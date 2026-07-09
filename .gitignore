@@ -1,0 +1,15 @@
+node_modules/
+dist/
+out/
+coverage/
+*.log
+.DS_Store
+
+# LaTeX ビルド成果物(fixtures のコンパイル確認で生成される)
+*.aux
+*.nav
+*.snm
+*.toc
+*.out
+*.synctex.gz
+fixtures/*.pdf
