@@ -1,0 +1,44 @@
+% C-1「本文領域の定義」のための計測デッキ(docs/subset-spec.md §2.8 の実測値の出典)。
+% default テーマ・16:9 で、タイトル 0 行 / 1 行 / 2 行それぞれの本文開始位置を
+% zref-savepos で .aux に記録する。フレームは [t](上詰め)必須。
+% コンパイル: tectonic --keep-intermediates measure-body-area.tex
+% 結果の読み方: .aux の \posx / \posy は sp 単位(65536 sp = 1 pt)。
+%   posy はページ下端からの距離なので、上端からの距離 = paperheight - posy/65536。
+% 実測(2026-07-10、tectonic 0.16.9):
+%   paperwidth=455.24pt (160mm) / paperheight=256.07pt (90mm)
+%   textwidth=398.34pt (140mm) / 左右マージン各 28.45pt (1cm)
+%   本文先頭ベースライン(上端から): タイトルなし 5.69pt / 1 行 28.58pt / 2 行 46.58pt
+%   → タイトル 1 行追加ごとに +18.0pt(= frametitle の行送り)
+% Phase 0.5 で deckcanvas の TeX 実装と合わせて本文領域の境界定数を最終確定する。
+\documentclass[aspectratio=169]{beamer}
+\usepackage{zref-savepos}
+\makeatletter
+\AtBeginDocument{%
+  \typeout{MEAS paperwidth=\the\paperwidth}%
+  \typeout{MEAS paperheight=\the\paperheight}%
+  \typeout{MEAS textwidth=\the\textwidth}%
+  \typeout{MEAS textheight=\the\textheight}%
+  \typeout{MEAS leftmargin=\the\beamer@leftmargin}%
+  \typeout{MEAS rightmargin=\the\beamer@rightmargin}%
+  \typeout{MEAS headheight=\the\headheight}%
+  \typeout{MEAS footskip=\the\footskip}%
+}
+\makeatother
+\begin{document}
+
+\begin{frame}[t]{One line title}
+\zsavepos{title1}%
+Body first line.
+\end{frame}
+
+\begin{frame}[t]{A very long frame title that is intentionally made long enough to wrap onto a second line in the default beamer theme at aspect ratio 16 by 9}
+\zsavepos{title2}%
+Body first line.
+\end{frame}
+
+\begin{frame}[t]
+\zsavepos{title0}%
+Body first line.
+\end{frame}
+
+\end{document}

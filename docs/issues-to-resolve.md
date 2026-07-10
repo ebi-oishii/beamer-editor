@@ -1,7 +1,24 @@
 # 要件定義レビュー: 実装前に解消すべき事項
 
-ステータス: レビュー結果 / 作成日: 2026-07-10
+ステータス: レビュー結果(全項目解決済み)/ 作成日: 2026-07-10 / 解決反映: 2026-07-10
 対象: `additional-requirements.md` を加えた要件定義一式(design / subset-spec / ai-protocol / development-plan)
+
+## 解決状況(2026-07-10 反映)
+
+本レビューの指摘はすべて文書へ反映済み。以下の本文はレビュー時の記録として残す。
+
+| 指摘 | 状況 |
+|---|---|
+| A-1〜A-6 | 反映済み(design.md、subset-spec.md v1.1、ai-protocol.md §7、development-plan.md 改訂版) |
+| B-1 / B-2 | development-plan.md 改訂版に反映(HTML/PDF 比較は Phase 4 の受け入れへ移動、Phase 0.5 を独立工数として計上) |
+| C-1 | **決定: 案①採用**(タイトル帯 1 行固定高、2 行以上は L019 警告)。default テーマ 16:9 を実測(スライド 160×90mm、左右マージン各 1cm、タイトル 1 行時の本文先頭ベースライン上端から 28.58pt、タイトル 1 行追加ごと +18.0pt。計測デッキ: `fixtures/measure-body-area.tex`)。subset-spec §2.8 に記録。境界定数の最終確定は Phase 0.5 |
+| C-2 | 決定: `zref-savepos` 実測を `deck check` に統合(L012 の実装方式)。はみ出し warning / 重なり info(subset-spec §2.8) |
+| C-3 | 決定: `decktext` 内はインライン要素・数式・`\\`・リスト 1 段まで(subset-spec §2.8)。違反は L014(対象を decktext 内部まで拡張) |
+| C-4 | 決定: キャンバスオブジェクトへのオーバーレイは v1 対象外。付与時は生ブロック化 + L014 通知 |
+| C-5 | 決定: L004 と同じ注入パターンの「寸法プローブ」(PNG/JPEG ヘッダ・PDF MediaBox)を core へ注入(subset-spec §2.8) |
+| C-6 | 決定: `deck*` を予約名前空間とし、再定義を L016(error) |
+| C-7 | 決定: adjust 依頼の合成時に対象 frame へ label を自動付与(ai-protocol.md §7) |
+| C-8 | 決定: `deck-source-version` の欠落・不一致は L017(warning)。ドラッグ中の一時状態は design.md §4.6 で「ソースが唯一の真実」原則の明示的例外として明文化。4:3 デッキでの `deckcanvas` は L018(warning) |
 
 ## この文書の位置づけ
 
