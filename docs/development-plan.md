@@ -30,7 +30,7 @@
 | C-1: 本文領域の定義 | **決定済み(2026-07-10)**。案①(タイトル帯 1 行固定高、2 行以上は L019 警告)を採用。default テーマ 16:9 の実測値は [subset-spec.md](subset-spec.md) §2.8 に記録(スライド 160×90mm、左右マージン各 1cm、タイトル 1 行時の本文先頭ベースライン 28.58pt、タイトル 1 行追加ごと +18.0pt)。境界定数の最終確定は Phase 0.5 |
 | C-2〜C-8: 設計の穴 | 仕様へ反映済み(savepos 検証 = L012 実装方式、decktext 内語彙、canvas オーバーレイ対象外、寸法プローブ注入、L016〜L019、adjust 時の label 自動付与)。[issues-to-resolve.md](issues-to-resolve.md) の解決状況を参照 |
 | A-1〜A-6: 文書リコンサイル | 反映済み(subset-spec v1.1、design.md、ai-protocol.md §7、本書) |
-| AST 型ドラフト | **未了**。着手チェックリスト 1 を参照 |
+| AST 型ドラフト | ドラフト作成済み(`packages/core/src/ast.ts`)。**レビューと合意が未了** |
 
 ## フェーズ詳細
 
@@ -163,6 +163,18 @@ Electron(旧 5c)はここでは作らない(「後続」参照)。
 - tectonic の配布方式(同梱 or 初回ダウンロード)を確定(Phase 6 の決定を製品化)。
 - 完了条件(= M5): チームメンバーが .vsix から導入して使える。
 
+### スタイルトラック(Phase 5 と並行・前倒し実施)
+
+指定フォーマットへのその場対応([theme-design.md](theme-design.md))。実物の社用テンプレ(PowerPoint)があり早期に使いたいという判断(2026-07-14)により、独立トラックとして並行実施する。**事前のテーマ整備・配布は行わず**、スタイルはデッキの `%% style` 領域 + `preamble-extra` に置き、AI が見本からその場で合わせる。
+
+| # | 内容 | 規模 | 依存 |
+|---|---|---|---|
+| S1 | スタイル語彙 v1(`\deckcolor` `\deckfont` `\decklogo` `\deckfooter`): TeX 側マクロ + パーサの style 領域 + renderer の CSS 変数/ロゴ/フッター描画 + `styled.tex` fixture + L020。renderer の `Theme` 分離は**済** | M | Phase 1 |
+| S2 | Noto Sans CJK: `\deckfont` のフォント解決・`deck fonts fetch`・日本語 fixture → design.md §9 の CJK 未決事項を解消 | S〜M | tectonic |
+| S3 | 「見本に合わせて」ワークフロー: pptx からの色・フォント抽出補助、SKILL への指示パターン追加、実物の社用テンプレで実演 | S〜M | S1, S2, 実物の PPT |
+
+幾何まで変える本格テーマ(タイトル帯高の変更等)は将来候補として theme-design.md に保持(必要になったら計測付きテーマパック方式)。
+
 ### 後続(M5 後に判断): Electron 第 2 シェルと Web 正式版
 
 Electron は次が VS Code 版で安定してから着手する(追加要件 §6):
@@ -181,6 +193,7 @@ Electron は次が VS Code 版で安定してから着手する(追加要件 §6
 - Phase 0.5 の TeX 実装は Phase 0 のモノレポ整備と部分的に並行できる(TeX 側は Node に依存しない)。
 - Phase 1 完了後: フォーマッタ / マクロ展開 / レンダラの 3 本は独立に進められる(AST の型だけ合意すればよい)。
 - Phase 7(GUI)と Phase 8(CLI)は独立。Phase 9(微調整依頼)は Phase 5 と 8 の完了後に着手できる。
+- スタイルトラック S1〜S3 は Phase 2〜5 のどれとも並行できる。
 - テーマ CSS の作り込みとサンプルデッキの拡充は、どのフェーズとも並行できる。
 
 ## テスト戦略
