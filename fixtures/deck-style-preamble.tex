@@ -1,0 +1,54 @@
+% %% style 領域のスタイル語彙の TeX 実装(スタイルトラック S1。theme-design.md §2)
+%
+% deck-canvas-preamble.tex の後に読み込むこと(本文領域の幾何定数と
+% deckpos キー定義を共有する)。最終的にはどちらも deck init / deck format が
+% ツール管理プリアンブルへインライン展開して所有する。
+%
+% v1 の語彙は幾何中立: ロゴとフッターは本文領域を消費しない
+% 「背景テンプレートへの絶対配置」で実装する(本文の組版に影響しない)。
+% フォントは存在しなければ警告して既定のまま進む(マシン間の可搬性)。
+% 警告はコンパイルログに DECKSTYLE 行として出す(deck lint / check が拾う)。
+\usepackage{fontspec}
+\makeatletter
+% ---- \deckcolor{役割}{RRGGBB} ----
+\newcommand\deckcolor[2]{%
+  \@ifundefined{deck@applycolor@#1}%
+    {\typeout{DECKSTYLE unknown-color-role: #1}}%
+    {\definecolor{deckcolor#1}{HTML}{#2}\csname deck@applycolor@#1\endcsname}}
+\@namedef{deck@applycolor@structure}{\setbeamercolor{structure}{fg=deckcolorstructure}}
+\@namedef{deck@applycolor@alert}{\setbeamercolor{alerted text}{fg=deckcoloralert}}
+\@namedef{deck@applycolor@example}{\setbeamercolor{example text}{fg=deckcolorexample}}
+\@namedef{deck@applycolor@text}{\setbeamercolor{normal text}{fg=deckcolortext}}
+\@namedef{deck@applycolor@background}{\setbeamercolor{background canvas}{bg=deckcolorbackground}}
+% ---- \deckfont{main|mono}{フォント名} ----
+\newcommand\deckfont[2]{%
+  \@ifundefined{deck@applyfont@#1}%
+    {\typeout{DECKSTYLE unknown-font-slot: #1}}%
+    {\IfFontExistsTF{#2}%
+      {\csname deck@applyfont@#1\endcsname{#2}}%
+      {\typeout{DECKSTYLE font-not-found: #2}}}}
+\@namedef{deck@applyfont@main}#1{\setsansfont{#1}}
+\@namedef{deck@applyfont@mono}#1{\setmonofont{#1}}
+% ---- \decklogo[x=,y=,w=]{path} / \deckfooter{テキスト} ----
+% 座標はキャンバスと同じ「本文領域に対する正規化値」(subset-spec §2.8)。
+\newcommand\decklogo[2][]{%
+  \deck@pos@reset\setkeys{deckpos}{#1}\deck@computepos
+  \xdef\deck@logo@x{\strip@pt\deck@abs@x}%
+  \xdef\deck@logo@y{\strip@pt\deck@abs@y}%
+  \xdef\deck@logo@w{\the\deck@abs@w}%
+  \gdef\deck@logo@path{#2}%
+  \deck@refresh@background}
+\newcommand\deckfooter[1]{%
+  \gdef\deck@footer@text{#1}%
+  \deck@refresh@background}
+\newcommand\deck@refresh@background{%
+  \setbeamertemplate{background}{%
+    \setlength{\unitlength}{1pt}%
+    \begin{picture}(0,0)%
+      \@ifundefined{deck@logo@path}{}{%
+        \put(\deck@logo@x,-\deck@logo@y){\makebox(0,0)[tl]{\includegraphics[width=\deck@logo@w]{\deck@logo@path}}}}%
+      \@ifundefined{deck@footer@text}{}{%
+        \put(28.45,-249){\makebox(0,0)[bl]{\color{gray}\fontsize{6}{7}\selectfont\deck@footer@text}}%
+        \put(426.79,-249){\makebox(0,0)[br]{\color{gray}\fontsize{6}{7}\selectfont\insertframenumber\,/\,\inserttotalframenumber}}}%
+    \end{picture}}}
+\makeatother

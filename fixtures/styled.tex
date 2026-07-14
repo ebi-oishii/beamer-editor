@@ -1,0 +1,62 @@
+\documentclass[aspectratio=169]{beamer}
+%% deck-source-version: 1
+% ---- ツール管理プリアンブル(将来は deck init / deck format が生成・所有する)----
+\usetheme{default}
+\setbeamertemplate{navigation symbols}{}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\input{deck-canvas-preamble}
+\input{deck-style-preamble}
+% ---- ツール管理ここまで ----
+
+%% macros:begin
+%% macros:end
+
+%% style:begin
+\deckcolor{structure}{0F62FE}
+\deckcolor{alert}{DA1E28}
+\deckcolor{example}{198038}
+\deckfont{main}{Noto Sans CJK JP}
+\decklogo[x=0.945,y=0.000,w=0.055]{assets/logo.png}
+\deckfooter{ACME Corp. --- Confidential}
+%% style:end
+
+%% preamble-extra:begin
+%% preamble-extra:end
+
+\title{Styled Golden Sample}
+\subtitle{Style vocabulary v1 (theme-design.md)}
+\author{Beamer Editor Team}
+\date{2026-07-14}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Structure color drives titles and bullets}
+  \begin{itemize}
+    \item Bullets and the frame title pick up the structure color.
+    \item \alert{Alerts} use the alert color.
+    \item The logo and footer appear on every frame without consuming body space.
+  \end{itemize}
+  \begin{exampleblock}{Example block}
+    Example blocks use the example color.
+  \end{exampleblock}
+\end{frame}
+
+\begin{frame}[label=styled-canvas]{Styled canvas frame}
+  \begin{deckcanvas}
+    \begin{decktext}[x=0.050,y=0.150,w=0.500,size=normal]
+      Canvas geometry is style-neutral: the body area stays identical, so
+      positioned objects do not move when colors or fonts change.
+    \end{decktext}
+    \deckimage[x=0.600,y=0.150,w=0.320]{assets/result-chart.pdf}
+  \end{deckcanvas}
+\end{frame}
+
+\end{document}

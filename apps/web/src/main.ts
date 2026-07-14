@@ -9,7 +9,11 @@ import { type RenderedDeck, renderDeck } from "@beamer-editor/renderer";
 import "katex/dist/katex.min.css";
 import "./style.css";
 
-const FIXTURES = ["basic.tex", "macros.tex", "kitchen-sink.tex", "canvas.tex"];
+const FIXTURES = ["basic.tex", "macros.tex", "kitchen-sink.tex", "canvas.tex", "styled.tex"];
+
+// %% style 領域から生成された CSS(deck.css)の注入先
+const deckStyleEl = document.createElement("style");
+document.head.append(deckStyleEl);
 
 const app = document.getElementById("app") as HTMLDivElement;
 app.innerHTML = `
@@ -46,7 +50,7 @@ const slideList = $<HTMLElement>("#slide-list");
 const slideHolder = $<HTMLDivElement>("#slide-holder");
 const stepInput = $<HTMLInputElement>("#step");
 
-let deck: RenderedDeck = { title: "", frames: [] };
+let deck: RenderedDeck = { title: "", frames: [], css: "" };
 let current = 0;
 let step = 1;
 
@@ -123,6 +127,7 @@ function rebuildList(): void {
 function reparse(source: string, resetTo = 0): void {
   try {
     deck = renderDeck(parseDeck(source));
+    deckStyleEl.textContent = deck.css;
     $<HTMLElement>("#doc-title").textContent = deck.title;
     rebuildList();
     showFrame(resetTo, resetTo === current);

@@ -68,6 +68,8 @@ export interface DeckDocument extends BaseNode {
   aspectRatio: AspectRatio;
   metadata: DeckMetadata;
   macros: MacroSection;
+  /** `%% style` 領域(theme-design.md)。領域が無ければ entries は空。 */
+  style: DeckStyle;
   /** `%% preamble-extra` 領域。ツールは解釈しない素通しテキスト。 */
   preambleExtra: RawRegion;
   /** ツール管理プリアンブルのうち、上記以外の部分(不透明。手編集は L006)。 */
@@ -127,6 +129,52 @@ export interface MacroDefinition extends BaseNode {
    * 呼び出し箇所が RawInline / RawBlock に落ちる(L002)。
    */
   expandable: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// スタイル(%% style 領域。theme-design.md §2)
+// ---------------------------------------------------------------------------
+
+export type StyleColorRole = "structure" | "alert" | "example" | "text" | "background";
+
+export interface StyleColorNode extends BaseNode {
+  type: "styleColor";
+  role: StyleColorRole;
+  /** RRGGBB(6 桁 16 進、# なし)。 */
+  hex: string;
+}
+
+export interface StyleFontNode extends BaseNode {
+  type: "styleFont";
+  slot: "main" | "mono";
+  /** フォント名(名前参照。バイナリは同梱しない)。 */
+  family: string;
+}
+
+/** 全フレーム共通のロゴ。座標はキャンバスと同じ本文領域正規化値。 */
+export interface StyleLogoNode extends BaseNode {
+  type: "styleLogo";
+  position: CanvasPosition;
+  path: string;
+}
+
+/** フッター(左: テキスト、右: ページ番号)。本文領域を消費しないオーバーレイ。 */
+export interface StyleFooterNode extends BaseNode {
+  type: "styleFooter";
+  text: InlineNode[];
+}
+
+export type StyleEntry =
+  | StyleColorNode
+  | StyleFontNode
+  | StyleLogoNode
+  | StyleFooterNode
+  | RawBlockNode;
+
+/** `%% style` 領域。語彙外の記述は RawBlock として保持し L020 が検出する。 */
+export interface DeckStyle extends BaseNode {
+  type: "style";
+  entries: StyleEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -405,7 +453,8 @@ export type RawReason =
   | "canvas-unsupported-content"
   | "canvas-overlay"
   | "unsupported-table-spec"
-  | "unsupported-option";
+  | "unsupported-option"
+  | "unknown-style";
 
 /** 未知コマンド + 引数グループ(生ブロック第 1 段階)。 */
 export interface RawInlineNode extends BaseNode {

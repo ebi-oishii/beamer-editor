@@ -160,8 +160,9 @@ main {
   position: relative;
   width: 455.24pt;
   height: 256.07pt;
-  background: #fff;
-  color: #000;
+  background: var(--deck-background, #fff);
+  color: var(--deck-text, #000);
+  font-family: var(--deck-font-main, -apple-system, "Helvetica Neue", Arial, sans-serif);
   font-size: 11pt;
   line-height: 1.24;
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25);
@@ -169,7 +170,7 @@ main {
   flex-shrink: 0;
 }
 .slide .frametitle {
-  color: #3333b3;
+  color: var(--deck-structure, #3333b3);
   font-size: 14.4pt;
   padding: 5.5pt 8.6pt 0;
   min-height: 19.06pt; /* 本文領域の上端 = タイトル帯 1 行固定高(Phase 0.5 実測) */
@@ -203,11 +204,11 @@ main {
   font-style: italic;
 }
 .slide code {
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--deck-font-mono, "SF Mono", ui-monospace, Menlo, monospace);
   font-size: 0.92em;
 }
 .slide .alert {
-  color: #c0392b;
+  color: var(--deck-alert, #c0392b);
 }
 .slide a.url {
   color: #2e5cb8;
@@ -224,7 +225,7 @@ main {
 }
 .slide ul > li::before {
   content: "▸";
-  color: #3333b3;
+  color: var(--deck-structure, #3333b3);
   display: inline-block;
   width: 10pt;
   margin-left: -10pt;
@@ -238,7 +239,7 @@ main {
 }
 .slide ol > li::before {
   content: counter(enum) ".";
-  color: #3333b3;
+  color: var(--deck-structure, #3333b3);
   display: inline-block;
   width: 12pt;
   margin-left: -12pt;
@@ -256,14 +257,14 @@ main {
   margin-bottom: 7pt;
 }
 .slide .beamer-block .block-title {
-  color: #3333b3;
+  color: var(--deck-structure, #3333b3);
   font-weight: 600;
 }
 .slide .beamer-block.alert .block-title {
-  color: #c0392b;
+  color: var(--deck-alert, #c0392b);
 }
 .slide .beamer-block.example .block-title {
-  color: #1e8449;
+  color: var(--deck-example, #1e8449);
 }
 .slide .beamer-block .block-body {
   margin-top: 1pt;
@@ -306,12 +307,12 @@ main {
   padding-top: 40pt;
 }
 .slide .tp-title {
-  color: #3333b3;
+  color: var(--deck-structure, #3333b3);
   font-size: 16pt;
   margin-bottom: 6pt;
 }
 .slide .tp-subtitle {
-  color: #3333b3;
+  color: var(--deck-structure, #3333b3);
   font-size: 11pt;
   margin-bottom: 18pt;
 }
@@ -397,4 +398,26 @@ main {
 }
 .slide img.canvas-item {
   max-width: none;
+}
+
+/* ---- スタイル語彙のロゴ・フッター(theme-design.md §2)---- */
+.slide .frametitle,
+.slide .slide-body {
+  position: relative;
+  z-index: 1;
+}
+.slide .deck-logo {
+  position: absolute;
+  z-index: 0;
+}
+.slide .deck-footer {
+  position: absolute;
+  z-index: 0;
+  left: 6.25%;
+  right: 6.25%;
+  bottom: 2pt;
+  display: flex;
+  justify-content: space-between;
+  font-size: 6pt;
+  color: #808080;
 }

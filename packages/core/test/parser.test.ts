@@ -186,3 +186,38 @@ describe("parseDeck: includegraphics", () => {
     expect(img.width).toMatchObject({ factor: 0.4, unit: "textwidth" });
   });
 });
+
+describe("parseDeck: styled.tex(%% style 領域)", () => {
+  const doc = parseDeck(fixture("styled.tex"));
+
+  it("スタイル語彙を読む", () => {
+    const colors = doc.style.entries.filter((e) => e.type === "styleColor");
+    expect(colors).toHaveLength(3);
+    expect(colors[0]).toMatchObject({ role: "structure", hex: "0F62FE" });
+    const font = doc.style.entries.find((e) => e.type === "styleFont");
+    expect(font).toMatchObject({ slot: "main", family: "Noto Sans CJK JP" });
+    const logo = doc.style.entries.find((e) => e.type === "styleLogo");
+    if (logo?.type !== "styleLogo") throw new Error("expected styleLogo");
+    expect(logo.position).toMatchObject({ x: 0.945, y: 0, width: 0.055 });
+    expect(logo.path).toBe("assets/logo.png");
+    const footer = doc.style.entries.find((e) => e.type === "styleFooter");
+    expect(footer).toBeDefined();
+  });
+
+  it("語彙外の記述は unknown-style の生ブロックになる", () => {
+    const broken = parseDeck(
+      fixture("styled.tex").replace(
+        "\\deckcolor{structure}{0F62FE}",
+        "\\deckcolor{structure}{bad}\n\\setbeamercolor{title}{fg=red}",
+      ),
+    );
+    const raws = broken.style.entries.filter((e) => e.type === "rawBlock");
+    expect(raws).toHaveLength(2);
+    expect(raws.every((r) => r.reason === "unknown-style")).toBe(true);
+  });
+
+  it("style 領域が無いデッキでは空になる", () => {
+    const doc2 = parseDeck(fixture("basic.tex"));
+    expect(doc2.style.entries).toHaveLength(0);
+  });
+});
