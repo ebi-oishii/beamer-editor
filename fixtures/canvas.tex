@@ -1,0 +1,78 @@
+\documentclass[aspectratio=169]{beamer}
+%% deck-source-version: 1
+% ---- ツール管理プリアンブル(将来は deck init / deck format が生成・所有する)----
+\usetheme{default}
+\setbeamertemplate{navigation symbols}{}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+% deckcanvas / decktext / deckimage の実装(Phase 0.5)。最終的にはインライン展開される
+\input{deck-canvas-preamble}
+% ---- ツール管理ここまで ----
+
+%% macros:begin
+%% macros:end
+
+%% preamble-extra:begin
+%% preamble-extra:end
+
+\title{Canvas Golden Sample}
+\subtitle{Positioned text and images (subset-spec §2.8)}
+\author{Beamer Editor Team}
+\date{2026-07-10}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}[label=canvas-results]{Experimental results}
+  \begin{deckcanvas}
+    \begin{decktext}[x=0.050,y=0.100,w=0.420,size=normal]
+      Accuracy improved by \textbf{8.4 points} over the baseline, while
+      latency stayed within budget.
+    \end{decktext}
+    \deckimage[x=0.520,y=0.140,w=0.400]{assets/result-chart.pdf}
+  \end{deckcanvas}
+\end{frame}
+
+\begin{frame}[label=canvas-sizes]{Discrete font sizes}
+  \begin{deckcanvas}
+    \begin{decktext}[x=0.050,y=0.050,w=0.900,size=Large]
+      Large headline text across the top
+    \end{decktext}
+    \begin{decktext}[x=0.050,y=0.320,w=0.430,size=small]
+      \begin{itemize}
+        \item Small bullet one
+        \item Small bullet two
+      \end{itemize}
+    \end{decktext}
+    \begin{decktext}[x=0.520,y=0.320,w=0.430,size=footnotesize]
+      A footnote-sized annotation column on the right, wrapped to the box
+      width.
+    \end{decktext}
+  \end{deckcanvas}
+\end{frame}
+
+\begin{frame}[label=canvas-stack]{Z-order follows source order}
+  \begin{deckcanvas}
+    \deckimage[x=0.100,y=0.100,w=0.500]{assets/result-chart.pdf}
+    \begin{decktext}[x=0.300,y=0.450,w=0.400,size=normal]
+      This text is written later, so it sits on top of the image.
+    \end{decktext}
+  \end{deckcanvas}
+\end{frame}
+
+\begin{frame}[label=canvas-overflow]{Intentional overflow}
+  % L012 / deck check の savepos 検出を試すための意図的なはみ出し
+  \begin{deckcanvas}
+    \begin{decktext}[x=0.800,y=0.900,w=0.400,size=normal]
+      This box intentionally extends past the body area on both axes.
+    \end{decktext}
+  \end{deckcanvas}
+\end{frame}
+
+\end{document}

@@ -13,3 +13,6 @@ coverage/
 *.out
 *.synctex.gz
 fixtures/*.pdf
+
+# playwright-cli の作業ファイル
+.playwright-cli/

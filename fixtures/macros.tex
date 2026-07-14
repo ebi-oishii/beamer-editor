@@ -1,0 +1,82 @@
+\documentclass[aspectratio=169]{beamer}
+%% deck-source-version: 1
+% ---- ツール管理プリアンブル(将来は deck init / deck format が生成・所有する)----
+\usetheme{default}
+\setbeamertemplate{navigation symbols}{}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+% ---- ツール管理ここまで ----
+
+%% macros:begin
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\pair}[2]{\left(#1,\ #2\right)}
+\newcommand{\greet}[1][world]{Hello, #1!}
+\newcommand{\highlight}[1]{\alert{#1}}
+\renewcommand{\highlight}[1]{\textbf{#1}}
+\newcommand{\maybe}[1]{\ifnum#1>0 positive\else non-positive\fi}
+\newenvironment{keypoints}{\begin{itemize}}{\end{itemize}}
+\def\swap(#1,#2){#2 and #1}
+%% macros:end
+
+%% preamble-extra:begin
+%% preamble-extra:end
+
+\title{Macro Golden Sample}
+\author{Beamer Editor Team}
+\date{2026-07-10}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Zero-argument macros}
+  The real line $\R$ appears inline, and in display math:
+  \[
+    f \colon \R \to \R
+  \]
+\end{frame}
+
+\begin{frame}{Macros with arguments}
+  Run \code{deck lint} before reporting. The point $\pair{x}{y}$ lies in $\R$.
+  \begin{itemize}
+    \item \code{deck format} normalizes the source.
+    \item Nested calls: \code{\highlight{deck check}} also expand.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Optional arguments}
+  Default: \greet\\
+  Explicit: \greet[team]
+\end{frame}
+
+\begin{frame}{Redefined macros}
+  After \texttt{renewcommand}, \highlight{this} is bold rather than alerted.
+\end{frame}
+
+\begin{frame}{Custom environments}
+  \begin{keypoints}
+    \item Environments defined as simple substitutions expand too.
+    \item Their bodies stay inside the subset.
+  \end{keypoints}
+\end{frame}
+
+\begin{frame}{Unexpandable calls fall back}
+  % \swap は区切り付き引数、\maybe は条件分岐を含むため、呼び出し箇所が生ブロックになる
+  A delimited call: \swap(alpha,beta).\\
+  A conditional call: one is \maybe{1}.
+\end{frame}
+
+\begin{frame}{Summary}
+  \begin{itemize}
+    \item Expansion is a preview-only approximation.
+    \item Export always compiles the unexpanded source.
+  \end{itemize}
+\end{frame}
+
+\end{document}

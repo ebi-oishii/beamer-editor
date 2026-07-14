@@ -1,0 +1,15 @@
+{
+  "name": "beamer-editor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "pnpm -r test",
+    "lint": "biome check .",
+    "format": "biome check --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  }
+}

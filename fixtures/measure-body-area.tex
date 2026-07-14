@@ -28,7 +28,12 @@
 
 \begin{frame}[t]{One line title}
 \zsavepos{title1}%
+\typeout{MEAS strutht=\the\ht\strutbox\space strutdp=\the\dp\strutbox}%
 Body first line.
+\end{frame}
+
+\begin{frame}[b]{Bottom probe}
+Bottom line.\zsavepos{bottom}%
 \end{frame}
 
 \begin{frame}[t]{A very long frame title that is intentionally made long enough to wrap onto a second line in the default beamer theme at aspect ratio 16 by 9}
