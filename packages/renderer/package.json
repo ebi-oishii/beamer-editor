@@ -1,0 +1,20 @@
+{
+  "name": "@beamer-editor/renderer",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@beamer-editor/core": "workspace:*",
+    "katex": "^0.16.11"
+  },
+  "devDependencies": {
+    "@types/katex": "^0.16.7",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  }
+}
