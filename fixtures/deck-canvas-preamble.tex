@@ -1,0 +1,79 @@
+% deckcanvas / decktext / deckimage のツール管理実装(Phase 0.5)
+%
+% subset-spec.md §2.8 の公開契約を提供する。内部実装(textpos)は公開契約に含めない。
+% 現状は fixture から \input されるが、最終的には deck init / deck format が
+% このブロックをツール管理プリアンブルへインライン展開して所有する。
+%
+% 本文領域の定数(default テーマ・16:9・タイトル帯 1 行固定高)は
+% fixtures/measure-body-area.tex の実測(2026-07-10、tectonic 0.16.9)による:
+%   スライド実寸 455.24pt x 256.07pt(160mm x 90mm)
+%   本文先頭ベースライン(1 行タイトル)28.58pt、strut ht 9.52pt / dp 4.08pt
+%   → 上端 = 28.58 - 9.52 = 19.06pt
+%   下詰めフレームの最終ベースライン 251.95pt → 下端 = 251.95 + 4.08 = 256.03pt
+%
+% ジオメトリ検査(L012 / deck check の土台):
+% 各オブジェクトの配置時に、絶対座標と実測寸法(ボックスの幅・高さ)を
+% コンパイルログへ出力する。deck check(Phase 6)がこれを解析して
+% 本文領域外へのはみ出し(warning)とオブジェクト重なり(info)を機械検出する。
+%   書式: DECKGEOM frame=<フレーム番号> kind=<text|image> x=<pt> y=<pt> w=<pt> h=<pt>
+%   本文領域: DECKBODY left=<pt> top=<pt> width=<pt> height=<pt>(文書冒頭に 1 回)
+% 高さはボックス実測なので、テキストのリフロー結果を正しく反映する。
+% (絶対配置は Overfull 警告を出さないため、この機構が check の安全網になる)
+\usepackage[absolute,overlay]{textpos}
+\usepackage{keyval}
+\makeatletter
+% ---- 本文領域の定数 ----
+\newdimen\deck@body@left   \deck@body@left=28.45pt
+\newdimen\deck@body@top    \deck@body@top=19.06pt
+\newdimen\deck@body@width  \deck@body@width=398.34pt
+\newdimen\deck@body@height \deck@body@height=236.97pt
+\textblockorigin{0pt}{0pt}
+\AtBeginDocument{\typeout{DECKBODY left=\the\deck@body@left\space top=\the\deck@body@top\space width=\the\deck@body@width\space height=\the\deck@body@height}}
+% ---- key-value(x / y / w は本文領域に対する 0.000〜1.000)----
+\define@key{deckpos}{x}{\def\deck@pos@x{#1}}
+\define@key{deckpos}{y}{\def\deck@pos@y{#1}}
+\define@key{deckpos}{w}{\def\deck@pos@w{#1}}
+\define@key{deckpos}{size}{\def\deck@pos@size{#1}}
+\newcommand\deck@pos@reset{%
+  \def\deck@pos@x{0}\def\deck@pos@y{0}\def\deck@pos@w{1}\def\deck@pos@size{normal}}
+% ---- 文字サイズ enum(subset-spec §2.8)----
+\@namedef{deck@size@tiny}{\tiny}
+\@namedef{deck@size@scriptsize}{\scriptsize}
+\@namedef{deck@size@footnotesize}{\footnotesize}
+\@namedef{deck@size@small}{\small}
+\@namedef{deck@size@normal}{\normalsize}
+\@namedef{deck@size@large}{\large}
+\@namedef{deck@size@Large}{\Large}
+\newcommand\deck@sizecmd{\csname deck@size@\deck@pos@size\endcsname}
+% ---- 幾何計算 ----
+\newdimen\deck@abs@x \newdimen\deck@abs@y \newdimen\deck@abs@w
+\newcommand\deck@computepos{%
+  \deck@abs@x=\deck@pos@x\deck@body@width
+  \advance\deck@abs@x by \deck@body@left
+  \deck@abs@y=\deck@pos@y\deck@body@height
+  \advance\deck@abs@y by \deck@body@top
+  \deck@abs@w=\deck@pos@w\deck@body@width}
+\newsavebox\deck@contentbox
+\newcommand\deck@geomlog[1]{%
+  \typeout{DECKGEOM frame=\insertframenumber\space kind=#1 x=\the\deck@abs@x\space y=\the\deck@abs@y\space w=\the\wd\deck@contentbox\space h=\the\dimexpr\ht\deck@contentbox+\dp\deck@contentbox\relax}}
+\newcommand\deck@place[1]{%
+  \begin{textblock*}{\deck@abs@w}(\deck@abs@x,\deck@abs@y)%
+    \usebox\deck@contentbox
+  \end{textblock*}%
+  \deck@geomlog{#1}}
+% ---- 公開契約 ----
+\newenvironment{deckcanvas}{\ignorespaces}{\ignorespacesafterend}
+\newenvironment{decktext}[1][]{%
+  \deck@pos@reset\setkeys{deckpos}{#1}\deck@computepos
+  \begin{lrbox}{\deck@contentbox}%
+  \begin{minipage}[t]{\deck@abs@w}%
+  \deck@sizecmd\ignorespaces
+}{%
+  \end{minipage}%
+  \end{lrbox}%
+  \deck@place{text}}
+\newcommand\deckimage[2][]{%
+  \deck@pos@reset\setkeys{deckpos}{#1}\deck@computepos
+  \sbox\deck@contentbox{\includegraphics[width=\deck@abs@w]{#2}}%
+  \deck@place{image}}
+\makeatother

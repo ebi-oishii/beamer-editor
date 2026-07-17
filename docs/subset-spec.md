@@ -1,8 +1,10 @@
-# Beamer サブセット仕様 v1
+# Beamer サブセット仕様 v1.1
 
 ステータス: draft / 最終更新: 2026-07-10
 
 このファイルは、人間と AI の共通言語となるソース形式(Beamer サブセット)の仕様。ツール(パーサ・フォーマッタ・リンター・プレビュー)が構文として理解する範囲を定義する。
+
+改訂履歴: v1.1 で自由配置(キャンバス)語彙を将来候補から本文(§2.8)へ昇格し、リント規則 L011〜L019 を追加した([beamer-editor-additional-requirements.md](beamer-editor-additional-requirements.md) と [issues-to-resolve.md](issues-to-resolve.md) の反映)。2026-07-14 に `%% style` 領域(スタイル語彙)と L020 を追加([theme-design.md](theme-design.md))。
 
 大原則: **ここに書かれていない構文を書いてもエラーにはならない。** ツールはそれを「生ブロック」として扱い、プレビューは部分コンパイル画像に、GUI 編集は移動のみに劣化する。最終 PDF は常に完全な Beamer としてコンパイルされる。
 
@@ -12,12 +14,18 @@
 
 ```latex
 \documentclass[aspectratio=169]{beamer}
-% ツール管理プリアンブル(テーマ・共通パッケージ)がここに入る
+%% deck-source-version: 1
+% ツール管理プリアンブル(テーマ・共通パッケージ・deck* マクロ)がここに入る
 
 %% macros:begin
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\code}[1]{\texttt{#1}}
 %% macros:end
+
+%% style:begin
+\deckcolor{structure}{0F62FE}
+\deckfooter{ACME Corp. — Confidential}
+%% style:end
 
 %% preamble-extra:begin
 % ツールが解釈しない自由領域(コンパイルには含まれる)
@@ -48,9 +56,15 @@
 |---|---|
 | `\documentclass` オプション | `aspectratio=169` / `aspectratio=43` のみ |
 | `%% macros:begin` 〜 `%% macros:end` | マクロ定義(§4 の規則に従う) |
-| `%% preamble-extra:begin` 〜 `%% preamble-extra:end` | 生の自由領域。ツールは素通しし、解釈しない |
+| `%% style:begin` 〜 `%% style:end` | スタイル語彙(`\deckcolor` `\deckfont` `\decklogo` `\deckfooter`。[theme-design.md](theme-design.md) §2)。語彙外は L020 |
+| `%% preamble-extra:begin` 〜 `%% preamble-extra:end` | 生の自由領域。ツールは素通しし、解釈しない(生スタイルの置き場でもある) |
 
-テーマ選択とパッケージはツール管理領域に入る。v1 のテーマは `default` と `metropolis` の 2 択。共通パッケージ(`graphicx`, `amsmath`, `amssymb`, `booktabs`, `hyperref` 等)はツールが自動注入する。
+テーマ選択とパッケージはツール管理領域に入る。v1 のテーマは `default` の 1 種類から開始する(2 テーマ目は HTML/PDF の座標差を fixture で評価してから追加。`metropolis` は将来候補)。共通パッケージ(`graphicx`, `amsmath`, `amssymb`, `booktabs`, `hyperref` 等)と、キャンバス用の `deckcanvas` / `decktext` / `deckimage`(§2.8)の定義はツールが自動注入する。
+
+- ツール管理領域は `%% deck-source-version: 1` でソース形式の版を記録する。構文の版が上がるときは、フォーマッタが黙って破壊的変換せず、明示的な migration コマンドを通す(欠落・不一致は L017)。
+- スタイル(色・フォント・ロゴ・フッター)は `%% style` 領域のスタイル語彙で指定する([theme-design.md](theme-design.md))。スタイルは本文の語彙を変えない提示層であり、v1 の語彙は幾何中立(本文領域・タイトル帯の寸法を変えない)。語彙外の様式は `%% preamble-extra` に生で書け、PDF には完全に効く(プレビューは近似のまま)。
+- `deck` で始まるコマンド・環境名はツールの予約名前空間であり、`%% macros` 領域での再定義は不可(L016)。
+- GUI キャンバスの正式サポートは 16:9(`aspectratio=169`)のみ。4:3 デッキでの `deckcanvas` 使用は警告する(L018)。
 
 メタデータ: `\title{}` `\author{}` `\date{}` `\institute{}` `\subtitle{}` を解釈する。
 
@@ -129,6 +143,102 @@
 
 `\only` `\uncover` `\visible` `\alt` は v1 対象外(生ブロックへ)。
 
+### 2.8 キャンバス(自由配置)
+
+GUI で扱う自由配置は、通常の Beamer フロー配置と混在させず、キャンバスモードとして分離する。フレーム本文に `deckcanvas` がある場合、そのフレームはキャンバスフレームである。
+
+- 通常フレーム: 既存の `columns`、`itemize`、`block` などで構成する
+- キャンバスフレーム: `deckcanvas` の直下に位置指定オブジェクトだけを並べる(通常フロー要素との混在は不可 → L014)
+- フレームタイトルは固定領域であり、GUI で移動しない
+- キャンバスフレームには一意な `label` を付ける(L011。AI 依頼・競合検査の永続アドレスに使う)
+
+```latex
+\begin{frame}[label=results]{実験結果}
+  \begin{deckcanvas}
+    \begin{decktext}[x=0.050,y=0.100,w=0.420,size=normal]
+      精度はベースラインより \textbf{8.4ポイント} 改善した。
+    \end{decktext}
+    \deckimage[x=0.520,y=0.140,w=0.400]{assets/result.pdf}
+  \end{deckcanvas}
+\end{frame}
+```
+
+`deckcanvas` / `decktext` / `deckimage` はツール管理プリアンブルが本物の LaTeX として定義する。内部実装は textpos 等の絶対配置パッケージを利用してよいが、ソースの公開契約には含めない(実装は将来交換できる)。
+
+#### 公認オブジェクト
+
+| オブジェクト | 内容 | GUI 操作 |
+|---|---|---|
+| `decktext` | テキスト・インライン要素・単純な箇条書き | 移動、幅変更、文字サイズ変更 |
+| `deckimage` | PNG / JPEG / PDF 画像 | 移動、縦横比を保った拡大縮小 |
+
+TikZ・複雑な表・生 LaTeX ブロック・動画・SVG はキャンバス GUI の対象外。必要な場合は生ブロック、または事前に PDF / PNG へ変換した画像として扱う。
+
+#### `decktext` 内部の許容語彙
+
+- 可: インライン要素(§2.5)、数式(§2.6)、改行 `\\`、`itemize` / `enumerate`(ネスト 1 段まで)
+- 不可: block 系環境、`columns`、`center`、`tabular`、`\includegraphics`(画像は `deckimage` を使う)、ネスト 2 段以上のリスト → L014
+
+#### 座標系と正規形
+
+| 項目 | 決定 |
+|---|---|
+| 原点 | フレーム本文領域の左上(下記「本文領域の定義」) |
+| `x`, `y`, `w` | 本文領域に対する 0.000〜1.000 の正規化値 |
+| y 軸 | 下向きを正 |
+| 画像の高さ | 元画像の縦横比から自動算出 |
+| テキストの高さ | 内容と幅から自動算出 |
+| z-order | ソース出現順(後に書かれたものが前面) |
+| 座標・画像幅の保存精度 | 小数 3 桁 |
+| 文字サイズ | `tiny`, `scriptsize`, `footnotesize`, `small`, `normal`, `large`, `Large` の離散値(L013) |
+
+#### 本文領域の定義
+
+タイトル領域を **1 行相当の固定高**と定義し、本文領域は「タイトル帯の直下から下マージンまで・左右マージンの内側」の固定矩形とする。タイトルが 2 行以上になると固定タイトル帯を超えて本文領域に重なるため、キャンバスフレームでは lint 警告とする(L019)。
+
+default テーマ・16:9 の実測値(2026-07-10、tectonic 0.16.9 / zref-savepos):
+
+| 項目 | 実測 |
+|---|---|
+| スライド実寸 | 160mm × 90mm(455.24pt × 256.07pt) |
+| 左右マージン | 各 1cm(28.45pt)→ 本文幅 140mm(398.34pt) |
+| 本文先頭ベースライン(タイトル 1 行) | 上端から 28.58pt |
+| 本文先頭ベースライン(タイトルなし) | 上端から 5.69pt |
+| タイトル 1 行追加ごとのずれ | +18.0pt |
+
+本文領域の境界定数は Phase 0.5 の実装時に実測で確定した(2026-07-10。strut ht 9.52pt / dp 4.08pt、下詰めフレームの最終ベースライン 251.95pt による):
+
+| 定数 | 値 |
+|---|---|
+| 左端 | 28.45pt |
+| 上端 | 19.06pt(= 28.58 − strut ht 9.52) |
+| 幅 | 398.34pt |
+| 高さ | 236.97pt(下端 256.03pt ≒ ページ下端。default テーマは footline が空) |
+
+実装は `fixtures/deck-canvas-preamble.tex`(将来はツールがプリアンブルへインライン展開して所有する)。
+
+#### オーバーレイ
+
+v1 ではキャンバスオブジェクトへのオーバーレイ指定(`\pause`、`<n->`)は対象外。付与された場合、そのオブジェクトは生ブロックに落ち、L014 で通知される。
+
+#### 画像
+
+- v1 対象は PNG / JPEG / PDF。SVG は GUI へ直接入れず、PDF または PNG へ変換する(L015)
+- 参照は相対パス。将来 GUI から追加する場合は `assets/` へコピーし、ファイル名衝突を解決する
+- 高さ自動算出・縦横比保持・L015 の検査に必要な画像寸法(PNG/JPEG ヘッダ、PDF の MediaBox)は、L004 と同じ注入パターンで core へ渡す「寸法プローブ」が取得する(core 自体はファイルシステムに依存しない)
+
+#### `deck check` によるキャンバス検証
+
+textpos 系の絶対配置は縦にはみ出しても Overfull 警告が出ない。そのためツール管理マクロが配置時に各オブジェクトの絶対座標と**実測寸法(TeX ボックスの幅・高さ。テキストのリフロー結果を反映)**をコンパイルログへ出力し、`deck check` がそれを解析して機械検出する(L012 の実装方式。Phase 0.5 で実装済み)。
+
+```
+DECKBODY left=<pt> top=<pt> width=<pt> height=<pt>   (文書冒頭に 1 回)
+DECKGEOM frame=<番号> kind=<text|image> x=<pt> y=<pt> w=<pt> h=<pt>
+```
+
+- 本文領域外へのはみ出し: warning
+- オブジェクト同士の重なり: info(意図的な場合があるため、静的 lint では扱わず check の実測レポートのみ)
+
 ## 3. 生ブロック
 
 パーサが未知の構文に遭遇したときのフォールバック。粒度の細かい順に適用する。
@@ -165,6 +275,18 @@
 | L008 | 正規形との不一致(`--fix` で自動整形) | info |
 | L009 | frame の `label` が重複している | warning |
 | L010 | 同梱スキル(SKILL.md)の版が CLI の版と一致しない | warning |
+| L011 | `deckcanvas` を持つ frame に一意な `label` がない | warning |
+| L012 | `x`, `y`, `w` が範囲外、またはオブジェクトが本文領域外へ出る(静的には宣言値で検査。`deck check` は savepos 実測で検査する。§2.8) | warning |
+| L013 | 許可されていない文字サイズ値 | error |
+| L014 | `deckcanvas` 直下または `decktext` 内部に許容外の要素がある(オーバーレイ指定を含む) | warning |
+| L015 | `deckimage` の形式が v1 対象外、またはファイルを読めない | error |
+| L016 | `deck*` 予約名前空間の再定義 | error |
+| L017 | `%% deck-source-version` の欠落、またはツールの版との不一致 | warning |
+| L018 | 4:3(`aspectratio=43`)デッキでの `deckcanvas` 使用 | warning |
+| L019 | キャンバスフレームのタイトルが 2 行以上(固定タイトル帯を超えて本文領域に重なる) | warning |
+| L020 | `%% style` 領域に語彙外の記述(不明なコマンド・役割名・色値・キー) | error |
+
+オブジェクト同士の重なりは意図的な場合があるため lint 対象にしない(`deck check` の実測レポートで info 表示のみ。§2.8)。
 
 リンターとフォーマッタは CLI から実行でき、AI の生成 → lint → 修正ループを支える。
 
@@ -173,6 +295,6 @@
 - `description` 環境、`\footnote`
 - `\only` / `\uncover` 系オーバーレイ
 - 発表者ノート `\note{}` と handout モード
-- 自由配置(textpos 系を公認語彙として 1 方式だけ導入し、GUI ドラッグと対応付ける)
+- キャンバスオブジェクトへのオーバーレイ指定(自由配置そのものは v1.1 で §2.8 に本文化済み)
 - `figure` + `\caption`
-- テーマの追加とカスタムカラーパレット
+- テーマの追加(`metropolis` 等)とカスタムカラーパレット

@@ -1,0 +1,22 @@
+{
+  "name": "@beamer-editor/web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@beamer-editor/core": "workspace:*",
+    "@beamer-editor/renderer": "workspace:*",
+    "katex": "^0.16.11"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^5.9.0",
+    "vite": "^7.3.0"
+  }
+}
