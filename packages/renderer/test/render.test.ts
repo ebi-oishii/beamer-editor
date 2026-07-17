@@ -73,3 +73,29 @@ describe("renderDeck: kitchen-sink.tex", () => {
     expect(raw?.html).toContain("解釈不能フレーム");
   });
 });
+
+describe("renderDeck: styled.tex(スタイル語彙)", () => {
+  const deck = renderDeck(parseDeck(fixture("styled.tex")));
+
+  it("CSS 変数が生成される", () => {
+    expect(deck.css).toContain("--deck-structure: #0F62FE;");
+    expect(deck.css).toContain("--deck-alert: #DA1E28;");
+    expect(deck.css).toContain('--deck-font-main: "Noto Sans CJK JP", sans-serif;');
+  });
+
+  it("ロゴとフッターが全フレームに入る(ページ番号付き)", () => {
+    for (const frame of deck.frames) {
+      expect(frame.html).toContain('class="deck-logo"');
+      expect(frame.html).toContain('class="deck-footer"');
+    }
+    expect(deck.frames[0]?.html).toContain("1 / 3");
+    expect(deck.frames[2]?.html).toContain("3 / 3");
+    expect(deck.frames[0]?.html).toContain("ACME Corp.");
+  });
+
+  it("style 領域が無いデッキでは CSS も装飾も出ない", () => {
+    const plain = renderDeck(parseDeck(fixture("basic.tex")));
+    expect(plain.css).toBe("");
+    expect(plain.frames[0]?.html).not.toContain("deck-footer");
+  });
+});

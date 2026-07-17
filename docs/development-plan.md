@@ -169,7 +169,7 @@ Electron(旧 5c)はここでは作らない(「後続」参照)。
 
 | # | 内容 | 規模 | 依存 |
 |---|---|---|---|
-| S1 | スタイル語彙 v1(`\deckcolor` `\deckfont` `\decklogo` `\deckfooter`): TeX 側マクロ + パーサの style 領域 + renderer の CSS 変数/ロゴ/フッター描画 + `styled.tex` fixture + L020。renderer の `Theme` 分離は**済** | M | Phase 1 |
+| S1 | スタイル語彙 v1(`\deckcolor` `\deckfont` `\decklogo` `\deckfooter`): TeX 側マクロ + パーサの style 領域 + renderer の CSS 変数/ロゴ/フッター描画 + `styled.tex` fixture。**済(2026-07-14。L020 の lint 化のみ Phase 2 へ)** | M | Phase 1 |
 | S2 | Noto Sans CJK: `\deckfont` のフォント解決・`deck fonts fetch`・日本語 fixture → design.md §9 の CJK 未決事項を解消 | S〜M | tectonic |
 | S3 | 「見本に合わせて」ワークフロー: pptx からの色・フォント抽出補助、SKILL への指示パターン追加、実物の社用テンプレで実演 | S〜M | S1, S2, 実物の PPT |
 

@@ -17,6 +17,8 @@ import type {
   InlineNode,
   ListItemNode,
   RawFrameNode,
+  StyleColorRole,
+  StyleLogoNode,
 } from "@beamer-editor/core";
 import { framesOf } from "@beamer-editor/core";
 import katex from "katex";
@@ -35,6 +37,8 @@ export interface RenderedFrame {
 export interface RenderedDeck {
   title: string;
   frames: RenderedFrame[];
+  /** `%% style` 領域から生成した CSS(CSS 変数)。ホストが <style> として注入する。 */
+  css: string;
 }
 
 const escapeHtml = (s: string) =>
@@ -66,6 +70,28 @@ const NAMED_COLORS: Record<string, string> = {
   white: "#ffffff",
 };
 
+/** `%% style` 領域の集約結果(同じ役割は後勝ち)。 */
+interface CollectedStyle {
+  colors: Partial<Record<StyleColorRole, string>>;
+  fonts: Partial<Record<"main" | "mono", string>>;
+  logo: StyleLogoNode | null;
+  footerHtml: string | null;
+}
+
+/** `%% style` 領域から CSS 変数ブロックを生成する。エントリが無ければ空文字。 */
+export function styleCssOf(doc: DeckDocument): string {
+  const vars: string[] = [];
+  for (const entry of doc.style.entries) {
+    if (entry.type === "styleColor") {
+      vars.push(`--deck-${entry.role}: #${entry.hex};`);
+    } else if (entry.type === "styleFont") {
+      const generic = entry.slot === "mono" ? "monospace" : "sans-serif";
+      vars.push(`--deck-font-${entry.slot}: "${entry.family.replaceAll('"', "")}", ${generic};`);
+    }
+  }
+  return vars.length > 0 ? `.slide {\n  ${vars.join("\n  ")}\n}` : "";
+}
+
 function math(tex: string, displayMode: boolean): string {
   try {
     return katex.renderToString(tex, { displayMode, throwOnError: false, output: "html" });
@@ -80,10 +106,44 @@ class FrameRenderer {
   /** フレーム内で観測したオーバーレイの最大ステップ。 */
   private maxStep = 1;
 
+  private readonly style: CollectedStyle;
+
   constructor(
     private readonly doc: DeckDocument,
     private readonly theme: Theme,
-  ) {}
+  ) {
+    const style: CollectedStyle = { colors: {}, fonts: {}, logo: null, footerHtml: null };
+    for (const entry of doc.style.entries) {
+      if (entry.type === "styleColor") style.colors[entry.role] = entry.hex;
+      else if (entry.type === "styleFont") style.fonts[entry.slot] = entry.family;
+      else if (entry.type === "styleLogo") style.logo = entry;
+      else if (entry.type === "styleFooter") style.footerHtml = this.renderInlines(entry.text);
+    }
+    this.style = style;
+  }
+
+  /**
+   * ロゴ・フッターのオーバーレイ(TeX 側の背景テンプレートに対応)。
+   * .slide 直下の先頭に入れ、CSS の z-index で本文の背面に置く。
+   */
+  private decorations(frameIndex: number, frameTotal: number): string {
+    let out = "";
+    const { slideWidthPt, slideHeightPt, bodyAreaPt: body } = this.theme.metrics;
+    if (this.style.logo) {
+      const { x, y, width } = this.style.logo.position;
+      const leftPct = (((body.left + x * body.width) / slideWidthPt) * 100).toFixed(2);
+      const topPct = (((body.top + y * body.height) / slideHeightPt) * 100).toFixed(2);
+      const widthPct = (((width * body.width) / slideWidthPt) * 100).toFixed(2);
+      const pos = `left:${leftPct}%;top:${topPct}%;width:${widthPct}%`;
+      out += this.style.logo.path.toLowerCase().endsWith(".pdf")
+        ? `<div class="deck-logo image-placeholder" style="${pos}">PDF ロゴ: ${escapeHtml(this.style.logo.path)}</div>`
+        : `<img class="deck-logo" src="${escapeHtml(this.style.logo.path)}" style="${pos}">`;
+    }
+    if (this.style.footerHtml !== null) {
+      out += `<div class="deck-footer"><span>${this.style.footerHtml}</span><span>${frameIndex} / ${frameTotal}</span></div>`;
+    }
+    return out;
+  }
 
   private overlayAttrs(overlay: ListItemNode["overlay"]): string {
     let attrs = "";
@@ -300,7 +360,11 @@ class FrameRenderer {
     return `<ol class="toc">${items}</ol>`;
   }
 
-  renderFrame(frame: FrameNode): { html: string; stepCount: number } {
+  renderFrame(
+    frame: FrameNode,
+    frameIndex: number,
+    frameTotal: number,
+  ): { html: string; stepCount: number } {
     this.pauseCount = 0;
     this.maxStep = 1;
     const body = this.renderBlocks(frame.body);
@@ -309,14 +373,14 @@ class FrameRenderer {
         ? `<div class="frametitle">${this.renderInlines(frame.title)}</div>`
         : "";
     return {
-      html: `<div class="slide${frame.options.plain ? " plain" : ""}">${title}<div class="slide-body">${body}</div></div>`,
+      html: `<div class="slide${frame.options.plain ? " plain" : ""}">${this.decorations(frameIndex, frameTotal)}${title}<div class="slide-body">${body}</div></div>`,
       stepCount: this.maxStep,
     };
   }
 
-  renderRawFrame(frame: RawFrameNode): string {
+  renderRawFrame(frame: RawFrameNode, frameIndex: number, frameTotal: number): string {
     return (
-      '<div class="slide raw-frame">' +
+      `<div class="slide raw-frame">${this.decorations(frameIndex, frameTotal)}` +
       `<div class="frametitle">${escapeHtml(frame.title ?? "(生フレーム)")}</div>` +
       '<div class="slide-body"><div class="raw-block"><div class="raw-badge">解釈不能フレーム(一覧・並べ替えのみ可能。プレビューは Phase 6 で画像に)</div>' +
       `<pre>${escapeHtml(frame.tex)}</pre></div></div></div>`
@@ -356,18 +420,20 @@ function inlineToPlain(nodes: InlineNode[]): string {
 /** デッキ全体を描画する。 */
 export function renderDeck(doc: DeckDocument, theme: Theme = DEFAULT_THEME): RenderedDeck {
   const renderer = new FrameRenderer(doc, theme);
-  const frames: RenderedFrame[] = framesOf(doc).map((frame, i) => {
+  const allFrames = framesOf(doc);
+  const total = allFrames.length;
+  const frames: RenderedFrame[] = allFrames.map((frame, i) => {
     if (frame.type === "rawFrame") {
       return {
         index: i + 1,
         label: frame.label,
         titleText: frame.title ?? `frame ${i + 1}`,
-        html: renderer.renderRawFrame(frame),
+        html: renderer.renderRawFrame(frame, i + 1, total),
         stepCount: 1,
         isRaw: true,
       };
     }
-    const { html, stepCount } = renderer.renderFrame(frame);
+    const { html, stepCount } = renderer.renderFrame(frame, i + 1, total);
     const titleText =
       frame.title && frame.title.length > 0 ? inlineToPlain(frame.title) : `frame ${i + 1}`;
     return {
@@ -382,5 +448,6 @@ export function renderDeck(doc: DeckDocument, theme: Theme = DEFAULT_THEME): Ren
   return {
     title: doc.metadata.title ? inlineToPlain(doc.metadata.title.value) : "(無題のデッキ)",
     frames,
+    css: styleCssOf(doc),
   };
 }

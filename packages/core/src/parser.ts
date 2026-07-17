@@ -19,6 +19,7 @@ import type {
   ColumnNode,
   DeckDocument,
   DeckElement,
+  DeckStyle,
   DimFactor,
   FrameNode,
   FrameOptions,
@@ -33,6 +34,7 @@ import type {
   RawBlockNode,
   RawFrameNode,
   SourceSpan,
+  StyleColorRole,
   TableRow,
 } from "./ast.js";
 
@@ -67,6 +69,9 @@ const CANVAS_SIZES = new Set([
   "large",
   "Large",
 ]);
+
+const STYLE_COLOR_ROLES = new Set(["structure", "alert", "example", "text", "background"]);
+const STYLE_FONT_SLOTS = new Set(["main", "mono"]);
 
 const span = (start: number, end: number): SourceSpan => ({ start, end });
 
@@ -1057,6 +1062,114 @@ class Parser {
     return { type: "macroSection", entries, span: span(start, end) };
   }
 
+  /** `%% style` 領域(theme-design.md §2)。語彙外の記述は RawBlock("unknown-style")。 */
+  private parseStyleSection(start: number, end: number): DeckStyle {
+    const entries: DeckStyle["entries"] = [];
+    let cursor = start;
+
+    const group = (from: number): { body: string; next: number } | null => {
+      if (this.src[from] !== "{") return null;
+      const close = readBalanced(this.src, from);
+      if (close === null || close > end) return null;
+      return { body: this.src.slice(from + 1, close), next: close + 1 };
+    };
+    const rawToEol = (from: number): number => {
+      const eol = this.src.indexOf("\n", from);
+      const stop = eol === -1 || eol > end ? end : eol;
+      entries.push(this.rawBlock(from, stop, null, "unknown-style"));
+      return stop + 1;
+    };
+
+    while (cursor < end) {
+      const ch = this.src[cursor] as string;
+      if (/\s/.test(ch)) {
+        cursor++;
+        continue;
+      }
+      if (ch === "%") {
+        const eol = this.src.indexOf("\n", cursor);
+        cursor = eol === -1 ? end : eol + 1;
+        continue;
+      }
+      if (this.src.startsWith("\\deckcolor", cursor)) {
+        const g1 = group(cursor + "\\deckcolor".length);
+        const g2 = g1 && group(g1.next);
+        const role = g1?.body.trim() ?? "";
+        const hex = g2?.body.trim() ?? "";
+        if (!g1 || !g2 || !STYLE_COLOR_ROLES.has(role) || !/^[0-9A-Fa-f]{6}$/.test(hex)) {
+          cursor = rawToEol(cursor);
+          continue;
+        }
+        entries.push({
+          type: "styleColor",
+          role: role as StyleColorRole,
+          hex: hex.toUpperCase(),
+          span: span(cursor, g2.next),
+        });
+        cursor = g2.next;
+        continue;
+      }
+      if (this.src.startsWith("\\deckfont", cursor)) {
+        const g1 = group(cursor + "\\deckfont".length);
+        const g2 = g1 && group(g1.next);
+        const slot = g1?.body.trim() ?? "";
+        if (!g1 || !g2 || !STYLE_FONT_SLOTS.has(slot) || g2.body.trim() === "") {
+          cursor = rawToEol(cursor);
+          continue;
+        }
+        entries.push({
+          type: "styleFont",
+          slot: slot as "main" | "mono",
+          family: g2.body.trim(),
+          span: span(cursor, g2.next),
+        });
+        cursor = g2.next;
+        continue;
+      }
+      if (this.src.startsWith("\\decklogo", cursor)) {
+        const optOpen = cursor + "\\decklogo".length;
+        const optClose =
+          this.src[optOpen] === "[" ? readBalanced(this.src, optOpen, "[", "]") : null;
+        const g = optClose !== null ? group(optClose + 1) : null;
+        const keys =
+          optClose !== null ? this.parseCanvasKeys(this.src.slice(optOpen + 1, optClose)) : null;
+        if (optClose === null || !g || keys === null) {
+          cursor = rawToEol(cursor);
+          continue;
+        }
+        entries.push({
+          type: "styleLogo",
+          position: { x: keys.x, y: keys.y, width: keys.w, span: span(optOpen, optClose + 1) },
+          path: g.body.trim(),
+          span: span(cursor, g.next),
+        });
+        cursor = g.next;
+        continue;
+      }
+      if (this.src.startsWith("\\deckfooter", cursor)) {
+        const gOpen = cursor + "\\deckfooter".length;
+        if (this.src[gOpen] !== "{") {
+          cursor = rawToEol(cursor);
+          continue;
+        }
+        const close = readBalanced(this.src, gOpen);
+        if (close === null || close > end) {
+          cursor = rawToEol(cursor);
+          continue;
+        }
+        entries.push({
+          type: "styleFooter",
+          text: this.parseInlines(gOpen + 1, close),
+          span: span(cursor, close + 1),
+        });
+        cursor = close + 1;
+        continue;
+      }
+      cursor = rawToEol(cursor);
+    }
+    return { type: "style", entries, span: span(start, end) };
+  }
+
   parseDocument(): DeckDocument {
     const src = this.src;
     const dcMatch = /\\documentclass(?:\[([^\]]*)\])?\{beamer\}/.exec(src);
@@ -1074,6 +1187,7 @@ class Parser {
       return [contentStart, endMark];
     };
     const macrosRegion = region("macros");
+    const styleRegion = region("style");
     const extraRegion = region("preamble-extra");
 
     const docBegin = src.indexOf("\\begin{document}");
@@ -1170,6 +1284,9 @@ class Parser {
       macros: macrosRegion
         ? this.parseMacroSection(macrosRegion[0], macrosRegion[1])
         : { type: "macroSection", entries: [], span: span(0, 0) },
+      style: styleRegion
+        ? this.parseStyleSection(styleRegion[0], styleRegion[1])
+        : { type: "style", entries: [], span: span(0, 0) },
       preambleExtra: {
         type: "rawRegion",
         tex: extraRegion ? src.slice(extraRegion[0], extraRegion[1]) : "",

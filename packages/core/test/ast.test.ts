@@ -52,6 +52,7 @@ describe("ast smoke", () => {
       aspectRatio: "169",
       metadata: { type: "metadata", span: span(0, 1) },
       macros: { type: "macroSection", span: span(0, 1), entries: [] },
+      style: { type: "style", span: span(0, 1), entries: [] },
       preambleExtra: { type: "rawRegion", span: span(0, 1), tex: "" },
       managedPreamble: { type: "rawRegion", span: span(0, 1), tex: "" },
       body: [

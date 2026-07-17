@@ -95,7 +95,7 @@ Phase 5(VS Code シェル)と並行可。
 
 | # | 内容 | 規模 | 依存 |
 |---|---|---|---|
-| S1 | スタイル語彙 v1: TeX 側 deck* スタイルマクロ + パーサの style 領域 + renderer の CSS 変数/ロゴ/フッター + `styled.tex` fixture + L020 | M | Phase 1 |
+| S1 | スタイル語彙 v1: TeX 側 deck* スタイルマクロ + パーサの style 領域 + renderer の CSS 変数/ロゴ/フッター + `styled.tex` fixture。**実装済み(2026-07-14)**。L020 の lint 化は Phase 2(パーサは語彙外を unknown-style の生ブロックとして保持済み)。TeX 側はフォント不在・不正値を DECKSTYLE 行としてログに出す | M | Phase 1 |
 | S2 | Noto Sans CJK: `\deckfont` のフォント解決・`deck fonts fetch`・日本語 fixture | S〜M | tectonic |
 | S3 | 「見本に合わせて」ワークフロー: pptx からの色・フォント抽出補助、指示パターンの SKILL 追加、実物の社用テンプレで実演 | S〜M | S1, S2, 実物の PPT |
 
