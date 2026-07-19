@@ -179,7 +179,7 @@ beamer-editor/
 | テーマ再現度 | HTML プレビューと PDF の見た目のズレ(特に行折返し・溢れ) | 原理的に消えないと割り切る。将来、プレビュー側での溢れヒューリスティック警告を検討 |
 | tabular の対応範囲 | 表の構文は奥が深い | v1 は booktabs + 基本列指定のみ(仕様参照)。逸脱は生ブロックへ |
 | tectonic の配布 | バイナリ同梱か初回ダウンロードか | Phase 6 で決定。まず開発機ではパス指定で動かす |
-| 日本語(CJK)対応 | tectonic(XeTeX)で日本語を組むにはフォント設定(fontspec + CJK フォント等)が必要。現状のゴールデンサンプルは英語で書いている | **Noto Sans CJK を標準とし、スタイル語彙 `\deckfont` の機構で解決する**([theme-design.md](theme-design.md) §4、スタイルトラック S2)。バイナリは同梱せず取得コマンドでキャッシュ |
+| 日本語(CJK)対応 | tectonic(XeTeX)で日本語を組むにはフォント設定(fontspec + CJK フォント等)が必要 | **解消済(S2、2026-07-19)**。`deck-style-preamble.tex` の xeCJK + `\deckfont` で CJK フォントを設定し、`deck fonts fetch`(`packages/cli`)が Noto Sans CJK JP を取得・キャッシュ・配置する。バイナリは同梱しない。`fixtures/japanese.tex` を tectonic で警告 0 コンパイル確認([theme-design.md](theme-design.md) §4) |
 | キャンバスの縦溢れ・重なり | textpos 系の絶対配置は縦にはみ出しても Overfull 警告が出ず、`deck check` の安全網が素通しになる | `zref-savepos` で各オブジェクトの実測位置を aux に出力させ、check がはみ出し(warning)・重なり(info)を機械検出する([subset-spec.md](subset-spec.md) §2.8) |
 | 同時編集の競合 | エディタ内未保存変更中に外部(AI)がファイルを書き換えた場合 | 外部 CLI(M2): 依頼前に保存し、dirty buffer は警告、外部変更は undo 1 ステップで取り込み、競合時は黙って上書きせず diff 表示。内蔵 AI(Phase 9): 一時 worktree で編集 → frame ハッシュ検査 → ShellHost 経由 patch 適用([ai-protocol.md](ai-protocol.md) §7) |
 | プレビュー内インライン編集とマクロ | 展開後表示への編集をマクロ引数へ書き戻すにはソースマップ逆引きが必要 | ソースマップは最初から実装するが、書き戻し UI は v1 必須にしない |

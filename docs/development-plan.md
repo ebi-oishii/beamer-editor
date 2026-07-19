@@ -77,6 +77,8 @@
 
 ### Phase 3: core — マクロ展開器(M)
 
+**実装済(2026-07-19)。** `packages/core/src/expander.ts`(`expandDeck` / `mapExpandedToSource`)。テキストレベル展開 + 再パース方式、ピース列方式のソースマップ、深さ上限による無限再帰ガード。展開不能な呼び出しは原文のまま残す。core テスト 36 件。
+
 - 定義のパース(展開可能性の判定)、単純置換の展開、ソースマップ。
 - 展開不能な呼び出しの生ブロック化。
 - Phase 2 と並行可能(どちらも Phase 1 の AST にのみ依存)。
@@ -170,7 +172,7 @@ Electron(旧 5c)はここでは作らない(「後続」参照)。
 | # | 内容 | 規模 | 依存 |
 |---|---|---|---|
 | S1 | スタイル語彙 v1(`\deckcolor` `\deckfont` `\decklogo` `\deckfooter`): TeX 側マクロ + パーサの style 領域 + renderer の CSS 変数/ロゴ/フッター描画 + `styled.tex` fixture。**済(2026-07-14。L020 の lint 化のみ Phase 2 へ)** | M | Phase 1 |
-| S2 | Noto Sans CJK: `\deckfont` のフォント解決・`deck fonts fetch`・日本語 fixture → design.md §9 の CJK 未決事項を解消 | S〜M | tectonic |
+| S2 | Noto Sans CJK: `\deckfont` のフォント解決・`deck fonts fetch`・日本語 fixture → design.md §9 の CJK 未決事項を解消。**済(2026-07-19)**。xeCJK 統合 + `packages/cli`(fonts status/fetch)+ renderer 和文フォールバック + `fixtures/japanese.tex`。tectonic で警告 0 コンパイル確認 | S〜M | tectonic |
 | S3 | 「見本に合わせて」ワークフロー: pptx からの色・フォント抽出補助、SKILL への指示パターン追加、実物の社用テンプレで実演 | S〜M | S1, S2, 実物の PPT |
 
 幾何まで変える本格テーマ(タイトル帯高の変更等)は将来候補として theme-design.md に保持(必要になったら計測付きテーマパック方式)。
