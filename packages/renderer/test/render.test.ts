@@ -80,7 +80,19 @@ describe("renderDeck: styled.tex(スタイル語彙)", () => {
   it("CSS 変数が生成される", () => {
     expect(deck.css).toContain("--deck-structure: #0F62FE;");
     expect(deck.css).toContain("--deck-alert: #DA1E28;");
-    expect(deck.css).toContain('--deck-font-main: "Noto Sans CJK JP", sans-serif;');
+    expect(deck.css).toContain(
+      '--deck-font-main: "Noto Sans CJK JP", "Hiragino Sans", "Yu Gothic", sans-serif;',
+    );
+  });
+
+  it("main フォントは和文ローカルフォントへフォールバックする(CJK 近似)", () => {
+    const deck2 = renderDeck(parseDeck(fixture("japanese.tex")));
+    // \deckfont{main}{Noto Sans CJK JP} → 指定名 → 和文ローカル → サンス総称。
+    expect(deck2.css).toContain(
+      '--deck-font-main: "Noto Sans CJK JP", "Hiragino Sans", "Yu Gothic", sans-serif;',
+    );
+    // mono は指定されていないので main のみが出る。
+    expect(deck2.css).not.toContain("--deck-font-mono");
   });
 
   it("ロゴとフッターが全フレームに入る(ページ番号付き)", () => {

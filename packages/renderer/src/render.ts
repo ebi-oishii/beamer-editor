@@ -85,8 +85,14 @@ export function styleCssOf(doc: DeckDocument): string {
     if (entry.type === "styleColor") {
       vars.push(`--deck-${entry.role}: #${entry.hex};`);
     } else if (entry.type === "styleFont") {
-      const generic = entry.slot === "mono" ? "monospace" : "sans-serif";
-      vars.push(`--deck-font-${entry.slot}: "${entry.family.replaceAll('"', "")}", ${generic};`);
+      const family = entry.family.replaceAll('"', "");
+      // main は和文のローカルフォントへフォールバックしてからサンス総称へ落とす
+      // (プレビューは近似でよい。theme-design.md §4)。mono は等幅のまま総称へ委ねる。
+      const stack =
+        entry.slot === "mono"
+          ? `"${family}", monospace`
+          : `"${family}", "Hiragino Sans", "Yu Gothic", sans-serif`;
+      vars.push(`--deck-font-${entry.slot}: ${stack};`);
     }
   }
   return vars.length > 0 ? `.slide {\n  ${vars.join("\n  ")}\n}` : "";

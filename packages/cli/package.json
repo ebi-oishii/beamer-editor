@@ -1,0 +1,20 @@
+{
+  "name": "@beamer-editor/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "src/cli.ts",
+  "bin": {
+    "deck": "src/cli.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "deck": "node --experimental-strip-types src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  }
+}
