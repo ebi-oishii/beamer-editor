@@ -150,6 +150,127 @@ describe("expandDeck: マクロなしソース", () => {
   });
 });
 
+describe("expandDeck: 複数行呼び出しと段落境界", () => {
+  const wrap = (call: string) =>
+    [
+      "\\documentclass{beamer}",
+      "%% macros:begin",
+      "\\newcommand{\\pair}[2]{PAIR(#1,#2)}",
+      "%% macros:end",
+      "\\begin{document}",
+      "\\begin{frame}",
+      call,
+      "\\end{frame}",
+      "\\end{document}",
+      "",
+    ].join("\n");
+
+  it("制御綴と引数の間の単一改行を越えて展開する", () => {
+    // \pair\n  {x}{y} は従来 missing-args だったが、単一改行込みの空白を食って展開する
+    const result = expandDeck(wrap("\\pair\n  {x}{y}"));
+    expect(result.source).toContain("PAIR(x,y)");
+    expect(result.changed).toBe(true);
+  });
+
+  it("空行(段落境界)を挟んだ呼び出しは引数を食わず未展開のまま残す", () => {
+    const result = expandDeck(wrap("\\pair\n\n  {x}{y}"));
+    expect(result.source).not.toContain("PAIR(x,y)");
+    expect(result.source).toContain("\\pair");
+    expect(result.diagnostics.some((d) => d.kind === "missing-args" && d.name === "pair")).toBe(
+      true,
+    );
+  });
+});
+
+describe("expandDeck: star form", () => {
+  const src = [
+    "\\documentclass{beamer}",
+    "%% macros:begin",
+    "\\newcommand{\\R}{\\mathbb{R}}",
+    "%% macros:end",
+    "\\begin{document}",
+    "\\begin{frame}",
+    "$\\R*$",
+    "\\end{frame}",
+    "\\end{document}",
+    "",
+  ].join("\n");
+
+  it("\\R* は \\R を展開し * はリテラルとして残す(star を特別扱いしない)", () => {
+    const result = expandDeck(src);
+    expect(result.source).toContain("\\mathbb{R}*");
+    expect(result.source).not.toContain("\\R*");
+    expect(result.changed).toBe(true);
+  });
+});
+
+describe("expandDeck: 省略可能引数の読取", () => {
+  const src = [
+    "\\documentclass{beamer}",
+    "%% macros:begin",
+    "\\newcommand{\\greet}[1][world]{Hello, #1!}",
+    "%% macros:end",
+    "\\begin{document}",
+    "\\begin{frame}",
+    "\\greet[a] and \\greet",
+    "\\end{frame}",
+    "\\end{document}",
+    "",
+  ].join("\n");
+
+  it("\\greet[a] は最初の裸 ] で閉じ、省略時はデフォルトを使う(回帰)", () => {
+    const result = expandDeck(src);
+    expect(result.source).toContain("Hello, a!");
+    expect(result.source).toContain("Hello, world!");
+  });
+});
+
+describe("expandDeck: \\begin{document} 検出", () => {
+  it("プリアンブルのコメント行の \\begin{document} を無視して本文開始を検出する", () => {
+    const src = [
+      "\\documentclass{beamer}",
+      "%% macros:begin",
+      "\\newcommand{\\R}{\\mathbb{R}}",
+      "%% macros:end",
+      "% see \\begin{document} then \\R stays raw",
+      "\\begin{document}",
+      "\\begin{frame}",
+      "$\\R$",
+      "\\end{frame}",
+      "\\end{document}",
+      "",
+    ].join("\n");
+    const result = expandDeck(src);
+    // 本文の \R は展開される
+    expect(result.source).toContain("$\\mathbb{R}$");
+    expect(result.changed).toBe(true);
+    // コメント行はそのまま残る(コメント内 \begin{document} を本文開始と誤検出していれば、
+    // 行後半の \R が本文扱いで展開され、この文字列は残らない)
+    expect(result.source).toContain("% see \\begin{document} then \\R stays raw");
+  });
+});
+
+describe("expandDeck: 例外を投げない", () => {
+  it("マクロ無し・展開有り・不完全ソースいずれでも throw しない", () => {
+    const withMacro = [
+      "\\documentclass{beamer}",
+      "%% macros:begin",
+      "\\newcommand{\\R}{\\mathbb{R}}",
+      "%% macros:end",
+      "\\begin{document}",
+      "\\begin{frame}",
+      "$\\R$",
+      "\\end{frame}",
+      "\\end{document}",
+      "",
+    ].join("\n");
+    expect(() => expandDeck(withMacro)).not.toThrow();
+    expect(() => expandDeck("plain text, no preamble")).not.toThrow();
+    expect(() => expandDeck("")).not.toThrow();
+    expect(() => expandDeck("\\begin{document}")).not.toThrow();
+  });
+});
+
 describe("expandDeck: スキップ領域", () => {
   it("コメント内・verbatim 内の呼び出しは展開しない", () => {
     const src = [

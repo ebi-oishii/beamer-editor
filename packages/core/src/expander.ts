@@ -13,8 +13,10 @@
  * 近似として割り切っている点(実 TeX とのずれ):
  * - 同名定義は後勝ち(\renewcommand セマンティクス)。本文の呼び出しはすべてプリアンブルより
  *   後にあるため、最終定義がすべての呼び出しに適用されるという単純化で足りる。
- * - 呼び出し直後の空白は消費しない(TeX は制御綴の後の空白を食うが、ここでは残す)。
- * - `\name*`(star form)は対象外。引数区切りは balanced な {...} / [...] のみ。
+ * - 制御綴と引数の間の空白(単一改行込み)は TeX 同様に食う。ただし空行(段落境界)は越えない。
+ *   展開しきった後の末尾空白は消費しない(TeX は制御綴の後の空白を食うが、ここでは残す)。
+ * - `\name*`(star form)は特別扱いしない。定義済みマクロは通常どおり展開し、`*` は後続の
+ *   リテラルとして残す(TeX 準拠)。引数区切りは必須 {...} と省略可能 [...]。
  * - コメント(`%`〜行末、`\%` は除く)・verbatim 系環境・`\verb` はスキップし、数式内は展開する。
  *
  * ソースマップ(ピース列方式):
@@ -240,11 +242,9 @@ class Expander {
         i = headerEnd;
         continue;
       }
-      if (s.charAt(j) === "*") {
-        // star form は対象外(そのまま残す)。
-        i = j + 1;
-        continue;
-      }
+      // star form は特別扱いしない: 定義済みマクロは通常どおり展開し、直後の `*` は
+      // リテラルとして後続テキストに残す(TeX 準拠)。paramCount>0 のマクロが `\name*{...}`
+      // の形なら、引数読取が `*` に阻まれ missing-args として未展開のまま残る(許容)。
       const def = this.commands.get(name);
       if (def) return { cs: i, kind: "cmd", name, def, headerEnd: j };
       i = j;
@@ -259,9 +259,27 @@ class Expander {
   readArgs(s: string, call: CallSite): { args: ArgDesc[]; ce: number } | null {
     if (call.kind === "end") return { args: [], ce: call.headerEnd };
     const def = call.def;
+    // 制御綴と引数の間の空白を食う。TeX 同様に単一改行込みでスキップするが、空行
+    //(段落境界 = 空白のみを挟んだ連続改行)は越えない。段落を跨いで引数を食うのは
+    // 近似として過剰なため、2 個目の改行に達したら元位置へ戻して読取を失敗させる。
     const skipWs = (p: number) => {
       let q = p;
-      while (q < s.length && (s.charAt(q) === " " || s.charAt(q) === "\t")) q++;
+      let newlines = 0;
+      while (q < s.length) {
+        const c = s.charAt(q);
+        if (c === " " || c === "\t") {
+          q++;
+          continue;
+        }
+        if (c === "\n" || c === "\r") {
+          if (c === "\r" && s.charAt(q + 1) === "\n") q++; // \r\n を 1 改行として数える
+          newlines += 1;
+          if (newlines >= 2) return p; // 空行(段落境界)は越えない
+          q++;
+          continue;
+        }
+        break;
+      }
       return q;
     };
     let cursor = call.headerEnd;
@@ -271,10 +289,15 @@ class Expander {
       mandatory -= 1;
       const at = skipWs(cursor);
       if (s.charAt(at) === "[") {
-        const close = readBalanced(s, at, "[", "]");
-        if (close === null) return null;
-        args.push({ kind: "src", a: at + 1, b: close });
-        cursor = close + 1;
+        // TeX の省略可能引数はネストせず、最初の裸 `]` で閉じる(`\]` は除く)。
+        let q = at + 1;
+        while (q < s.length && s.charAt(q) !== "]") {
+          if (s.charAt(q) === "\\") q += 1; // \] などのエスケープを 1 文字読み飛ばす
+          q += 1;
+        }
+        if (q >= s.length) return null; // 閉じ `]` が無い
+        args.push({ kind: "src", a: at + 1, b: q });
+        cursor = q + 1;
       } else {
         args.push({ kind: "default", text: def.optionalDefault });
       }
@@ -306,13 +329,17 @@ class Expander {
     const total = acc;
     const s = pieces.map((p) => p.text).join("");
 
-    // S オフセット o を含む Piece の添字。
+    // S オフセット o を含む Piece の添字。starts は昇順かつ連続なので、
+    // starts[idx] <= o を満たす最大の idx が該当ピース(二分探索。挙動は線形探索と同一)。
     const pieceAt = (o: number): number => {
-      for (let idx = 0; idx < pieces.length; idx++) {
-        const ps = starts[idx] as number;
-        if (o < ps + (pieces[idx] as Piece).text.length) return idx;
+      let lo = 0;
+      let hi = pieces.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if ((starts[mid] as number) <= o) lo = mid;
+        else hi = mid - 1;
       }
-      return pieces.length - 1;
+      return lo;
     };
     // S 開始オフセット → 元ソースオフセット(exact は 1:1、synthetic は site 先頭へ)。
     const mapStart = (o: number): number => {
@@ -442,15 +469,79 @@ function buildSegments(pieces: Piece[]): ExpansionMap {
 }
 
 /**
- * ソース全体を展開する。決して throw しない(パーサが回復するため最悪でも入力と同一を返す)。
+ * `\begin{document}` の開始位置を探す。プリアンブルの `%` 行コメント内の
+ * `% \begin{document}` に誤マッチしないよう、行コメントを飛ばしながら走査する
+ *(`\%` エスケープは考慮。verbatim はプリアンブルにほぼ無いため考慮しない)。見つからなければ -1。
+ */
+function findDocumentBegin(source: string): number {
+  const marker = "\\begin{document}";
+  let i = 0;
+  while (i < source.length) {
+    if (source.startsWith(marker, i)) return i;
+    const ch = source.charAt(i);
+    if (ch === "%") {
+      const nl = source.indexOf("\n", i);
+      i = nl === -1 ? source.length : nl + 1;
+      continue;
+    }
+    if (ch === "\\") {
+      i += 2; // エスケープ(\% など)は 2 文字読み飛ばす(marker の判定は上で済んでいる)
+      continue;
+    }
+    i += 1;
+  }
+  return -1;
+}
+
+/** 入力パースが失敗したときのフォールバック用の空 DeckDocument(呼び出し側をクラッシュさせない)。 */
+function emptyDoc(source: string): DeckDocument {
+  const span: SourceSpan = { start: 0, end: source.length };
+  return {
+    type: "document",
+    span,
+    sourceVersion: null,
+    aspectRatio: "169",
+    metadata: { type: "metadata", span },
+    macros: { type: "macroSection", span, entries: [] },
+    style: { type: "style", span, entries: [] },
+    preambleExtra: { type: "rawRegion", span, tex: "" },
+    managedPreamble: { type: "rawRegion", span, tex: "" },
+    body: [],
+  };
+}
+
+/**
+ * ソース全体を展開する。決して throw しない。内部の parseDeck(入力パース・展開後再パースの
+ * 両方)を try/catch で防御し、例外時は安全にフォールバックする(入力パース失敗時は全文素通し +
+ * 空 doc、再パース失敗時は展開後 source を返しつつ doc は入力パース結果へ戻す)。
  * `\begin{document}` 以降のみを対象にし、プリアンブル(macros 領域を含む)は逐語で残す。
  */
 export function expandDeck(source: string): ExpandResult {
-  const doc = parseDeck(source);
+  let doc: DeckDocument;
+  try {
+    doc = parseDeck(source);
+  } catch {
+    // 入力パースが失敗: 展開を諦め、全文を 1:1 で素通しする安全な結果を返す。
+    return {
+      source,
+      doc: emptyDoc(source),
+      map: [
+        {
+          expandedStart: 0,
+          expandedEnd: source.length,
+          sourceStart: 0,
+          sourceEnd: source.length,
+          exact: true,
+        },
+      ],
+      diagnostics: [],
+      changed: false,
+    };
+  }
   const expander = new Expander(doc);
 
   const marker = "\\begin{document}";
-  const docBegin = source.indexOf(marker);
+  const docBegin = findDocumentBegin(source);
 
   let pieces: Piece[];
   if (docBegin === -1 || !expander.hasDefs) {
@@ -478,8 +569,16 @@ export function expandDeck(source: string): ExpandResult {
 
   const expandedSource = pieces.map((p) => p.text).join("");
   const map = buildSegments(pieces);
-  // 展開が無ければ再パース結果は入力と同一なので doc を再利用する。
-  const expandedDoc = expander.changed ? parseDeck(expandedSource) : doc;
+  // 展開が無ければ再パース結果は入力と同一なので doc を再利用する。展開があった場合は
+  // 再パースするが、万一 throw しても入力パース結果 doc へフォールバックする(source は返す)。
+  let expandedDoc = doc;
+  if (expander.changed) {
+    try {
+      expandedDoc = parseDeck(expandedSource);
+    } catch {
+      expandedDoc = doc;
+    }
+  }
 
   return {
     source: expandedSource,
