@@ -13,7 +13,7 @@
  */
 
 import { createWriteStream } from "node:fs";
-import { access, copyFile, mkdir } from "node:fs/promises";
+import { access, copyFile, mkdir, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -92,10 +92,14 @@ export interface FontResolution {
   files: ResolvedFontFile[];
 }
 
-/** OS 既定のフォントパス。darwin を第一に、win32 / それ以外(XDG)も面倒を見る。 */
+/**
+ * OS 既定のフォントパス。darwin を第一に、win32 / それ以外(XDG)も面倒を見る。
+ * 環境変数(LOCALAPPDATA / XDG_DATA_HOME)は `env` 経由で読む純関数(テストで注入可能)。
+ */
 export function defaultFontPaths(
   platform: NodeJS.Platform = process.platform,
   home: string = homedir(),
+  env: NodeJS.ProcessEnv = process.env,
 ): FontPaths {
   if (platform === "darwin") {
     return {
@@ -104,14 +108,14 @@ export function defaultFontPaths(
     };
   }
   if (platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
+    const localAppData = env.LOCALAPPDATA ?? join(home, "AppData", "Local");
     return {
       cacheDir: join(localAppData, "beamer-editor", "fonts"),
       userFontDir: join(localAppData, "Microsoft", "Windows", "Fonts"),
     };
   }
   // linux / その他: XDG Base Directory に従う。
-  const dataHome = process.env.XDG_DATA_HOME ?? join(home, ".local", "share");
+  const dataHome = env.XDG_DATA_HOME ?? join(home, ".local", "share");
   return {
     cacheDir: join(dataHome, "beamer-editor", "fonts"),
     userFontDir: join(home, ".local", "share", "fonts"),
@@ -146,12 +150,16 @@ export async function resolveFont(
     const inCache = await io.exists(join(paths.cacheDir, f.fileName));
     files.push({ fileName: f.fileName, url: f.url, inUserDir, inCache });
   }
+  // files が空だと every(...) が真になり installed/cached と誤判定するため明示ガードする
+  // (カタログは常に非空だが、空エントリを missing 相当として扱う防御)。
   const status: FontStatus =
-    paths.userFontDir !== null && files.every((f) => f.inUserDir)
-      ? "installed"
-      : files.every((f) => f.inCache)
-        ? "cached"
-        : "missing";
+    files.length === 0
+      ? "missing"
+      : paths.userFontDir !== null && files.every((f) => f.inUserDir)
+        ? "installed"
+        : files.every((f) => f.inCache)
+          ? "cached"
+          : "missing";
   return { family, status, license: entry.license, files };
 }
 
@@ -203,6 +211,10 @@ export async function fetchFont(
  * デッキソースの `%% style` 領域から `\deckfont{main|mono}{名前}` の family を抽出する
  * (`fonts status <deck>` が「そのデッキで使われうるフォント」を出すための純関数)。
  * core のパーサには依存しない軽量スキャン。重複は取り除き、出現順を保つ。
+ *
+ * 注意: これはコメント/verbatim を区別しない軽量スキャンであり、`% \deckfont{...}` の
+ * ようにコメントアウトされた呼び出しや verbatim 環境内の呼び出しも拾ってしまう。
+ * TODO: 正確な抽出が必要になったら core パーサ(%% style 領域の構文解析)へ寄せる。
  */
 export function deckFontFamilies(texSource: string): string[] {
   const re = /\\deckfont\s*\{\s*(?:main|mono)\s*\}\s*\{([^}]*)\}/g;
@@ -229,15 +241,37 @@ export const nodeFontIO: FontIO = {
     }
   },
   async download(url, destPath) {
-    const res = await fetch(url);
-    if (!res.ok || res.body === null) {
-      throw new Error(`ダウンロード失敗 (HTTP ${res.status}): ${url}`);
+    // 原子的に書く: 一時ファイルへ流し切ってから rename で本来の名前へ。
+    // 途中で例外/中断が起きても壊れた部分ファイルを destPath に残さない
+    // (残すと次回 resolveFont の exists が真になり「壊れた OTF がキャッシュ済み」と誤判定する)。
+    // proxy ハング等で無期限に固まらないよう 30 秒のタイムアウトを付け、
+    // 一過性の失敗に備えて 1 回だけ即再試行する(過剰なバックオフはしない)。
+    const tmpPath = `${destPath}.${process.pid}.${Date.now()}.tmp`;
+    const attempt = async () => {
+      const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+      if (!res.ok || res.body === null) {
+        throw new Error(`ダウンロード失敗 (HTTP ${res.status}): ${url}`);
+      }
+      // web ReadableStream → Node stream でファイルへ流す(大きい OTF を一気に持たない)。
+      // 組み込み fetch の body(DOM 系 ReadableStream)と node:stream/web の型は
+      // 同一実体だが型名が食い違うため、fromWeb 用に後者へ読み替える(実行時は無変換)。
+      const webBody = res.body as unknown as NodeWebReadableStream<Uint8Array>;
+      await pipeline(Readable.fromWeb(webBody), createWriteStream(tmpPath));
+    };
+    try {
+      try {
+        await attempt();
+      } catch {
+        // 半端に書けた tmp を消してから一度だけ再試行する。
+        await unlink(tmpPath).catch(() => {});
+        await attempt();
+      }
+      await rename(tmpPath, destPath);
+    } catch (err) {
+      // 失敗時は tmp を掃除する(無ければ無視)。
+      await unlink(tmpPath).catch(() => {});
+      throw err;
     }
-    // web ReadableStream → Node stream でファイルへ流す(大きい OTF を一気に持たない)。
-    // 組み込み fetch の body(DOM 系 ReadableStream)と node:stream/web の型は
-    // 同一実体だが型名が食い違うため、fromWeb 用に後者へ読み替える(実行時は無変換)。
-    const webBody = res.body as unknown as NodeWebReadableStream<Uint8Array>;
-    await pipeline(Readable.fromWeb(webBody), createWriteStream(destPath));
   },
   async copy(src, dest) {
     await copyFile(src, dest);

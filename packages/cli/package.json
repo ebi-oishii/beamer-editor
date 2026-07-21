@@ -3,10 +3,6 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "main": "src/cli.ts",
-  "bin": {
-    "deck": "src/cli.ts"
-  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

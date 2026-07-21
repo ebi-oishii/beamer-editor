@@ -39,6 +39,8 @@
     {\IfFontExistsTF{#2}%
       {\csname deck@applyfont@#1\endcsname{#2}}%
       {\typeout{DECKSTYLE font-not-found: #2}}}}
+% TODO: 将来「見出しサンス / 本文明朝」を入れる際は、main を sans/serif の 2 スロットへ分割する
+% (現状は Noto Sans オンリー運用として \setCJKmainfont(明朝相当)にもサンスを束ねている)。
 \@namedef{deck@applyfont@main}#1{\setsansfont{#1}\setCJKsansfont{#1}\setCJKmainfont{#1}}
 \@namedef{deck@applyfont@mono}#1{\setmonofont{#1}\setCJKmonofont{#1}}
 % ---- \decklogo[x=,y=,w=]{path} / \deckfooter{テキスト} ----

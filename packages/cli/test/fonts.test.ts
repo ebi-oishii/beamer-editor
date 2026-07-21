@@ -235,4 +235,38 @@ describe("defaultFontPaths(OS 分岐)", () => {
     expect(p.cacheDir).toContain(join("beamer-editor", "fonts"));
     expect(p.userFontDir).toContain(join(".local", "share", "fonts"));
   });
+
+  it("darwin は env に依存しない", () => {
+    const p = defaultFontPaths("darwin", "/Users/test", {
+      XDG_DATA_HOME: "/x",
+      LOCALAPPDATA: "/l",
+    });
+    expect(p.cacheDir).toBe(
+      join("/Users/test", "Library", "Application Support", "beamer-editor", "fonts"),
+    );
+    expect(p.userFontDir).toBe(join("/Users/test", "Library", "Fonts"));
+  });
+
+  it("win32 は注入した LOCALAPPDATA を使う", () => {
+    const p = defaultFontPaths("win32", "C:\\Users\\test", { LOCALAPPDATA: "D:\\AppData" });
+    expect(p.cacheDir).toBe(join("D:\\AppData", "beamer-editor", "fonts"));
+    expect(p.userFontDir).toBe(join("D:\\AppData", "Microsoft", "Windows", "Fonts"));
+  });
+
+  it("win32 は LOCALAPPDATA 未設定なら home 配下へフォールバックする", () => {
+    const p = defaultFontPaths("win32", "/home/test", {});
+    expect(p.cacheDir).toBe(join("/home/test", "AppData", "Local", "beamer-editor", "fonts"));
+  });
+
+  it("linux は注入した XDG_DATA_HOME を使う", () => {
+    const p = defaultFontPaths("linux", "/home/test", { XDG_DATA_HOME: "/data" });
+    expect(p.cacheDir).toBe(join("/data", "beamer-editor", "fonts"));
+    // userFontDir は XDG_DATA_HOME に依らず ~/.local/share/fonts 固定。
+    expect(p.userFontDir).toBe(join("/home/test", ".local", "share", "fonts"));
+  });
+
+  it("linux は XDG_DATA_HOME 未設定なら ~/.local/share へフォールバックする", () => {
+    const p = defaultFontPaths("linux", "/home/test", {});
+    expect(p.cacheDir).toBe(join("/home/test", ".local", "share", "beamer-editor", "fonts"));
+  });
 });

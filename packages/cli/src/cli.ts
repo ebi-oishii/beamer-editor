@@ -10,6 +10,7 @@
  * エラーは終了コード非 0 + 人間可読メッセージ(stderr)。
  */
 
+import { pathToFileURL } from "node:url";
 import {
   defaultFontPaths,
   type FetchResult,
@@ -162,7 +163,8 @@ export async function run(argv: readonly string[]): Promise<number> {
 }
 
 // エントリポイント(import されたときは実行しない)。
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Windows のパス形式でも一致するよう pathToFileURL で比較する(Node 標準イディオム)。
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   run(process.argv.slice(2))
     .then((code) => {
       process.exitCode = code;
