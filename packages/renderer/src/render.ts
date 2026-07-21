@@ -78,6 +78,14 @@ interface CollectedStyle {
   footerHtml: string | null;
 }
 
+/**
+ * フォント family 名を CSS の `"..."` へ埋め込む前の最小サニタイズ。
+ * `"`(引用符閉じ)・`\`(エスケープ)・改行(`\r` / `\n`)を除去して
+ * CSS 文字列を壊されないようにする。出所は `\deckfont{...}` に限られる前提だが防御として。
+ */
+const sanitizeFontFamily = (family: string): string =>
+  family.replaceAll('"', "").replaceAll("\\", "").replaceAll("\r", "").replaceAll("\n", "");
+
 /** `%% style` 領域から CSS 変数ブロックを生成する。エントリが無ければ空文字。 */
 export function styleCssOf(doc: DeckDocument): string {
   const vars: string[] = [];
@@ -85,8 +93,16 @@ export function styleCssOf(doc: DeckDocument): string {
     if (entry.type === "styleColor") {
       vars.push(`--deck-${entry.role}: #${entry.hex};`);
     } else if (entry.type === "styleFont") {
-      const generic = entry.slot === "mono" ? "monospace" : "sans-serif";
-      vars.push(`--deck-font-${entry.slot}: "${entry.family.replaceAll('"', "")}", ${generic};`);
+      const family = sanitizeFontFamily(entry.family);
+      // main は和文のローカルフォントへフォールバックしてからサンス総称へ落とす
+      // (プレビューは近似でよい。theme-design.md §4)。mono は等幅のまま総称へ委ねる。
+      // 和文フォールバックは Linux(Noto Sans CJK JP / Noto Sans JP)・macOS(Hiragino Sans)・
+      // Windows(Yu Gothic)を順に並べる。先頭 family と重複しても害はない。
+      const stack =
+        entry.slot === "mono"
+          ? `"${family}", monospace`
+          : `"${family}", "Noto Sans CJK JP", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif`;
+      vars.push(`--deck-font-${entry.slot}: ${stack};`);
     }
   }
   return vars.length > 0 ? `.slide {\n  ${vars.join("\n  ")}\n}` : "";

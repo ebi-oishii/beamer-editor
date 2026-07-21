@@ -1,0 +1,109 @@
+\documentclass[aspectratio=169]{beamer}
+%% deck-source-version: 1
+% ---- ツール管理プリアンブル(将来は deck init / deck format が生成・所有する)----
+\usetheme{default}
+\setbeamertemplate{navigation symbols}{}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\input{deck-canvas-preamble}
+\input{deck-style-preamble}
+% ---- ツール管理ここまで ----
+
+%% macros:begin
+%% macros:end
+
+%% style:begin
+% Noto Sans CJK JP を指定すると、xeCJK 経由で和文サンス・明朝・等幅が同フォントになる
+% (deck-style-preamble.tex の \deckfont{main} が CJK も設定する)。
+\deckfont{main}{Noto Sans CJK JP}
+\deckcolor{structure}{0F62FE}
+\deckcolor{alert}{DA1E28}
+%% style:end
+
+%% preamble-extra:begin
+%% preamble-extra:end
+
+\title{日本語ゴールデンサンプル}
+\subtitle{Noto Sans CJK JP による和文組版(theme-design.md §4)}
+\author{Beamer Editor チーム}
+\date{2026-07-19}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{和文の箇条書きとブロック}
+  \begin{itemize}
+    \item 見出しと箇条書きの記号は構造色を引き継ぐ。
+    \item \alert{強調}は強調色で表示される。
+    \item 入れ子の箇条書きも和文で崩れない:
+      \begin{itemize}
+        \item 第 2 階層の項目その一。
+        \item 第 2 階層の項目その二。
+      \end{itemize}
+  \end{itemize}
+  \begin{exampleblock}{例示ブロック}
+    例示ブロックは和欧混植でも読みやすさを保つ。英語の \texttt{deck lint} のような
+    等幅も同じフォントファミリから供給される。
+  \end{exampleblock}
+\end{frame}
+
+\begin{frame}{和文見出しの表(booktabs)}
+  \begin{center}
+    \begin{tabular}{lrr}
+      \toprule
+      手法 & 精度 (\%) & 遅延 (ms) \\
+      \midrule
+      ベースライン & 85.6 & 12 \\
+      提案手法 & 94.0 & 14 \\
+      改善幅 & 8.4 & 2 \\
+      \bottomrule
+    \end{tabular}
+  \end{center}
+\end{frame}
+
+\begin{frame}{数式との混在}
+  提案手法の精度は $p = 0.94$ に達し、ベースラインの $p_0 = 0.856$ を上回った。
+  改善幅 $\Delta$ は次式で与えられる:
+  \[
+    \Delta = p - p_0 = 0.084.
+  \]
+  和文の中に $\sum_{i=1}^{n} x_i$ のようなインライン数式を置いても行の高さは安定する。
+\end{frame}
+
+\begin{frame}{アラートブロックと注意書き}
+  \begin{alertblock}{注意}
+    このデッキはフォント \texttt{Noto Sans CJK JP} が解決できることを前提とする。
+    未解決の場合は \texttt{deck fonts fetch} で取得する。
+  \end{alertblock}
+  \begin{block}{補足}
+    フォント名は名前参照であり、バイナリはリポジトリに同梱しない。
+  \end{block}
+\end{frame}
+
+\begin{frame}[label=japanese-canvas]{キャンバス上の和文}
+  \begin{deckcanvas}
+    \begin{decktext}[x=0.050,y=0.150,w=0.500,size=normal]
+      キャンバスの幾何はスタイル非依存: 本文領域は同一のままなので、色や
+      フォントを変えても配置したオブジェクトは動かない。
+    \end{decktext}
+    \deckimage[x=0.600,y=0.150,w=0.320]{assets/result-chart.pdf}
+  \end{deckcanvas}
+\end{frame}
+
+\begin{frame}{長い段落の行分割}
+  形態素の区切りに依らず、xeCJK は和文の任意箇所で行を折り返す。以下の段落は
+  行分割の挙動を確認するために意図的に長くしてある。日本語の文章では単語間に
+  空白を置かないため、行末での折り返し位置は組版エンジンが決定する。約物(句読点や
+  括弧)が行頭・行末に来ないようにする禁則処理も、和欧が混在する場合の空き調整も、
+  すべて XeTeX と xeCJK が担う。プレビュー側はローカルフォントへのフォールバックで
+  近似し、最終的な体裁は PDF で確認する——これが「プレビューは意味の確認、PDF は
+  体裁の確認」という役割分担である。
+\end{frame}
+
+\end{document}
