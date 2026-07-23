@@ -4,6 +4,11 @@ export interface TextEdit {
   selectionEnd: number;
 }
 
+export interface TextSelection {
+  selectionStart: number;
+  selectionEnd: number;
+}
+
 const INDENT = "\t";
 
 function lineStartAt(value: string, position: number): number {
@@ -91,4 +96,34 @@ export function editIndentation(
   return outdentRequested
     ? outdent(value, selectionStart, selectionEnd)
     : indent(value, selectionStart, selectionEnd);
+}
+
+/** 現在行の先頭空白を引き継いだ改行を返す。 */
+export function editNewlineWithIndent(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): TextEdit {
+  const lineStart = lineStartAt(value, selectionStart);
+  const beforeCursor = value.slice(lineStart, selectionStart);
+  const indentation = beforeCursor.match(/^[\t ]*/)?.[0] ?? "";
+  const insertion = `\n${indentation}`;
+  const cursor = selectionStart + insertion.length;
+
+  return {
+    value: `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`,
+    selectionStart: cursor,
+    selectionEnd: cursor,
+  };
+}
+
+/** 指定位置を含む行の選択範囲を返す。ジャンプ先を視覚的に示すために使う。 */
+export function lineSelectionAt(value: string, position: number): TextSelection {
+  const safePosition = Math.max(0, Math.min(position, value.length));
+  const selectionStart = lineStartAt(value, safePosition);
+  const lineBreak = value.indexOf("\n", safePosition);
+  return {
+    selectionStart,
+    selectionEnd: lineBreak === -1 ? value.length : lineBreak,
+  };
 }
