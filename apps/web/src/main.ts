@@ -95,6 +95,13 @@ function showFrame(index: number, keepStep = false): void {
   }
 }
 
+function jumpToCurrentFrameSource(): void {
+  const frame = deck.frames[current];
+  if (!frame) return;
+  sourceArea.focus();
+  sourceArea.setSelectionRange(frame.sourceSpan.start, frame.sourceSpan.start);
+}
+
 function fitSlide(): void {
   const scaleBox = slideHolder.querySelector<HTMLElement>(".slide-scale");
   if (!scaleBox) return;
@@ -199,6 +206,7 @@ stepInput.addEventListener("input", () => {
   $<HTMLElement>("#step-indicator").textContent = `${step}/${frame?.stepCount ?? 1}`;
   applyOverlay(slideHolder, step);
 });
+slideHolder.addEventListener("dblclick", jumpToCurrentFrameSource);
 document.addEventListener("keydown", (e) => {
   if (e.target === sourceArea) return;
   if (e.key === "ArrowLeft") showFrame(current - 1);
