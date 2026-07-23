@@ -7,6 +7,7 @@
 import { parseDeck } from "@beamer-editor/core";
 import { type RenderedDeck, renderDeck } from "@beamer-editor/renderer";
 import "katex/dist/katex.min.css";
+import { editIndentation } from "./editor-text.js";
 import "./style.css";
 
 const FIXTURES = ["basic.tex", "macros.tex", "kitchen-sink.tex", "canvas.tex", "styled.tex"];
@@ -173,6 +174,20 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 sourceArea.addEventListener("input", () => {
   clearTimeout(timer);
   timer = setTimeout(() => reparse(sourceArea.value, current), 120);
+});
+sourceArea.addEventListener("keydown", (event) => {
+  if (event.key !== "Tab") return;
+  event.preventDefault();
+
+  const edit = editIndentation(
+    sourceArea.value,
+    sourceArea.selectionStart,
+    sourceArea.selectionEnd,
+    event.shiftKey,
+  );
+  sourceArea.value = edit.value;
+  sourceArea.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+  sourceArea.dispatchEvent(new Event("input", { bubbles: true }));
 });
 
 // ナビゲーション
