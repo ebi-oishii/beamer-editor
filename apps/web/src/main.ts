@@ -7,12 +7,7 @@
 import { parseDeck } from "@beamer-editor/core";
 import { type RenderedDeck, renderDeck } from "@beamer-editor/renderer";
 import "katex/dist/katex.min.css";
-import {
-  editIndentation,
-  editNewlineWithIndent,
-  lineSelectionAt,
-  type TextEdit,
-} from "./editor-text.js";
+import { sourceJumpTarget } from "./editor-navigation.js";
 import "./style.css";
 
 const FIXTURES = ["basic.tex", "macros.tex", "kitchen-sink.tex", "canvas.tex", "styled.tex"];
@@ -59,6 +54,7 @@ const stepInput = $<HTMLInputElement>("#step");
 let deck: RenderedDeck = { title: "", frames: [], css: "" };
 let current = 0;
 let step = 1;
+let jumpHighlightTimer: ReturnType<typeof setTimeout> | undefined;
 
 function applyOverlay(root: HTMLElement, currentStep: number): void {
   for (const el of root.querySelectorAll<HTMLElement>("[data-min]")) {
@@ -103,9 +99,23 @@ function showFrame(index: number, keepStep = false): void {
 function jumpToCurrentFrameSource(): void {
   const frame = deck.frames[current];
   if (!frame) return;
-  const selection = lineSelectionAt(sourceArea.value, frame.sourceSpan.start);
-  sourceArea.focus();
-  sourceArea.setSelectionRange(selection.selectionStart, selection.selectionEnd);
+  const lineHeight = Number.parseFloat(getComputedStyle(sourceArea).lineHeight) || 18;
+  const target = sourceJumpTarget(
+    sourceArea.value,
+    frame.sourceSpan.start,
+    lineHeight,
+    sourceArea.clientHeight,
+  );
+
+  sourceArea.focus({ preventScroll: true });
+  sourceArea.setSelectionRange(target.selectionStart, target.selectionEnd);
+  sourceArea.scrollTop = target.scrollTop;
+
+  clearTimeout(jumpHighlightTimer);
+  sourceArea.classList.remove("jump-target");
+  void sourceArea.offsetWidth;
+  sourceArea.classList.add("jump-target");
+  jumpHighlightTimer = setTimeout(() => sourceArea.classList.remove("jump-target"), 900);
 }
 
 function fitSlide(): void {
@@ -188,31 +198,6 @@ sourceArea.addEventListener("input", () => {
   clearTimeout(timer);
   timer = setTimeout(() => reparse(sourceArea.value, current), 120);
 });
-function applySourceEdit(edit: TextEdit): void {
-  sourceArea.value = edit.value;
-  sourceArea.setSelectionRange(edit.selectionStart, edit.selectionEnd);
-  sourceArea.dispatchEvent(new Event("input", { bubbles: true }));
-}
-sourceArea.addEventListener("keydown", (event) => {
-  if (event.isComposing) return;
-
-  if (event.key === "Tab") {
-    event.preventDefault();
-    applySourceEdit(
-      editIndentation(
-        sourceArea.value,
-        sourceArea.selectionStart,
-        sourceArea.selectionEnd,
-        event.shiftKey,
-      ),
-    );
-  } else if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.altKey) {
-    event.preventDefault();
-    applySourceEdit(
-      editNewlineWithIndent(sourceArea.value, sourceArea.selectionStart, sourceArea.selectionEnd),
-    );
-  }
-});
 
 // ナビゲーション
 $<HTMLButtonElement>("#prev").addEventListener("click", () => showFrame(current - 1));
@@ -223,7 +208,11 @@ stepInput.addEventListener("input", () => {
   $<HTMLElement>("#step-indicator").textContent = `${step}/${frame?.stepCount ?? 1}`;
   applyOverlay(slideHolder, step);
 });
-slideHolder.addEventListener("dblclick", jumpToCurrentFrameSource);
+slideHolder.addEventListener("mousedown", (event) => {
+  if (event.button !== 0 || event.detail !== 2) return;
+  event.preventDefault();
+  jumpToCurrentFrameSource();
+});
 document.addEventListener("keydown", (e) => {
   if (e.target === sourceArea) return;
   if (e.key === "ArrowLeft") showFrame(current - 1);
