@@ -7,7 +7,8 @@ import { renderDeck } from "../src/render.js";
 const fixture = (name: string) => readFileSync(join(__dirname, "../../../fixtures", name), "utf8");
 
 describe("renderDeck: basic.tex", () => {
-  const deck = renderDeck(parseDeck(fixture("basic.tex")));
+  const source = fixture("basic.tex");
+  const deck = renderDeck(parseDeck(source));
 
   it("15 フレームが描画される", () => {
     expect(deck.frames).toHaveLength(15);
@@ -33,6 +34,15 @@ describe("renderDeck: basic.tex", () => {
 
   it("画像が img タグになる", () => {
     expect(deck.frames[7]?.html).toContain('src="assets/logo.png"');
+  });
+
+  it("元ソース上のフレーム範囲を引き継ぐ", () => {
+    const first = deck.frames[0];
+    expect(first).toBeDefined();
+    if (!first) return;
+    expect(source.slice(first.sourceSpan.start, first.sourceSpan.end)).toBe(
+      "\\begin{frame}\n  \\titlepage\n\\end{frame}",
+    );
   });
 });
 
