@@ -115,7 +115,7 @@ function jumpToCurrentFrameSource(): void {
   sourceArea.classList.remove("jump-target");
   void sourceArea.offsetWidth;
   sourceArea.classList.add("jump-target");
-  jumpHighlightTimer = setTimeout(() => sourceArea.classList.remove("jump-target"), 900);
+  jumpHighlightTimer = setTimeout(() => sourceArea.classList.remove("jump-target"), 500);
 }
 
 function fitSlide(): void {
