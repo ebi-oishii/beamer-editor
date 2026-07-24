@@ -1,0 +1,12 @@
+# Keep routine coordination and implementation on the cost-balanced model.
+model = "gpt-5.6-terra"
+model_reasoning_effort = "medium"
+
+# Built-in /review should use the same quality-first model as the custom reviewer.
+review_model = "gpt-5.6-sol"
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 2
+default_subagent_model = "gpt-5.6-terra"
+default_subagent_reasoning_effort = "medium"
