@@ -39,8 +39,17 @@
     "lint": "biome check .",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@beamer-editor/core": "workspace:*",
+    "@beamer-editor/renderer": "workspace:*",
+    "@beamer-editor/ui": "workspace:*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
     "@types/vscode": "^1.125.0",
     "esbuild": "^0.28.1",
     "typescript": "^5.9.0",

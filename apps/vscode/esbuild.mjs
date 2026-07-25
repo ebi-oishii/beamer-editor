@@ -17,6 +17,8 @@ const webviewOptions = {
   bundle: true,
   entryPoints: ["src/webview.ts"],
   format: "iife",
+  // React 自動ランタイム。react / react-dom は external にせずバンドルへ含める。
+  jsx: "automatic",
   outfile: "media/webview.js",
   platform: "browser",
   sourcemap: true,
