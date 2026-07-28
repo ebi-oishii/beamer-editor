@@ -153,6 +153,10 @@ main {
   white-space: pre;
   overflow: auto;
 }
+#source.jump-target::selection {
+  color: #111;
+  background: #ffd54f;
+}
 
 /* ---- スライド(beamer default テーマの近似) ---- */
 /* 論理サイズは実寸どおり pt で持ち、transform でスケールする(design.md §4.4) */

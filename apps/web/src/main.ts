@@ -7,6 +7,7 @@
 import { parseDeck } from "@beamer-editor/core";
 import { type RenderedDeck, renderDeck } from "@beamer-editor/renderer";
 import "katex/dist/katex.min.css";
+import { sourceJumpTarget } from "./editor-navigation.js";
 import "./style.css";
 
 const FIXTURES = ["basic.tex", "macros.tex", "kitchen-sink.tex", "canvas.tex", "styled.tex"];
@@ -53,6 +54,7 @@ const stepInput = $<HTMLInputElement>("#step");
 let deck: RenderedDeck = { title: "", frames: [], css: "" };
 let current = 0;
 let step = 1;
+let jumpHighlightTimer: ReturnType<typeof setTimeout> | undefined;
 
 function applyOverlay(root: HTMLElement, currentStep: number): void {
   for (const el of root.querySelectorAll<HTMLElement>("[data-min]")) {
@@ -92,6 +94,28 @@ function showFrame(index: number, keepStep = false): void {
   for (const el of slideList.querySelectorAll(".thumb")) {
     el.classList.toggle("active", Number((el as HTMLElement).dataset.index) === current);
   }
+}
+
+function jumpToCurrentFrameSource(): void {
+  const frame = deck.frames[current];
+  if (!frame) return;
+  const lineHeight = Number.parseFloat(getComputedStyle(sourceArea).lineHeight) || 18;
+  const target = sourceJumpTarget(
+    sourceArea.value,
+    frame.sourceSpan.start,
+    lineHeight,
+    sourceArea.clientHeight,
+  );
+
+  sourceArea.focus({ preventScroll: true });
+  sourceArea.setSelectionRange(target.selectionStart, target.selectionEnd);
+  sourceArea.scrollTop = target.scrollTop;
+
+  clearTimeout(jumpHighlightTimer);
+  sourceArea.classList.remove("jump-target");
+  void sourceArea.offsetWidth;
+  sourceArea.classList.add("jump-target");
+  jumpHighlightTimer = setTimeout(() => sourceArea.classList.remove("jump-target"), 500);
 }
 
 function fitSlide(): void {
@@ -183,6 +207,11 @@ stepInput.addEventListener("input", () => {
   const frame = deck.frames[current];
   $<HTMLElement>("#step-indicator").textContent = `${step}/${frame?.stepCount ?? 1}`;
   applyOverlay(slideHolder, step);
+});
+slideHolder.addEventListener("mousedown", (event) => {
+  if (event.button !== 0 || event.detail !== 2) return;
+  event.preventDefault();
+  jumpToCurrentFrameSource();
 });
 document.addEventListener("keydown", (e) => {
   if (e.target === sourceArea) return;
