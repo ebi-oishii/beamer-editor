@@ -1,0 +1,24 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "vscode: watch",
+      "type": "shell",
+      "command": "pnpm --filter ./apps/vscode watch",
+      "isBackground": true,
+      "problemMatcher": [
+        {
+          "owner": "esbuild",
+          "pattern": {
+            "regexp": "^$"
+          },
+          "background": {
+            "activeOnStart": false,
+            "beginsPattern": "^Starting watch mode$",
+            "endsPattern": "^Watch mode enabled$"
+          }
+        }
+      ]
+    }
+  ]
+}

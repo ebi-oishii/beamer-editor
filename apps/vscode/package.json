@@ -1,0 +1,49 @@
+{
+  "name": "beamer-editor",
+  "displayName": "Beamer Editor",
+  "description": "Beamer slide previews for VS Code.",
+  "version": "0.0.1",
+  "private": true,
+  "publisher": "ebi-oishii",
+  "engines": {
+    "vscode": "^1.130.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "onCommand:beamerEditor.openPreview"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "beamerEditor.openPreview",
+        "title": "Beamer Editor: Open Preview"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "beamerEditor.openPreview",
+          "when": "resourceExtname == .tex",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/vscode": "^1.125.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  }
+}
