@@ -1,0 +1,80 @@
+// @vitest-environment jsdom
+import type { RenderedDeck } from "@beamer-editor/renderer";
+import { act } from "react";
+import { afterEach, describe, expect, it } from "vitest";
+import { mountPreview } from "../src/preview/mount.js";
+import type { ShellHost } from "../src/shell-host.js";
+
+// React の act() を有効化する（createRoot の flush を同期させる）。
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+/** core を介さず（ui → renderer の依存方向を保つ）手組みした最小デッキ。 */
+const DECK: RenderedDeck = {
+  title: "smoke",
+  css: ".slide { color: red; }",
+  frames: [
+    {
+      index: 1,
+      label: null,
+      titleText: "one",
+      html: '<div class="slide"><div class="slide-body"><p data-min="2">hi</p></div></div>',
+      stepCount: 2,
+      isRaw: false,
+    },
+    {
+      index: 2,
+      label: "f2",
+      titleText: "two",
+      html: '<div class="slide"><div class="slide-body"><p>bye</p></div></div>',
+      stepCount: 1,
+      isRaw: false,
+    },
+  ],
+};
+
+/** deck を注入できるフェイク ShellHost。 */
+function fakeHost(): ShellHost & { push: (deck: RenderedDeck) => void } {
+  let listener: ((deck: RenderedDeck, version: number) => void) | undefined;
+  return {
+    subscribe(l) {
+      listener = l;
+      return () => {
+        listener = undefined;
+      };
+    },
+    jumpToSource() {},
+    notifyActiveFrame() {},
+    push(deck) {
+      listener?.(deck, 1);
+    },
+  };
+}
+
+describe("mountPreview", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    document.head.innerHTML = "";
+  });
+
+  it("フェイク host と手組みデッキを例外なく描画し unmount できる", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+
+    let unmount: () => void = () => {};
+    act(() => {
+      unmount = mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    // PREVIEW_CSS が一度だけ注入される。
+    expect(document.getElementById("beamer-preview-styles")).not.toBeNull();
+    // beamer-preview のルートが描画され、フレームのスライドが入る。
+    expect(container.querySelector(".beamer-preview")).not.toBeNull();
+    expect(container.querySelectorAll(".thumb")).toHaveLength(2);
+
+    expect(() => act(() => unmount())).not.toThrow();
+  });
+});
