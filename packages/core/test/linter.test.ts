@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { lintDeck, parseDeck } from "../src/index.js";
 
 function deck(body: string, preamble = ""): string {
@@ -11,6 +11,130 @@ ${body}
 }
 
 describe("lintDeck", () => {
+  it("注入された fileExists で通常・ネスト画像とスタイルロゴを L004 として報告する", () => {
+    const source = deck(
+      `
+\\begin{frame}{Images}
+\\begin{center}\\includegraphics{missing-nested.png}\\end{center}
+\\includegraphics{missing.png}
+\\end{frame}`,
+      `%% style:begin
+\\decklogo[x=0,y=0,w=0.1]{missing-logo.png}
+%% style:end`,
+    );
+    const fileExists = vi.fn(() => false);
+    const diagnostics = lintDeck(parseDeck(source), { fileExists }).filter(
+      (entry) => entry.code === "L004",
+    );
+
+    expect(diagnostics).toHaveLength(3);
+    expect(fileExists.mock.calls.map(([path]) => path)).toEqual([
+      "missing-logo.png",
+      "missing-nested.png",
+      "missing.png",
+    ]);
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\decklogo[x=0,y=0,w=0.1]{missing-logo.png}",
+      "\\includegraphics{missing-nested.png}",
+      "\\includegraphics{missing.png}",
+    ]);
+    expect(lintDeck(parseDeck(source)).some((entry) => entry.code === "L004")).toBe(false);
+  });
+
+  it("deckimage の形式と注入された寸法プローブを L015 で検査する", () => {
+    const source = deck(`
+\\begin{frame}[label=canvas]{Canvas}
+\\begin{deckcanvas}
+\\deckimage[x=0,y=0,w=1]{image.PNG}
+\\deckimage[x=0,y=0,w=1]{image.svg}
+\\end{deckcanvas}
+\\end{frame}`);
+    const diagnostics = lintDeck(parseDeck(source), {
+      probeImage: () => ({
+        ok: true,
+        metadata: { format: "jpeg", dimensions: { width: 10, height: 10, unit: "px" } },
+      }),
+    }).filter((entry) => entry.code === "L015");
+
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\deckimage[x=0,y=0,w=1]{image.PNG}",
+      "\\deckimage[x=0,y=0,w=1]{image.svg}",
+    ]);
+  });
+
+  it("deckimage は L004 の対象外で、L015 のプローブ契約を守る", () => {
+    const source = deck(`
+\\begin{frame}[label=canvas]{Canvas}
+\\begin{deckcanvas}
+\\deckimage[x=0,y=0,w=1]{image.png}
+\\deckimage[x=0,y=0,w=1]{image.svg}
+\\end{deckcanvas}
+\\end{frame}`);
+    const doc = parseDeck(source);
+    const probeImage = vi.fn(() => ({
+      ok: false as const,
+      error: { code: "invalid-data" as const },
+    }));
+
+    expect(
+      lintDeck(doc, { fileExists: () => false }).filter((entry) => entry.code === "L004"),
+    ).toEqual([]);
+    expect(lintDeck(doc).filter((entry) => entry.code === "L015")).toHaveLength(1);
+    expect(lintDeck(doc, { probeImage }).filter((entry) => entry.code === "L015")).toHaveLength(2);
+    expect(probeImage).toHaveBeenCalledTimes(1);
+  });
+
+  it("一致するプローブを受け入れ、不正な寸法を L015 で報告する", () => {
+    const source = deck(`
+\\begin{frame}[label=canvas]{Canvas}
+\\begin{deckcanvas}
+\\deckimage[x=0,y=0,w=1]{raw path.PNG}
+\\end{deckcanvas}
+\\end{frame}`);
+    const doc = parseDeck(source);
+    const matchingProbe = vi.fn(() => ({
+      ok: true as const,
+      metadata: {
+        format: "png" as const,
+        dimensions: { width: 10, height: 20, unit: "px" as const },
+      },
+    }));
+
+    expect(
+      lintDeck(doc, { probeImage: matchingProbe }).some((entry) => entry.code === "L015"),
+    ).toBe(false);
+    expect(matchingProbe).toHaveBeenCalledWith("raw path.PNG");
+    for (const dimensions of [
+      { width: 0, height: 1, unit: "px" as const },
+      { width: Number.NaN, height: 1, unit: "px" as const },
+      { width: Number.POSITIVE_INFINITY, height: 1, unit: "px" as const },
+    ]) {
+      expect(
+        lintDeck(doc, {
+          probeImage: () => ({ ok: true, metadata: { format: "png", dimensions } }),
+        }).some((entry) => entry.code === "L015"),
+      ).toBe(true);
+    }
+  });
+
+  it("ネストされた canvas 内の deckimage も L015 で検査する", () => {
+    const source = deck(`
+\\begin{frame}{Nested}
+\\begin{center}
+\\begin{deckcanvas}
+\\deckimage[x=0,y=0,w=1]{unsupported.svg}
+\\end{deckcanvas}
+\\end{center}
+\\end{frame}`);
+
+    expect(lintDeck(parseDeck(source)).filter((entry) => entry.code === "L015")).toEqual([
+      expect.objectContaining({
+        span: expect.objectContaining({ start: source.indexOf("\\deckimage") }),
+      }),
+    ]);
+  });
+
   it("生ブロック化されたサブセット外構文を L001 で報告する", () => {
     const source = deck(`
 \\begin{frame}{Raw}

@@ -8,6 +8,9 @@
     "typecheck": "tsc --noEmit",
     "deck": "node --experimental-strip-types src/cli.ts"
   },
+  "dependencies": {
+    "@beamer-editor/core": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^26.1.1",
     "typescript": "^5.9.0",
