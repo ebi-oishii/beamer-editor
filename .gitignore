@@ -4,8 +4,7 @@ out/
 coverage/
 *.log
 .DS_Store
-apps/vscode/media/*.js
-apps/vscode/media/*.js.map
+apps/vscode/media/
 apps/vscode/out-test/
 apps/vscode/.vscode-test/
 

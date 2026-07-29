@@ -120,12 +120,13 @@ export function activate(context: vscode.ExtensionContext): void {
         },
       );
 
-      const webviewScriptUri = panel.webview
-        .asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "webview.js"))
-        .toString();
+      const mediaUri = (name: string) =>
+        panel.webview
+          .asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", name))
+          .toString();
       const controller = new PreviewController(
         panel,
-        webviewScriptUri,
+        { scriptUri: mediaUri("webview.js"), styleUri: mediaUri("webview.css") },
         document,
         {
           onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),

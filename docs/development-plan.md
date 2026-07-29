@@ -98,7 +98,7 @@
 
 ### Phase 5: 共有 UI + VS Code シェル
 
-**進行中。** VS-1(拡張スキャフォールド、PR #19)・VS-2(共有プレビュー UI `packages/ui` + ShellHost 契約、PR #20)・VS-3(TextDocument 同期: 変更購読 + debounce + version guard + マクロ展開統合)・VS-4(プレビュー → ソースジャンプ: ExpansionMap で元ソースへ解決 + 古い版検出時は再描画要求)・VS-5(lint → DiagnosticCollection: 開いている .tex ごとに独立管理)・VS-6(外部編集と競合: @vscode/test-electron による実 VS Code 統合テストで clean buffer 追従・dirty buffer 保全を検証。`pnpm --dir apps/vscode test:integration`)は実装済(2026-07-29)。次は VS-7(テーマ・アクセシビリティ・CSP)。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
+**進行中。** VS-1(拡張スキャフォールド、PR #19)・VS-2(共有プレビュー UI `packages/ui` + ShellHost 契約、PR #20)・VS-3(TextDocument 同期: 変更購読 + debounce + version guard + マクロ展開統合)・VS-4(プレビュー → ソースジャンプ: ExpansionMap で元ソースへ解決 + 古い版検出時は再描画要求)・VS-5(lint → DiagnosticCollection: 開いている .tex ごとに独立管理)・VS-6(外部編集と競合: @vscode/test-electron による実 VS Code 統合テストで clean buffer 追従・dirty buffer 保全を検証。`pnpm --dir apps/vscode test:integration`)・VS-7(テーマ変数 + KaTeX CSS・ナビ状態の getState/setState 保存・ARIA/キーボード・CSP default-src 'none' + nonce・Workspace Trust 対応)は実装済(2026-07-29)。残りは VS-8/VS-9(.vsix 生成とチーム内配布・統合テストの CI 組み込み)で M2。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
 
 **5a. packages/ui — 共有 UI と ShellHost 契約(S)**
 

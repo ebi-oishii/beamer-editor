@@ -79,4 +79,36 @@ describe("mountPreview", () => {
 
     expect(() => act(() => unmount())).not.toThrow();
   });
+
+  it("loadNavState から現在フレームを復元し、ナビ操作で saveNavState が呼ばれる", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: unknown[] = [];
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 1, step: 1 }),
+      saveNavState: (state: unknown) => {
+        saved.push(state);
+      },
+    };
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    // 復元された current=1 のサムネイルがアクティブになる。
+    const thumbs = [...container.querySelectorAll(".thumb")];
+    expect(thumbs[1]?.classList.contains("active")).toBe(true);
+    expect(saved.at(-1)).toEqual({ current: 1, step: 1 });
+
+    // 前へ移動すると新しいナビ状態が保存される。
+    const prev = container.querySelector<HTMLButtonElement>('button[aria-label="前のフレーム"]');
+    act(() => {
+      prev?.click();
+    });
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1 });
+  });
 });

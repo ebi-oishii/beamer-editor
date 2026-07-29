@@ -23,6 +23,13 @@ const webviewOptions = {
   platform: "browser",
   sourcemap: true,
   target: "es2022",
+  // KaTeX の CSS は media/webview.css へ、フォントは media/ へファイルとして抽出する。
+  loader: {
+    ".woff2": "file",
+    ".woff": "file",
+    ".ttf": "file",
+  },
+  assetNames: "[name]",
 };
 
 async function build() {
