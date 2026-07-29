@@ -4,6 +4,8 @@ out/
 coverage/
 *.log
 .DS_Store
+apps/vscode/media/*.js
+apps/vscode/media/*.js.map
 
 # LaTeX ビルド成果物(fixtures のコンパイル確認で生成される)
 *.aux

@@ -1,6 +1,6 @@
 # 開発計画
 
-ステータス: 改訂版(追加要件・レビュー統合)/ 最終更新: 2026-07-10
+ステータス: 改訂版(追加要件・レビュー統合)/ 最終更新: 2026-07-29
 
 [beamer-editor-additional-requirements.md](beamer-editor-additional-requirements.md)(キャンバス前倒し・VS Code 1 本化・AgentAdapter)と [issues-to-resolve.md](issues-to-resolve.md)(A/B/C 指摘)を初版計画に統合した改訂版。
 
@@ -71,6 +71,8 @@
 
 ### Phase 2: core — フォーマッタ + リンター(M)
 
+**一部実装済(2026-07-24)。** キャンバス正規形フォーマッタ(`packages/core/src/formatter.ts`、PR #15)と AST ベースのリンター基盤 + L009/L011/L017/L018/L020(`packages/core/src/linter.ts`、PR #16)。残りは正規形の全域化(キャンバス以外)と冪等性テストの全 fixture 適用、残りのリント規則(L004/L015 のファイルアクセス・画像寸法プローブ注入を含む)。
+
 - 正規形の実装(キャンバスの座標 3 桁固定・key 順序の正規化を含む)。冪等性テスト(`format(format(x)) == format(x)`)、コメント保持テスト。
 - リント規則 L001〜L019。L004 / L015 は環境非依存にするため、ファイルアクセスと画像寸法プローブ(PNG/JPEG ヘッダ・PDF MediaBox)を注入可能にする(C-5)。
 - 完了条件: サンプル 4 本の正規形がレビューで合意され、fixture として固定される。
@@ -95,6 +97,8 @@
 - 完了条件(= M1): `basic.tex` と `canvas.tex` がブラウザでスライドとして閲覧でき、数式・段組・ブロック・オーバーレイ・キャンバス配置が表示される。**HTML と PDF 期待画像(Phase 0.5)の比較で、位置の大きな逆転や領域外配置がないこと**(レビュー B-1 の移動先)。
 
 ### Phase 5: 共有 UI + VS Code シェル
+
+**進行中。** VS-1(拡張スキャフォールド、PR #19)と VS-2(共有プレビュー UI `packages/ui` + ShellHost 契約、PR #20)は実装済(2026-07-25)。次は VS-3(TextDocument 同期)。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
 
 **5a. packages/ui — 共有 UI と ShellHost 契約(S)**
 
