@@ -1,7 +1,15 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
   "files": {
-    "includes": ["**", "!**/dist", "!**/node_modules", "!apps/vscode/media", "!fixtures"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/node_modules",
+      "!apps/vscode/media",
+      "!apps/vscode/.vscode-test",
+      "!apps/vscode/out-test",
+      "!fixtures"
+    ]
   },
   "formatter": {
     "enabled": true,
