@@ -9,9 +9,11 @@ import {
   type RawFrameNode,
   type SourceSpan,
 } from "./ast.js";
+import type { FileExistsProbe, ImageFormat, ImageProbe } from "./image.js";
 
 export type LintCode =
   | "L001"
+  | "L004"
   | "L005"
   | "L007"
   | "L009"
@@ -19,6 +21,7 @@ export type LintCode =
   | "L012"
   | "L013"
   | "L014"
+  | "L015"
   | "L017"
   | "L018"
   | "L019"
@@ -36,6 +39,10 @@ export interface LintDiagnostic {
 export interface LintOptions {
   /** 対応する `%% deck-source-version`。 */
   expectedSourceVersion?: number;
+  /** Optional external dependency; core itself never accesses the filesystem. */
+  fileExists?: FileExistsProbe;
+  /** Optional external dependency used for deckcanvas image validation. */
+  probeImage?: ImageProbe;
 }
 
 export const CURRENT_DECK_SOURCE_VERSION = 1;
@@ -523,11 +530,90 @@ function lintStyle(doc: DeckDocument): LintDiagnostic[] {
     }));
 }
 
+function lintImageReferences(
+  doc: DeckDocument,
+  fileExists: FileExistsProbe | undefined,
+): LintDiagnostic[] {
+  if (fileExists === undefined) return [];
+  const diagnostics: LintDiagnostic[] = [];
+  const check = (path: string, span: SourceSpan): void => {
+    if (!fileExists(path)) {
+      diagnostics.push(diagnostic("L004", "error", "画像の参照先ファイルが存在しません", span));
+    }
+  };
+  for (const entry of doc.style.entries) {
+    if (entry.type === "styleLogo") check(entry.path, entry.span);
+  }
+  for (const frame of framesOf(doc)) {
+    if (frame.type !== "frame") continue;
+    visitBlocks(frame.body, (block) => {
+      if (block.type === "image") check(block.path, block.span);
+    });
+  }
+  return diagnostics;
+}
+
+const IMAGE_FORMATS: Record<string, ImageFormat> = {
+  png: "png",
+  jpg: "jpeg",
+  jpeg: "jpeg",
+  pdf: "pdf",
+};
+
+function validDimensions(value: { width: number; height: number }): boolean {
+  return (
+    Number.isFinite(value.width) &&
+    Number.isFinite(value.height) &&
+    value.width > 0 &&
+    value.height > 0
+  );
+}
+
+function lintCanvasImages(doc: DeckDocument, probeImage: ImageProbe | undefined): LintDiagnostic[] {
+  const diagnostics: LintDiagnostic[] = [];
+  for (const frame of framesOf(doc)) {
+    if (frame.type !== "frame") continue;
+    visitBlocks(frame.body, (block) => {
+      if (block.type !== "canvas") return;
+      for (const item of block.items) {
+        if (item.type !== "canvasImage") continue;
+        const extension = item.path.match(/\.([^.\\/]+)$/)?.[1]?.toLowerCase();
+        const expectedFormat = extension === undefined ? undefined : IMAGE_FORMATS[extension];
+        if (expectedFormat === undefined) {
+          diagnostics.push(
+            diagnostic(
+              "L015",
+              "error",
+              "deckimage は PNG / JPEG / PDF のみ対応しています",
+              item.span,
+            ),
+          );
+          continue;
+        }
+        if (probeImage === undefined) continue;
+        const result = probeImage(item.path);
+        if (
+          !result.ok ||
+          result.metadata.format !== expectedFormat ||
+          !validDimensions(result.metadata.dimensions)
+        ) {
+          diagnostics.push(
+            diagnostic(
+              "L015",
+              "error",
+              "deckimage の画像形式または寸法を確認できません",
+              item.span,
+            ),
+          );
+        }
+      }
+    });
+  }
+  return diagnostics;
+}
+
 /**
- * AST だけで判定できる lint 規則を実行する。
- *
- * ファイル参照や画像寸法など、外部環境が必要な規則は別途注入可能な
- * lint コンテキストを追加して実装する。
+ * AST と、必要に応じて注入された外部プローブで lint 規則を実行する。
  */
 export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiagnostic[] {
   const expectedSourceVersion = options.expectedSourceVersion ?? CURRENT_DECK_SOURCE_VERSION;
@@ -541,6 +627,8 @@ export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiag
     ...lintCanvasTitles(doc),
     ...lintSourceVersion(doc, expectedSourceVersion),
     ...lintStyle(doc),
+    ...lintImageReferences(doc, options.fileExists),
+    ...lintCanvasImages(doc, options.probeImage),
   ];
 
   return diagnostics.sort((a, b) => a.span.start - b.span.start || a.code.localeCompare(b.code));
