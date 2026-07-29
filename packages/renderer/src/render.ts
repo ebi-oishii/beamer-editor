@@ -17,6 +17,7 @@ import type {
   InlineNode,
   ListItemNode,
   RawFrameNode,
+  SourceSpan,
   StyleColorRole,
   StyleLogoNode,
 } from "@beamer-editor/core";
@@ -29,6 +30,8 @@ export interface RenderedFrame {
   label: string | null;
   titleText: string;
   html: string;
+  /** 元ソース上の frame 環境の範囲。プレビューからソース位置へ移動するために使う。 */
+  sourceSpan: SourceSpan;
   /** オーバーレイの総ステップ数(1 なら段階表示なし)。 */
   stepCount: number;
   isRaw: boolean;
@@ -445,6 +448,7 @@ export function renderDeck(doc: DeckDocument, theme: Theme = DEFAULT_THEME): Ren
         label: frame.label,
         titleText: frame.title ?? `frame ${i + 1}`,
         html: renderer.renderRawFrame(frame, i + 1, total),
+        sourceSpan: frame.span,
         stepCount: 1,
         isRaw: true,
       };
@@ -457,6 +461,7 @@ export function renderDeck(doc: DeckDocument, theme: Theme = DEFAULT_THEME): Ren
       label: frame.options.label,
       titleText,
       html,
+      sourceSpan: frame.span,
       stepCount,
       isRaw: false,
     };
