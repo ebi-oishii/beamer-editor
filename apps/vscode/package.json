@@ -13,6 +13,7 @@
   ],
   "main": "./dist/extension.cjs",
   "activationEvents": [
+    "onLanguage:latex",
     "onCommand:beamerEditor.openPreview"
   ],
   "contributes": {
@@ -38,7 +39,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "test": "vitest run",
-    "test:integration": "pnpm build && node esbuild.integration.mjs && vscode-test"
+    "test:integration": "pnpm build && node esbuild.integration.mjs && vscode-test",
+    "package": "pnpm build && vsce package --no-dependencies -o beamer-editor.vsix"
   },
   "dependencies": {
     "@beamer-editor/core": "workspace:*",
@@ -56,6 +58,7 @@
     "@types/vscode": "^1.125.0",
     "@vscode/test-cli": "^0.0.15",
     "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0"

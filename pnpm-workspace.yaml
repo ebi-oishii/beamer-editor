@@ -2,4 +2,13 @@ packages:
   - packages/*
   - apps/*
 allowBuilds:
+  # publish 時の署名・資格情報用ネイティブビルド。ローカルの vsce package には不要
+  '@vscode/vsce-sign': false
   esbuild: true
+  keytar: false
+packageExtensions:
+  # vsce の依存 @azure/identity が tslib を宣言し忘れており、pnpm の厳格な
+  # node_modules では解決できない(vsce package が起動時に落ちる)ため補う
+  '@azure/identity':
+    dependencies:
+      tslib: '^2'

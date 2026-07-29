@@ -54,6 +54,45 @@ export interface PreviewControllerOptions {
    * エディタ操作は vscode API が要るため extension.ts が注入する。既定は何もしない。
    */
   navigate?: (offset: number) => void;
+  /**
+   * 画像などローカルリソースのパスを Webview で読める URI へ変換する
+   * (asWebviewUri。extension.ts が注入)。未指定なら書き換えない。
+   */
+  resolveResource?: (path: string) => string;
+}
+
+const HTML_ESCAPES: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+
+function escapeAttr(value: string): string {
+  return value.replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch] as string);
+}
+
+function unescapeAttr(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * deck HTML 内の <img src> をローカルリソース変換にかける(移植計画 VS-8 の
+ * 「ローカルファイルは asWebviewUri で URL へ変換する」)。renderer は
+ * includegraphics / deckimage / logo をエスケープ済みの生パスで出すため、
+ * http(s) / data / vscode-webview 系以外を resolve へ通す。
+ */
+export function rewriteImageSources(html: string, resolve: (path: string) => string): string {
+  return html.replace(/(<img\b[^>]*\bsrc=")([^"]*)(")/g, (whole, pre, src, post) => {
+    if (/^(?:https?:|data:|vscode-webview|vscode-resource:)/i.test(src)) return whole;
+    return `${pre}${escapeAttr(resolve(unescapeAttr(src)))}${post}`;
+  });
 }
 
 /**
@@ -66,7 +105,8 @@ export function emptyPreviewHtml(assets: WebviewAssets, cspSource: string, nonce
     "default-src 'none'",
     `img-src ${cspSource} data:`,
     `style-src ${cspSource} 'unsafe-inline'`,
-    `font-src ${cspSource}`,
+    // KaTeX の CSS は版によって data: URL のフォントを含むため許可する
+    `font-src ${cspSource} data:`,
     `script-src 'nonce-${nonce}'`,
   ].join("; ");
   return `<!DOCTYPE html>
@@ -100,22 +140,32 @@ export class PreviewController implements vscode.Disposable {
   private readonly render: (text: string, version: number) => RenderOutcome;
   private readonly onError: (message: string) => void;
   private readonly navigate: (offset: number) => void;
+  private readonly resolveResource: ((path: string) => string) | undefined;
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
   private latest: RenderOutcome | undefined;
 
+  /**
+   * プレビュー対象の文書。エディタタブを閉じると TextDocument は close され
+   * getText() が凍結するため、変更イベントが届くたびに最新のインスタンスへ
+   * 差し替える(close → 再オープンで別インスタンスになる)。
+   */
+  private document: PreviewDocument;
+
   constructor(
     private readonly panel: PreviewPanel,
     assets: WebviewAssets,
-    private readonly document: PreviewDocument,
+    document: PreviewDocument,
     events: DocumentEvents,
     private readonly onDispose: () => void,
     options: PreviewControllerOptions = {},
   ) {
+    this.document = document;
     this.render = options.render ?? renderDocument;
     this.onError = options.onError ?? (() => {});
     this.navigate = options.navigate ?? (() => {});
+    this.resolveResource = options.resolveResource;
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
@@ -162,6 +212,8 @@ export class PreviewController implements vscode.Disposable {
   private handleDocumentChange(event: PreviewDocumentChangeEvent): void {
     if (this.disposed) return;
     if (event.document.uri.toString() !== this.document.uri.toString()) return;
+    // close → 再オープンで新しい TextDocument になっても追従できるよう差し替える。
+    this.document = event.document;
     if (event.contentChanges.length === 0) return;
     clearTimeout(this.debounceTimer);
     this.debounceTimer = setTimeout(() => this.sendDeck(), RENDER_DEBOUNCE_MS);
@@ -179,9 +231,19 @@ export class PreviewController implements vscode.Disposable {
     try {
       const outcome = this.render(this.document.getText(), this.document.version);
       this.latest = outcome;
+      const resolve = this.resolveResource;
+      const deck = resolve
+        ? {
+            ...outcome.deck,
+            frames: outcome.deck.frames.map((frame) => ({
+              ...frame,
+              html: rewriteImageSources(frame.html, resolve),
+            })),
+          }
+        : outcome.deck;
       message = {
         type: "deckUpdated",
-        deck: outcome.deck,
+        deck,
         version: outcome.version,
         activeFrame: 0,
       };

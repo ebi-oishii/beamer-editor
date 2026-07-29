@@ -75,7 +75,12 @@ async function jumpToOffset(
   lineFlash.flash(editor, range);
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+/** 統合テストからの観測用 API(activate の戻り値)。製品コードから参照しない。 */
+export interface TestApi {
+  _previewControllerForTest(): PreviewController | undefined;
+}
+
+export function activate(context: vscode.ExtensionContext): TestApi {
   const lineFlash = createLineFlash();
   context.subscriptions.push(lineFlash);
 
@@ -110,13 +115,16 @@ export function activate(context: vscode.ExtensionContext): void {
 
       previewController?.close();
       const document = editor.document;
+      // 画像(includegraphics / deckimage / logo)は文書からの相対パスで参照される
+      // ため、文書のあるフォルダだけを workspace 側のリソース範囲として開ける。
+      const documentDir = vscode.Uri.joinPath(document.uri, "..");
       const panel = vscode.window.createWebviewPanel(
         "beamerEditor.preview",
         `Beamer Preview: ${document.fileName.split(/[\\/]/).pop()}`,
         vscode.ViewColumn.Beside,
         {
           enableScripts: true,
-          localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
+          localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media"), documentDir],
         },
       );
 
@@ -141,13 +149,27 @@ export function activate(context: vscode.ExtensionContext): void {
             void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
           },
           navigate: (offset) => {
-            void jumpToOffset(document, offset, lineFlash);
+            // タブを閉じて close された場合、元の TextDocument は凍結するため
+            // 同じ uri の最新インスタンスを引き直してからジャンプする。
+            const target =
+              vscode.workspace.textDocuments.find(
+                (candidate) => candidate.uri.toString() === document.uri.toString(),
+              ) ?? document;
+            void jumpToOffset(target, offset, lineFlash);
+          },
+          resolveResource: (path) => {
+            const uri = path.startsWith("/")
+              ? vscode.Uri.file(path)
+              : vscode.Uri.joinPath(documentDir, path);
+            return panel.webview.asWebviewUri(uri).toString();
           },
         },
       );
       previewController = controller;
     }),
   );
+
+  return { _previewControllerForTest: () => previewController };
 }
 
 export function deactivate(): void {

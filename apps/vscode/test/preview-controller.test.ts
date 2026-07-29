@@ -7,6 +7,7 @@ import {
   type PreviewDocumentChangeEvent,
   type PreviewPanel,
   RENDER_DEBOUNCE_MS,
+  rewriteImageSources,
 } from "../src/preview-controller";
 
 /** テスト用のフェイク Webview パネル。postMessage / onDidReceiveMessage を捕捉する。 */
@@ -83,6 +84,25 @@ type DeckMessage = { type: string; version: number; activeFrame: number };
 
 const ASSETS = { scriptUri: "webview.js", styleUri: "webview.css" };
 
+describe("rewriteImageSources", () => {
+  it("エスケープ済みパスを復元して resolve し、結果を再エスケープする", () => {
+    const html = '<img class="x" src="figs/a&amp;b.png">';
+    const seen: string[] = [];
+    const result = rewriteImageSources(html, (path) => {
+      seen.push(path);
+      return `resolved://${path}?q="v"`;
+    });
+
+    expect(seen).toEqual(["figs/a&b.png"]);
+    expect(result).toBe('<img class="x" src="resolved://figs/a&amp;b.png?q=&quot;v&quot;">');
+  });
+
+  it("http(s) / data / vscode-webview 系の src は書き換えない", () => {
+    const html = '<img src="https://a/b.png"><img src="data:x"><img src="vscode-webview://x/y">';
+    expect(rewriteImageSources(html, () => "BOOM")).toBe(html);
+  });
+});
+
 describe("PreviewController", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -139,7 +159,7 @@ describe("PreviewController", () => {
     const html = panel.webview.html;
     expect(html).toContain("default-src 'none'");
     expect(html).toContain("style-src https://csp.test 'unsafe-inline'");
-    expect(html).toContain("font-src https://csp.test");
+    expect(html).toContain("font-src https://csp.test data:");
     expect(html).toContain('<link rel="stylesheet" href="webview.css"');
     const nonce = html.match(/script-src 'nonce-([a-f0-9]+)'/)?.[1];
     expect(nonce).toBeTruthy();
@@ -189,6 +209,25 @@ describe("PreviewController", () => {
 
     expect(posted).toHaveLength(1);
     expect((posted[0] as DeckMessage).version).toBe(10);
+  });
+
+  it("close → 再オープンで別インスタンスになった同一文書にも追従する", () => {
+    const { panel, posted, fire } = makePanel();
+    const { events, change } = makeEvents();
+    const original = makeDoc();
+    new PreviewController(panel, ASSETS, original, events, vi.fn());
+    fire({ type: "ready" });
+
+    // タブを閉じて開き直すと、同じ uri の新しい TextDocument から変更イベントが届く。
+    const reopened = makeDoc();
+    reopened.version = 1;
+    reopened.edit("\\begin{document}\\begin{frame}{Hi}REOPENED\\end{frame}\\end{document}");
+    change(reopened);
+    vi.advanceTimersByTime(RENDER_DEBOUNCE_MS);
+
+    expect(posted).toHaveLength(2);
+    // 凍結した旧インスタンス(version 7)ではなく、新インスタンスの内容が描画される。
+    expect((posted[1] as DeckMessage).version).toBe(2);
   });
 
   it("別ファイルの変更ではプレビューを再計算しない", () => {
@@ -297,6 +336,47 @@ describe("PreviewController", () => {
 
     expect(navigate).not.toHaveBeenCalled();
     expect(posted).toHaveLength(1);
+  });
+
+  it("resolveResource 指定時は送信する deck の <img src> だけを書き換える", () => {
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    const html =
+      '<div><img src="figs/a.png"><img src="https://cdn/x.png"><img src="data:image/png;base64,AA"></div>';
+    const render = (_text: string, version: number): RenderOutcome => ({
+      deck: {
+        title: "t",
+        css: "",
+        frames: [
+          {
+            index: 1,
+            label: null,
+            titleText: "one",
+            html,
+            stepCount: 1,
+            isRaw: false,
+            sourceSpan: { start: 0, end: 1 },
+          },
+        ],
+      },
+      version,
+      expansionMap: [],
+      expandDiagnostics: [],
+    });
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      render,
+      resolveResource: (path) => `vscode-webview://authority/${path}`,
+    });
+
+    fire({ type: "ready" });
+
+    const sent = (posted[0] as { deck: { frames: { html: string }[] } }).deck.frames[0]
+      ?.html as string;
+    expect(sent).toContain('src="vscode-webview://authority/figs/a.png"');
+    expect(sent).toContain('src="https://cdn/x.png"');
+    expect(sent).toContain('src="data:image/png;base64,AA"');
+    // latestOutcome(ジャンプ・診断の参照元)は書き換え前の deck を保持する。
+    expect(controller.latestOutcome?.deck.frames[0]?.html).toBe(html);
   });
 
   it("予期しない例外では error を通知し、最後に成功した結果を保持する", () => {

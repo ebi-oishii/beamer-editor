@@ -74,6 +74,14 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
 
   const frame = deck.frames[state.current];
 
+  // step を現在フレームの stepCount 内へ収める。復元 state が上限を超えていた場合の
+  // ほか、文書編集で表示中フレームの stepCount が減った場合もここでクランプされる。
+  useEffect(() => {
+    if (frame && state.step > frame.stepCount) {
+      dispatch({ type: "setStep", step: frame.stepCount });
+    }
+  }, [frame, state.step]);
+
   // フレーム移動のキーボード操作(スライダー等の入力要素の矢印キーは奪わない)。
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
@@ -110,6 +118,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
           onPrev={() => dispatch({ type: "prev" })}
           onNext={() => dispatch({ type: "next" })}
           onStep={(s) => dispatch({ type: "setStep", step: s })}
+          onJump={() => host.jumpToSource(state.current, version)}
         />
       </section>
     </div>

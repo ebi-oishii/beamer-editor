@@ -51,11 +51,12 @@ export interface WebviewStateStore {
   setState(state: unknown): void;
 }
 
-/** getState の戻り値を NavState として検証する(型が合わなければ捨てる)。 */
+/** getState の戻り値を NavState として検証する(型・範囲が合わなければ捨てる)。 */
 function parseNavState(raw: unknown): NavState | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const { current, step } = raw as Record<string, unknown>;
-  if (typeof current !== "number" || typeof step !== "number") return undefined;
+  if (typeof current !== "number" || !Number.isInteger(current) || current < 0) return undefined;
+  if (typeof step !== "number" || !Number.isInteger(step) || step < 1) return undefined;
   return { current, step };
 }
 

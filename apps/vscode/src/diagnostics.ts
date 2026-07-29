@@ -75,9 +75,10 @@ export class LintController<TDoc extends LintableDocument> {
     if (this.disposed || !this.isTarget(document)) return;
     try {
       this.sink.set(document, lintDocumentText(document.getText()));
-    } catch {
+    } catch (err) {
       // パースは Raw 劣化で例外を出さない設計。予期しない例外時は
       // 直前の診断を保持する(消すと「直った」と誤解させるため)。
+      console.error(`beamer-editor: lint に失敗しました (${document.fileName})`, err);
     }
   }
 

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { RenderedDeck } from "@beamer-editor/renderer";
 import { act } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountPreview } from "../src/preview/mount.js";
 import type { ShellHost } from "../src/shell-host.js";
 
@@ -110,5 +110,59 @@ describe("mountPreview", () => {
       prev?.click();
     });
     expect(saved.at(-1)).toEqual({ current: 0, step: 1 });
+  });
+
+  it("復元した step は現在フレームの stepCount へクランプされる(P2 指摘)", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: unknown[] = [];
+    const host = {
+      ...fakeHost(),
+      // frames[0] の stepCount は 2。壊れていないが上限超えの state を復元する。
+      loadNavState: () => ({ current: 0, step: 999 }),
+      saveNavState: (state: unknown) => {
+        saved.push(state);
+      },
+    };
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    expect(saved.at(-1)).toEqual({ current: 0, step: 2 });
+  });
+
+  it("「ソースへ」ボタンと Ctrl+Enter でキーボードからジャンプできる", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const jumpToSource = vi.fn();
+    const host = { ...fakeHost(), jumpToSource };
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    const jumpButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="このフレームのソース位置へ移動"]',
+    );
+    act(() => {
+      jumpButton?.click();
+    });
+    expect(jumpToSource).toHaveBeenLastCalledWith(0, 1);
+
+    // サムネイル上の Ctrl+Enter はダブルクリックと等価にジャンプする。
+    const thumb = container.querySelectorAll<HTMLElement>(".thumb")[1];
+    act(() => {
+      thumb?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
+      );
+    });
+    expect(jumpToSource).toHaveBeenLastCalledWith(1, 1);
   });
 });
