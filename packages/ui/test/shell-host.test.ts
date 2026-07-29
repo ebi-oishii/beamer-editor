@@ -48,12 +48,12 @@ describe("createMessageShellHost", () => {
     const host = createMessageShellHost(transport);
 
     host.ready();
-    host.jumpToSource(3);
+    host.jumpToSource(3, 5);
     host.notifyActiveFrame(1);
 
     expect(posted).toEqual([
       { type: "ready" },
-      { type: "jumpToSource", frameIndex: 3 },
+      { type: "jumpToSource", frameIndex: 3, version: 5 },
       { type: "activeFrameChanged", frameIndex: 1 },
     ]);
   });

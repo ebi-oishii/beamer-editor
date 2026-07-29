@@ -211,6 +211,76 @@ describe("PreviewController", () => {
     expect(posted).toHaveLength(0);
   });
 
+  it("jumpToSource: 最新版のプレビューからのジャンプは元ソースのオフセットへ移動する", () => {
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const navigate = vi.fn();
+    const render = (_text: string, version: number): RenderOutcome => ({
+      deck: {
+        title: "t",
+        css: "",
+        frames: [
+          {
+            index: 1,
+            label: null,
+            titleText: "one",
+            html: "<div />",
+            stepCount: 1,
+            isRaw: false,
+            // 展開後座標。exact セグメントで +10 ずれた元ソースに対応させる。
+            sourceSpan: { start: 25, end: 40 },
+          },
+        ],
+      },
+      version,
+      expansionMap: [
+        { expandedStart: 0, expandedEnd: 100, sourceStart: 10, sourceEnd: 110, exact: true },
+      ],
+      expandDiagnostics: [],
+    });
+    new PreviewController(panel, "webview.js", doc, events, vi.fn(), { render, navigate });
+
+    fire({ type: "ready" });
+    fire({ type: "jumpToSource", frameIndex: 0, version: 7 });
+
+    expect(navigate).toHaveBeenCalledExactlyOnceWith(35);
+    // ジャンプで余計な再送はしない(ready の 1 通のみ)。
+    expect(posted).toHaveLength(1);
+  });
+
+  it("jumpToSource: プレビューが古い版を見ていたら移動せず再描画を送る", () => {
+    const { panel, posted, fire } = makePanel();
+    const { events, change } = makeEvents();
+    const doc = makeDoc();
+    const navigate = vi.fn();
+    new PreviewController(panel, "webview.js", doc, events, vi.fn(), { navigate });
+    fire({ type: "ready" });
+
+    // 編集直後(debounce 保留中)は document.version が先行する。
+    doc.edit("\\begin{document}\\begin{frame}{Hi}B\\end{frame}\\end{document}");
+    change(doc);
+    fire({ type: "jumpToSource", frameIndex: 0, version: 7 });
+
+    expect(navigate).not.toHaveBeenCalled();
+    expect(posted).toHaveLength(2);
+    expect((posted[1] as DeckMessage).type).toBe("deckUpdated");
+    expect((posted[1] as DeckMessage).version).toBe(8);
+  });
+
+  it("jumpToSource: 存在しない frameIndex では何もしない", () => {
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    const navigate = vi.fn();
+    new PreviewController(panel, "webview.js", makeDoc(), events, vi.fn(), { navigate });
+    fire({ type: "ready" });
+
+    fire({ type: "jumpToSource", frameIndex: 99, version: 7 });
+
+    expect(navigate).not.toHaveBeenCalled();
+    expect(posted).toHaveLength(1);
+  });
+
   it("予期しない例外では error を通知し、最後に成功した結果を保持する", () => {
     const { panel, posted, fire } = makePanel();
     const { events, change } = makeEvents();

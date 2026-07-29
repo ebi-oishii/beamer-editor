@@ -2,6 +2,7 @@ import type { ExtensionToWebview } from "@beamer-editor/ui";
 import { parseWebviewToExtension } from "@beamer-editor/ui";
 import type * as vscode from "vscode";
 import { type RenderOutcome, renderDocument } from "./document-controller";
+import { resolveJumpOffset } from "./source-navigation";
 
 /**
  * PreviewController が必要とする Webview 面。実 vscode.Webview はこれらを満たす。
@@ -42,6 +43,11 @@ export interface PreviewControllerOptions {
   render?: (text: string, version: number) => RenderOutcome;
   /** 予期しないレンダリング例外の通知先(既定は何もしない)。 */
   onError?: (message: string) => void;
+  /**
+   * ソースジャンプの実行先(元ソースの UTF-16 オフセットを受け取る)。
+   * エディタ操作は vscode API が要るため extension.ts が注入する。既定は何もしない。
+   */
+  navigate?: (offset: number) => void;
 }
 
 export function emptyPreviewHtml(webviewScriptUri: string): string {
@@ -68,6 +74,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly disposables: { dispose(): void }[];
   private readonly render: (text: string, version: number) => RenderOutcome;
   private readonly onError: (message: string) => void;
+  private readonly navigate: (offset: number) => void;
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
@@ -83,6 +90,7 @@ export class PreviewController implements vscode.Disposable {
   ) {
     this.render = options.render ?? renderDocument;
     this.onError = options.onError ?? (() => {});
+    this.navigate = options.navigate ?? (() => {});
     this.panel.webview.html = emptyPreviewHtml(webviewScriptUri);
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
@@ -101,8 +109,25 @@ export class PreviewController implements vscode.Disposable {
     if (!msg) return;
     if (msg.type === "ready") {
       this.sendDeck();
+    } else if (msg.type === "jumpToSource") {
+      this.handleJump(msg.frameIndex, msg.version);
     }
-    // jumpToSource / activeFrameChanged は VS-4 で実装(現状 no-op)。
+    // activeFrameChanged はソース側カーソル追従(VS-5 以降)で使う予定(現状 no-op)。
+  }
+
+  /**
+   * プレビューからのソースジャンプ(VS-4)。プレビューが古い文書バージョンを参照して
+   * いた場合(未 debounce の編集が保留中の場合を含む)は移動せず、再描画だけを送る。
+   */
+  private handleJump(frameIndex: number, version: number): void {
+    const latest = this.latest;
+    if (!latest || version !== this.document.version || latest.version !== this.document.version) {
+      this.sendDeck();
+      return;
+    }
+    const offset = resolveJumpOffset(latest, frameIndex);
+    if (offset === null) return;
+    this.navigate(offset);
   }
 
   /**

@@ -17,6 +17,8 @@ const INITIAL_STATE: PreviewState = { current: 0, step: 1 };
 
 export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const [deck, setDeck] = useState<RenderedDeck>(EMPTY_DECK);
+  // 表示中 deck の document version。jumpToSource に添えて古い版からのジャンプを検出させる。
+  const [version, setVersion] = useState(Number.NEGATIVE_INFINITY);
 
   // frameCount を reducer へ渡すため ref に写す（reducer の同一性を保つ）。
   const frameCountRef = useRef(0);
@@ -27,7 +29,14 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   );
 
   // ホストからの deck 更新を購読する。
-  useEffect(() => host.subscribe((next) => setDeck(next)), [host]);
+  useEffect(
+    () =>
+      host.subscribe((next, nextVersion) => {
+        setDeck(next);
+        setVersion(nextVersion);
+      }),
+    [host],
+  );
 
   // deck が変わったら位置を保ったまま読み込み直す（編集中は現在フレームを維持）。
   useEffect(() => {
@@ -64,7 +73,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         frames={deck.frames}
         current={state.current}
         onSelect={(i) => dispatch({ type: "goto", index: i })}
-        onJump={(i) => host.jumpToSource(i)}
+        onJump={(i) => host.jumpToSource(i, version)}
       />
       <section className="stage">
         <Stage frame={frame} step={state.step} />
