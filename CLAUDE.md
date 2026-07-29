@@ -10,7 +10,8 @@ pnpm test / lint / typecheck  # 全ワークスペース(CI と同じ)
 pnpm --dir packages/core test # 単一パッケージ
 pnpm --dir apps/web dev       # renderer 動作確認用 dev ビューア
 pnpm --dir apps/vscode build  # 拡張バンドル。開発は VS Code で F5
-pnpm --dir apps/vscode test:integration  # 実 VS Code での統合テスト(ローカルのみ、CI 対象外)
+pnpm --dir apps/vscode test:integration  # 実 VS Code での統合テスト(CI では xvfb で実行)
+pnpm --dir apps/vscode package  # 開発用配布物 beamer-editor.vsix を生成(CI が artifact 化)
 ```
 
 ## 構成と依存方向
