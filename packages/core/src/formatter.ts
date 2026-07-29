@@ -30,7 +30,7 @@ function fixed(value: number): string {
 
 function canvasTextOptions(item: CanvasTextNode): string {
   const { x, y, width } = item.position;
-  return `[x=${fixed(x)},y=${fixed(y)},w=${fixed(width)},size=${item.size}]`;
+  return `[x=${fixed(x)},y=${fixed(y)},w=${fixed(width)},size=${item.invalidSize?.value ?? item.size}]`;
 }
 
 function canvasImageOptions(item: CanvasImageNode): string {

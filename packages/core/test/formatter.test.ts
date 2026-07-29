@@ -81,6 +81,19 @@ describe("formatDeck", () => {
     expect(formatted).toContain("[x=0.250,y=0.200,w=0.500,size=Large]");
   });
 
+  it("許可外サイズの宣言値をフォーマット後も保持する", () => {
+    const source = UNFORMATTED.replace("size=small", "size=huge");
+    expect(formatDeck(source)).toContain("[x=0.100,y=0.200,w=0.400,size=huge]");
+  });
+
+  it("deckimage の許可外 size キーをフォーマットで消さない", () => {
+    const source = UNFORMATTED.replace(
+      "w=0.333333,y=-0,x=0.666666",
+      "w=0.333333,y=-0,x=0.666666,size=huge",
+    );
+    expect(formatDeck(source)).toContain("[w=0.333333,y=-0,x=0.666666,size=huge]");
+  });
+
   it("既存の正規形fixtureを変更しない", () => {
     for (const name of ["canvas.tex", "styled.tex"]) {
       const source = fixture(name);

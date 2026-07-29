@@ -359,6 +359,12 @@ export type CanvasFontSize =
   | "large"
   | "Large";
 
+/** `decktext` に書かれた許可外の文字サイズ。L013 の診断と原文保持に使う。 */
+export interface InvalidCanvasFontSize {
+  value: string;
+  span: SourceSpan;
+}
+
 export interface CanvasNode extends BaseNode {
   type: "canvas";
   /** 許容外の直下要素は RawBlock として保持し L014 が検出する。 */
@@ -370,7 +376,10 @@ export type CanvasItemNode = CanvasTextNode | CanvasImageNode | RawBlockNode;
 export interface CanvasTextNode extends BaseNode {
   type: "canvasText";
   position: CanvasPosition;
+  /** レンダラーが安全に使える許可済みサイズ。不正値時は normal にフォールバックする。 */
   size: CanvasFontSize;
+  /** 許可外の宣言値。無指定または許可値なら null。 */
+  invalidSize: InvalidCanvasFontSize | null;
   /**
    * decktext 内の許容語彙(§2.8): paragraph(インライン要素・数式・改行)と
    * ネスト 1 段までのリストのみ。深さ・内容の逸脱は L014 が検査する
