@@ -141,7 +141,13 @@ export function activate(context: vscode.ExtensionContext): void {
             void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
           },
           navigate: (offset) => {
-            void jumpToOffset(document, offset, lineFlash);
+            // タブを閉じて close された場合、元の TextDocument は凍結するため
+            // 同じ uri の最新インスタンスを引き直してからジャンプする。
+            const target =
+              vscode.workspace.textDocuments.find(
+                (candidate) => candidate.uri.toString() === document.uri.toString(),
+              ) ?? document;
+            void jumpToOffset(target, offset, lineFlash);
           },
         },
       );

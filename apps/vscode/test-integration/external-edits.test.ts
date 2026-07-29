@@ -47,6 +47,13 @@ function sleep(ms: number): Promise<void> {
 
 suite("VS-6: 外部編集と競合", () => {
   teardown(async () => {
+    // dirty なまま閉じると保存ダイアログでハングし得るため、先に revert する。
+    for (const document of vscode.workspace.textDocuments) {
+      if (document.isDirty) {
+        await vscode.window.showTextDocument(document);
+        await vscode.commands.executeCommand("workbench.action.files.revert");
+      }
+    }
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
   });
 

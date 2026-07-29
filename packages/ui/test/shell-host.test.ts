@@ -61,6 +61,15 @@ describe("createMessageShellHost", () => {
     expect(host.loadNavState?.()).toBeUndefined();
     stored = "junk";
     expect(host.loadNavState?.()).toBeUndefined();
+    // 範囲・整数性も検証する(壊れた state で空表示にならないように)。
+    stored = { current: -1, step: 1 };
+    expect(host.loadNavState?.()).toBeUndefined();
+    stored = { current: Number.NaN, step: 1 };
+    expect(host.loadNavState?.()).toBeUndefined();
+    stored = { current: 1.5, step: 1 };
+    expect(host.loadNavState?.()).toBeUndefined();
+    stored = { current: 0, step: 0 };
+    expect(host.loadNavState?.()).toBeUndefined();
   });
 
   it("StateStore なしでも loadNavState は undefined を返すだけで壊れない", () => {

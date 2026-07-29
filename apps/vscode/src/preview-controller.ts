@@ -66,7 +66,8 @@ export function emptyPreviewHtml(assets: WebviewAssets, cspSource: string, nonce
     "default-src 'none'",
     `img-src ${cspSource} data:`,
     `style-src ${cspSource} 'unsafe-inline'`,
-    `font-src ${cspSource}`,
+    // KaTeX の CSS は版によって data: URL のフォントを含むため許可する
+    `font-src ${cspSource} data:`,
     `script-src 'nonce-${nonce}'`,
   ].join("; ");
   return `<!DOCTYPE html>
@@ -105,14 +106,22 @@ export class PreviewController implements vscode.Disposable {
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
   private latest: RenderOutcome | undefined;
 
+  /**
+   * プレビュー対象の文書。エディタタブを閉じると TextDocument は close され
+   * getText() が凍結するため、変更イベントが届くたびに最新のインスタンスへ
+   * 差し替える(close → 再オープンで別インスタンスになる)。
+   */
+  private document: PreviewDocument;
+
   constructor(
     private readonly panel: PreviewPanel,
     assets: WebviewAssets,
-    private readonly document: PreviewDocument,
+    document: PreviewDocument,
     events: DocumentEvents,
     private readonly onDispose: () => void,
     options: PreviewControllerOptions = {},
   ) {
+    this.document = document;
     this.render = options.render ?? renderDocument;
     this.onError = options.onError ?? (() => {});
     this.navigate = options.navigate ?? (() => {});
@@ -162,6 +171,8 @@ export class PreviewController implements vscode.Disposable {
   private handleDocumentChange(event: PreviewDocumentChangeEvent): void {
     if (this.disposed) return;
     if (event.document.uri.toString() !== this.document.uri.toString()) return;
+    // close → 再オープンで新しい TextDocument になっても追従できるよう差し替える。
+    this.document = event.document;
     if (event.contentChanges.length === 0) return;
     clearTimeout(this.debounceTimer);
     this.debounceTimer = setTimeout(() => this.sendDeck(), RENDER_DEBOUNCE_MS);

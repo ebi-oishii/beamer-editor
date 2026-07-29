@@ -139,7 +139,7 @@ describe("PreviewController", () => {
     const html = panel.webview.html;
     expect(html).toContain("default-src 'none'");
     expect(html).toContain("style-src https://csp.test 'unsafe-inline'");
-    expect(html).toContain("font-src https://csp.test");
+    expect(html).toContain("font-src https://csp.test data:");
     expect(html).toContain('<link rel="stylesheet" href="webview.css"');
     const nonce = html.match(/script-src 'nonce-([a-f0-9]+)'/)?.[1];
     expect(nonce).toBeTruthy();
@@ -189,6 +189,25 @@ describe("PreviewController", () => {
 
     expect(posted).toHaveLength(1);
     expect((posted[0] as DeckMessage).version).toBe(10);
+  });
+
+  it("close → 再オープンで別インスタンスになった同一文書にも追従する", () => {
+    const { panel, posted, fire } = makePanel();
+    const { events, change } = makeEvents();
+    const original = makeDoc();
+    new PreviewController(panel, ASSETS, original, events, vi.fn());
+    fire({ type: "ready" });
+
+    // タブを閉じて開き直すと、同じ uri の新しい TextDocument から変更イベントが届く。
+    const reopened = makeDoc();
+    reopened.version = 1;
+    reopened.edit("\\begin{document}\\begin{frame}{Hi}REOPENED\\end{frame}\\end{document}");
+    change(reopened);
+    vi.advanceTimersByTime(RENDER_DEBOUNCE_MS);
+
+    expect(posted).toHaveLength(2);
+    // 凍結した旧インスタンス(version 7)ではなく、新インスタンスの内容が描画される。
+    expect((posted[1] as DeckMessage).version).toBe(2);
   });
 
   it("別ファイルの変更ではプレビューを再計算しない", () => {
