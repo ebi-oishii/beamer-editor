@@ -27,8 +27,8 @@ AI がスライドの叩き台を生成し、人間が微調整して完成さ�
 
 実装中。**M1(読める)到達済み**、現在 **Phase 5(VS Code シェル)** を進行中(開発順序は開発計画を参照)。
 
-- 実装済み: パーサ + AST(Phase 1)、キャンバス正規形フォーマッタ + リンター基盤 L009/L011/L017/L018/L020(Phase 2 の一部)、マクロ展開器(Phase 3)、HTML プレビュー + KaTeX(Phase 4)、スタイル語彙 v1(S1)、Noto Sans CJK 対応(S2)、VS Code 拡張スキャフォールド(VS-1)+ 共有プレビュー UI `packages/ui`(VS-2)+ 編集追従プレビュー(VS-3)+ ソースジャンプ(VS-4)
-- 次: VS-5(lint → Diagnostics)以降([vscode-migration-plan.md](docs/vscode-migration-plan.md))、Phase 2 の残り(正規形の全域化・残りリント規則)
+- 実装済み: パーサ + AST(Phase 1)、キャンバス正規形フォーマッタ + リンター基盤 L009/L011/L017/L018/L020(Phase 2 の一部)、マクロ展開器(Phase 3)、HTML プレビュー + KaTeX(Phase 4)、スタイル語彙 v1(S1)、Noto Sans CJK 対応(S2)、VS Code 拡張スキャフォールド(VS-1)+ 共有プレビュー UI `packages/ui`(VS-2)+ 編集追従プレビュー(VS-3)+ ソースジャンプ(VS-4)+ lint 診断(VS-5)
+- 次: VS-6(外部編集と競合の実機検証)以降([vscode-migration-plan.md](docs/vscode-migration-plan.md))、Phase 2 の残り(正規形の全域化・残りリント規則)
 
 ## 開発
 
