@@ -98,7 +98,7 @@
 
 ### Phase 5: 共有 UI + VS Code シェル
 
-**進行中。** VS-1(拡張スキャフォールド、PR #19)と VS-2(共有プレビュー UI `packages/ui` + ShellHost 契約、PR #20)は実装済(2026-07-25)。次は VS-3(TextDocument 同期)。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
+**進行中。** VS-1(拡張スキャフォールド、PR #19)・VS-2(共有プレビュー UI `packages/ui` + ShellHost 契約、PR #20)・VS-3(TextDocument 同期: 変更購読 + debounce + version guard + マクロ展開統合)は実装済(2026-07-29)。次は VS-4(プレビュー → ソースジャンプ)。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
 
 **5a. packages/ui — 共有 UI と ShellHost 契約(S)**
 

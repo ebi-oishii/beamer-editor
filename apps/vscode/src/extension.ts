@@ -26,11 +26,24 @@ export function activate(context: vscode.ExtensionContext): void {
       const webviewScriptUri = panel.webview
         .asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "webview.js"))
         .toString();
-      const controller = new PreviewController(panel, webviewScriptUri, editor.document, () => {
-        if (previewController === controller) {
-          previewController = undefined;
-        }
-      });
+      const controller = new PreviewController(
+        panel,
+        webviewScriptUri,
+        editor.document,
+        {
+          onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
+        },
+        () => {
+          if (previewController === controller) {
+            previewController = undefined;
+          }
+        },
+        {
+          onError: (message) => {
+            void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
+          },
+        },
+      );
       previewController = controller;
     }),
   );

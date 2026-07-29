@@ -29,10 +29,15 @@ export interface MessageTransport {
 
 /** MessageTransport から Webview 用の ShellHost を作る。 */
 export function createMessageShellHost(transport: MessageTransport): ShellHost & { ready(): void } {
+  // 非同期処理の完了順が入れ替わっても古いプレビューへ戻らないよう、
+  // 現在値より古い document version の deckUpdated は捨てる(移植計画 §6)。
+  let lastVersion = Number.NEGATIVE_INFINITY;
   return {
     subscribe(listener) {
       return transport.subscribe((msg) => {
         if (msg.type === "deckUpdated") {
+          if (msg.version < lastVersion) return;
+          lastVersion = msg.version;
           listener(msg.deck, msg.version);
         }
       });
