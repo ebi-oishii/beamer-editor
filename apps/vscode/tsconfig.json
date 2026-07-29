@@ -6,7 +6,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "noEmit": true,
-    "types": ["node", "vscode"]
+    "types": ["node", "vscode", "mocha"]
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "test-integration"]
 }

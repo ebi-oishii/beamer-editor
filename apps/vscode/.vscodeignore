@@ -1,9 +1,15 @@
 .vscode/**
 .gitignore
 .vscodeignore
+.vscode-test.mjs
+.vscode-test/**
 esbuild.mjs
+esbuild.integration.mjs
+vitest.config.ts
 src/**
 test/**
+test-integration/**
+out-test/**
 tsconfig.json
 **/*.ts
 **/*.map

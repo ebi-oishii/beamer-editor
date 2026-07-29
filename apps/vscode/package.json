@@ -37,7 +37,8 @@
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "pnpm build && node esbuild.integration.mjs && vscode-test"
   },
   "dependencies": {
     "@beamer-editor/core": "workspace:*",
@@ -47,10 +48,13 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^26.1.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/vscode": "^1.125.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
     "esbuild": "^0.28.1",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0"
