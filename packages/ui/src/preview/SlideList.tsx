@@ -7,6 +7,10 @@ import type { RenderedFrame } from "@beamer-editor/renderer";
 import { useEffect, useRef } from "react";
 import { applyOverlay } from "./overlay.js";
 
+/** aria-label に載せる修飾キー名(mac は Cmd、それ以外は Ctrl。判定不能時は Ctrl)。 */
+const MODIFIER_LABEL =
+  typeof navigator !== "undefined" && /mac/i.test(navigator.platform) ? "Cmd" : "Ctrl";
+
 function Thumb({
   frame,
   index,
@@ -35,11 +39,15 @@ function Thumb({
       data-index={index}
       role="button"
       tabIndex={0}
-      aria-label={`フレーム ${frame.index}: ${frame.titleText}`}
+      aria-label={`フレーム ${frame.index}: ${frame.titleText}（Enter で選択、${MODIFIER_LABEL}+Enter でソースへ移動）`}
       onClick={() => onSelect(index)}
       onDoubleClick={() => onJump(index)}
       onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          // ダブルクリックと等価のキーボード操作(コントロールの「ソースへ」ボタンでも可)。
+          e.preventDefault();
+          onJump(index);
+        } else if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onSelect(index);
         }

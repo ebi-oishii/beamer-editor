@@ -12,6 +12,7 @@ export function Controls({
   onPrev,
   onNext,
   onStep,
+  onJump,
 }: {
   frame: RenderedFrame | undefined;
   total: number;
@@ -19,6 +20,7 @@ export function Controls({
   onPrev: () => void;
   onNext: () => void;
   onStep: (step: number) => void;
+  onJump: () => void;
 }): JSX.Element {
   const stepCount = frame?.stepCount ?? 1;
   const indicator = frame
@@ -35,6 +37,15 @@ export function Controls({
       </span>
       <button type="button" aria-label="次のフレーム" onClick={onNext}>
         ▶
+      </button>
+      {/* キーボードだけでもソースジャンプできる明示ボタン(サムネイルのダブルクリックと等価) */}
+      <button
+        type="button"
+        aria-label="このフレームのソース位置へ移動"
+        disabled={!frame}
+        onClick={onJump}
+      >
+        ソースへ
       </button>
       {stepCount > 1 ? (
         <span className="step-box">
