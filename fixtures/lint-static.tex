@@ -1,0 +1,30 @@
+%% deck-source-version: 1
+\documentclass[aspectratio=169]{beamer}
+\begin{document}
+
+\begin{frame}{Raw syntax}
+\unknowncommand{value}
+\end{frame}
+
+\begin{frame}{Overlay}
+\begin{itemize}
+\item<2> delayed
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Verbatim}
+\begin{verbatim}
+code
+\end{verbatim}
+\end{frame}
+
+\begin{frame}[label=canvas]{First line\\Second line}
+\begin{deckcanvas}
+\pause
+\begin{decktext}[x=0.8,y=0,w=0.4,size=huge]
+text
+\end{decktext}
+\end{deckcanvas}
+\end{frame}
+
+\end{document}

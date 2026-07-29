@@ -30,6 +30,7 @@ describe("ast smoke", () => {
           span: span(0, 1),
           position: { x: 0.05, y: 0.1, width: 0.42, span: span(0, 1) },
           size: "normal",
+          invalidSize: null,
           children: [],
         },
         {

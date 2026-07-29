@@ -63,6 +63,14 @@ describe("renderDeck: canvas.tex", () => {
     expect(sizes?.html).toContain("font-size:9pt"); // footnotesize
   });
 
+  it("許可外サイズは normal の安全なフォールバックで描画される", () => {
+    const source = fixture("canvas.tex").replace("size=normal", "size=huge");
+    const rendered = renderDeck(parseDeck(source));
+
+    expect(rendered.frames[1]?.html).toContain("font-size:11pt");
+    expect(rendered.frames[1]?.html).not.toContain("font-size:undefinedpt");
+  });
+
   it("PDF 画像はプレースホルダになる", () => {
     expect(deck.frames[1]?.html).toContain("image-placeholder");
   });

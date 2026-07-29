@@ -129,8 +129,38 @@ describe("parseDeck: canvas.tex", () => {
     if (text?.type !== "canvasText") throw new Error("expected canvasText");
     expect(text.position).toMatchObject({ x: 0.05, y: 0.1, width: 0.42 });
     expect(text.size).toBe("normal");
+    expect(text.invalidSize).toBeNull();
     if (image?.type !== "canvasImage") throw new Error("expected canvasImage");
     expect(image.path).toBe("assets/result-chart.pdf");
+  });
+
+  it("許可外の decktext サイズは安全な値へフォールバックし、宣言値を保持する", () => {
+    const source = fixture("canvas.tex").replace("size=normal", "size=huge");
+    const frame = framesOf(parseDeck(source))[1];
+    if (frame?.type !== "frame") throw new Error("expected frame");
+    const canvas = frame.body.find((block) => block.type === "canvas");
+    if (canvas?.type !== "canvas") throw new Error("expected canvas");
+    const text = canvas.items.find((item) => item.type === "canvasText");
+    if (text?.type !== "canvasText") throw new Error("expected canvasText");
+
+    expect(text.size).toBe("normal");
+    expect(text.invalidSize).toMatchObject({ value: "huge" });
+    expect(source.slice(text.invalidSize?.span.start, text.invalidSize?.span.end)).toBe("huge");
+  });
+
+  it("deckimage の size キーは許可せず、生ブロックとして原文を保持する", () => {
+    const source = fixture("canvas.tex").replace(
+      "x=0.520,y=0.140,w=0.400",
+      "x=0.520,y=0.140,w=0.400,size=huge",
+    );
+    const frame = framesOf(parseDeck(source))[1];
+    if (frame?.type !== "frame") throw new Error("expected frame");
+    const canvas = frame.body.find((block) => block.type === "canvas");
+    if (canvas?.type !== "canvas") throw new Error("expected canvas");
+
+    expect(
+      canvas.items.some((item) => item.type === "rawBlock" && item.tex.includes("size=huge")),
+    ).toBe(true);
   });
 
   it("decktext 内の箇条書きを読む", () => {
@@ -214,6 +244,17 @@ describe("parseDeck: styled.tex(%% style 領域)", () => {
     const raws = broken.style.entries.filter((e) => e.type === "rawBlock");
     expect(raws).toHaveLength(2);
     expect(raws.every((r) => r.reason === "unknown-style")).toBe(true);
+  });
+
+  it("decklogo の size キーは許可せず、style 生ブロックとして保持する", () => {
+    const broken = parseDeck(
+      fixture("styled.tex").replace("x=0.945,y=0.000,w=0.055", "x=0.945,y=0.000,w=0.055,size=huge"),
+    );
+    const raw = broken.style.entries.find(
+      (entry) => entry.type === "rawBlock" && entry.tex.includes("size=huge"),
+    );
+
+    expect(raw).toBeDefined();
   });
 
   it("style 領域が無いデッキでは空になる", () => {

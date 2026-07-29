@@ -1,13 +1,28 @@
 import {
+  type BlockNode,
+  type CanvasNode,
   type DeckDocument,
   type FrameNode,
   framesOf,
+  type InlineNode,
   isCanvasFrame,
   type RawFrameNode,
   type SourceSpan,
 } from "./ast.js";
 
-export type LintCode = "L009" | "L011" | "L017" | "L018" | "L020";
+export type LintCode =
+  | "L001"
+  | "L005"
+  | "L007"
+  | "L009"
+  | "L011"
+  | "L012"
+  | "L013"
+  | "L014"
+  | "L017"
+  | "L018"
+  | "L019"
+  | "L020";
 
 export type LintSeverity = "info" | "warning" | "error";
 
@@ -27,6 +42,7 @@ export const CURRENT_DECK_SOURCE_VERSION = 1;
 
 type AnyFrame = FrameNode | RawFrameNode;
 
+const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlisting", "minted"]);
 function frameLabel(frame: AnyFrame): string | null {
   const label = frame.type === "frame" ? frame.options.label : frame.label;
   return label?.trim() || null;
@@ -87,6 +103,367 @@ function lintCanvasFrames(doc: DeckDocument): LintDiagnostic[] {
   return diagnostics;
 }
 
+function diagnostic(
+  code: LintCode,
+  severity: LintSeverity,
+  message: string,
+  span: SourceSpan,
+): LintDiagnostic {
+  return { code, severity, message, span };
+}
+
+function lintRawSyntax(doc: DeckDocument): LintDiagnostic[] {
+  const diagnostics: LintDiagnostic[] = [];
+  const visit = (value: unknown): void => {
+    if (value === null || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      for (const entry of value) visit(entry);
+      return;
+    }
+    const node = value as { type?: string; span?: SourceSpan };
+    if (
+      (node.type === "rawInline" || node.type === "rawBlock" || node.type === "rawFrame") &&
+      node.span !== undefined
+    ) {
+      diagnostics.push(
+        diagnostic("L001", "info", "サブセット外の構文は生ブロックとして扱われます", node.span),
+      );
+    }
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(doc);
+  return diagnostics;
+}
+
+function visitBlocks(blocks: BlockNode[], visitor: (block: BlockNode) => void): void {
+  for (const block of blocks) {
+    visitor(block);
+    switch (block.type) {
+      case "list":
+        for (const item of block.items) visitBlocks(item.children, visitor);
+        break;
+      case "columns":
+        for (const column of block.columns) visitBlocks(column.children, visitor);
+        break;
+      case "blockEnv":
+      case "center":
+        visitBlocks(block.children, visitor);
+        break;
+      case "canvas":
+        for (const item of block.items) {
+          if (item.type === "canvasText") visitBlocks(item.children, visitor);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+function lintOverlays(doc: DeckDocument): LintDiagnostic[] {
+  const diagnostics: LintDiagnostic[] = [];
+  for (const frame of framesOf(doc)) {
+    if (frame.type !== "frame") continue;
+    const overlays: Array<{ from: number; to: number | null; span: SourceSpan }> = [];
+    visitBlocks(frame.body, (block) => {
+      if (block.type === "list") {
+        for (const item of block.items) {
+          const overlay = item.overlay;
+          if (overlay) {
+            overlays.push(...overlay.ranges.map((range) => ({ ...range, span: overlay.span })));
+          }
+        }
+      } else if (block.type === "blockEnv") {
+        const overlay = block.overlay;
+        if (overlay) {
+          overlays.push(...overlay.ranges.map((range) => ({ ...range, span: overlay.span })));
+        }
+      }
+    });
+
+    const invalid = overlays.filter(({ from, to }) => from < 1 || (to !== null && to < from));
+    for (const overlay of invalid) {
+      diagnostics.push(
+        diagnostic("L005", "warning", "オーバーレイ番号の範囲が不正です", overlay.span),
+      );
+    }
+    const valid = overlays.filter(({ from, to }) => from >= 1 && (to === null || to >= from));
+    const max = valid.reduce(
+      (current, overlay) => Math.max(current, overlay.to ?? overlay.from),
+      0,
+    );
+    const hasAlwaysVisibleContent = frame.body.some((block) => {
+      if (block.type === "blockEnv") return block.overlay === null;
+      if (block.type !== "list") return true;
+      return block.items.some((item) => item.overlay === null);
+    });
+    for (let step = 1; step <= max; step++) {
+      if (
+        hasAlwaysVisibleContent ||
+        valid.some(({ from, to }) => from <= step && (to === null || step <= to))
+      ) {
+        continue;
+      }
+      diagnostics.push(
+        diagnostic(
+          "L005",
+          "warning",
+          `オーバーレイのステップ ${step} に表示される要素がありません`,
+          frame.span,
+        ),
+      );
+    }
+  }
+  return diagnostics;
+}
+
+function lintFragileFrames(doc: DeckDocument): LintDiagnostic[] {
+  const diagnostics: LintDiagnostic[] = [];
+  for (const frame of framesOf(doc)) {
+    if (frame.type === "rawFrame") {
+      if (rawFrameNeedsFragile(frame)) {
+        diagnostics.push(
+          diagnostic(
+            "L007",
+            "error",
+            "verbatim 系を含む frame には fragile オプションが必要です",
+            frame.span,
+          ),
+        );
+      }
+      continue;
+    }
+    if (frame.options.fragile) continue;
+    visitBlocks(frame.body, (block) => {
+      if (
+        block.type === "rawBlock" &&
+        block.environment !== null &&
+        VERBATIM_ENVS.has(block.environment)
+      ) {
+        diagnostics.push(
+          diagnostic(
+            "L007",
+            "error",
+            "verbatim 系を含む frame には fragile オプションが必要です",
+            block.span,
+          ),
+        );
+      }
+    });
+  }
+  return diagnostics;
+}
+
+function rawFrameNeedsFragile(frame: RawFrameNode): boolean {
+  const withoutComments = frame.tex
+    .split("\n")
+    .map((line) => {
+      for (let index = 0; index < line.length; index++) {
+        if (line[index] !== "%") continue;
+        let slashes = 0;
+        for (let previous = index - 1; previous >= 0 && line[previous] === "\\"; previous--)
+          slashes++;
+        if (slashes % 2 === 0) return line.slice(0, index);
+      }
+      return line;
+    })
+    .join("\n");
+  const opening = /\\begin\{frame\}\s*(?:\[([^\]]*)\])?/.exec(withoutComments);
+  if (!opening || /(?:^|,)\s*fragile(?:\s*=\s*[^,\]]+)?\s*(?:,|$)/.test(opening[1] ?? "")) {
+    return false;
+  }
+  return containsVerbatimEnvironment(withoutComments);
+}
+
+function containsVerbatimEnvironment(source: string): boolean {
+  let stringifyNextToken = false;
+  for (let index = 0; index < source.length; ) {
+    const char = source[index] as string;
+    if (stringifyNextToken && /\s/.test(char)) {
+      index++;
+      continue;
+    }
+    if (char !== "\\") {
+      stringifyNextToken = false;
+      index++;
+      continue;
+    }
+    const next = source[index + 1] ?? "";
+    if (!/[a-zA-Z@]/.test(next)) {
+      // `\\` は改行コマンドであり、後続の `begin` は通常文字列になる。
+      stringifyNextToken = false;
+      index += Math.min(2, source.length - index);
+      continue;
+    }
+    let end = index + 1;
+    while (end < source.length && /[a-zA-Z@]/.test(source[end] as string)) end++;
+    const command = source.slice(index + 1, end);
+    if (stringifyNextToken) {
+      stringifyNextToken = false;
+      index = end;
+      continue;
+    }
+    if (command === "string") {
+      stringifyNextToken = true;
+      index = end;
+      continue;
+    }
+    if (command === "begin") {
+      let cursor = end;
+      while (cursor < source.length && /\s/.test(source[cursor] as string)) cursor++;
+      const close = source.indexOf("}", cursor + 1);
+      if (source[cursor] === "{" && close !== -1) {
+        const environment = source.slice(cursor + 1, close);
+        if (VERBATIM_ENVS.has(environment)) return true;
+      }
+    }
+    index = end;
+  }
+  return false;
+}
+
+function lintCanvas(canvas: CanvasNode, frame: FrameNode): LintDiagnostic[] {
+  const diagnostics: LintDiagnostic[] = [];
+  for (const item of canvas.items) {
+    if (item.type === "rawBlock") {
+      diagnostics.push(
+        diagnostic(
+          "L014",
+          "warning",
+          "deckcanvas 直下には decktext または deckimage だけを置けます",
+          item.span,
+        ),
+      );
+      continue;
+    }
+    const { x, y, width, span } = item.position;
+    if (x < 0 || x > 1 || y < 0 || y > 1 || width <= 0 || width > 1 || x + width > 1) {
+      diagnostics.push(
+        diagnostic(
+          "L012",
+          "warning",
+          "キャンバスの x, y, w は本文領域内に収まる必要があります",
+          span,
+        ),
+      );
+    }
+    if (item.type !== "canvasText") continue;
+    if (item.invalidSize !== null) {
+      diagnostics.push(
+        diagnostic(
+          "L013",
+          "error",
+          `許可されていない文字サイズです: ${item.invalidSize.value}`,
+          item.invalidSize.span,
+        ),
+      );
+    }
+    const visitTextBlocks = (blocks: BlockNode[], listDepth: number): void => {
+      for (const block of blocks) {
+        if (block.type === "paragraph") {
+          continue;
+        }
+        if (block.type === "rawBlock") {
+          diagnostics.push(
+            diagnostic(
+              "L014",
+              "warning",
+              "decktext 内に許可されていない要素があります",
+              block.span,
+            ),
+          );
+        } else if (block.type === "list") {
+          if (listDepth > 1) {
+            diagnostics.push(
+              diagnostic(
+                "L014",
+                "warning",
+                "decktext 内のリストは 1 段までしかネストできません",
+                block.span,
+              ),
+            );
+          }
+          for (const listItem of block.items) {
+            if (listItem.overlay !== null) {
+              diagnostics.push(
+                diagnostic(
+                  "L014",
+                  "warning",
+                  "decktext 内のリスト項目にオーバーレイ指定は使えません",
+                  listItem.overlay.span,
+                ),
+              );
+            }
+            visitTextBlocks(listItem.children, listDepth + 1);
+          }
+        } else {
+          diagnostics.push(
+            diagnostic(
+              "L014",
+              "warning",
+              "decktext 内に許可されていない要素があります",
+              block.span,
+            ),
+          );
+        }
+      }
+    };
+    visitTextBlocks(item.children, 0);
+  }
+  for (const block of frame.body) {
+    if (block !== canvas) {
+      diagnostics.push(
+        diagnostic(
+          "L014",
+          "warning",
+          "deckcanvas を持つ frame に通常フロー要素を混在できません",
+          block.span,
+        ),
+      );
+    }
+  }
+  return diagnostics;
+}
+
+function lintCanvasContent(doc: DeckDocument): LintDiagnostic[] {
+  const diagnostics: LintDiagnostic[] = [];
+  for (const element of doc.body) {
+    if (element.type !== "frame") continue;
+    for (const block of element.body) {
+      if (block.type === "canvas") diagnostics.push(...lintCanvas(block, element));
+    }
+  }
+  return diagnostics;
+}
+
+function lintCanvasTitles(doc: DeckDocument): LintDiagnostic[] {
+  const diagnostics: LintDiagnostic[] = [];
+  for (const element of doc.body) {
+    if (element.type !== "frame" || !isCanvasFrame(element) || element.title === null) continue;
+    if (!hasLineBreak(element.title)) continue;
+    const first = element.title[0];
+    const last = element.title.at(-1);
+    diagnostics.push(
+      diagnostic("L019", "warning", "キャンバスフレームのタイトルは 1 行に収めてください", {
+        start: first?.span.start ?? element.span.start,
+        end: last?.span.end ?? element.span.end,
+      }),
+    );
+  }
+  return diagnostics;
+}
+
+function hasLineBreak(nodes: InlineNode[]): boolean {
+  return nodes.some((node) => {
+    if (node.type === "lineBreak" || (node.type === "text" && node.value.includes("\n")))
+      return true;
+    return (
+      (node.type === "styled" || node.type === "colorText" || node.type === "href") &&
+      hasLineBreak(node.children)
+    );
+  });
+}
+
 function lintSourceVersion(doc: DeckDocument, expectedSourceVersion: number): LintDiagnostic[] {
   if (doc.sourceVersion === expectedSourceVersion) return [];
 
@@ -125,8 +502,13 @@ function lintStyle(doc: DeckDocument): LintDiagnostic[] {
 export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiagnostic[] {
   const expectedSourceVersion = options.expectedSourceVersion ?? CURRENT_DECK_SOURCE_VERSION;
   const diagnostics = [
+    ...lintRawSyntax(doc),
+    ...lintOverlays(doc),
+    ...lintFragileFrames(doc),
     ...lintDuplicateLabels(framesOf(doc)),
     ...lintCanvasFrames(doc),
+    ...lintCanvasContent(doc),
+    ...lintCanvasTitles(doc),
     ...lintSourceVersion(doc, expectedSourceVersion),
     ...lintStyle(doc),
   ];

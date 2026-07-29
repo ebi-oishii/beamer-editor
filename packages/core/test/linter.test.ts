@@ -11,6 +11,58 @@ ${body}
 }
 
 describe("lintDeck", () => {
+  it("生ブロック化されたサブセット外構文を L001 で報告する", () => {
+    const source = deck(`
+\\begin{frame}{Raw}
+\\unknowncommand{value}
+\\end{frame}`);
+
+    const diagnostic = lintDeck(parseDeck(source)).find((entry) => entry.code === "L001");
+
+    expect(diagnostic).toMatchObject({ severity: "info" });
+    expect(source.slice(diagnostic?.span.start, diagnostic?.span.end)).toContain(
+      "\\unknowncommand",
+    );
+  });
+
+  it("到達しないオーバーレイのステップを L005 で報告し、連続範囲は許可する", () => {
+    const source = deck(`
+\\begin{frame}{Overlay}
+\\begin{itemize}
+\\item<2> second
+\\end{itemize}
+\\end{frame}`);
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L005");
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({ severity: "warning", span: expect.any(Object) });
+    expect(
+      lintDeck(parseDeck(source.replace("<2>", "<1->"))).some((entry) => entry.code === "L005"),
+    ).toBe(false);
+  });
+
+  it("verbatim 系を fragile なしで使う frame を L007 で報告する", () => {
+    const source = deck(`
+\\begin{frame}{Code}
+\\begin{verbatim}
+code
+\\end{verbatim}
+\\end{frame}`);
+
+    const diagnostic = lintDeck(parseDeck(source)).find((entry) => entry.code === "L007");
+
+    expect(diagnostic).toMatchObject({ severity: "error" });
+    expect(source.slice(diagnostic?.span.start, diagnostic?.span.end)).toContain(
+      "\\begin{verbatim}",
+    );
+    expect(
+      lintDeck(parseDeck(source.replace("\\begin{frame}", "\\begin{frame}[fragile]"))).some(
+        (entry) => entry.code === "L007",
+      ),
+    ).toBe(false);
+  });
+
   it("重複した frame label のすべての出現箇所を L009 で報告する", () => {
     const source = deck(`
 \\begin{frame}[label=duplicate]{First}
@@ -33,7 +85,7 @@ second
     const source = deck(`
 \\begin{frame}{Canvas}
 \\begin{deckcanvas}
-\\decktext[x=0.1,y=0.1,w=0.5]{text}
+\\begin{decktext}[x=0.1,y=0.1,w=0.5]text\\end{decktext}
 \\end{deckcanvas}
 \\end{frame}`);
 
@@ -55,11 +107,9 @@ second
 \\end{deckcanvas}
 \\end{frame}`);
 
-    expect(lintDeck(parseDeck(source))).toEqual([
-      expect.objectContaining({
-        code: "L011",
-      }),
-    ]);
+    expect(lintDeck(parseDeck(source))).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "L011" })]),
+    );
   });
 
   it("source version の欠落と不一致を L017 で報告する", () => {
@@ -86,17 +136,154 @@ second
       `
 \\begin{frame}[label=canvas]{Canvas}
 \\begin{deckcanvas}
-\\decktext[x=0.1,y=0.1,w=0.5]{text}
+\\begin{decktext}[x=0.1,y=0.1,w=0.5]text\\end{decktext}
 \\end{deckcanvas}
 \\end{frame}`,
     ).replace("aspectratio=169", "aspectratio=43");
 
-    expect(lintDeck(parseDeck(source))).toEqual([
-      expect.objectContaining({
-        code: "L018",
-        severity: "warning",
-      }),
-    ]);
+    expect(lintDeck(parseDeck(source))).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "L018", severity: "warning" })]),
+    );
+  });
+
+  it("キャンバス座標の範囲外を L012 で報告し、境界上は許可する", () => {
+    const outOfBounds = deck(`
+\\begin{frame}[label=canvas]{Canvas}
+\\begin{deckcanvas}
+\\deckimage[x=0.8,y=1,w=0.3]{image.png}
+\\end{deckcanvas}
+\\end{frame}`);
+    const valid = outOfBounds.replace("x=0.8,y=1,w=0.3", "x=0,y=0,w=1");
+
+    const diagnostic = lintDeck(parseDeck(outOfBounds)).find((entry) => entry.code === "L012");
+
+    expect(diagnostic).toMatchObject({ severity: "warning" });
+    expect(sourceText(outOfBounds, diagnostic)).toBe("[x=0.8,y=1,w=0.3]");
+    expect(lintDeck(parseDeck(valid)).some((entry) => entry.code === "L012")).toBe(false);
+  });
+
+  it("許可外の decktext サイズを L013 で報告し、許可値は報告しない", () => {
+    const invalid = deck(`
+\\begin{frame}[label=canvas]{Canvas}
+\\begin{deckcanvas}
+\\begin{decktext}[x=0,y=0,w=1,size=huge]text\\end{decktext}
+\\end{deckcanvas}
+\\end{frame}`);
+    const valid = invalid.replace("size=huge", "size=Large");
+
+    const diagnostic = lintDeck(parseDeck(invalid)).find((entry) => entry.code === "L013");
+
+    expect(diagnostic).toMatchObject({ severity: "error" });
+    expect(sourceText(invalid, diagnostic)).toBe("huge");
+    expect(lintDeck(parseDeck(valid)).some((entry) => entry.code === "L013")).toBe(false);
+  });
+
+  it("L013 は size=size の値側だけを指す", () => {
+    const source = deck(`
+\\begin{frame}[label=canvas]{Canvas}
+\\begin{deckcanvas}
+\\begin{decktext}[x=0,y=0,w=1,size=size]text\\end{decktext}
+\\end{deckcanvas}
+\\end{frame}`);
+    const diagnostic = lintDeck(parseDeck(source)).find((entry) => entry.code === "L013");
+    const optionStart = source.indexOf("size=size");
+
+    expect(sourceText(source, diagnostic)).toBe("size");
+    expect(diagnostic?.span.start).toBe(optionStart + "size=".length);
+  });
+
+  it("キャンバス直下・decktext 内の許可外要素を L014 で報告する", () => {
+    const source = deck(`
+\\begin{frame}[label=canvas]{Canvas}
+ordinary flow
+\\begin{deckcanvas}
+\\pause
+\\begin{decktext}[x=0,y=0,w=1]
+\\begin{block}{not allowed}text\\end{block}
+\\end{decktext}
+\\end{deckcanvas}
+\\end{frame}`);
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L014");
+
+    expect(diagnostics).toHaveLength(3);
+    expect(diagnostics.every((entry) => entry.span.end > entry.span.start)).toBe(true);
+  });
+
+  it("decktext 内の list item オーバーレイを L014 で指定箇所に報告する", () => {
+    const source = deck(`
+\\begin{frame}[label=canvas]{Canvas}
+\\begin{deckcanvas}
+\\begin{decktext}[x=0,y=0,w=1]
+\\begin{itemize}\\item<2-> delayed\\end{itemize}
+\\end{decktext}
+\\end{deckcanvas}
+\\end{frame}`);
+
+    const diagnostic = lintDeck(parseDeck(source)).find(
+      (entry) => entry.code === "L014" && entry.message.includes("オーバーレイ"),
+    );
+
+    expect(sourceText(source, diagnostic)).toBe("<2->");
+  });
+
+  it("明示改行を含むキャンバスフレームのタイトルを L019 で報告する", () => {
+    const source = deck(`
+\\begin{frame}[label=canvas]{First line\\\\Second line}
+\\begin{deckcanvas}
+\\deckimage[x=0,y=0,w=1]{image.png}
+\\end{deckcanvas}
+\\end{frame}`);
+
+    const diagnostic = lintDeck(parseDeck(source)).find((entry) => entry.code === "L019");
+
+    expect(diagnostic).toMatchObject({ severity: "warning" });
+    expect(sourceText(source, diagnostic)).toBe("First line\\\\Second line");
+  });
+
+  it("装飾コマンドの内側の改行もキャンバスタイトルの L019 で報告する", () => {
+    const source = deck(`
+\\begin{frame}[label=canvas]{\\textbf{First\\\\Second}}
+\\begin{deckcanvas}
+\\deckimage[x=0,y=0,w=1]{image.png}
+\\end{deckcanvas}
+\\end{frame}`);
+
+    expect(lintDeck(parseDeck(source)).some((entry) => entry.code === "L019")).toBe(true);
+  });
+
+  it("生フレーム内の verbatim 系を fragile なしで使う場合も L007 を報告する", () => {
+    const source = deck(`
+\\begin{frame}[shrink=5]{Raw}
+% \\begin{verbatim} commented out
+\\begin{verbatim}
+code
+\\end{verbatim}
+\\end{frame}`);
+    const fragile = source.replace("shrink=5", "shrink=5,fragile=singleslide");
+
+    expect(lintDeck(parseDeck(source)).some((entry) => entry.code === "L007")).toBe(true);
+    expect(lintDeck(parseDeck(fragile)).some((entry) => entry.code === "L007")).toBe(false);
+  });
+
+  it("RawFrame 内の \\string で表した verbatim 環境名は L007 の対象外", () => {
+    for (const stringified of ["\\string\\begin{verbatim}", "\\string \\begin{verbatim}"]) {
+      const source = deck(`
+\\begin{frame}[shrink=5]{Raw}
+\\texttt{${stringified}}
+\\end{frame}`);
+
+      expect(lintDeck(parseDeck(source)).some((entry) => entry.code === "L007")).toBe(false);
+    }
+  });
+
+  it("RawFrame 内の二重バックスラッシュ後の begin は L007 の対象外", () => {
+    const source = deck(`
+\\begin{frame}[shrink=5]{Raw}
+\\\\begin{verbatim}
+\\end{frame}`);
+
+    expect(lintDeck(parseDeck(source)).some((entry) => entry.code === "L007")).toBe(false);
   });
 
   it("style領域の未知の記述を L020 で報告する", () => {
@@ -109,13 +296,11 @@ second
 
     const diagnostics = lintDeck(parseDeck(source));
 
-    expect(diagnostics).toEqual([
-      expect.objectContaining({
-        code: "L020",
-        severity: "error",
-      }),
-    ]);
-    expect(source.slice(diagnostics[0]?.span.start, diagnostics[0]?.span.end)).toBe(
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "L020", severity: "error" })]),
+    );
+    const styleDiagnostic = diagnostics.find((entry) => entry.code === "L020");
+    expect(source.slice(styleDiagnostic?.span.start, styleDiagnostic?.span.end)).toBe(
       "\\deckunknown{value}",
     );
   });
@@ -124,7 +309,7 @@ second
     const source = deck(`
 \\begin{frame}[label=canvas]{Canvas}
 \\begin{deckcanvas}
-\\decktext[x=0.1,y=0.1,w=0.5]{text}
+\\begin{decktext}[x=0.1,y=0.1,w=0.5]text\\end{decktext}
 \\end{deckcanvas}
 \\end{frame}`);
 
@@ -136,4 +321,51 @@ second
 
     expect(lintDeck(parseDeck(source), { expectedSourceVersion: 2 })).toEqual([]);
   });
+
+  it("既存 fixture では新規規則の誤検出がない", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const fixtureNames = [
+      "basic.tex",
+      "macros.tex",
+      "kitchen-sink.tex",
+      "canvas.tex",
+      "styled.tex",
+      "japanese.tex",
+    ];
+    const newCodes = new Set(["L005", "L007", "L012", "L013", "L014", "L019"]);
+
+    const fixturesWithRawSyntax = new Set(["macros.tex", "kitchen-sink.tex"]);
+    for (const name of fixtureNames) {
+      const source = await readFile(join(__dirname, "../../../fixtures", name), "utf8");
+      const expectedCodes = name === "canvas.tex" ? ["L012"] : [];
+      expect(
+        lintDeck(parseDeck(source))
+          .filter((entry) => newCodes.has(entry.code))
+          .map((entry) => entry.code),
+      ).toEqual(expectedCodes);
+      expect(lintDeck(parseDeck(source)).some((entry) => entry.code === "L001")).toBe(
+        fixturesWithRawSyntax.has(name),
+      );
+    }
+  });
+
+  it("静的 lint 規則の検出は専用 fixture でも担保する", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const source = await readFile(join(__dirname, "../../../fixtures/lint-static.tex"), "utf8");
+    const codes = new Set(lintDeck(parseDeck(source)).map((entry) => entry.code));
+
+    for (const code of ["L001", "L005", "L007", "L012", "L013", "L014", "L019"]) {
+      expect(codes).toContain(code);
+    }
+  });
 });
+
+function sourceText(
+  source: string,
+  diagnostic: { span: { start: number; end: number } } | undefined,
+): string {
+  if (!diagnostic) throw new Error("expected diagnostic");
+  return source.slice(diagnostic.span.start, diagnostic.span.end);
+}

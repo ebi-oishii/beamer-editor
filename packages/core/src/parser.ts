@@ -24,6 +24,7 @@ import type {
   FrameNode,
   FrameOptions,
   InlineNode,
+  InvalidCanvasFontSize,
   ListItemNode,
   ListNode,
   MacroDefinition,
@@ -60,7 +61,7 @@ const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlist
 
 const STYLE_COMMANDS = new Set(["textbf", "emph", "textit", "texttt", "alert"]);
 
-const CANVAS_SIZES = new Set([
+const CANVAS_SIZES = new Set<CanvasFontSize>([
   "tiny",
   "scriptsize",
   "footnotesize",
@@ -799,21 +800,50 @@ class Parser {
 
   private parseCanvasKeys(
     text: string,
-  ): { x: number; y: number; w: number; size: CanvasFontSize } | null {
-    const result = { x: 0, y: 0, w: 1, size: "normal" as CanvasFontSize };
+    offset: number,
+    allowSize: boolean,
+  ): {
+    x: number;
+    y: number;
+    w: number;
+    size: CanvasFontSize;
+    invalidSize: InvalidCanvasFontSize | null;
+  } | null {
+    const result = {
+      x: 0,
+      y: 0,
+      w: 1,
+      size: "normal" as CanvasFontSize,
+      invalidSize: null as InvalidCanvasFontSize | null,
+    };
+    let partOffset = 0;
     for (const part of text.split(",")) {
-      if (part.trim() === "") continue;
-      const m = /^\s*(x|y|w|size)\s*=\s*(\S+)\s*$/.exec(part);
+      const nextPartOffset = partOffset + part.length + 1;
+      if (part.trim() === "") {
+        partOffset = nextPartOffset;
+        continue;
+      }
+      const m = /^(\s*(x|y|w|size)\s*=\s*)(\S+)\s*$/.exec(part);
       if (!m) return null;
-      const key = m[1] as "x" | "y" | "w" | "size";
+      const key = m[2] as "x" | "y" | "w" | "size";
+      const value = m[3] as string;
       if (key === "size") {
-        if (!CANVAS_SIZES.has(m[2] as string)) return null;
-        result.size = m[2] as CanvasFontSize;
+        if (!allowSize) return null;
+        if (CANVAS_SIZES.has(value as CanvasFontSize)) {
+          result.size = value as CanvasFontSize;
+        } else {
+          const valueStart = offset + partOffset + (m[1] as string).length;
+          result.invalidSize = {
+            value,
+            span: span(valueStart, valueStart + value.length),
+          };
+        }
       } else {
-        const v = Number(m[2]);
+        const v = Number(value);
         if (!Number.isFinite(v)) return null;
         result[key] = v;
       }
+      partOffset = nextPartOffset;
     }
     return result;
   }
@@ -844,7 +874,9 @@ class Parser {
         }
         const itemNext = envEnd + "\\end{decktext}".length;
         const keys =
-          optClose === null ? null : this.parseCanvasKeys(this.src.slice(optOpen + 1, optClose));
+          optClose === null
+            ? null
+            : this.parseCanvasKeys(this.src.slice(optOpen + 1, optClose), optOpen + 1, true);
         if (keys === null) {
           items.push(this.rawBlock(cursor, itemNext, "decktext", "canvas-unsupported-content"));
           cursor = itemNext;
@@ -865,6 +897,7 @@ class Parser {
             span: span(optOpen, optClose === null ? optOpen : optClose + 1),
           },
           size: keys.size,
+          invalidSize: keys.invalidSize,
           children,
           span: span(cursor, itemNext),
         });
@@ -878,7 +911,9 @@ class Parser {
         const pathOpen = optClose === null ? optOpen : optClose + 1;
         const pathClose = this.src[pathOpen] === "{" ? readBalanced(this.src, pathOpen) : null;
         const keys =
-          optClose === null ? null : this.parseCanvasKeys(this.src.slice(optOpen + 1, optClose));
+          optClose === null
+            ? null
+            : this.parseCanvasKeys(this.src.slice(optOpen + 1, optClose), optOpen + 1, false);
         if (pathClose === null || keys === null) {
           const eol = this.src.indexOf("\n", cursor);
           const stop = eol === -1 || eol > bodyEnd ? bodyEnd : eol;
@@ -1132,7 +1167,9 @@ class Parser {
           this.src[optOpen] === "[" ? readBalanced(this.src, optOpen, "[", "]") : null;
         const g = optClose !== null ? group(optClose + 1) : null;
         const keys =
-          optClose !== null ? this.parseCanvasKeys(this.src.slice(optOpen + 1, optClose)) : null;
+          optClose !== null
+            ? this.parseCanvasKeys(this.src.slice(optOpen + 1, optClose), optOpen + 1, false)
+            : null;
         if (optClose === null || !g || keys === null) {
           cursor = rawToEol(cursor);
           continue;
