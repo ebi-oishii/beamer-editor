@@ -20,6 +20,7 @@ const DECK: RenderedDeck = {
       html: '<div class="slide"><div class="slide-body"><p data-min="2">hi</p></div></div>',
       stepCount: 2,
       isRaw: false,
+      sourceSpan: { start: 0, end: 40 },
     },
     {
       index: 2,
@@ -28,6 +29,7 @@ const DECK: RenderedDeck = {
       html: '<div class="slide"><div class="slide-body"><p>bye</p></div></div>',
       stepCount: 1,
       isRaw: false,
+      sourceSpan: { start: 41, end: 80 },
     },
   ],
 };
