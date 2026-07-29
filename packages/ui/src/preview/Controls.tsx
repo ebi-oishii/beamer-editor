@@ -27,11 +27,13 @@ export function Controls({
 
   return (
     <div className="controls">
-      <button type="button" onClick={onPrev}>
+      <button type="button" aria-label="前のフレーム" onClick={onPrev}>
         ◀
       </button>
-      <span className="frame-indicator">{indicator}</span>
-      <button type="button" onClick={onNext}>
+      <span className="frame-indicator" aria-live="polite">
+        {indicator}
+      </span>
+      <button type="button" aria-label="次のフレーム" onClick={onNext}>
         ▶
       </button>
       {stepCount > 1 ? (
@@ -43,6 +45,7 @@ export function Controls({
               min={1}
               max={stepCount}
               value={step}
+              aria-label={`オーバーレイ step（${stepCount} 段階）`}
               onChange={(e) => onStep(Number(e.target.value))}
             />
           </label>

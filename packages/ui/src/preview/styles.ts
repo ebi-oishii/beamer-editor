@@ -15,7 +15,12 @@ export const PREVIEW_CSS = `
   min-height: 0;
   height: 100%;
   box-sizing: border-box;
-  font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--vscode-font-family, -apple-system, "Helvetica Neue", Arial, sans-serif);
+  color: var(--vscode-foreground, #333);
+}
+.beamer-preview :focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, #3344b3);
+  outline-offset: -2px;
 }
 .beamer-preview * {
   box-sizing: border-box;
@@ -24,9 +29,9 @@ export const PREVIEW_CSS = `
 .slide-list {
   width: 190px;
   overflow-y: auto;
-  border-right: 1px solid #ddd;
+  border-right: 1px solid var(--vscode-panel-border, #ddd);
   padding: 8px;
-  background: #f4f4f6;
+  background: var(--vscode-sideBar-background, #f4f4f6);
 }
 .thumb {
   cursor: pointer;
@@ -35,20 +40,20 @@ export const PREVIEW_CSS = `
   padding: 3px;
 }
 .thumb.active {
-  outline: 2px solid #3344b3;
-  background: #e8eaf9;
+  outline: 2px solid var(--vscode-focusBorder, #3344b3);
+  background: var(--vscode-list-activeSelectionBackground, #e8eaf9);
 }
 .thumb-scale {
   width: 160px;
   height: 90px;
   overflow: hidden;
   position: relative;
-  border: 1px solid #ccc;
+  border: 1px solid var(--vscode-panel-border, #ccc);
   background: #fff;
 }
 .thumb-label {
   font-size: 11px;
-  color: #444;
+  color: var(--vscode-descriptionForeground, #444);
   padding: 2px 2px 0;
   white-space: nowrap;
   overflow: hidden;
@@ -60,7 +65,7 @@ export const PREVIEW_CSS = `
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: #e9e9ee;
+  background: var(--vscode-editor-background, #e9e9ee);
 }
 .slide-holder {
   flex: 1;
@@ -79,19 +84,23 @@ export const PREVIEW_CSS = `
   gap: 10px;
   justify-content: center;
   padding: 8px;
-  border-top: 1px solid #ddd;
-  background: #fafafa;
+  border-top: 1px solid var(--vscode-panel-border, #ddd);
+  background: var(--vscode-editorWidget-background, #fafafa);
   font-size: 13px;
 }
 .controls button {
-  border: 1px solid #bbb;
-  background: #fff;
+  border: 1px solid var(--vscode-button-border, #bbb);
+  background: var(--vscode-button-secondaryBackground, #fff);
+  color: var(--vscode-button-secondaryForeground, inherit);
   border-radius: 4px;
   padding: 2px 12px;
   cursor: pointer;
 }
+.controls button:hover {
+  background: var(--vscode-button-secondaryHoverBackground, #eef);
+}
 .empty {
-  color: #999;
+  color: var(--vscode-descriptionForeground, #999);
   padding: 40px;
 }
 

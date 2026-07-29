@@ -43,6 +43,34 @@ describe("createMessageShellHost", () => {
     ]);
   });
 
+  it("ナビ状態を WebviewStateStore へ保存・復元し、型不一致は捨てる", () => {
+    const { transport } = makeTransport();
+    let stored: unknown;
+    const host = createMessageShellHost(transport, {
+      getState: () => stored,
+      setState: (state) => {
+        stored = state;
+      },
+    });
+
+    expect(host.loadNavState?.()).toBeUndefined();
+    host.saveNavState?.({ current: 2, step: 3 });
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3 });
+
+    stored = { current: "2", step: 3 };
+    expect(host.loadNavState?.()).toBeUndefined();
+    stored = "junk";
+    expect(host.loadNavState?.()).toBeUndefined();
+  });
+
+  it("StateStore なしでも loadNavState は undefined を返すだけで壊れない", () => {
+    const { transport } = makeTransport();
+    const host = createMessageShellHost(transport);
+
+    expect(host.loadNavState?.()).toBeUndefined();
+    expect(() => host.saveNavState?.({ current: 0, step: 1 })).not.toThrow();
+  });
+
   it("ready / jumpToSource / activeFrameChanged を transport へ post する", () => {
     const { transport, posted } = makeTransport();
     const host = createMessageShellHost(transport);

@@ -40,6 +40,10 @@ export function previewReducer(
       if (!action.keepPosition) {
         return { current: 0, step: 1 };
       }
+      // deck が空(未着)の間は位置を保持する(getState からの復元直後を 0 で潰さない)。
+      if (action.frameCount <= 0) {
+        return state;
+      }
       const current = clamp(state.current, action.frameCount);
       return current === state.current ? state : { ...state, current };
     }

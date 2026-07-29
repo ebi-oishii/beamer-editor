@@ -5,7 +5,7 @@
  */
 
 import type { RenderedDeck } from "@beamer-editor/renderer";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useReducer, useRef, useState } from "react";
 import type { ShellHost } from "../shell-host.js";
 import { Controls } from "./Controls.js";
 import { SlideList } from "./SlideList.js";
@@ -26,7 +26,14 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const [state, dispatch] = useReducer(
     (s: PreviewState, a: PreviewAction) => previewReducer(s, a, frameCountRef.current),
     INITIAL_STATE,
+    // パネル再表示時は前回のナビ状態から復元する(範囲外は deckLoaded がクランプ)。
+    (initial) => host.loadNavState?.() ?? initial,
   );
+
+  // ナビ状態を保存する(VS-7: current / step のみ。ソース本文や AST は保存しない)。
+  useEffect(() => {
+    host.saveNavState?.({ current: state.current, step: state.step });
+  }, [host, state.current, state.step]);
 
   // ホストからの deck 更新を購読する。
   useEffect(
@@ -67,8 +74,27 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
 
   const frame = deck.frames[state.current];
 
+  // フレーム移動のキーボード操作(スライダー等の入力要素の矢印キーは奪わない)。
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      dispatch({ type: "prev" });
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      dispatch({ type: "next" });
+    }
+  };
+
   return (
-    <div className="beamer-preview">
+    // biome-ignore lint/a11y/useSemanticElements: 矢印キーのフレーム移動を束ねるコンテナ。
+    <div
+      className="beamer-preview"
+      role="group"
+      aria-label="Beamer スライドプレビュー"
+      onKeyDown={handleKeyDown}
+    >
       <SlideList
         frames={deck.frames}
         current={state.current}

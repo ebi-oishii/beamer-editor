@@ -19,6 +19,7 @@ function makePanel() {
   const panel: PreviewPanel & { webview: { html: string } } = {
     webview: {
       html: "",
+      cspSource: "https://csp.test",
       postMessage: (msg: unknown) => {
         posted.push(msg);
         return Promise.resolve(true);
@@ -80,6 +81,8 @@ function makeDoc(uri = "file:///deck.tex") {
 
 type DeckMessage = { type: string; version: number; activeFrame: number };
 
+const ASSETS = { scriptUri: "webview.js", styleUri: "webview.css" };
+
 describe("PreviewController", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -92,7 +95,7 @@ describe("PreviewController", () => {
     const { panel, fireDispose, listenerDisposable, receiveDisposable } = makePanel();
     const { events, disposable } = makeEvents();
     const onDispose = vi.fn();
-    const controller = new PreviewController(panel, "webview.js", makeDoc(), events, onDispose);
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, onDispose);
 
     fireDispose();
     controller.dispose();
@@ -107,7 +110,7 @@ describe("PreviewController", () => {
   it("closes the panel before releasing its resources", () => {
     const { panel } = makePanel();
     const { events } = makeEvents();
-    const controller = new PreviewController(panel, "webview.js", makeDoc(), events, vi.fn());
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn());
 
     controller.close();
 
@@ -117,7 +120,7 @@ describe("PreviewController", () => {
   it("renders and posts a deckUpdated with the document version on ready", () => {
     const { panel, posted, fire } = makePanel();
     const { events } = makeEvents();
-    new PreviewController(panel, "webview.js", makeDoc(), events, vi.fn());
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn());
 
     fire({ type: "ready" });
 
@@ -128,10 +131,25 @@ describe("PreviewController", () => {
     expect(message.activeFrame).toBe(0);
   });
 
+  it("Webview HTML に CSP(default-src 'none' + nonce)とアセット参照が入る", () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn());
+
+    const html = panel.webview.html;
+    expect(html).toContain("default-src 'none'");
+    expect(html).toContain("style-src https://csp.test 'unsafe-inline'");
+    expect(html).toContain("font-src https://csp.test");
+    expect(html).toContain('<link rel="stylesheet" href="webview.css"');
+    const nonce = html.match(/script-src 'nonce-([a-f0-9]+)'/)?.[1];
+    expect(nonce).toBeTruthy();
+    expect(html).toContain(`<script nonce="${nonce}" src="webview.js">`);
+  });
+
   it("ignores invalid webview messages", () => {
     const { panel, posted, fire } = makePanel();
     const { events } = makeEvents();
-    new PreviewController(panel, "webview.js", makeDoc(), events, vi.fn());
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn());
 
     fire({ type: "bogus" });
     fire(null);
@@ -143,7 +161,7 @@ describe("PreviewController", () => {
     const { panel, posted, fire } = makePanel();
     const { events, change } = makeEvents();
     const doc = makeDoc();
-    new PreviewController(panel, "webview.js", doc, events, vi.fn());
+    new PreviewController(panel, ASSETS, doc, events, vi.fn());
     fire({ type: "ready" });
 
     doc.edit("\\begin{document}\\begin{frame}{Hi}B\\end{frame}\\end{document}");
@@ -160,7 +178,7 @@ describe("PreviewController", () => {
     const { panel, posted } = makePanel();
     const { events, change } = makeEvents();
     const doc = makeDoc();
-    new PreviewController(panel, "webview.js", doc, events, vi.fn());
+    new PreviewController(panel, ASSETS, doc, events, vi.fn());
 
     for (const text of ["A", "AB", "ABC"]) {
       doc.edit(`\\begin{document}\\begin{frame}{Hi}${text}\\end{frame}\\end{document}`);
@@ -176,7 +194,7 @@ describe("PreviewController", () => {
   it("別ファイルの変更ではプレビューを再計算しない", () => {
     const { panel, posted } = makePanel();
     const { events, change } = makeEvents();
-    new PreviewController(panel, "webview.js", makeDoc(), events, vi.fn());
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn());
 
     change(makeDoc("file:///other.tex"));
     vi.advanceTimersByTime(RENDER_DEBOUNCE_MS * 2);
@@ -188,7 +206,7 @@ describe("PreviewController", () => {
     const { panel, posted } = makePanel();
     const { events, change } = makeEvents();
     const doc = makeDoc();
-    new PreviewController(panel, "webview.js", doc, events, vi.fn());
+    new PreviewController(panel, ASSETS, doc, events, vi.fn());
 
     change(doc, []);
     vi.advanceTimersByTime(RENDER_DEBOUNCE_MS * 2);
@@ -200,7 +218,7 @@ describe("PreviewController", () => {
     const { panel, posted } = makePanel();
     const { events, change } = makeEvents();
     const doc = makeDoc();
-    const controller = new PreviewController(panel, "webview.js", doc, events, vi.fn());
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn());
 
     change(doc);
     controller.dispose();
@@ -239,7 +257,7 @@ describe("PreviewController", () => {
       ],
       expandDiagnostics: [],
     });
-    new PreviewController(panel, "webview.js", doc, events, vi.fn(), { render, navigate });
+    new PreviewController(panel, ASSETS, doc, events, vi.fn(), { render, navigate });
 
     fire({ type: "ready" });
     fire({ type: "jumpToSource", frameIndex: 0, version: 7 });
@@ -254,7 +272,7 @@ describe("PreviewController", () => {
     const { events, change } = makeEvents();
     const doc = makeDoc();
     const navigate = vi.fn();
-    new PreviewController(panel, "webview.js", doc, events, vi.fn(), { navigate });
+    new PreviewController(panel, ASSETS, doc, events, vi.fn(), { navigate });
     fire({ type: "ready" });
 
     // 編集直後(debounce 保留中)は document.version が先行する。
@@ -272,7 +290,7 @@ describe("PreviewController", () => {
     const { panel, posted, fire } = makePanel();
     const { events } = makeEvents();
     const navigate = vi.fn();
-    new PreviewController(panel, "webview.js", makeDoc(), events, vi.fn(), { navigate });
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), { navigate });
     fire({ type: "ready" });
 
     fire({ type: "jumpToSource", frameIndex: 99, version: 7 });
@@ -295,7 +313,7 @@ describe("PreviewController", () => {
         expandDiagnostics: [],
       };
     };
-    const controller = new PreviewController(panel, "webview.js", doc, events, vi.fn(), {
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
       render,
       onError,
     });

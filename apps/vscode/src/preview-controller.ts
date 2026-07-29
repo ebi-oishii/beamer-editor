@@ -9,12 +9,18 @@ import { resolveJumpOffset } from "./source-navigation";
  * postMessage / onDidReceiveMessage を含め、Extension ↔ Webview の typed message を扱う。
  */
 export interface PreviewPanel {
-  readonly webview: Pick<vscode.Webview, "html"> & {
+  readonly webview: Pick<vscode.Webview, "html" | "cspSource"> & {
     postMessage(msg: unknown): Thenable<boolean>;
     onDidReceiveMessage(listener: (msg: unknown) => void): vscode.Disposable;
   };
   onDidDispose(listener: () => void): vscode.Disposable;
   dispose(): void;
+}
+
+/** Webview へ読み込ませるビルド済みアセット(asWebviewUri 変換済みの URL)。 */
+export interface WebviewAssets {
+  scriptUri: string;
+  styleUri: string;
 }
 
 /** プレビューが入力とする文書の最小面（vscode.TextDocument が満たす）。 */
@@ -50,13 +56,27 @@ export interface PreviewControllerOptions {
   navigate?: (offset: number) => void;
 }
 
-export function emptyPreviewHtml(webviewScriptUri: string): string {
+/**
+ * Webview の HTML。CSP は `default-src 'none'` を基本に必要な源だけを開ける
+ * (移植計画 VS-8)。script は nonce 必須、style は ui / deck.css が動的に
+ * <style> を注入するため 'unsafe-inline' を許可、img は拡張リソースと data: のみ。
+ */
+export function emptyPreviewHtml(assets: WebviewAssets, cspSource: string, nonce: string): string {
+  const csp = [
+    "default-src 'none'",
+    `img-src ${cspSource} data:`,
+    `style-src ${cspSource} 'unsafe-inline'`,
+    `font-src ${cspSource}`,
+    `script-src 'nonce-${nonce}'`,
+  ].join("; ");
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
   <head>
     <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="${csp}" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Beamer Editor Preview</title>
+    <link rel="stylesheet" href="${assets.styleUri}" />
     <style>
       html, body { height: 100%; margin: 0; }
       #app { display: flex; height: 100%; }
@@ -64,9 +84,14 @@ export function emptyPreviewHtml(webviewScriptUri: string): string {
   </head>
   <body>
     <main id="app" aria-label="Beamer preview"></main>
-    <script src="${webviewScriptUri}"></script>
+    <script nonce="${nonce}" src="${assets.scriptUri}"></script>
   </body>
 </html>`;
+}
+
+/** CSP 用の nonce(リクエストごとに使い捨て)。 */
+function createNonce(): string {
+  return globalThis.crypto.randomUUID().replaceAll("-", "");
 }
 
 /** Owns every disposable associated with one preview panel. */
@@ -82,7 +107,7 @@ export class PreviewController implements vscode.Disposable {
 
   constructor(
     private readonly panel: PreviewPanel,
-    webviewScriptUri: string,
+    assets: WebviewAssets,
     private readonly document: PreviewDocument,
     events: DocumentEvents,
     private readonly onDispose: () => void,
@@ -91,7 +116,7 @@ export class PreviewController implements vscode.Disposable {
     this.render = options.render ?? renderDocument;
     this.onError = options.onError ?? (() => {});
     this.navigate = options.navigate ?? (() => {});
-    this.panel.webview.html = emptyPreviewHtml(webviewScriptUri);
+    this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
       this.panel.webview.onDidReceiveMessage((raw) => this.handleMessage(raw)),

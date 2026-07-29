@@ -44,6 +44,7 @@
     "@beamer-editor/core": "workspace:*",
     "@beamer-editor/renderer": "workspace:*",
     "@beamer-editor/ui": "workspace:*",
+    "katex": "^0.16.47",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -58,5 +59,11 @@
     "esbuild": "^0.28.1",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "プレビュー・lint はコードを実行しません。PDF 書き出し(tectonic)導入時は Workspace Trust が無い場合に無効化します。"
+    }
   }
 }

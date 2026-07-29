@@ -29,6 +29,9 @@ importers:
       '@beamer-editor/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      katex:
+        specifier: ^0.16.47
+        version: 0.16.47
       react:
         specifier: ^18.3.1
         version: 18.3.1
