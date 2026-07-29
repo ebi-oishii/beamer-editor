@@ -1,7 +1,30 @@
+import type { LintDiagnostic, LintSeverity } from "@beamer-editor/core";
 import * as vscode from "vscode";
+import { LintController } from "./diagnostics";
 import { PreviewController } from "./preview-controller";
 
 let previewController: PreviewController | undefined;
+
+const LINT_SEVERITIES: Record<LintSeverity, vscode.DiagnosticSeverity> = {
+  error: vscode.DiagnosticSeverity.Error,
+  warning: vscode.DiagnosticSeverity.Warning,
+  info: vscode.DiagnosticSeverity.Information,
+};
+
+/** core の LintDiagnostic を VS Code の Diagnostic へ変換する(移植計画 VS-5)。 */
+function toVscodeDiagnostic(
+  document: vscode.TextDocument,
+  lint: LintDiagnostic,
+): vscode.Diagnostic {
+  const range = new vscode.Range(
+    document.positionAt(lint.span.start),
+    document.positionAt(lint.span.end),
+  );
+  const diagnostic = new vscode.Diagnostic(range, lint.message, LINT_SEVERITIES[lint.severity]);
+  diagnostic.code = lint.code;
+  diagnostic.source = "beamer-editor";
+  return diagnostic;
+}
 
 /**
  * ジャンプ先の行を短時間だけ強調する decoration(VS-4)。選択だけだと移動に気づき
@@ -55,6 +78,28 @@ async function jumpToOffset(
 export function activate(context: vscode.ExtensionContext): void {
   const lineFlash = createLineFlash();
   context.subscriptions.push(lineFlash);
+
+  // lint → Problems パネル・波線(VS-5)。開いている .tex 文書ごとに独立管理する。
+  const diagnosticCollection = vscode.languages.createDiagnosticCollection("beamer-editor");
+  const lintController = new LintController<vscode.TextDocument>(
+    {
+      onDidOpenTextDocument: (listener) => vscode.workspace.onDidOpenTextDocument(listener),
+      onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
+      onDidCloseTextDocument: (listener) => vscode.workspace.onDidCloseTextDocument(listener),
+    },
+    {
+      set: (document, diagnostics) => {
+        diagnosticCollection.set(
+          document.uri,
+          diagnostics.map((lint) => toVscodeDiagnostic(document, lint)),
+        );
+      },
+      delete: (document) => diagnosticCollection.delete(document.uri),
+    },
+    vscode.workspace.textDocuments,
+  );
+  context.subscriptions.push(diagnosticCollection, lintController);
+
   context.subscriptions.push(
     vscode.commands.registerCommand("beamerEditor.openPreview", () => {
       const editor = vscode.window.activeTextEditor;
