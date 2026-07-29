@@ -235,11 +235,7 @@ function lintFragileFrames(doc: DeckDocument): LintDiagnostic[] {
     }
     if (frame.options.fragile) continue;
     visitBlocks(frame.body, (block) => {
-      if (
-        block.type === "rawBlock" &&
-        block.environment !== null &&
-        VERBATIM_ENVS.has(block.environment)
-      ) {
+      if (block.type === "rawBlock" && containsVerbatimEnvironment(stripTexComments(block.tex))) {
         diagnostics.push(
           diagnostic(
             "L007",
@@ -255,7 +251,16 @@ function lintFragileFrames(doc: DeckDocument): LintDiagnostic[] {
 }
 
 function rawFrameNeedsFragile(frame: RawFrameNode): boolean {
-  const withoutComments = frame.tex
+  const withoutComments = stripTexComments(frame.tex);
+  const opening = /\\begin\{frame\}\s*(?:\[([^\]]*)\])?/.exec(withoutComments);
+  if (!opening || /(?:^|,)\s*fragile(?:\s*=\s*[^,\]]+)?\s*(?:,|$)/.test(opening[1] ?? "")) {
+    return false;
+  }
+  return containsVerbatimEnvironment(withoutComments);
+}
+
+function stripTexComments(source: string): string {
+  return source
     .split("\n")
     .map((line) => {
       for (let index = 0; index < line.length; index++) {
@@ -268,11 +273,6 @@ function rawFrameNeedsFragile(frame: RawFrameNode): boolean {
       return line;
     })
     .join("\n");
-  const opening = /\\begin\{frame\}\s*(?:\[([^\]]*)\])?/.exec(withoutComments);
-  if (!opening || /(?:^|,)\s*fragile(?:\s*=\s*[^,\]]+)?\s*(?:,|$)/.test(opening[1] ?? "")) {
-    return false;
-  }
-  return containsVerbatimEnvironment(withoutComments);
 }
 
 function containsVerbatimEnvironment(source: string): boolean {
@@ -303,7 +303,12 @@ function containsVerbatimEnvironment(source: string): boolean {
       index = end;
       continue;
     }
-    if (command === "string") {
+    if (command === "detokenize") {
+      const argumentEnd = balancedArgumentEnd(source, end);
+      index = argumentEnd ?? end;
+      continue;
+    }
+    if (command === "string" || command === "meaning") {
       stringifyNextToken = true;
       index = end;
       continue;
@@ -320,6 +325,31 @@ function containsVerbatimEnvironment(source: string): boolean {
     index = end;
   }
   return false;
+}
+
+function balancedArgumentEnd(source: string, index: number): number | null {
+  let cursor = index;
+  while (cursor < source.length && /\s/.test(source[cursor] as string)) cursor++;
+  if (source[cursor] !== "{") return null;
+
+  let depth = 1;
+  cursor++;
+  while (cursor < source.length) {
+    if (source[cursor] === "\\") {
+      const next = source[cursor + 1] ?? "";
+      if (/[a-zA-Z@]/.test(next)) {
+        cursor += 2;
+        while (cursor < source.length && /[a-zA-Z@]/.test(source[cursor] as string)) cursor++;
+      } else {
+        cursor += Math.min(2, source.length - cursor);
+      }
+      continue;
+    }
+    if (source[cursor] === "{") depth++;
+    if (source[cursor] === "}" && --depth === 0) return cursor + 1;
+    cursor++;
+  }
+  return null;
 }
 
 function lintCanvas(canvas: CanvasNode, frame: FrameNode): LintDiagnostic[] {

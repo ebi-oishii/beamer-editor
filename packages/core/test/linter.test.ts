@@ -63,6 +63,45 @@ code
     ).toBe(false);
   });
 
+  it("未知環境の生ブロック内にネストした verbatim 系も L007 で報告する", () => {
+    const source = deck(`
+\\begin{frame}{Code}
+\\begin{adjustbox}{width=\\textwidth}
+\\begin{verbatim}
+code
+\\end{verbatim}
+\\end{adjustbox}
+\\end{frame}`);
+
+    const diagnostic = lintDeck(parseDeck(source)).find((entry) => entry.code === "L007");
+
+    expect(diagnostic).toMatchObject({ severity: "error" });
+    expect(source.slice(diagnostic?.span.start, diagnostic?.span.end)).toContain(
+      "\\begin{adjustbox}",
+    );
+    expect(
+      lintDeck(parseDeck(source.replace("\\begin{frame}", "\\begin{frame}[fragile]"))).some(
+        (entry) => entry.code === "L007",
+      ),
+    ).toBe(false);
+  });
+
+  it("未知環境の生ブロック内で文字列化された verbatim 系は L007 の対象外", () => {
+    for (const content of [
+      "\\detokenize{before { \\begin{verbatim} } after}",
+      "\\meaning\\begin{verbatim}",
+    ]) {
+      const source = deck(`
+\\begin{frame}{Code}
+\\begin{adjustbox}{width=\\textwidth}
+${content}
+\\end{adjustbox}
+\\end{frame}`);
+
+      expect(lintDeck(parseDeck(source)).some((entry) => entry.code === "L007")).toBe(false);
+    }
+  });
+
   it("重複した frame label のすべての出現箇所を L009 で報告する", () => {
     const source = deck(`
 \\begin{frame}[label=duplicate]{First}
