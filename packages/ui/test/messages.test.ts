@@ -39,9 +39,10 @@ describe("parseExtensionToWebview", () => {
 describe("parseWebviewToExtension", () => {
   it("正当なものを受理する", () => {
     expect(parseWebviewToExtension({ type: "ready" })).toEqual({ type: "ready" });
-    expect(parseWebviewToExtension({ type: "jumpToSource", frameIndex: 4 })).toEqual({
+    expect(parseWebviewToExtension({ type: "jumpToSource", frameIndex: 4, version: 2 })).toEqual({
       type: "jumpToSource",
       frameIndex: 4,
+      version: 2,
     });
     expect(parseWebviewToExtension({ type: "activeFrameChanged", frameIndex: 0 })).toEqual({
       type: "activeFrameChanged",
@@ -54,7 +55,11 @@ describe("parseWebviewToExtension", () => {
     expect(parseWebviewToExtension(42)).toBeNull();
     expect(parseWebviewToExtension({ type: "nope" })).toBeNull();
     // frameIndex 型違い
-    expect(parseWebviewToExtension({ type: "jumpToSource", frameIndex: "4" })).toBeNull();
+    expect(
+      parseWebviewToExtension({ type: "jumpToSource", frameIndex: "4", version: 2 }),
+    ).toBeNull();
+    // version 欠落(古い版からのジャンプ検出に必須)
+    expect(parseWebviewToExtension({ type: "jumpToSource", frameIndex: 4 })).toBeNull();
     // frameIndex 欠落
     expect(parseWebviewToExtension({ type: "activeFrameChanged" })).toBeNull();
   });

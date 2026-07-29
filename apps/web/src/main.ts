@@ -53,7 +53,8 @@ class LocalShellHost implements ShellHost {
     return () => this.listeners.delete(listener);
   }
 
-  jumpToSource(frameIndex: number): void {
+  jumpToSource(frameIndex: number, _version: number): void {
+    // apps/web は同一プロセスで deck が常に最新なので version 検査は不要。
     const frame = latestDeck.frames[frameIndex];
     if (!frame) return;
     const lineHeight = Number.parseFloat(getComputedStyle(sourceArea).lineHeight) || 18;

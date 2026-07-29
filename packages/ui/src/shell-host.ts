@@ -12,8 +12,11 @@ import type { ExtensionToWebview, WebviewToExtension } from "./messages.js";
 export interface ShellHost {
   /** ホストからの deck 更新を購読する。unsubscribe を返す。 */
   subscribe(listener: (deck: RenderedDeck, version: number) => void): () => void;
-  /** ui → ホスト: 対象フレームのソースへ移動要求（VS-2 は frameIndex。span は VS-4/PR#14 で拡張）。 */
-  jumpToSource(frameIndex: number): void;
+  /**
+   * ui → ホスト: 対象フレームのソースへ移動要求。version は表示中 deck の document
+   * version(ホスト側で古い版からのジャンプを検出し、移動せず再描画を要求する。VS-4)。
+   */
+  jumpToSource(frameIndex: number, version: number): void;
   /** ui → ホスト: プレビュー内でアクティブフレームが変わった通知。 */
   notifyActiveFrame(frameIndex: number): void;
 }
@@ -42,8 +45,8 @@ export function createMessageShellHost(transport: MessageTransport): ShellHost &
         }
       });
     },
-    jumpToSource(frameIndex) {
-      transport.post({ type: "jumpToSource", frameIndex });
+    jumpToSource(frameIndex, version) {
+      transport.post({ type: "jumpToSource", frameIndex, version });
     },
     notifyActiveFrame(frameIndex) {
       transport.post({ type: "activeFrameChanged", frameIndex });

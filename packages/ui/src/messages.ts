@@ -16,7 +16,8 @@ export type ExtensionToWebview =
 
 export type WebviewToExtension =
   | { type: "ready" }
-  | { type: "jumpToSource"; frameIndex: number }
+  /** version はプレビューが表示中の deck の document version(古い版からのジャンプ検出に使う)。 */
+  | { type: "jumpToSource"; frameIndex: number; version: number }
   | { type: "activeFrameChanged"; frameIndex: number };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -63,8 +64,8 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
     case "ready":
       return { type: "ready" };
     case "jumpToSource":
-      if (typeof raw.frameIndex === "number") {
-        return { type: "jumpToSource", frameIndex: raw.frameIndex };
+      if (typeof raw.frameIndex === "number" && typeof raw.version === "number") {
+        return { type: "jumpToSource", frameIndex: raw.frameIndex, version: raw.version };
       }
       return null;
     case "activeFrameChanged":
