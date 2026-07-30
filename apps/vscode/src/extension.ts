@@ -1,9 +1,19 @@
 import type { LintDiagnostic, LintSeverity } from "@beamer-editor/core";
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
+import {
+  appendUniqueIgnorePatterns,
+  DEFAULT_MANAGED_FILE_PATTERNS,
+  globalOrDefaultArray,
+  isManagedDocument,
+  needsLatexWorkshopIgnorePrompt,
+  PreviewRegistry,
+} from "./managed-files";
 import { PreviewController } from "./preview-controller";
 
 let previewController: PreviewController | undefined;
+const previewControllers = new PreviewRegistry<PreviewController, vscode.TextDocument>();
+let latexWorkshopPrompted = false;
 
 const LINT_SEVERITIES: Record<LintSeverity, vscode.DiagnosticSeverity> = {
   error: vscode.DiagnosticSeverity.Error,
@@ -102,8 +112,141 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       delete: (document) => diagnosticCollection.delete(document.uri),
     },
     vscode.workspace.textDocuments,
+    (document) => isManagedDocument(document, managedPatterns(document), matchesManagedGlob),
   );
   context.subscriptions.push(diagnosticCollection, lintController);
+
+  function managedPatterns(document: vscode.TextDocument): readonly string[] {
+    return (
+      vscode.workspace
+        .getConfiguration("beamerEditor", document.uri)
+        .get<readonly string[]>("managedFiles") ?? DEFAULT_MANAGED_FILE_PATTERNS
+    );
+  }
+
+  function matchesManagedGlob(document: vscode.TextDocument, pattern: string): boolean {
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+    const glob: vscode.GlobPattern = workspaceFolder
+      ? new vscode.RelativePattern(workspaceFolder, pattern)
+      : pattern;
+    return vscode.languages.match({ scheme: "file", pattern: glob }, document) > 0;
+  }
+
+  async function offerLatexWorkshopIgnore(document: vscode.TextDocument): Promise<void> {
+    if (latexWorkshopPrompted || !vscode.extensions.getExtension("James-Yu.latex-workshop")) return;
+    const patterns = managedPatterns(document);
+    const workshop = vscode.workspace.getConfiguration("latex-workshop", document.uri);
+    const watchIgnore = globalOrDefaultArray(
+      workshop.inspect<readonly string[]>("latex.watch.files.ignore"),
+    );
+    const autoBuildIgnore = globalOrDefaultArray(
+      workshop.inspect<readonly string[]>("latex.autoBuild.onSave.files.ignore"),
+    );
+    if (!needsLatexWorkshopIgnorePrompt(watchIgnore, autoBuildIgnore, patterns)) return;
+    latexWorkshopPrompted = true;
+
+    const choice = await vscode.window.showInformationMessage(
+      "Beamer Editor の managed slide files を LaTeX Workshop の自動監視・保存時自動ビルドから除外しますか？通常の .tex の設定は変更しません。",
+      "Global Settings に追加",
+    );
+    if (choice !== "Global Settings に追加") return;
+    await Promise.all([
+      workshop.update(
+        "latex.watch.files.ignore",
+        appendUniqueIgnorePatterns(watchIgnore, patterns),
+        vscode.ConfigurationTarget.Global,
+      ),
+      workshop.update(
+        "latex.autoBuild.onSave.files.ignore",
+        appendUniqueIgnorePatterns(autoBuildIgnore, patterns),
+        vscode.ConfigurationTarget.Global,
+      ),
+    ]);
+  }
+
+  function openPreview(document: vscode.TextDocument, automatic: boolean): void {
+    if (previewControllers.has(document.uri)) return;
+
+    // 画像(includegraphics / deckimage / logo)は文書からの相対パスで参照される
+    // ため、文書のあるフォルダだけを workspace 側のリソース範囲として開ける。
+    const documentDir = vscode.Uri.joinPath(document.uri, "..");
+    const panel = vscode.window.createWebviewPanel(
+      "beamerEditor.preview",
+      `Beamer Preview: ${document.fileName.split(/[\\/]/).pop()}`,
+      vscode.ViewColumn.Beside,
+      {
+        enableScripts: true,
+        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media"), documentDir],
+      },
+    );
+
+    const mediaUri = (name: string) =>
+      panel.webview
+        .asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", name))
+        .toString();
+    const controller = new PreviewController(
+      panel,
+      { scriptUri: mediaUri("webview.js"), styleUri: mediaUri("webview.css") },
+      document,
+      {
+        onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
+      },
+      () => {
+        previewControllers.delete(document.uri);
+        if (previewController === controller) previewController = undefined;
+      },
+      {
+        onError: (message) => {
+          void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
+        },
+        navigate: (offset) => {
+          const target =
+            vscode.workspace.textDocuments.find(
+              (candidate) => candidate.uri.toString() === document.uri.toString(),
+            ) ?? document;
+          void jumpToOffset(target, offset, lineFlash);
+        },
+        resolveResource: (path) => {
+          const uri = path.startsWith("/")
+            ? vscode.Uri.file(path)
+            : vscode.Uri.joinPath(documentDir, path);
+          return panel.webview.asWebviewUri(uri).toString();
+        },
+      },
+    );
+    previewControllers.add(document.uri, { controller, document, automatic });
+    previewController = controller;
+  }
+
+  function handleManagedDocument(document: vscode.TextDocument | undefined): void {
+    if (!document || !isManagedDocument(document, managedPatterns(document), matchesManagedGlob))
+      return;
+    openPreview(document, true);
+    void offerLatexWorkshopIgnore(document).catch((error) => {
+      void vscode.window.showErrorMessage(
+        `Beamer Editor: LaTeX Workshop settings update failed: ${String(error)}`,
+      );
+    });
+  }
+
+  context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument((document) => handleManagedDocument(document)),
+    vscode.window.onDidChangeActiveTextEditor((editor) => handleManagedDocument(editor?.document)),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration("beamerEditor.managedFiles")) return;
+      lintController.refresh(vscode.workspace.textDocuments);
+      for (const owner of previewControllers.automaticEntries()) {
+        if (
+          owner.automatic &&
+          !isManagedDocument(owner.document, managedPatterns(owner.document), matchesManagedGlob)
+        ) {
+          owner.controller.close();
+        }
+      }
+      handleManagedDocument(vscode.window.activeTextEditor?.document);
+    }),
+  );
+  handleManagedDocument(vscode.window.activeTextEditor?.document);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("beamerEditor.openPreview", () => {
@@ -113,59 +256,13 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         return;
       }
 
-      previewController?.close();
-      const document = editor.document;
-      // 画像(includegraphics / deckimage / logo)は文書からの相対パスで参照される
-      // ため、文書のあるフォルダだけを workspace 側のリソース範囲として開ける。
-      const documentDir = vscode.Uri.joinPath(document.uri, "..");
-      const panel = vscode.window.createWebviewPanel(
-        "beamerEditor.preview",
-        `Beamer Preview: ${document.fileName.split(/[\\/]/).pop()}`,
-        vscode.ViewColumn.Beside,
-        {
-          enableScripts: true,
-          localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media"), documentDir],
-        },
-      );
-
-      const mediaUri = (name: string) =>
-        panel.webview
-          .asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", name))
-          .toString();
-      const controller = new PreviewController(
-        panel,
-        { scriptUri: mediaUri("webview.js"), styleUri: mediaUri("webview.css") },
-        document,
-        {
-          onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
-        },
-        () => {
-          if (previewController === controller) {
-            previewController = undefined;
-          }
-        },
-        {
-          onError: (message) => {
-            void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
-          },
-          navigate: (offset) => {
-            // タブを閉じて close された場合、元の TextDocument は凍結するため
-            // 同じ uri の最新インスタンスを引き直してからジャンプする。
-            const target =
-              vscode.workspace.textDocuments.find(
-                (candidate) => candidate.uri.toString() === document.uri.toString(),
-              ) ?? document;
-            void jumpToOffset(target, offset, lineFlash);
-          },
-          resolveResource: (path) => {
-            const uri = path.startsWith("/")
-              ? vscode.Uri.file(path)
-              : vscode.Uri.joinPath(documentDir, path);
-            return panel.webview.asWebviewUri(uri).toString();
-          },
-        },
-      );
-      previewController = controller;
+      const existing = previewControllers.get(editor.document.uri);
+      if (existing) {
+        previewControllers.promoteManual(editor.document.uri);
+        previewController = existing.controller;
+        return;
+      }
+      openPreview(editor.document, false);
     }),
   );
 
@@ -173,6 +270,6 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 }
 
 export function deactivate(): void {
-  previewController?.close();
+  for (const [, owner] of [...previewControllers.entries()]) owner.controller.close();
   previewController = undefined;
 }

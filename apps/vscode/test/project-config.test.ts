@@ -19,9 +19,6 @@ const tasks = JSON.parse(
     }>;
   }>;
 };
-const workspaceSettings = JSON.parse(
-  readFileSync(fileURLToPath(new URL("../../../.vscode/settings.json", import.meta.url)), "utf8"),
-) as Record<string, unknown>;
 const vscodeIgnore = readFileSync(
   fileURLToPath(new URL("../.vscodeignore", import.meta.url)),
   "utf8",
@@ -44,7 +41,19 @@ describe("VS Code extension project configuration", () => {
     expect(vscodeIgnore).toContain("**/*.map");
   });
 
-  it("disables LaTeX Workshop automatic builds in this workspace", () => {
-    expect(workspaceSettings["latex-workshop.latex.autoBuild.run"]).toBe("never");
+  it("declares the managed slide-file default without workspace-wide LaTex overrides", () => {
+    const contributes = packageJson.contributes as {
+      configuration: { properties: Record<string, unknown> };
+    };
+    expect(contributes.configuration.properties["beamerEditor.managedFiles"]).toMatchObject({
+      default: ["**/*.slide.tex"],
+      scope: "resource",
+    });
+    expect(() =>
+      readFileSync(
+        fileURLToPath(new URL("../../../.vscode/settings.json", import.meta.url)),
+        "utf8",
+      ),
+    ).toThrow();
   });
 });

@@ -53,6 +53,8 @@ export class LintController<TDoc extends LintableDocument> {
     events: LintEvents<TDoc>,
     private readonly sink: DiagnosticsSink<TDoc>,
     initialDocuments: readonly TDoc[] = [],
+    private readonly isTargetDocument: (document: TDoc) => boolean = (document) =>
+      document.uri.scheme === "file" && document.fileName.endsWith(".tex"),
   ) {
     this.disposables = [
       events.onDidOpenTextDocument((document) => this.lintNow(document)),
@@ -68,7 +70,19 @@ export class LintController<TDoc extends LintableDocument> {
 
   /** ローカルの .tex 本体だけを対象にする(git diff ビュー等の scheme は除外)。 */
   private isTarget(document: TDoc): boolean {
-    return document.uri.scheme === "file" && document.fileName.endsWith(".tex");
+    return this.isTargetDocument(document);
+  }
+
+  /** 設定変更後、開いている文書の診断を再評価する。 */
+  refresh(documents: readonly TDoc[]): void {
+    if (this.disposed) return;
+    for (const document of documents) {
+      if (this.isTarget(document)) {
+        this.lintNow(document);
+      } else {
+        this.drop(document, true);
+      }
+    }
   }
 
   private lintNow(document: TDoc): void {
@@ -97,8 +111,8 @@ export class LintController<TDoc extends LintableDocument> {
     );
   }
 
-  private drop(document: TDoc): void {
-    if (this.disposed || !this.isTarget(document)) return;
+  private drop(document: TDoc, force = false): void {
+    if (this.disposed || (!force && !this.isTarget(document))) return;
     const key = document.uri.toString();
     clearTimeout(this.timers.get(key));
     this.timers.delete(key);
