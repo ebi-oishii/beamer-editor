@@ -2,6 +2,7 @@ import type { LintDiagnostic, LintSeverity } from "@beamer-editor/core";
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
 import { PreviewController } from "./preview-controller";
+import { resolveSourceViewColumn } from "./source-navigation";
 
 let previewController: PreviewController | undefined;
 
@@ -66,8 +67,20 @@ async function jumpToOffset(
   document: vscode.TextDocument,
   offset: number,
   lineFlash: ReturnType<typeof createLineFlash>,
+  fallbackViewColumn: vscode.ViewColumn | undefined,
 ): Promise<void> {
-  const editor = await vscode.window.showTextDocument(document);
+  const viewColumn = resolveSourceViewColumn(
+    document.uri,
+    vscode.window.visibleTextEditors.map((editor) => ({
+      documentUri: editor.document.uri,
+      viewColumn: editor.viewColumn,
+    })),
+    fallbackViewColumn,
+  );
+  const editor = await vscode.window.showTextDocument(
+    document,
+    viewColumn === undefined ? { preserveFocus: false } : { viewColumn, preserveFocus: false },
+  );
   const position = document.positionAt(offset);
   const range = document.lineAt(position.line).range;
   editor.selection = new vscode.Selection(range.start, range.end);
@@ -115,6 +128,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
       previewController?.close();
       const document = editor.document;
+      const sourceViewColumn = editor.viewColumn;
       // 画像(includegraphics / deckimage / logo)は文書からの相対パスで参照される
       // ため、文書のあるフォルダだけを workspace 側のリソース範囲として開ける。
       const documentDir = vscode.Uri.joinPath(document.uri, "..");
@@ -155,7 +169,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
               vscode.workspace.textDocuments.find(
                 (candidate) => candidate.uri.toString() === document.uri.toString(),
               ) ?? document;
-            void jumpToOffset(target, offset, lineFlash);
+            void jumpToOffset(target, offset, lineFlash, sourceViewColumn);
           },
           resolveResource: (path) => {
             const uri = path.startsWith("/")
