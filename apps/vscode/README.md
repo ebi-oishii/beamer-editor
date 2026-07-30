@@ -21,4 +21,6 @@ code --install-extension apps/vscode/beamer-editor.vsix
 
 外部プロセス(AI エージェントや CLI)がファイルを書き換えた場合、未編集のバッファは自動で追従します。編集中(dirty)のバッファは上書きされず、競合の扱いは VS Code 標準に従います。
 
+このリポジトリでは LaTeX Workshop の既定の自動ビルドと競合しないよう、`.vscode/settings.json` で自動ビルドを無効にしています。利用者のワークスペースでも同じ設定を追加できます。自動ビルドだけが停止し、LaTeX Workshop の手動 **Build LaTeX project** は引き続き利用できます。
+
 PDF 書き出し(tectonic)は Phase 6 で追加予定です。

@@ -19,6 +19,9 @@ const tasks = JSON.parse(
     }>;
   }>;
 };
+const workspaceSettings = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../../.vscode/settings.json", import.meta.url)), "utf8"),
+) as Record<string, unknown>;
 const vscodeIgnore = readFileSync(
   fileURLToPath(new URL("../.vscodeignore", import.meta.url)),
   "utf8",
@@ -39,5 +42,9 @@ describe("VS Code extension project configuration", () => {
 
   it("excludes source maps from packaged extensions", () => {
     expect(vscodeIgnore).toContain("**/*.map");
+  });
+
+  it("disables LaTeX Workshop automatic builds in this workspace", () => {
+    expect(workspaceSettings["latex-workshop.latex.autoBuild.run"]).toBe("never");
   });
 });
