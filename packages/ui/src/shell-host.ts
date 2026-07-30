@@ -8,6 +8,7 @@
 
 import type { RenderedDeck } from "@beamer-editor/renderer";
 import type { ExtensionToWebview, WebviewToExtension } from "./messages.js";
+import { parseZoom, type ZoomState } from "./preview/zoom.js";
 
 /**
  * プレビューのナビ状態。Webview の getState/setState で保存する最小限で、
@@ -18,6 +19,8 @@ export interface NavState {
   current: number;
   /** オーバーレイの現在ステップ(1 起点)。 */
   step: number;
+  /** スライドの表示倍率。旧 state には無く、無い場合は fit とする。 */
+  zoom: ZoomState;
 }
 
 export interface ShellHost {
@@ -51,13 +54,13 @@ export interface WebviewStateStore {
   setState(state: unknown): void;
 }
 
-/** getState の戻り値を NavState として検証する(型・範囲が合わなければ捨てる)。 */
+/** getState の戻り値を NavState として検証する(壊れた zoom は fit へ戻す)。 */
 function parseNavState(raw: unknown): NavState | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const { current, step } = raw as Record<string, unknown>;
   if (typeof current !== "number" || !Number.isInteger(current) || current < 0) return undefined;
   if (typeof step !== "number" || !Number.isInteger(step) || step < 1) return undefined;
-  return { current, step };
+  return { current, step, zoom: parseZoom((raw as Record<string, unknown>).zoom) };
 }
 
 /** MessageTransport から Webview 用の ShellHost を作る。 */
@@ -88,7 +91,7 @@ export function createMessageShellHost(
       return parseNavState(state?.getState());
     },
     saveNavState(nav) {
-      state?.setState({ current: nav.current, step: nav.step });
+      state?.setState({ current: nav.current, step: nav.step, zoom: nav.zoom });
     },
     ready() {
       transport.post({ type: "ready" });
