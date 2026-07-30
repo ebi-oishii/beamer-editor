@@ -59,6 +59,17 @@ export interface PreviewControllerOptions {
    * (asWebviewUri。extension.ts が注入)。未指定なら書き換えない。
    */
   resolveResource?: (path: string) => string;
+  /** 有効な canvas image の source update。false は applyEdit 失敗として再描画する。 */
+  moveCanvasElement?: (move: {
+    frameIndex: number;
+    elementId: string;
+    version: number;
+    x: number;
+    y: number;
+    sourceSpan: { start: number; end: number };
+    document: PreviewDocument;
+    expectedOptions: string;
+  }) => Promise<boolean>;
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -141,10 +152,19 @@ export class PreviewController implements vscode.Disposable {
   private readonly onError: (message: string) => void;
   private readonly navigate: (offset: number) => void;
   private readonly resolveResource: ((path: string) => string) | undefined;
+  private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
   private latest: RenderOutcome | undefined;
+  /** latest を生成した TextDocument。URI/version が偶然一致しても別 object は拒否する。 */
+  private latestDocument: PreviewDocument | undefined;
+  /**
+   * WorkspaceEdit の完了から文書変更による再描画まで、同じ旧 version に対する
+   * 追加 move を拒否する。位置更新同士が古い sourceSpan を奪い合うのを防ぐ。
+   */
+  private moveApplyPending = false;
+  private moveAwaitingVersion: number | undefined;
 
   /**
    * プレビュー対象の文書。エディタタブを閉じると TextDocument は close され
@@ -166,6 +186,7 @@ export class PreviewController implements vscode.Disposable {
     this.onError = options.onError ?? (() => {});
     this.navigate = options.navigate ?? (() => {});
     this.resolveResource = options.resolveResource;
+    this.moveCanvasElement = options.moveCanvasElement;
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
@@ -186,8 +207,74 @@ export class PreviewController implements vscode.Disposable {
       this.sendDeck();
     } else if (msg.type === "jumpToSource") {
       this.handleJump(msg.frameIndex, msg.version);
+    } else if (msg.type === "moveCanvasElement") {
+      void this.handleMove(msg);
     }
     // activeFrameChanged はソース側カーソル追従(VS-5 以降)で使う予定(現状 no-op)。
+  }
+
+  private async handleMove(move: {
+    frameIndex: number;
+    elementId: string;
+    version: number;
+    x: number;
+    y: number;
+  }): Promise<void> {
+    if (this.moveApplyPending || this.moveAwaitingVersion !== undefined) return;
+    const latest = this.latest;
+    const frame = latest?.deck.frames[move.frameIndex];
+    const element = frame?.canvasElements?.find(
+      (candidate) =>
+        candidate.id === move.elementId && candidate.kind === "image" && candidate.editable,
+    );
+    if (
+      !latest ||
+      this.latestDocument !== this.document ||
+      move.version !== this.document.version ||
+      latest.version !== this.document.version ||
+      !frame ||
+      !element ||
+      !Number.isFinite(move.x) ||
+      !Number.isFinite(move.y)
+    ) {
+      this.sendDeck();
+      return;
+    }
+    if (element.position.x === move.x && element.position.y === move.y) return;
+    const { frameIndex, elementId, version, x, y } = move;
+    const document = this.document;
+    const expectedOptions = document
+      .getText()
+      .slice(element.sourceSpan.start, element.sourceSpan.end);
+    this.moveApplyPending = true;
+    try {
+      const ok = await this.moveCanvasElement?.({
+        frameIndex,
+        elementId,
+        version,
+        x,
+        y,
+        sourceSpan: element.sourceSpan,
+        document,
+        expectedOptions,
+      });
+      this.moveApplyPending = false;
+      if (this.disposed) return;
+      if (ok) {
+        this.moveAwaitingVersion = version;
+        // applyEdit の変更イベントが Promise 解決より先に届いていた場合も、
+        // 更新後の descriptor で確実にロックを解除する。
+        if (this.document.version !== version) this.sendDeck();
+        return;
+      }
+    } catch {
+      this.moveApplyPending = false;
+      if (this.disposed) return;
+    }
+    if (!this.disposed) {
+      this.onError("failed to update canvas image position.");
+      this.sendDeck();
+    }
   }
 
   /**
@@ -229,8 +316,13 @@ export class PreviewController implements vscode.Disposable {
     if (this.disposed) return;
     let message: ExtensionToWebview;
     try {
-      const outcome = this.render(this.document.getText(), this.document.version);
+      const renderedDocument = this.document;
+      const outcome = this.render(renderedDocument.getText(), renderedDocument.version);
       this.latest = outcome;
+      this.latestDocument = renderedDocument;
+      if (this.moveAwaitingVersion !== undefined && outcome.version !== this.moveAwaitingVersion) {
+        this.moveAwaitingVersion = undefined;
+      }
       const resolve = this.resolveResource;
       const deck = resolve
         ? {

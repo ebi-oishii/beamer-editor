@@ -37,6 +37,13 @@ export interface ShellHost {
   jumpToSource(frameIndex: number, version: number): void;
   /** ui → ホスト: プレビュー内でアクティブフレームが変わった通知。 */
   notifyActiveFrame(frameIndex: number): void;
+  moveCanvasElement?(
+    frameIndex: number,
+    elementId: string,
+    version: number,
+    x: number,
+    y: number,
+  ): void;
 }
 
 /**
@@ -86,6 +93,9 @@ export function createMessageShellHost(
     },
     notifyActiveFrame(frameIndex) {
       transport.post({ type: "activeFrameChanged", frameIndex });
+    },
+    moveCanvasElement(frameIndex, elementId, version, x, y) {
+      transport.post({ type: "moveCanvasElement", frameIndex, elementId, version, x, y });
     },
     loadNavState() {
       return parseNavState(state?.getState());

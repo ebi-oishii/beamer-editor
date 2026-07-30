@@ -121,6 +121,10 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
           frame={frame}
           step={state.step}
           zoom={zoom}
+          version={version}
+          onMoveCanvasElement={(elementId, x, y) =>
+            host.moveCanvasElement?.(state.current, elementId, version, x, y)
+          }
           onFitScaleChange={handleFitScaleChange}
         />
         <Controls

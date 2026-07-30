@@ -1,4 +1,8 @@
-import type { LintDiagnostic, LintSeverity } from "@beamer-editor/core";
+import {
+  canvasImagePositionReplacement,
+  type LintDiagnostic,
+  type LintSeverity,
+} from "@beamer-editor/core";
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
 import { PreviewController } from "./preview-controller";
@@ -162,6 +166,32 @@ export function activate(context: vscode.ExtensionContext): TestApi {
               ? vscode.Uri.file(path)
               : vscode.Uri.joinPath(documentDir, path);
             return panel.webview.asWebviewUri(uri).toString();
+          },
+          moveCanvasElement: async (move) => {
+            const target = vscode.workspace.textDocuments.find(
+              (candidate) => candidate === move.document,
+            );
+            if (
+              !target ||
+              target.uri.toString() !== move.document.uri.toString() ||
+              target.version !== move.version
+            )
+              return false;
+            const original = target.getText().slice(move.sourceSpan.start, move.sourceSpan.end);
+            if (original !== move.expectedOptions) return false;
+            const replacement = canvasImagePositionReplacement(original, move.x, move.y);
+            if (replacement === null) return false;
+            if (replacement === original) return true;
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+              target.uri,
+              new vscode.Range(
+                target.positionAt(move.sourceSpan.start),
+                target.positionAt(move.sourceSpan.end),
+              ),
+              replacement,
+            );
+            return vscode.workspace.applyEdit(edit);
           },
         },
       );
