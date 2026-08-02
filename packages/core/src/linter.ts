@@ -13,6 +13,7 @@ import type { FileExistsProbe, ImageFormat, ImageProbe } from "./image.js";
 
 export type LintCode =
   | "L001"
+  | "L002"
   | "L004"
   | "L005"
   | "L007"
@@ -22,6 +23,7 @@ export type LintCode =
   | "L013"
   | "L014"
   | "L015"
+  | "L016"
   | "L017"
   | "L018"
   | "L019"
@@ -139,6 +141,185 @@ function lintRawSyntax(doc: DeckDocument): LintDiagnostic[] {
     for (const child of Object.values(value)) visit(child);
   };
   visit(doc);
+  return diagnostics;
+}
+
+interface RawDefinitionState {
+  start: SourceSpan;
+  expectingTarget: boolean;
+  bodyDepth: number | null;
+}
+
+function skipTexTrivia(tex: string, start: number): number {
+  let index = start;
+  while (index < tex.length) {
+    if (/\s/.test(tex[index] ?? "")) {
+      index++;
+      continue;
+    }
+    if (tex[index] === "%") {
+      const newline = tex.indexOf("\n", index);
+      index = newline === -1 ? tex.length : newline + 1;
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
+function readControlWord(tex: string, start: number, names: readonly string[]): number | null {
+  for (const name of names) {
+    const command = `\\${name}`;
+    if (tex.startsWith(command, start) && !/[A-Za-z@]/.test(tex[start + command.length] ?? "")) {
+      return start + command.length;
+    }
+  }
+  return null;
+}
+
+function readReservedTarget(tex: string, start: number): number | null {
+  const match = /^\\deck[A-Za-z@]*/.exec(tex.slice(start));
+  return match === null ? null : start + match[0].length;
+}
+
+function readDirectTarget(tex: string, start: number): number | null {
+  const match = /^\\[A-Za-z@]+/.exec(tex.slice(start));
+  return match === null ? null : start + match[0].length;
+}
+
+function updateBraceDepth(tex: string, start: number, initialDepth: number): number {
+  let depth = initialDepth;
+  for (let index = start; index < tex.length; index++) {
+    const ch = tex[index];
+    if (ch === "\\") {
+      index++;
+      continue;
+    }
+    if (ch === "%") {
+      const newline = tex.indexOf("\n", index);
+      if (newline === -1) break;
+      index = newline;
+      continue;
+    }
+    if (ch === "{") depth++;
+    if (ch === "}") depth--;
+  }
+  return depth;
+}
+
+/**
+ * RawBlock は行単位なので、定義の prefix / primitive / target は隣接する
+ * RawBlock に分かれうる。先頭からこの有限文法だけを読むことで、本文や呼び出しを
+ * 定義として再走査しない。
+ */
+function readRawReservedDefinition(
+  tex: string,
+  span: SourceSpan,
+  state: RawDefinitionState | null,
+): { diagnosticSpan: SourceSpan | null; state: RawDefinitionState | null } {
+  let index = skipTexTrivia(tex, 0);
+  const current = state;
+
+  if (current?.bodyDepth != null) {
+    const bodyDepth = updateBraceDepth(tex, 0, current.bodyDepth);
+    return {
+      diagnosticSpan: null,
+      state: bodyDepth > 0 ? { ...current, bodyDepth } : null,
+    };
+  }
+
+  if (current?.expectingTarget) {
+    const targetEnd = readDirectTarget(tex, index);
+    if (targetEnd === null) return { diagnosticSpan: null, state: null };
+    const bodyDepth = updateBraceDepth(tex, targetEnd, 0);
+    return {
+      diagnosticSpan:
+        readReservedTarget(tex, index) === null
+          ? null
+          : { start: current.start.start, end: span.end },
+      state: bodyDepth > 0 ? { ...current, expectingTarget: false, bodyDepth } : null,
+    };
+  }
+
+  let definitionStart: SourceSpan | null = current?.start ?? null;
+  while (true) {
+    const prefixEnd = readControlWord(tex, index, ["global", "long", "outer", "protected"]);
+    if (prefixEnd === null) break;
+    definitionStart ??= span;
+    index = skipTexTrivia(tex, prefixEnd);
+  }
+
+  const primitiveEnd = readControlWord(tex, index, ["def", "gdef", "edef", "xdef"]);
+  if (primitiveEnd === null) {
+    if (definitionStart !== null && index === tex.length) {
+      return {
+        diagnosticSpan: null,
+        state: { start: definitionStart, expectingTarget: false, bodyDepth: null },
+      };
+    }
+    return { diagnosticSpan: null, state: null };
+  }
+  definitionStart ??= span;
+  index = skipTexTrivia(tex, primitiveEnd);
+
+  const targetEnd = readDirectTarget(tex, index);
+  if (targetEnd !== null) {
+    const bodyDepth = updateBraceDepth(tex, targetEnd, 0);
+    return {
+      diagnosticSpan:
+        readReservedTarget(tex, index) === null
+          ? null
+          : { start: definitionStart.start, end: span.end },
+      state: bodyDepth > 0 ? { start: definitionStart, expectingTarget: false, bodyDepth } : null,
+    };
+  }
+  if (index === tex.length) {
+    return {
+      diagnosticSpan: null,
+      state: { start: definitionStart, expectingTarget: true, bodyDepth: null },
+    };
+  }
+  return { diagnosticSpan: null, state: null };
+}
+
+/** マクロ領域は展開器に渡す前の AST 情報だけで検査する。 */
+function lintMacros(doc: DeckDocument): LintDiagnostic[] {
+  const diagnostics: LintDiagnostic[] = [];
+  let rawDefinitionState: RawDefinitionState | null = null;
+
+  for (const entry of doc.macros.entries) {
+    if (entry.type === "rawBlock") {
+      diagnostics.push(diagnostic("L002", "warning", "このマクロ定義は未対応です", entry.span));
+      const result = readRawReservedDefinition(entry.tex, entry.span, rawDefinitionState);
+      rawDefinitionState = result.state;
+      if (result.diagnosticSpan !== null) {
+        diagnostics.push(
+          diagnostic(
+            "L016",
+            "error",
+            "deck で始まるマクロ名は予約されています",
+            result.diagnosticSpan,
+          ),
+        );
+      }
+      continue;
+    }
+
+    rawDefinitionState = null;
+
+    if (!entry.expandable) {
+      diagnostics.push(
+        diagnostic("L002", "warning", "このマクロ定義は展開に対応していません", entry.span),
+      );
+    }
+
+    if (entry.name.startsWith("deck")) {
+      diagnostics.push(
+        diagnostic("L016", "error", "deck で始まるマクロ名は予約されています", entry.span),
+      );
+    }
+  }
+
   return diagnostics;
 }
 
@@ -619,6 +800,7 @@ export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiag
   const expectedSourceVersion = options.expectedSourceVersion ?? CURRENT_DECK_SOURCE_VERSION;
   const diagnostics = [
     ...lintRawSyntax(doc),
+    ...lintMacros(doc),
     ...lintOverlays(doc),
     ...lintFragileFrames(doc),
     ...lintDuplicateLabels(framesOf(doc)),

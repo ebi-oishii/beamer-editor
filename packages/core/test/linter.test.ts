@@ -11,6 +11,153 @@ ${body}
 }
 
 describe("lintDeck", () => {
+  it("マクロ領域の未展開・未対応な定義を L002 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\newcommand{\\conditional}[1]{\\ifx#1x yes\\fi}
+\\def\\legacy{value}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L002");
+
+    expect(diagnostics).toMatchObject([{ severity: "warning" }, { severity: "warning" }]);
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\newcommand{\\conditional}[1]{\\ifx#1x yes\\fi}",
+      "\\def\\legacy{value}",
+    ]);
+  });
+
+  it("deck で始まるマクロ名だけを L016 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\renewcommand{\\deckimage}[1]{#1}
+\\newenvironment{deckfoo}{}{}
+\\newcommand{\\DeckFoo}[1]{#1}
+\\newcommand{\\ordinary}[1]{#1}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics).toMatchObject([{ severity: "error" }, { severity: "error" }]);
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\renewcommand{\\deckimage}[1]{#1}",
+      "\\newenvironment{deckfoo}{}{}",
+    ]);
+  });
+
+  it("生の def 系primitiveによる deck* 再定義も L016 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def
+\\deckdef{}
+\\global \\def \\deckglobal{}
+\\gdef\\deckgdef{}
+\\edef\\deckedef{}
+\\xdef\\deckxdef{}
+\\long
+\\protected
+\\def
+\\deckmultiline{}
+\\def% comment
+\\deckcomment{}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\def\n\\deckdef{}",
+      "\\global \\def \\deckglobal{}",
+      "\\gdef\\deckgdef{}",
+      "\\edef\\deckedef{}",
+      "\\xdef\\deckxdef{}",
+      "\\long\n\\protected\n\\def\n\\deckmultiline{}",
+      "\\def% comment\n\\deckcomment{}",
+    ]);
+  });
+
+  it("生の \\def は予約済みの対象制御綴だけを L016 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def\\deckimage{}
+\\def\\ordinary{%
+  \\gdef\\deckinside{}
+}
+\\def\\DeckFoo{}
+\\deckfoo{}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics).toHaveLength(1);
+    const [diagnostic] = diagnostics;
+    if (diagnostic === undefined) throw new Error("expected an L016 diagnostic");
+    expect(sourceText(source, diagnostic)).toBe("\\def\\deckimage{}");
+  });
+
+  it("複数RawBlockの定義はL001/L002を維持しL016を一度だけ報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\global
+\\def
+\\deckfoo{}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source));
+
+    expect(diagnostics.map((entry) => entry.code)).toEqual([
+      "L001",
+      "L002",
+      "L016",
+      "L001",
+      "L002",
+      "L001",
+      "L002",
+    ]);
+    const diagnostic = diagnostics[2];
+    if (diagnostic === undefined) throw new Error("expected an L016 diagnostic");
+    expect(sourceText(source, diagnostic)).toBe("\\global\n\\def\n\\deckfoo{}");
+  });
+
+  it("通常の展開可能なマクロは L002/L016 の対象外", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\newcommand{\\ordinary}[1]{Hello, #1!}
+%% macros:end`,
+    );
+
+    expect(
+      lintDeck(parseDeck(source)).filter((entry) => entry.code === "L002" || entry.code === "L016"),
+    ).toEqual([]);
+  });
+
+  it("同じマクロ定義の L002 と L016 を安定した順で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\newcommand{\\deckconditional}[1]{\\ifx#1x yes\\fi}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source));
+
+    expect(diagnostics.map((entry) => entry.code)).toEqual(["L002", "L016"]);
+    expect(diagnostics.map((entry) => entry.span)).toEqual([
+      diagnostics[0]?.span,
+      diagnostics[0]?.span,
+    ]);
+  });
+
   it("注入された fileExists で通常・ネスト画像とスタイルロゴを L004 として報告する", () => {
     const source = deck(
       `
