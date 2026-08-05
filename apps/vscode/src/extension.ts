@@ -2,6 +2,7 @@ import type { LintDiagnostic, LintSeverity } from "@beamer-editor/core";
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
 import {
+  AutoPreviewDismissals,
   appendUniqueIgnorePatterns,
   DEFAULT_MANAGED_FILE_PATTERNS,
   globalOrDefaultArray,
@@ -14,6 +15,8 @@ import { PreviewController } from "./preview-controller";
 let previewController: PreviewController | undefined;
 const previewControllers = new PreviewRegistry<PreviewController, vscode.TextDocument>();
 let latexWorkshopPrompted = false;
+const dismissedAutoPreviewUris = new AutoPreviewDismissals();
+const configurationClosedAutoPreviewUris = new Set<string>();
 
 const LINT_SEVERITIES: Record<LintSeverity, vscode.DiagnosticSeverity> = {
   error: vscode.DiagnosticSeverity.Error,
@@ -91,6 +94,9 @@ export interface TestApi {
 }
 
 export function activate(context: vscode.ExtensionContext): TestApi {
+  const openDocumentUris = new Set(
+    vscode.workspace.textDocuments.map((document) => document.uri.toString()),
+  );
   const lineFlash = createLineFlash();
   context.subscriptions.push(lineFlash);
 
@@ -165,7 +171,17 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   }
 
   function openPreview(document: vscode.TextDocument, automatic: boolean): void {
-    if (previewControllers.has(document.uri)) return;
+    const uri = document.uri.toString();
+    const existing = previewControllers.get(document.uri);
+    if (existing) {
+      if (!automatic) {
+        previewControllers.promoteManual(document.uri);
+        existing.controller.reveal();
+        previewController = existing.controller;
+      }
+      return;
+    }
+    if (automatic && dismissedAutoPreviewUris.has(document.uri)) return;
 
     // 画像(includegraphics / deckimage / logo)は文書からの相対パスで参照される
     // ため、文書のあるフォルダだけを workspace 側のリソース範囲として開ける。
@@ -173,7 +189,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     const panel = vscode.window.createWebviewPanel(
       "beamerEditor.preview",
       `Beamer Preview: ${document.fileName.split(/[\\/]/).pop()}`,
-      vscode.ViewColumn.Beside,
+      automatic
+        ? { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }
+        : vscode.ViewColumn.Beside,
       {
         enableScripts: true,
         localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media"), documentDir],
@@ -192,6 +210,12 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
       },
       () => {
+        const owner = previewControllers.get(document.uri);
+        if (owner?.controller === controller && owner.automatic) {
+          if (!configurationClosedAutoPreviewUris.delete(uri)) {
+            dismissedAutoPreviewUris.dismiss(document.uri, openDocumentUris.has(uri));
+          }
+        }
         previewControllers.delete(document.uri);
         if (previewController === controller) previewController = undefined;
       },
@@ -230,16 +254,27 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   }
 
   context.subscriptions.push(
-    vscode.workspace.onDidOpenTextDocument((document) => handleManagedDocument(document)),
+    vscode.workspace.onDidOpenTextDocument((document) => {
+      openDocumentUris.add(document.uri.toString());
+      dismissedAutoPreviewUris.clear(document.uri);
+      handleManagedDocument(document);
+    }),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      openDocumentUris.delete(document.uri.toString());
+      dismissedAutoPreviewUris.clear(document.uri);
+    }),
     vscode.window.onDidChangeActiveTextEditor((editor) => handleManagedDocument(editor?.document)),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (!event.affectsConfiguration("beamerEditor.managedFiles")) return;
+      dismissedAutoPreviewUris.clearAll();
+      latexWorkshopPrompted = false;
       lintController.refresh(vscode.workspace.textDocuments);
       for (const owner of previewControllers.automaticEntries()) {
         if (
           owner.automatic &&
           !isManagedDocument(owner.document, managedPatterns(owner.document), matchesManagedGlob)
         ) {
+          configurationClosedAutoPreviewUris.add(owner.document.uri.toString());
           owner.controller.close();
         }
       }
@@ -259,6 +294,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       const existing = previewControllers.get(editor.document.uri);
       if (existing) {
         previewControllers.promoteManual(editor.document.uri);
+        existing.controller.reveal();
         previewController = existing.controller;
         return;
       }
@@ -272,4 +308,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 export function deactivate(): void {
   for (const [, owner] of [...previewControllers.entries()]) owner.controller.close();
   previewController = undefined;
+  dismissedAutoPreviewUris.clearAll();
+  configurationClosedAutoPreviewUris.clear();
+  latexWorkshopPrompted = false;
 }

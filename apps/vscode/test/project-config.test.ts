@@ -41,7 +41,7 @@ describe("VS Code extension project configuration", () => {
     expect(vscodeIgnore).toContain("**/*.map");
   });
 
-  it("declares the managed slide-file default without workspace-wide LaTex overrides", () => {
+  it("declares the managed slide-file default without disabling LaTeX Workshop auto-build", () => {
     const contributes = packageJson.contributes as {
       configuration: { properties: Record<string, unknown> };
     };
@@ -49,11 +49,13 @@ describe("VS Code extension project configuration", () => {
       default: ["**/*.slide.tex"],
       scope: "resource",
     });
-    expect(() =>
-      readFileSync(
-        fileURLToPath(new URL("../../../.vscode/settings.json", import.meta.url)),
-        "utf8",
-      ),
-    ).toThrow();
+    const settingsPath = fileURLToPath(new URL("../../../.vscode/settings.json", import.meta.url));
+    let settings: Record<string, unknown> = {};
+    try {
+      settings = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+    }
+    expect(settings["latex-workshop.latex.autoBuild.run"]).not.toBe("never");
   });
 });

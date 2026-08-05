@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  AutoPreviewDismissals,
   appendUniqueIgnorePatterns,
   DEFAULT_MANAGED_FILE_PATTERNS,
   globalOrDefaultArray,
   isManagedDocument,
   needsLatexWorkshopIgnorePrompt,
+  normalizeLatexWorkshopIgnorePatterns,
   PreviewRegistry,
 } from "../src/managed-files";
 
@@ -62,12 +64,50 @@ describe("managed file helpers", () => {
     expect(registry.has(documentUri)).toBe(false);
   });
 
-  it("preserves ignore arrays and adds managed patterns idempotently", () => {
+  it("does not restore auto-preview dismissal when a document closes before its panel disposes", () => {
+    const dismissals = new AutoPreviewDismissals();
+    const documentUri = uri("file:///work/talk.slide.tex");
+
+    dismissals.dismiss(documentUri, true);
+    expect(dismissals.has(documentUri)).toBe(true);
+
+    // document close clears the suppression; a later panel dispose sees it is no longer open.
+    dismissals.clear(documentUri);
+    dismissals.dismiss(documentUri, false);
+    expect(dismissals.has(documentUri)).toBe(false);
+  });
+
+  it("normalizes relative Workshop ignore globs and preserves absolute globs", () => {
+    expect(
+      normalizeLatexWorkshopIgnorePatterns([
+        "slides/**/*.tex",
+        "./slides/**/*.tex",
+        "**/*.slide.tex",
+        "/tmp/**/*.tex",
+        "C:\\slides\\**\\*.tex",
+      ]),
+    ).toEqual(["**/slides/**/*.tex", "**/*.slide.tex", "/tmp/**/*.tex", "C:\\slides\\**\\*.tex"]);
+  });
+
+  it("preserves ignore arrays and adds normalized managed patterns idempotently", () => {
     const existing = ["**/node_modules/**", "**/*.slide.tex"];
     expect(appendUniqueIgnorePatterns(existing, ["**/*.slide.tex", "slides/**/*.tex"])).toEqual([
       "**/node_modules/**",
       "**/*.slide.tex",
-      "slides/**/*.tex",
+      "**/slides/**/*.tex",
+    ]);
+    expect(
+      appendUniqueIgnorePatterns(appendUniqueIgnorePatterns(existing, ["slides/**/*.tex"]), [
+        "./slides/**/*.tex",
+      ]),
+    ).toEqual(["**/node_modules/**", "**/*.slide.tex", "**/slides/**/*.tex"]);
+  });
+
+  it("keeps existing Workshop patterns byte-for-byte while comparing their normalized meaning", () => {
+    expect(appendUniqueIgnorePatterns(["build/*.tex"], ["build/*.tex"])).toEqual(["build/*.tex"]);
+    expect(appendUniqueIgnorePatterns(["build/*.tex"], ["slides/**/*.tex"])).toEqual([
+      "build/*.tex",
+      "**/slides/**/*.tex",
     ]);
   });
 
@@ -93,6 +133,13 @@ describe("managed file helpers", () => {
   it("prompts until both ignore arrays include every managed pattern", () => {
     const patterns = ["**/*.slide.tex", "slides/**/*.tex"];
     expect(needsLatexWorkshopIgnorePrompt(patterns, patterns, patterns)).toBe(false);
+    expect(
+      needsLatexWorkshopIgnorePrompt(
+        ["**/slides/**/*.tex"],
+        ["slides/**/*.tex"],
+        ["./slides/**/*.tex"],
+      ),
+    ).toBe(false);
     expect(needsLatexWorkshopIgnorePrompt(patterns, [patterns[0] as string], patterns)).toBe(true);
     expect(needsLatexWorkshopIgnorePrompt([patterns[0] as string], patterns, patterns)).toBe(true);
     expect(needsLatexWorkshopIgnorePrompt([], [], patterns)).toBe(true);

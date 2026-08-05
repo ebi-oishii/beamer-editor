@@ -34,6 +34,7 @@ function makePanel() {
       disposeListener = listener;
       return listenerDisposable;
     },
+    reveal: vi.fn(),
     dispose: vi.fn(),
   };
   return {
@@ -135,6 +136,17 @@ describe("PreviewController", () => {
     controller.close();
 
     expect(panel.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("reveals the existing panel without disposing it", () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn());
+
+    controller.reveal();
+
+    expect(panel.reveal).toHaveBeenCalledOnce();
+    expect(panel.dispose).not.toHaveBeenCalled();
   });
 
   it("renders and posts a deckUpdated with the document version on ready", () => {
