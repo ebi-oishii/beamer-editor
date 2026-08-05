@@ -1,10 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { relative, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { EXIT_CODE, exitCodeForError } from "../src/cli.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
+const require = createRequire(import.meta.url);
+// tsx executes workspace TypeScript and its .js-specifier imports in the subprocess just like Node ESM.
+const tsxLoader = require.resolve("tsx");
 const temporaryDirectories: string[] = [];
 
 async function temporaryDirectory(): Promise<string> {
@@ -32,11 +37,7 @@ ${body}
 function runCli(...args: string[]) {
   return spawnSync(
     process.execPath,
-    [
-      "--import=./packages/cli/node_modules/tsx/dist/loader.mjs",
-      "packages/cli/src/cli.ts",
-      ...args,
-    ],
+    [`--import=${tsxLoader}`, "packages/cli/src/cli.ts", ...args],
     {
       cwd: ROOT,
       encoding: "utf8",
@@ -158,13 +159,36 @@ describe("deck lint", () => {
 
   it("keeps usage and I/O errors on stderr", () => {
     const usage = runCli("lint", "--write", "missing.tex", "--json");
-    expect(usage.status).toBe(2);
+    expect(usage.status).toBe(3);
     expect(usage.stdout).toBe("");
     expect(JSON.parse(usage.stderr).error.code).toBe("E_USAGE");
     const io = runCli("format", "missing.tex");
-    expect(io.status).toBe(1);
+    expect(io.status).toBe(3);
     expect(io.stdout).toBe("");
     expect(io.stderr).toContain("読み込みに失敗しました");
+    const ioJson = runCli("format", "missing.tex", "--json");
+    expect(ioJson.status).toBe(3);
+    expect(ioJson.stdout).toBe("");
+    expect(JSON.parse(ioJson.stderr)).toMatchObject({ error: { code: "E_IO" } });
+  });
+
+  it("maps all E_* operational failures to the stable exit code", () => {
+    expect(exitCodeForError("E_USAGE")).toBe(EXIT_CODE.operationalFailure);
+    expect(exitCodeForError("E_IO")).toBe(EXIT_CODE.operationalFailure);
+    expect(exitCodeForError("E_INTERNAL")).toBe(EXIT_CODE.operationalFailure);
+  });
+
+  it("treats an unknown font fetch as an operational failure without changing its JSON result", () => {
+    const result = runCli("fonts", "fetch", "Unknown Family", "--json");
+
+    expect(result.status).toBe(3);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual({
+      family: "Unknown Family",
+      status: "unknown-family",
+      fetched: [],
+      installed: [],
+    });
   });
 
   it("treats options without a command as usage errors but retains bare deck behavior", () => {
@@ -174,12 +198,12 @@ describe("deck lint", () => {
     expect(bare.stderr).toContain("使い方: deck");
 
     const json = runCli("--json");
-    expect(json.status).toBe(2);
+    expect(json.status).toBe(3);
     expect(json.stdout).toBe("");
     expect(JSON.parse(json.stderr)).toMatchObject({ error: { code: "E_USAGE" } });
 
     const write = runCli("--write");
-    expect(write.status).toBe(2);
+    expect(write.status).toBe(3);
     expect(write.stdout).toBe("");
     expect(write.stderr).toContain("コマンドを指定してください");
     expect(write.stderr).toContain("使い方: deck");

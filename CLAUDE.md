@@ -19,12 +19,14 @@ pnpm --dir apps/vscode package  # 開発用配布物 beamer-editor.vsix を生�
 - `packages/core` — トークナイザ / パーサ / AST / マクロ展開 / フォーマッタ / リンター(環境非依存)
 - `packages/renderer` — AST → HTML(KaTeX 同期描画)
 - `packages/ui` — 共有プレビュー UI(React + ShellHost 契約)
-- `packages/cli` — `deck` CLI(現状は fonts サブコマンドのみ)
+- `packages/cli` — `deck` CLI(lint / format / fonts)
 - `apps/web` — 開発用ビューア。製品 UI ではない(VS Code 移植計画 §3)
 - `apps/vscode` — VS Code 拡張(Extension Host + Webview)
 - `fixtures/` — ゴールデンサンプル。全フェーズのテストデータ兼受け入れ基準
 
 依存方向は `ui → renderer → core` の一方向に固定。`core` / `renderer` / `ui` に `vscode` API を import しない。シェル固有 API を知るのは `apps/*` だけ。
+
+CLI の subprocess テストは `tsx` を `--import` して workspace TypeScript と `.js` specifier の ESM 解決を実行する。
 
 ## PR・ブランチ運用
 

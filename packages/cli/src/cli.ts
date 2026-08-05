@@ -1,4 +1,19 @@
-/** `deck` command line entry point. */
+/**
+ * `deck` command line entry point.
+ *
+ *   deck lint <file> [--json]             診断を stdout に出す
+ *   deck format <file> [--write] [--json] 整形結果または書き込み結果を stdout に出す
+ *
+ * --json を含む成功結果は stdout、E_* エラーは stderr の JSON を維持する。人間向けの
+ * 成功結果とエラーも、それぞれ stdout と stderr に出す。
+ *
+ * | 終了コード | 意味 |
+ * | --- | --- |
+ * | 0 | 成功または情報のみ |
+ * | 1 | lint warning |
+ * | 2 | lint error |
+ * | 3 | 操作失敗 (E_USAGE / E_IO / E_INTERNAL / 取得不能な font など) |
+ */
 
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -16,6 +31,25 @@ import {
 } from "./fonts.ts";
 
 const DEFAULT_FAMILY = "Noto Sans CJK JP";
+
+export const EXIT_CODE = {
+  success: 0,
+  lintWarning: 1,
+  lintError: 2,
+  operationalFailure: 3,
+} as const;
+
+type CliErrorCode = "E_USAGE" | "E_IO" | "E_INTERNAL";
+const ERROR_EXIT_CODE: Record<CliErrorCode, number> = {
+  E_USAGE: EXIT_CODE.operationalFailure,
+  E_IO: EXIT_CODE.operationalFailure,
+  E_INTERNAL: EXIT_CODE.operationalFailure,
+};
+
+/** E_* は payload の種類にかかわらず、呼び出し側の操作失敗として同じ終了コードにする。 */
+export function exitCodeForError(code: CliErrorCode): number {
+  return ERROR_EXIT_CODE[code];
+}
 
 export interface ParsedArgs {
   command: string | undefined;
@@ -87,12 +121,12 @@ async function runFontsStatus(json: boolean): Promise<number> {
         2,
       )}\n`,
     );
-    return 0;
+    return EXIT_CODE.success;
   }
   process.stdout.write(`フォント解決状態(cache: ${paths.cacheDir})\n`);
   if (resolutions.length === 0) process.stdout.write("  (カタログが空です)\n");
   for (const resolution of resolutions) process.stdout.write(`${statusLine(resolution)}\n`);
-  return 0;
+  return EXIT_CODE.success;
 }
 
 async function runFontsFetch(family: string, json: boolean): Promise<number> {
@@ -109,12 +143,12 @@ async function runFontsFetch(family: string, json: boolean): Promise<number> {
           "  カタログに無いフォントは名前参照のみです。各自でインストールしてください。\n",
       );
     }
-    return 1;
+    return EXIT_CODE.operationalFailure;
   }
   const result: FetchResult = await fetchFont(family, paths, nodeFontIO);
   if (json) {
     process.stdout.write(`${JSON.stringify({ family, status: "ok", ...result }, null, 2)}\n`);
-    return 0;
+    return EXIT_CODE.success;
   }
   process.stdout.write(`フォント取得: ${family}\n`);
   process.stdout.write(
@@ -125,7 +159,7 @@ async function runFontsFetch(family: string, json: boolean): Promise<number> {
   for (const file of result.installed) process.stdout.write(`  配置: ${file}\n`);
   if (paths.userFontDir === null)
     process.stdout.write("  (userFontDir 不明のため配置はスキップ・キャッシュのみ)\n");
-  return 0;
+  return EXIT_CODE.success;
 }
 
 const USAGE = `使い方: deck <command> ...
@@ -136,7 +170,7 @@ const USAGE = `使い方: deck <command> ...
   deck fonts fetch [family] [--json]  family(既定 "${DEFAULT_FAMILY}")を取得・配置
 `;
 
-function writeError(code: "E_USAGE" | "E_IO" | "E_INTERNAL", message: string, json: boolean): void {
+function writeError(code: CliErrorCode, message: string, json: boolean): void {
   if (json) {
     process.stderr.write(`${JSON.stringify({ error: { code, message } }, null, 2)}\n`);
   } else {
@@ -183,7 +217,7 @@ async function runLint(file: string, json: boolean): Promise<number> {
     source = await readFile(resolve(file), "utf8");
   } catch (error) {
     writeError("E_IO", `読み込みに失敗しました: ${file}: ${errorMessage(error)}`, json);
-    return 1;
+    return exitCodeForError("E_IO");
   }
   const probes = createNodeFileProbes(dirname(resolve(file)));
   const diagnostics = lintDeck(parseDeck(source), probes);
@@ -198,9 +232,9 @@ async function runLint(file: string, json: boolean): Promise<number> {
       );
     }
   }
-  if (result.summary.errors > 0) return 2;
-  if (result.summary.warnings > 0) return 1;
-  return 0;
+  if (result.summary.errors > 0) return EXIT_CODE.lintError;
+  if (result.summary.warnings > 0) return EXIT_CODE.lintWarning;
+  return EXIT_CODE.success;
 }
 
 async function runFormat(file: string, write: boolean, json: boolean): Promise<number> {
@@ -209,14 +243,14 @@ async function runFormat(file: string, write: boolean, json: boolean): Promise<n
     source = await readFile(resolve(file), "utf8");
   } catch (error) {
     writeError("E_IO", `読み込みに失敗しました: ${file}: ${errorMessage(error)}`, json);
-    return 1;
+    return exitCodeForError("E_IO");
   }
   let formatted: string;
   try {
     formatted = formatDeck(source);
   } catch (error) {
     writeError("E_INTERNAL", `整形に失敗しました: ${errorMessage(error)}`, json);
-    return 1;
+    return exitCodeForError("E_INTERNAL");
   }
   const changed = formatted !== source;
   if (write && changed) {
@@ -224,7 +258,7 @@ async function runFormat(file: string, write: boolean, json: boolean): Promise<n
       await writeFile(resolve(file), formatted, "utf8");
     } catch (error) {
       writeError("E_IO", `書き込みに失敗しました: ${file}: ${errorMessage(error)}`, json);
-      return 1;
+      return exitCodeForError("E_IO");
     }
   }
   if (json) {
@@ -236,7 +270,7 @@ async function runFormat(file: string, write: boolean, json: boolean): Promise<n
   } else {
     process.stdout.write(formatted);
   }
-  return 0;
+  return EXIT_CODE.success;
 }
 
 function errorMessage(error: unknown): string {
@@ -245,7 +279,7 @@ function errorMessage(error: unknown): string {
 
 function usageError(message: string, json: boolean): number {
   writeError("E_USAGE", message, json);
-  return 2;
+  return exitCodeForError("E_USAGE");
 }
 
 /** Dispatches subcommands and returns a process exit code. */
@@ -271,7 +305,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   }
   if (command === undefined && argv.length === 0) {
     process.stderr.write(USAGE);
-    return 0;
+    return EXIT_CODE.success;
   }
   if (command === undefined) return usageError("コマンドを指定してください", json);
   return usageError(`不明なコマンド: ${command}`, json);
@@ -285,6 +319,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     .catch((error: unknown) => {
       const json = process.argv.slice(2).includes("--json");
       writeError("E_INTERNAL", `内部エラー: ${errorMessage(error)}`, json);
-      process.exitCode = 1;
+      process.exitCode = exitCodeForError("E_INTERNAL");
     });
 }
