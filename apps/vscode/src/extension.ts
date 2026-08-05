@@ -69,18 +69,19 @@ async function jumpToOffset(
   lineFlash: ReturnType<typeof createLineFlash>,
   fallbackViewColumn: vscode.ViewColumn | undefined,
 ): Promise<void> {
-  const viewColumn = resolveSourceViewColumn(
-    document.uri,
-    vscode.window.visibleTextEditors.map((editor) => ({
-      documentUri: editor.document.uri,
-      viewColumn: editor.viewColumn,
-    })),
-    fallbackViewColumn,
-  );
-  const editor = await vscode.window.showTextDocument(
-    document,
-    viewColumn === undefined ? { preserveFocus: false } : { viewColumn, preserveFocus: false },
-  );
+  const viewColumn =
+    resolveSourceViewColumn(
+      document.uri,
+      vscode.window.visibleTextEditors.map((editor) => ({
+        documentUri: editor.document.uri,
+        viewColumn: editor.viewColumn,
+      })),
+      fallbackViewColumn,
+    ) ?? vscode.ViewColumn.One;
+  const editor = await vscode.window.showTextDocument(document, {
+    viewColumn,
+    preserveFocus: false,
+  });
   const position = document.positionAt(offset);
   const range = document.lineAt(position.line).range;
   editor.selection = new vscode.Selection(range.start, range.end);

@@ -79,4 +79,14 @@ describe("resolveSourceViewColumn", () => {
       ),
     ).toBe(2);
   });
+
+  it("対象 editor の列が未定義ならプレビュー作成時の列へ戻す", () => {
+    expect(
+      resolveSourceViewColumn(
+        { toString: () => "file:///deck.tex" },
+        [{ documentUri: { toString: () => "file:///deck.tex" }, viewColumn: undefined }],
+        3,
+      ),
+    ).toBe(3);
+  });
 });
