@@ -5,12 +5,15 @@ import type { BlockNode, DeckDocument, SourceSpan } from "../src/ast.js";
 import { formatDeck } from "../src/formatter.js";
 import { parseDeck } from "../src/parser.js";
 
+// Fixture enrollment: fixtures/*.tex is canonical except reserved prefixes lint-/measure- and deck-*-preamble.tex.
 interface CanonicalFixture {
   name: string;
   source: string;
 }
 
 const fixturesDirectory = join(__dirname, "../../../fixtures");
+const ROUND_TRIP_DIAGNOSTIC =
+  " Inspect the parse-format-parse preserves semantic AST property result first.";
 
 function loadCanonicalFixtures(): CanonicalFixture[] {
   return readdirSync(fixturesDirectory, { withFileTypes: true })
@@ -91,14 +94,14 @@ function assertEqualSegment(
     if (original[index] !== formatted[index]) {
       throw new Error(
         `${label} changed outside formatter-owned spans at ${locationAt(original, originalStart + index)}; ` +
-          `formatted ${locationAt(formatted, formattedStart + index)}.`,
+          `formatted ${locationAt(formatted, formattedStart + index)}.${ROUND_TRIP_DIAGNOSTIC}`,
       );
     }
   }
   if (original.length !== formatted.length) {
     throw new Error(
       `${label} changed outside formatter-owned spans at ${locationAt(original, originalStart + length)}; ` +
-        `formatted ${locationAt(formatted, formattedStart + length)}.`,
+        `formatted ${locationAt(formatted, formattedStart + length)}.${ROUND_TRIP_DIAGNOSTIC}`,
     );
   }
 }
@@ -106,7 +109,12 @@ function assertEqualSegment(
 function assertBytesPreservedOutsideOwnedSpans(original: string, formatted: string): void {
   const originalSpans = collectFormatterOwnedSpans(parseDeck(original));
   const formattedSpans = collectFormatterOwnedSpans(parseDeck(formatted));
-  expect(formattedSpans, "formatter-owned span count").toHaveLength(originalSpans.length);
+  if (formattedSpans.length !== originalSpans.length) {
+    throw new Error(
+      `formatter-owned span count changed from ${originalSpans.length} to ${formattedSpans.length}.` +
+        ROUND_TRIP_DIAGNOSTIC,
+    );
+  }
 
   let originalCursor = 0;
   let formattedCursor = 0;
@@ -114,7 +122,7 @@ function assertBytesPreservedOutsideOwnedSpans(original: string, formatted: stri
     const originalSpan = originalSpans[index];
     const formattedSpan = formattedSpans[index];
     if (originalSpan === undefined || formattedSpan === undefined) {
-      throw new Error(`missing formatter-owned span ${index}`);
+      throw new Error(`missing formatter-owned span ${index}.${ROUND_TRIP_DIAGNOSTIC}`);
     }
     assertEqualSegment(
       original.slice(originalCursor, originalSpan.start),
@@ -138,6 +146,15 @@ function assertBytesPreservedOutsideOwnedSpans(original: string, formatted: stri
 const canonicalFixtures = loadCanonicalFixtures();
 
 describe("canonical fixture properties", () => {
+  it("preservation failures direct contributors to the round-trip property result", () => {
+    const source = "\\documentclass{beamer}\n\\begin{document}\n\\end{document}\n";
+    const changed = source.replace("beamer", "article");
+
+    expect(() => assertBytesPreservedOutsideOwnedSpans(source, changed)).toThrow(
+      "Inspect the parse-format-parse preserves semantic AST property result first.",
+    );
+  });
+
   it("fixture discovery includes canonical baselines and excludes helper fixtures", () => {
     const names = canonicalFixtures.map(({ name }) => name);
     expect(names).toEqual(
