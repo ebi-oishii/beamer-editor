@@ -1,8 +1,4 @@
 {
-  "latex-workshop.latex.watch.files.ignore": [
-    "**/fixtures/**/*.tex"
-  ],
-  "latex-workshop.latex.autoBuild.onSave.files.ignore": [
-    "**/fixtures/**/*.tex"
-  ]
+  "latex-workshop.latex.watch.files.ignore": ["**/fixtures/**/*.tex"],
+  "latex-workshop.latex.autoBuild.onSave.files.ignore": ["**/fixtures/**/*.tex"]
 }
