@@ -1,7 +1,7 @@
 # VS Code 移植計画
 
-更新日: 2026-08-02
-対象: Phase 5（共有 UI + VS Code シェル）  
+更新日: 2026-08-02<br>
+対象: Phase 5（共有 UI + VS Code シェル）<br>
 目的: Phase 7 の GUI 編集へ進む前に、VS Code 上で編集・プレビュー・診断の基盤を成立させる
 
 ## 1. 結論
@@ -49,11 +49,11 @@ Phase 5 の完了条件は、開発計画の M2（書ける）を満たすこと
 ここまで通過してから、Phase 7 のドラッグ移動・画像拡縮・表編集など「ソースを書き換える
 GUI 編集」へ進む。
 
-### 2.1 反映済み範囲と作業中PR
+### 2.1 反映済み範囲と継続作業
 
-origin/main には Phase 5 のPRチェーン #27〜#34 がマージ済みで、VS-1〜VS-9（`.vsix`生成とCI artifactを含む）が反映されている。
+Phase 5 のPRチェーン #27〜#34 はマージ済みで、VS-1〜VS-9（`.vsix`生成とCI artifactを含む）が反映されている。
 
-作業状況は恒久状態と分けて扱う。2026-08-02時点で local main は origin/main より source pane 修正、LaTeX autobuild 修正、zoom の3コミット先行しているが、対応する PR #44〜#46 は未承認のopen状態である。画像ドラッグの PR #47 は #46 ベースのdraft、fixture property tests の PR #48 は main ベースのopen、L002/L016 の PR #49 は main ベースのdraftである。これらは承認・マージまで Phase 5 の完了状態を変更しない。zoom の設計・実装記述は本書の該当節を維持する。
+継続中の変更は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)で確認する。Phase 5 の完了は本書 §2 と §9 の受け入れ項目で判断し、実機確認が終わるまで恒久状態を更新しない。
 
 ## 3. 移植するもの・しないもの
 

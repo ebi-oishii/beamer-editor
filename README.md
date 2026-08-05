@@ -25,10 +25,9 @@ AI がスライドの叩き台を生成し、人間が微調整して完成さ�
 
 ## ステータス
 
-実装中。**M1(読める)到達済み**。origin/main には Phase 5 の基盤が反映済みで、M2 は実機受け入れ確認を残す(開発順序は開発計画を参照)。
+実装中。**M1(読める)到達済み**。Phase 5 の VS Code 基盤はマージ済みで、M2 は実機受け入れ確認を残す(開発順序は開発計画を参照)。進行中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。
 
-- origin/main 実装済み: パーサ + AST(Phase 1)、キャンバス正規形フォーマッタ + lint L001/L004/L005/L007/L009/L011〜L015/L017〜L020(Phase 2 の一部)、マクロ展開器(Phase 3)、HTML プレビュー + KaTeX(Phase 4)、スタイル語彙 v1(S1)、Noto Sans CJK 対応(S2)、VS Code 拡張スキャフォールド(VS-1)〜テーマ/a11y(VS-7)、CSP/Workspace Trust(VS-8)、テスト・`.vsix`生成・CI artifact(VS-9)。
-- 作業状況(2026-08-02時点): local main は source pane 修正・LaTeX autobuild 修正・zoom を含む3コミット先行しているが、対応するPR #44〜#46は未承認のopen状態。画像ドラッグのPR #47は#46ベースのdraft、fixture property testsのPR #48はmainベースのopen、L002/L016のPR #49はmainベースのdraftであり、いずれも恒久状態には未反映。
+- 実装済み: パーサ + AST(Phase 1)、キャンバス正規形フォーマッタ + lint 基盤(Phase 2)、マクロ展開器(Phase 3)、HTML プレビュー + KaTeX(Phase 4)、スタイル語彙 v1(S1)、Noto Sans CJK 対応(S2)、VS Code 拡張スキャフォールド(VS-1)〜テーマ/a11y(VS-7)、CSP/Workspace Trust(VS-8)、テスト・`.vsix`生成・CI artifact(VS-9)。
 - 次: M2 の実機受け入れ確認（特に別環境での`.vsix`導入）→ ドッグフーディング開始([vscode-migration-plan.md](docs/vscode-migration-plan.md))、Phase 2 の残り(正規形の全域化、L003/L006/L008/L010)。
 
 ## 開発

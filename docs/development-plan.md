@@ -27,7 +27,7 @@
 
 | 項目 | 状況 |
 |---|---|
-| C-1: 本文領域の定義 | **確定済み(2026-07-10)**。案①(タイトル帯 1 行固定高、2 行以上は L019 警告)を採用。default テーマ 16:9 の実測値と境界定数は [subset-spec.md](subset-spec.md) §2.8 および計測fixtureで固定済み |
+| C-1: 本文領域の定義 | **確定済み(2026-07-10)**。案①(タイトル帯 1 行固定高、2 行以上は L019 警告)を採用。Tectonic 0.16.9 と `zref-savepos` で `fixtures/measure-body-area.tex` を計測し、結果を [subset-spec.md](subset-spec.md) §2.8、renderer の境界定数、計測 artifact に記録した |
 | C-2〜C-8: 設計の穴 | 仕様へ反映済み(savepos 検証 = L012 実装方式、decktext 内語彙、canvas オーバーレイ対象外、寸法プローブ注入、L016〜L019、adjust 時の label 自動付与)。[issues-to-resolve.md](issues-to-resolve.md) の解決状況を参照 |
 | A-1〜A-6: 文書リコンサイル | 反映済み(subset-spec v1.1、design.md、ai-protocol.md §7、本書) |
 | AST 型 | 実装済み(`packages/core/src/ast.ts`。キャンバスノード・decktext 内語彙制約・source span・コメント保持を含む) |
@@ -52,7 +52,7 @@
 キャンバスの「ソース表現と操作セマンティクス」を実装前に固定する。**TeX 側マクロは textpos 統合・minipage 幅・fontsize 切替・縦横比保持を含む本物の TeX エンジニアリングであり、独立した工数として計上する**(レビュー B-2)。
 
 - `deckcanvas` / `decktext` / `deckimage` の TeX 実装(ツール管理プリアンブルに入る本物の LaTeX 定義)。
-- 本文領域の境界定数を savepos 実測で最終確定し、fixture として固定(C-1 の続き。計測デッキは `fixtures/measure-body-area.tex` を出発点にする)。
+- C-1 で確定した本文領域の境界定数を TeX 実装と fixture へ適用する(計測デッキは `fixtures/measure-body-area.tex`)。
 - `zref-savepos` によるはみ出し・重なり計測のプロトタイプ(Phase 6 の check 統合の土台。C-2)。
 - 座標系・数値精度・文字サイズ enum・キャンバス frame の正規形を fixture とテストで固定。
 - `canvas.tex` の PDF 期待画像を生成し、受け入れ基準にする。
@@ -71,7 +71,7 @@
 
 ### Phase 2: core — フォーマッタ + リンター(M)
 
-**一部実装済(2026-08-02)。** origin/main にはキャンバス正規形フォーマッタと AST ベースのリンター基盤、L001/L004/L005/L007/L009/L011〜L015/L017〜L020 が反映済み。L002/L016 は main ベースの draft PR #49 で実装・検証済みだが、恒久状態には含めない。残りは正規形の全域化(キャンバス以外)、冪等性テストの全fixture適用、L003/L006/L008/L010。fixture property tests の PR #48 は review 待ち(いずれも2026-08-02時点)。
+キャンバス正規形フォーマッタと AST ベースのリンター基盤を備える。残りは正規形の全域化(キャンバス以外)、冪等性テストの全 fixture 適用、L003/L006/L008/L010 を含む未実装規則の整備である。
 
 - 正規形の実装(キャンバスの座標 3 桁固定・key 順序の正規化を含む)。冪等性テスト(`format(format(x)) == format(x)`)、コメント保持テスト。
 - リント規則 L001〜L020。L004 / L015 は環境非依存にするため、ファイルアクセスと画像寸法プローブ(PNG/JPEG ヘッダ・PDF MediaBox)を注入可能にする(C-5)。
@@ -98,7 +98,7 @@
 
 ### Phase 5: 共有 UI + VS Code シェル
 
-**origin/main 反映済み。** VS-1〜VS-9（拡張スキャフォールド、共有プレビューUI、編集追従、ソースジャンプ、lint診断、外部編集統合テスト、テーマ/a11y(VS-7)、CSP/Workspace Trust(VS-8)、テスト・`.vsix`生成・CI artifact(VS-9)）は Phase 5 のPRチェーン #27〜#34 でマージ済み。**M2 の残りは実機での受け入れ確認**(移植計画 §2 の8項目、特に別環境への`.vsix`導入)。local main 先行のsource pane・LaTeX autobuild・zoomは対応PR #44〜#46が未承認のopen状態であり、画像ドラッグPR #47は#46ベースのdraftである(いずれも2026-08-02時点)。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
+VS-1〜VS-9（拡張スキャフォールド、共有プレビューUI、編集追従、ソースジャンプ、lint診断、外部編集統合テスト、テーマ/a11y(VS-7)、CSP/Workspace Trust(VS-8)、テスト・`.vsix`生成・CI artifact(VS-9)）は Phase 5 のPRチェーン #27〜#34 でマージ済み。**M2 の残りは実機での受け入れ確認**(移植計画 §2 の8項目、特に別環境への`.vsix`導入)。継続中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
 
 **5a. packages/ui — 共有 UI と ShellHost 契約(S)**
 
@@ -215,4 +215,4 @@ Electron は次が VS Code 版で安定してから着手する(追加要件 §6
 
 1. M2 の実機受け入れを完了する（移植計画 §2 の8項目、特に別環境への`.vsix`導入）。
 2. Phase 2 の正規形をキャンバス外へ広げ、L003/L006/L008/L010を実装する。
-3. PR #48 のfixture property testsとPR #49のL002/L016をレビューし、承認後に恒久状態へ反映する(2026-08-02時点)。
+3. 受け入れ結果を反映し、ドッグフーディング開始条件を満たす。
