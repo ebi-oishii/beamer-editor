@@ -1,15 +1,14 @@
 # VS Code エディタセットアップ
 
-更新日: 2026-08-02
+更新日: 2026-08-05
 
 ## 結論
 
 Beamer Editor の `.tex` は、VS Code に組み込まれた LaTeX 言語サポートだけで基本的な
-構文強調を利用できる。プロジェクト固有の highlighter は実装しない。
+構文強調を利用できる。これを必須の文法基盤とし、プロジェクト固有の highlighter は実装しない。
 
 [LaTeX Workshop](https://marketplace.visualstudio.com/items?itemName=James-Yu.latex-workshop)
-は、補完、アウトライン、参照移動などの編集支援が必要な場合の推奨オプションとする。
-ただし、Beamer Editor 以外のビルドが意図せず起動しないよう、自動ビルドを無効にする。
+は、補完、アウトライン、参照移動などの編集支援が必要な場合の任意の追加機能とする。
 
 ## 最小セットアップ
 
@@ -28,23 +27,26 @@ Beamer Editor の `.tex` は、VS Code に組み込まれた LaTeX 言語サポ�
 独自環境は一般的な LaTeX 環境として強調される。Beamer Editor 固有の意味に応じた色分けは
 行わず、誤りや未対応構文は Beamer Editor の Diagnostics で示す。
 
-## 推奨セットアップ: LaTeX Workshop
+## 任意の編集支援: LaTeX Workshop
 
 このリポジトリをVS Codeで開くと、`.vscode/extensions.json` により LaTeX Workshop が
 推奨される。インストールは任意であり、基本的な構文強調だけなら不要である。
 
-LaTeX Workshopを使う場合は、ユーザー設定またはワークスペース設定に次を追加する。
+LaTeX Workshop を使う場合も、通常の `.tex` の自動ビルドは維持する。自動ビルド全体を
+無効にしない。
 
-```json
-{
-  "latex-workshop.latex.autoBuild.run": "never"
-}
-```
+Beamer Editor の managed slide は、拡張機能が初回に確認したうえで LaTeX Workshop の
+Global user settings の監視・保存時自動ビルド ignore へ managed pattern を追加する。この
+扱いは managed slide だけに限定され、通常の `.tex` や手動の **Build LaTeX project** は
+引き続き利用できる。
 
-LaTeX Workshop 10.16.1では、この設定の既定値は `onFileChange` であり、ファイル変更を
-検知してLaTeXのビルドを開始する。Beamer Editorが提供するプレビューと診断だけを使う
-場合は `never` とし、PDFが必要なときはBeamer Editor側の書き出し機能または明示的な
-ビルド操作を使う。
+このリポジトリにコミットする ignore は、テスト fixture への対象限定設定だけである。
+`.vscode/settings.json` の `**/fixtures/**/*.tex` は絶対パスの workspace でも一致し、fixture
+の監視・保存時自動ビルドだけを除外する。managed slide の設定をワークスペース設定へ
+固定したり、すべての LaTeX 自動ビルドを止めたりしない。
+
+PDF が必要な場合は、現時点では LaTeX Workshop の **Build LaTeX project** を明示的に実行するか、
+利用中の LaTeX compiler を直接実行する。Beamer Editor 自身の PDF export は Phase 6 で予定している。
 
 ## 候補比較
 
@@ -54,7 +56,7 @@ LaTeX Workshop 10.16.1では、この設定の既定値は `onFileChange` であ
 | 候補 | 基本LaTeX | `%% deck` | `deckcanvas` / `decktext` | 判断 |
 |---|---|---|---|---|
 | VS Code組み込みのLaTeXサポート | 対応 | コメントとして対応 | 一般環境として対応 | 必須基盤。追加インストール不要 |
-| LaTeX Workshop 10.16.1 | 対応 | コメントとして対応 | 一般環境として対応 | 編集支援が必要な場合に推奨。自動ビルドは無効化 |
+| LaTeX Workshop 10.16.1 | 対応 | コメントとして対応 | 一般環境として対応 | 編集支援が必要な場合に任意で利用。通常の `.tex` 自動ビルドは維持し、managed slide/fixture だけを scoped ignore |
 | `mathematic.vscode-latex` 2.0.0 | 対応 | コメントとして対応 | 一般環境として対応 | grammar、lint、formatが既存機能と重複するため非推奨 |
 
 3候補とも、コメント、コマンド、環境、数式とプロジェクト独自環境を正しくscopeへ分類した。

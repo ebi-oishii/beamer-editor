@@ -23,6 +23,9 @@ const vscodeIgnore = readFileSync(
   fileURLToPath(new URL("../.vscodeignore", import.meta.url)),
   "utf8",
 );
+const workspaceSettings = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../../.vscode/settings.json", import.meta.url)), "utf8"),
+) as Record<string, unknown>;
 
 describe("VS Code extension project configuration", () => {
   it("uses the approved extension ID and F5 watch task readiness protocol", () => {
@@ -39,5 +42,14 @@ describe("VS Code extension project configuration", () => {
 
   it("excludes source maps from packaged extensions", () => {
     expect(vscodeIgnore).toContain("**/*.map");
+  });
+
+  it("keeps ordinary LaTeX auto-build enabled while ignoring only repository fixtures", () => {
+    const fixtureGlob = "**/fixtures/**/*.tex";
+    expect(workspaceSettings["latex-workshop.latex.autoBuild.run"]).not.toBe("never");
+    expect(workspaceSettings["latex-workshop.latex.watch.files.ignore"]).toEqual([fixtureGlob]);
+    expect(workspaceSettings["latex-workshop.latex.autoBuild.onSave.files.ignore"]).toEqual([
+      fixtureGlob,
+    ]);
   });
 });
