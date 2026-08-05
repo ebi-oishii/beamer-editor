@@ -41,6 +41,7 @@ function useFitScale(
       const availH = Math.max(0, holder.clientHeight - 24);
       const fitScale = Math.max(MIN_FIT_SCALE, Math.min(availW / slideW, availH / slideH, 1.6));
       const effectiveScale = zoom === "fit" ? fitScale : zoom;
+      // ResizeObserver 内からの state 更新は、親側の stable callback と同値 no-op guard が前提。
       onFitScaleChange(fitScale);
       scaleBox.style.transform = `scale(${effectiveScale})`;
       layoutBox.style.width = `${slideW * effectiveScale}px`;
