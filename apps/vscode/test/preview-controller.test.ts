@@ -371,7 +371,7 @@ describe("PreviewController", () => {
     const { panel, fire } = makePanel();
     const { events } = makeEvents();
     const doc = makeDoc();
-    const moveCanvasElement = vi.fn(async () => true);
+    const moveCanvasElement = vi.fn(async () => "applied" as const);
     const render = (_text: string, version: number): RenderOutcome => ({
       deck: {
         title: "t",
@@ -425,18 +425,20 @@ describe("PreviewController", () => {
   });
 
   it.each([
-    false,
+    "failed" as const,
     new Error("reject"),
   ])("move callback failure (%s) re-renders and reports once", async (result) => {
     const { panel, posted, fire } = makePanel();
     const { events } = makeEvents();
     const error = vi.fn();
+    const warning = vi.fn();
     const callback = vi.fn(() =>
       result instanceof Error ? Promise.reject(result) : Promise.resolve(result),
     );
     new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
       render: canvasRender,
       onError: error,
+      onWarning: warning,
       moveCanvasElement: callback,
     });
     fire({ type: "ready" });
@@ -451,14 +453,83 @@ describe("PreviewController", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(error).toHaveBeenCalledTimes(1);
+    expect(warning).not.toHaveBeenCalled();
     expect(posted).toHaveLength(2);
+  });
+
+  it("unchanged move silently redraws and permits another move at the same version", async () => {
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    const callback = vi.fn(async () => "unchanged" as const);
+    const warning = vi.fn();
+    const error = vi.fn();
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      render: canvasRender,
+      onWarning: warning,
+      onError: error,
+      moveCanvasElement: callback,
+    });
+    fire({ type: "ready" });
+    const move = {
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 7,
+      x: 0.25,
+      y: 0.5,
+    } as const;
+
+    fire(move);
+    await Promise.resolve();
+    fire({ ...move, x: 0.75 });
+    await Promise.resolve();
+
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(posted).toHaveLength(3);
+    expect(warning).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("cancelled move warns, redraws, and permits a retry", async () => {
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    const callback = vi.fn(async () => "cancelled" as const);
+    const warning = vi.fn();
+    const error = vi.fn();
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      render: canvasRender,
+      onWarning: warning,
+      onError: error,
+      moveCanvasElement: callback,
+    });
+    fire({ type: "ready" });
+    const move = {
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 7,
+      x: 0.25,
+      y: 0.5,
+    } as const;
+
+    fire(move);
+    await Promise.resolve();
+    fire({ ...move, x: 0.75 });
+    await Promise.resolve();
+
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(posted).toHaveLength(3);
+    expect(warning).toHaveBeenCalledWith(
+      "Canvas image position was not updated. Try dragging it again.",
+    );
+    expect(error).not.toHaveBeenCalled();
   });
 
   it("applyEdit 中は同じ旧 version の追加 move を無視し、再描画後に解除する", async () => {
     const { panel, posted, fire } = makePanel();
     const { events } = makeEvents();
-    let settle: ((value: boolean) => void) | undefined;
-    const pending = new Promise<boolean>((resolve) => {
+    let settle: ((value: "failed") => void) | undefined;
+    const pending = new Promise<"failed">((resolve) => {
       settle = resolve;
     });
     const callback = vi.fn(() => pending);
@@ -479,7 +550,7 @@ describe("PreviewController", () => {
     fire({ ...first, x: 0.75 });
     expect(callback).toHaveBeenCalledTimes(1);
 
-    settle?.(false);
+    settle?.("failed");
     await Promise.resolve();
     await Promise.resolve();
     expect(posted).toHaveLength(2);
@@ -492,7 +563,7 @@ describe("PreviewController", () => {
     const { panel, fire } = makePanel();
     const { events, change } = makeEvents();
     const doc = makeDoc();
-    const callback = vi.fn(async () => true);
+    const callback = vi.fn(async () => "applied" as const);
     new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
       render: canvasRender,
       moveCanvasElement: callback,
@@ -519,15 +590,15 @@ describe("PreviewController", () => {
   });
 
   it.each([
-    false,
+    "failed" as const,
     new Error("reject"),
   ])("disposed pending callback (%s) is silent", async (result) => {
     const { panel, posted, fire } = makePanel();
     const { events } = makeEvents();
     const error = vi.fn();
-    let settle: ((value: boolean) => void) | undefined;
+    let settle: ((value: "failed") => void) | undefined;
     let reject: ((reason: unknown) => void) | undefined;
-    const pending = new Promise<boolean>((resolve, rejectPromise) => {
+    const pending = new Promise<"failed">((resolve, rejectPromise) => {
       settle = resolve;
       reject = rejectPromise;
     });

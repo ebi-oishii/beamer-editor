@@ -152,6 +152,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           onError: (message) => {
             void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
           },
+          onWarning: (message) => {
+            void vscode.window.showWarningMessage(`Beamer preview: ${message}`);
+          },
           navigate: (offset) => {
             // タブを閉じて close された場合、元の TextDocument は凍結するため
             // 同じ uri の最新インスタンスを引き直してからジャンプする。
@@ -176,12 +179,12 @@ export function activate(context: vscode.ExtensionContext): TestApi {
               target.uri.toString() !== move.document.uri.toString() ||
               target.version !== move.version
             )
-              return false;
+              return "cancelled";
             const original = target.getText().slice(move.sourceSpan.start, move.sourceSpan.end);
-            if (original !== move.expectedOptions) return false;
+            if (original !== move.expectedOptions) return "cancelled";
             const replacement = canvasImagePositionReplacement(original, move.x, move.y);
-            if (replacement === null) return false;
-            if (replacement === original) return true;
+            if (replacement === null) return "failed";
+            if (replacement === original) return "unchanged";
             const edit = new vscode.WorkspaceEdit();
             edit.replace(
               target.uri,
@@ -191,7 +194,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
               ),
               replacement,
             );
-            return vscode.workspace.applyEdit(edit);
+            return (await vscode.workspace.applyEdit(edit)) ? "applied" : "failed";
           },
         },
       );

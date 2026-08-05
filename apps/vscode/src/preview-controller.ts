@@ -44,11 +44,16 @@ export interface DocumentEvents {
 /** 連続入力を 1 回のレンダリングへまとめる待ち時間(移植計画 VS-3 は 100〜150ms)。 */
 export const RENDER_DEBOUNCE_MS = 120;
 
+/** 編集 host が canvas image の移動要求を処理した結果。 */
+export type CanvasImageMoveResult = "applied" | "unchanged" | "cancelled" | "failed";
+
 export interface PreviewControllerOptions {
   /** レンダリングパイプラインの差し替え口(テスト用)。既定は renderDocument。 */
   render?: (text: string, version: number) => RenderOutcome;
   /** 予期しないレンダリング例外の通知先(既定は何もしない)。 */
   onError?: (message: string) => void;
+  /** 文書競合など、再試行可能な canvas image 編集中止の通知先。 */
+  onWarning?: (message: string) => void;
   /**
    * ソースジャンプの実行先(元ソースの UTF-16 オフセットを受け取る)。
    * エディタ操作は vscode API が要るため extension.ts が注入する。既定は何もしない。
@@ -59,7 +64,7 @@ export interface PreviewControllerOptions {
    * (asWebviewUri。extension.ts が注入)。未指定なら書き換えない。
    */
   resolveResource?: (path: string) => string;
-  /** 有効な canvas image の source update。false は applyEdit 失敗として再描画する。 */
+  /** 有効な canvas image の source update。VS Code host の結果を返す。 */
   moveCanvasElement?: (move: {
     frameIndex: number;
     elementId: string;
@@ -69,7 +74,7 @@ export interface PreviewControllerOptions {
     sourceSpan: { start: number; end: number };
     document: PreviewDocument;
     expectedOptions: string;
-  }) => Promise<boolean>;
+  }) => Promise<CanvasImageMoveResult>;
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -150,6 +155,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly disposables: { dispose(): void }[];
   private readonly render: (text: string, version: number) => RenderOutcome;
   private readonly onError: (message: string) => void;
+  private readonly onWarning: (message: string) => void;
   private readonly navigate: (offset: number) => void;
   private readonly resolveResource: ((path: string) => string) | undefined;
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
@@ -184,6 +190,7 @@ export class PreviewController implements vscode.Disposable {
     this.document = document;
     this.render = options.render ?? renderDocument;
     this.onError = options.onError ?? (() => {});
+    this.onWarning = options.onWarning ?? (() => {});
     this.navigate = options.navigate ?? (() => {});
     this.resolveResource = options.resolveResource;
     this.moveCanvasElement = options.moveCanvasElement;
@@ -248,7 +255,7 @@ export class PreviewController implements vscode.Disposable {
       .slice(element.sourceSpan.start, element.sourceSpan.end);
     this.moveApplyPending = true;
     try {
-      const ok = await this.moveCanvasElement?.({
+      const result = await this.moveCanvasElement?.({
         frameIndex,
         elementId,
         version,
@@ -260,11 +267,20 @@ export class PreviewController implements vscode.Disposable {
       });
       this.moveApplyPending = false;
       if (this.disposed) return;
-      if (ok) {
+      if (result === "applied") {
         this.moveAwaitingVersion = version;
         // applyEdit の変更イベントが Promise 解決より先に届いていた場合も、
         // 更新後の descriptor で確実にロックを解除する。
         if (this.document.version !== version) this.sendDeck();
+        return;
+      }
+      if (result === "unchanged") {
+        this.sendDeck();
+        return;
+      }
+      if (result === "cancelled") {
+        this.onWarning("Canvas image position was not updated. Try dragging it again.");
+        this.sendDeck();
         return;
       }
     } catch {
