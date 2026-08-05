@@ -144,11 +144,16 @@ function lintRawSyntax(doc: DeckDocument): LintDiagnostic[] {
   return diagnostics;
 }
 
-interface RawDefinitionState {
-  start: SourceSpan;
-  expectingTarget: boolean;
-  bodyDepth: number | null;
-}
+type RawDefinitionState =
+  | { phase: "primitive"; start: SourceSpan }
+  | { phase: "target"; start: SourceSpan }
+  | {
+      phase: "body";
+      start: SourceSpan;
+      reservedTarget: boolean;
+      depth: number;
+      started: boolean;
+    };
 
 function skipTexTrivia(tex: string, start: number): number {
   let index = start;
@@ -187,8 +192,14 @@ function readDirectTarget(tex: string, start: number): number | null {
   return match === null ? null : start + match[0].length;
 }
 
-function updateBraceDepth(tex: string, start: number, initialDepth: number): number {
+function scanBraceDepth(
+  tex: string,
+  start: number,
+  initialDepth: number,
+  initialBodyStarted: boolean,
+): { depth: number; started: boolean; completed: boolean; nextIndex: number } {
   let depth = initialDepth;
+  let started = initialBodyStarted;
   for (let index = start; index < tex.length; index++) {
     const ch = tex[index];
     if (ch === "\\") {
@@ -197,14 +208,19 @@ function updateBraceDepth(tex: string, start: number, initialDepth: number): num
     }
     if (ch === "%") {
       const newline = tex.indexOf("\n", index);
-      if (newline === -1) break;
+      if (newline === -1) return { depth, started, completed: false, nextIndex: tex.length };
       index = newline;
       continue;
     }
-    if (ch === "{") depth++;
-    if (ch === "}") depth--;
+    if (ch === "{") {
+      depth++;
+      started = true;
+    } else if (ch === "}" && started) {
+      depth--;
+      if (depth === 0) return { depth, started, completed: true, nextIndex: index + 1 };
+    }
   }
-  return depth;
+  return { depth, started, completed: false, nextIndex: tex.length };
 }
 
 /**
@@ -212,74 +228,112 @@ function updateBraceDepth(tex: string, start: number, initialDepth: number): num
  * RawBlock に分かれうる。先頭からこの有限文法だけを読むことで、本文や呼び出しを
  * 定義として再走査しない。
  */
-function readRawReservedDefinition(
+function scanRawReservedDefinition(
   tex: string,
   span: SourceSpan,
   state: RawDefinitionState | null,
-): { diagnosticSpan: SourceSpan | null; state: RawDefinitionState | null } {
+): { consumed: boolean; diagnosticSpans: SourceSpan[]; state: RawDefinitionState | null } {
   let index = skipTexTrivia(tex, 0);
-  const current = state;
+  let current = state;
+  const diagnosticSpans: SourceSpan[] = [];
 
-  if (current?.bodyDepth != null) {
-    const bodyDepth = updateBraceDepth(tex, 0, current.bodyDepth);
-    return {
-      diagnosticSpan: null,
-      state: bodyDepth > 0 ? { ...current, bodyDepth } : null,
-    };
-  }
+  while (index < tex.length || current !== null) {
+    if (current?.phase === "body") {
+      const body = scanBraceDepth(tex, index, current.depth, current.started);
+      if (!body.completed) {
+        return {
+          diagnosticSpans,
+          consumed: true,
+          state: { ...current, depth: body.depth, started: body.started },
+        };
+      }
+      if (current.reservedTarget) {
+        diagnosticSpans.push({ start: current.start.start, end: span.start + body.nextIndex });
+      }
+      current = null;
+      index = skipTexTrivia(tex, body.nextIndex);
+      continue;
+    }
 
-  if (current?.expectingTarget) {
-    const targetEnd = readDirectTarget(tex, index);
-    if (targetEnd === null) return { diagnosticSpan: null, state: null };
-    const bodyDepth = updateBraceDepth(tex, targetEnd, 0);
-    return {
-      diagnosticSpan:
-        readReservedTarget(tex, index) === null
-          ? null
-          : { start: current.start.start, end: span.end },
-      state: bodyDepth > 0 ? { ...current, expectingTarget: false, bodyDepth } : null,
-    };
-  }
+    if (current?.phase === "target") {
+      const pendingStart = current.start;
+      const targetEnd = readDirectTarget(tex, index);
+      if (targetEnd === null) return { consumed: false, diagnosticSpans, state: null };
+      const reservedTarget = readReservedTarget(tex, index) !== null;
+      const body = scanBraceDepth(tex, targetEnd, 0, false);
+      if (reservedTarget && body.completed) {
+        diagnosticSpans.push({ start: pendingStart.start, end: span.start + body.nextIndex });
+      }
+      current = body.completed
+        ? null
+        : {
+            phase: "body",
+            start: pendingStart,
+            depth: body.depth,
+            started: body.started,
+            reservedTarget,
+          };
+      index = skipTexTrivia(tex, body.nextIndex);
+      continue;
+    }
 
-  let definitionStart: SourceSpan | null = current?.start ?? null;
-  while (true) {
-    const prefixEnd = readControlWord(tex, index, ["global", "long", "outer", "protected"]);
-    if (prefixEnd === null) break;
-    definitionStart ??= span;
-    index = skipTexTrivia(tex, prefixEnd);
-  }
+    let definitionStart = current?.start ?? null;
+    while (true) {
+      const prefixStart = index;
+      const prefixEnd = readControlWord(tex, index, ["global", "long", "outer", "protected"]);
+      if (prefixEnd === null) break;
+      definitionStart ??= { start: span.start + prefixStart, end: span.end };
+      index = skipTexTrivia(tex, prefixEnd);
+    }
 
-  const primitiveEnd = readControlWord(tex, index, ["def", "gdef", "edef", "xdef"]);
-  if (primitiveEnd === null) {
-    if (definitionStart !== null && index === tex.length) {
+    const primitiveStart = index;
+    const primitiveEnd = readControlWord(tex, index, ["def", "gdef", "edef", "xdef"]);
+    if (primitiveEnd === null) {
+      if (definitionStart !== null && index === tex.length) {
+        return {
+          consumed: true,
+          diagnosticSpans,
+          state: { phase: "primitive", start: definitionStart },
+        };
+      }
       return {
-        diagnosticSpan: null,
-        state: { start: definitionStart, expectingTarget: false, bodyDepth: null },
+        consumed: current?.phase !== "primitive",
+        diagnosticSpans,
+        state: null,
       };
     }
-    return { diagnosticSpan: null, state: null };
-  }
-  definitionStart ??= span;
-  index = skipTexTrivia(tex, primitiveEnd);
+    definitionStart ??= { start: span.start + primitiveStart, end: span.end };
+    index = skipTexTrivia(tex, primitiveEnd);
 
-  const targetEnd = readDirectTarget(tex, index);
-  if (targetEnd !== null) {
-    const bodyDepth = updateBraceDepth(tex, targetEnd, 0);
-    return {
-      diagnosticSpan:
-        readReservedTarget(tex, index) === null
-          ? null
-          : { start: definitionStart.start, end: span.end },
-      state: bodyDepth > 0 ? { start: definitionStart, expectingTarget: false, bodyDepth } : null,
-    };
+    const targetEnd = readDirectTarget(tex, index);
+    if (targetEnd !== null) {
+      const reservedTarget = readReservedTarget(tex, index) !== null;
+      const body = scanBraceDepth(tex, targetEnd, 0, false);
+      if (reservedTarget && body.completed) {
+        diagnosticSpans.push({ start: definitionStart.start, end: span.start + body.nextIndex });
+      }
+      current = body.completed
+        ? null
+        : {
+            phase: "body",
+            start: definitionStart,
+            depth: body.depth,
+            started: body.started,
+            reservedTarget,
+          };
+      index = skipTexTrivia(tex, body.nextIndex);
+      continue;
+    }
+    if (index === tex.length) {
+      return {
+        consumed: true,
+        diagnosticSpans,
+        state: { phase: "target", start: definitionStart },
+      };
+    }
+    return { consumed: true, diagnosticSpans, state: null };
   }
-  if (index === tex.length) {
-    return {
-      diagnosticSpan: null,
-      state: { start: definitionStart, expectingTarget: true, bodyDepth: null },
-    };
-  }
-  return { diagnosticSpan: null, state: null };
+  return { consumed: true, diagnosticSpans, state: current };
 }
 
 /** マクロ領域は展開器に渡す前の AST 情報だけで検査する。 */
@@ -288,19 +342,32 @@ function lintMacros(doc: DeckDocument): LintDiagnostic[] {
   let rawDefinitionState: RawDefinitionState | null = null;
 
   for (const entry of doc.macros.entries) {
-    if (entry.type === "rawBlock") {
-      diagnostics.push(diagnostic("L002", "warning", "このマクロ定義は未対応です", entry.span));
-      const result = readRawReservedDefinition(entry.tex, entry.span, rawDefinitionState);
+    const stateWasPending = rawDefinitionState !== null;
+    if (stateWasPending) {
+      const result = scanRawReservedDefinition(entry.tex, entry.span, rawDefinitionState);
       rawDefinitionState = result.state;
-      if (result.diagnosticSpan !== null) {
+      for (const diagnosticSpan of result.diagnosticSpans) {
         diagnostics.push(
-          diagnostic(
-            "L016",
-            "error",
-            "deck で始まるマクロ名は予約されています",
-            result.diagnosticSpan,
-          ),
+          diagnostic("L016", "error", "deck で始まるマクロ名は予約されています", diagnosticSpan),
         );
+      }
+      // pending definition に続く structured entry は本文/未完部分として消費済みであり、
+      // AST 単位の L002/L016 を重ねて出さない。
+      if (entry.type === "macroDefinition" && result.consumed) continue;
+    }
+
+    if (entry.type === "rawBlock") {
+      diagnostics.push(
+        diagnostic("L002", "warning", "このマクロ領域の内容は展開に対応していません", entry.span),
+      );
+      if (!stateWasPending) {
+        const result = scanRawReservedDefinition(entry.tex, entry.span, rawDefinitionState);
+        rawDefinitionState = result.state;
+        for (const diagnosticSpan of result.diagnosticSpans) {
+          diagnostics.push(
+            diagnostic("L016", "error", "deck で始まるマクロ名は予約されています", diagnosticSpan),
+          );
+        }
       }
       continue;
     }
