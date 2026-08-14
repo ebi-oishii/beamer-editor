@@ -41,7 +41,7 @@ export function lintDocumentText(text: string): LintDiagnostic[] {
 }
 
 /**
- * 開いている `.tex` 文書ごとに lint を実行し、Diagnostics を最新に保つ。
+ * 開いている managed 文書ごとに lint を実行し、Diagnostics を最新に保つ。
  * 文書は uri 単位で独立に管理するため、複数の `.tex` を開いても診断は混ざらない。
  */
 export class LintController<TDoc extends LintableDocument> {
@@ -53,7 +53,7 @@ export class LintController<TDoc extends LintableDocument> {
     events: LintEvents<TDoc>,
     private readonly sink: DiagnosticsSink<TDoc>,
     initialDocuments: readonly TDoc[] = [],
-    private readonly isTargetDocument: (document: TDoc) => boolean = (document) =>
+    private readonly isManaged: (document: TDoc) => boolean = (document) =>
       document.uri.scheme === "file" && document.fileName.endsWith(".tex"),
   ) {
     this.disposables = [
@@ -61,23 +61,18 @@ export class LintController<TDoc extends LintableDocument> {
       events.onDidChangeTextDocument((event) =>
         this.scheduleLint(event.document, event.contentChanges),
       ),
-      events.onDidCloseTextDocument((document) => this.drop(document)),
+      events.onDidCloseTextDocument((document) => this.drop(document, true)),
     ];
     for (const document of initialDocuments) {
       this.lintNow(document);
     }
   }
 
-  /** ローカルの .tex 本体だけを対象にする(git diff ビュー等の scheme は除外)。 */
-  private isTarget(document: TDoc): boolean {
-    return this.isTargetDocument(document);
-  }
-
   /** 設定変更後、開いている文書の診断を再評価する。 */
   refresh(documents: readonly TDoc[]): void {
     if (this.disposed) return;
     for (const document of documents) {
-      if (this.isTarget(document)) {
+      if (this.isManaged(document)) {
         this.lintNow(document);
       } else {
         this.drop(document, true);
@@ -86,7 +81,7 @@ export class LintController<TDoc extends LintableDocument> {
   }
 
   private lintNow(document: TDoc): void {
-    if (this.disposed || !this.isTarget(document)) return;
+    if (this.disposed || !this.isManaged(document)) return;
     try {
       this.sink.set(document, lintDocumentText(document.getText()));
     } catch (err) {
@@ -97,7 +92,7 @@ export class LintController<TDoc extends LintableDocument> {
   }
 
   private scheduleLint(document: TDoc, contentChanges: readonly unknown[]): void {
-    if (this.disposed || !this.isTarget(document)) return;
+    if (this.disposed || !this.isManaged(document)) return;
     // 保存などで contentChanges が空のイベントは更新の条件にしない。
     if (contentChanges.length === 0) return;
     const key = document.uri.toString();
@@ -112,7 +107,7 @@ export class LintController<TDoc extends LintableDocument> {
   }
 
   private drop(document: TDoc, force = false): void {
-    if (this.disposed || (!force && !this.isTarget(document))) return;
+    if (this.disposed || (!force && !this.isManaged(document))) return;
     const key = document.uri.toString();
     clearTimeout(this.timers.get(key));
     this.timers.delete(key);

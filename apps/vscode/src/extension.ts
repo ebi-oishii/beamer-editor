@@ -1,22 +1,26 @@
-import type { LintDiagnostic, LintSeverity } from "@beamer-editor/core";
+import {
+  canvasImagePositionReplacement,
+  type LintDiagnostic,
+  type LintSeverity,
+} from "@beamer-editor/core";
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
 import {
   AutoPreviewDismissals,
   appendUniqueIgnorePatterns,
+  chooseLatexWorkshopTarget,
   DEFAULT_MANAGED_FILE_PATTERNS,
-  globalOrDefaultArray,
+  effectiveArray,
   isManagedDocument,
   needsLatexWorkshopIgnorePrompt,
   PreviewRegistry,
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
+import { resolveSourceViewColumn } from "./source-navigation";
 
 let previewController: PreviewController | undefined;
 const previewControllers = new PreviewRegistry<PreviewController, vscode.TextDocument>();
-let latexWorkshopPrompted = false;
 const dismissedAutoPreviewUris = new AutoPreviewDismissals();
-const configurationClosedAutoPreviewUris = new Set<string>();
 
 const LINT_SEVERITIES: Record<LintSeverity, vscode.DiagnosticSeverity> = {
   error: vscode.DiagnosticSeverity.Error,
@@ -79,8 +83,21 @@ async function jumpToOffset(
   document: vscode.TextDocument,
   offset: number,
   lineFlash: ReturnType<typeof createLineFlash>,
+  fallbackViewColumn: vscode.ViewColumn | undefined,
 ): Promise<void> {
-  const editor = await vscode.window.showTextDocument(document);
+  const viewColumn =
+    resolveSourceViewColumn(
+      document.uri,
+      vscode.window.visibleTextEditors.map((editor) => ({
+        documentUri: editor.document.uri,
+        viewColumn: editor.viewColumn,
+      })),
+      fallbackViewColumn,
+    ) ?? vscode.ViewColumn.One;
+  const editor = await vscode.window.showTextDocument(document, {
+    viewColumn,
+    preserveFocus: false,
+  });
   const position = document.positionAt(offset);
   const range = document.lineAt(position.line).range;
   editor.selection = new vscode.Selection(range.start, range.end);
@@ -94,9 +111,8 @@ export interface TestApi {
 }
 
 export function activate(context: vscode.ExtensionContext): TestApi {
-  const openDocumentUris = new Set(
-    vscode.workspace.textDocuments.map((document) => document.uri.toString()),
-  );
+  const managedPatternCache = new Map<string, readonly string[]>();
+  const latexWorkshopSessionPrompted = new Set<string>();
   const lineFlash = createLineFlash();
   context.subscriptions.push(lineFlash);
 
@@ -118,16 +134,21 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       delete: (document) => diagnosticCollection.delete(document.uri),
     },
     vscode.workspace.textDocuments,
-    (document) => isManagedDocument(document, managedPatterns(document), matchesManagedGlob),
+    (document) => isManaged(document),
   );
   context.subscriptions.push(diagnosticCollection, lintController);
 
   function managedPatterns(document: vscode.TextDocument): readonly string[] {
-    return (
+    if (document.uri.scheme !== "file") return [];
+    const folder = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.toString() ?? "outside";
+    const cached = managedPatternCache.get(folder);
+    if (cached) return cached;
+    const patterns =
       vscode.workspace
         .getConfiguration("beamerEditor", document.uri)
-        .get<readonly string[]>("managedFiles") ?? DEFAULT_MANAGED_FILE_PATTERNS
-    );
+        .get<readonly string[]>("managedFiles") ?? DEFAULT_MANAGED_FILE_PATTERNS;
+    managedPatternCache.set(folder, patterns);
+    return patterns;
   }
 
   function matchesManagedGlob(document: vscode.TextDocument, pattern: string): boolean {
@@ -138,40 +159,70 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     return vscode.languages.match({ scheme: "file", pattern: glob }, document) > 0;
   }
 
+  function isManaged(document: vscode.TextDocument): boolean {
+    return isManagedDocument(document, managedPatterns(document), matchesManagedGlob);
+  }
+
   async function offerLatexWorkshopIgnore(document: vscode.TextDocument): Promise<void> {
-    if (latexWorkshopPrompted || !vscode.extensions.getExtension("James-Yu.latex-workshop")) return;
+    if (!vscode.extensions.getExtension("James-Yu.latex-workshop")) return;
     const patterns = managedPatterns(document);
+    if (patterns.length === 0) return;
     const workshop = vscode.workspace.getConfiguration("latex-workshop", document.uri);
-    const watchIgnore = globalOrDefaultArray(
-      workshop.inspect<readonly string[]>("latex.watch.files.ignore"),
-    );
-    const autoBuildIgnore = globalOrDefaultArray(
-      workshop.inspect<readonly string[]>("latex.autoBuild.onSave.files.ignore"),
-    );
+    const managed = vscode.workspace
+      .getConfiguration("beamerEditor", document.uri)
+      .inspect<readonly string[]>("managedFiles");
+    const watch = workshop.inspect<readonly string[]>("latex.watch.files.ignore");
+    const autoBuild = workshop.inspect<readonly string[]>("latex.autoBuild.onSave.files.ignore");
+    const watchIgnore = effectiveArray(watch);
+    const autoBuildIgnore = effectiveArray(autoBuild);
     if (!needsLatexWorkshopIgnorePrompt(watchIgnore, autoBuildIgnore, patterns)) return;
-    latexWorkshopPrompted = true;
+    const signature = `${document.uri.toString()}\u0000${patterns.join("\u0000")}`;
+    const refusalKey = `latexWorkshopIgnoreRefused:${signature}`;
+    if (latexWorkshopSessionPrompted.has(signature) || context.globalState.get<boolean>(refusalKey))
+      return;
+    latexWorkshopSessionPrompted.add(signature);
+    const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+    const scopeName = (scope: string) =>
+      scope === "workspaceFolder"
+        ? "Workspace Folder"
+        : scope === "workspace"
+          ? "Workspace"
+          : "Global";
+    const watchTarget = chooseLatexWorkshopTarget(managed, watch, !!folder);
+    const autoBuildTarget = chooseLatexWorkshopTarget(managed, autoBuild, !!folder);
+    const target = (scope: string): vscode.ConfigurationTarget =>
+      scope === "workspaceFolder"
+        ? vscode.ConfigurationTarget.WorkspaceFolder
+        : scope === "workspace"
+          ? vscode.ConfigurationTarget.Workspace
+          : vscode.ConfigurationTarget.Global;
 
     const choice = await vscode.window.showInformationMessage(
-      "Beamer Editor の managed slide files を LaTeX Workshop の自動監視・保存時自動ビルドから除外しますか？通常の .tex の設定は変更しません。",
-      "Global Settings に追加",
+      `Beamer Editor の managed slide files を LaTeX Workshop の自動監視・保存時自動ビルドから除外しますか？ ${scopeName(watchTarget)} / ${scopeName(autoBuildTarget)} Settings を更新します。`,
+      "追加",
+      "今はしない",
+      "今後表示しない",
     );
-    if (choice !== "Global Settings に追加") return;
+    if (choice === "今後表示しない") {
+      await context.globalState.update(refusalKey, true);
+      return;
+    }
+    if (choice !== "追加") return;
     await Promise.all([
       workshop.update(
         "latex.watch.files.ignore",
         appendUniqueIgnorePatterns(watchIgnore, patterns),
-        vscode.ConfigurationTarget.Global,
+        target(watchTarget),
       ),
       workshop.update(
         "latex.autoBuild.onSave.files.ignore",
         appendUniqueIgnorePatterns(autoBuildIgnore, patterns),
-        vscode.ConfigurationTarget.Global,
+        target(autoBuildTarget),
       ),
     ]);
   }
 
   function openPreview(document: vscode.TextDocument, automatic: boolean): void {
-    const uri = document.uri.toString();
     const existing = previewControllers.get(document.uri);
     if (existing) {
       if (!automatic) {
@@ -182,6 +233,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       return;
     }
     if (automatic && dismissedAutoPreviewUris.has(document.uri)) return;
+    const sourceViewColumn = vscode.window.visibleTextEditors.find(
+      (editor) => editor.document.uri.toString() === document.uri.toString(),
+    )?.viewColumn;
 
     // 画像(includegraphics / deckimage / logo)は文書からの相対パスで参照される
     // ため、文書のあるフォルダだけを workspace 側のリソース範囲として開ける。
@@ -211,30 +265,56 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       },
       () => {
         const owner = previewControllers.get(document.uri);
-        if (owner?.controller === controller && owner.automatic) {
-          if (!configurationClosedAutoPreviewUris.delete(uri)) {
-            dismissedAutoPreviewUris.dismiss(document.uri, openDocumentUris.has(uri));
-          }
-        }
+        if (owner?.controller !== controller) return;
         previewControllers.delete(document.uri);
+        dismissedAutoPreviewUris.dismiss(document.uri, true);
         if (previewController === controller) previewController = undefined;
       },
       {
         onError: (message) => {
           void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
         },
+        onWarning: (message) => {
+          void vscode.window.showWarningMessage(`Beamer preview: ${message}`);
+        },
         navigate: (offset) => {
           const target =
             vscode.workspace.textDocuments.find(
               (candidate) => candidate.uri.toString() === document.uri.toString(),
             ) ?? document;
-          void jumpToOffset(target, offset, lineFlash);
+          void jumpToOffset(target, offset, lineFlash, sourceViewColumn);
         },
         resolveResource: (path) => {
           const uri = path.startsWith("/")
             ? vscode.Uri.file(path)
             : vscode.Uri.joinPath(documentDir, path);
           return panel.webview.asWebviewUri(uri).toString();
+        },
+        moveCanvasElement: async (move) => {
+          const target = vscode.workspace.textDocuments.find(
+            (candidate) => candidate === move.document,
+          );
+          if (
+            !target ||
+            target.uri.toString() !== move.document.uri.toString() ||
+            target.version !== move.version
+          )
+            return "cancelled";
+          const original = target.getText().slice(move.sourceSpan.start, move.sourceSpan.end);
+          if (original !== move.expectedOptions) return "cancelled";
+          const replacement = canvasImagePositionReplacement(original, move.x, move.y);
+          if (replacement === null) return "failed";
+          if (replacement === original) return "unchanged";
+          const edit = new vscode.WorkspaceEdit();
+          edit.replace(
+            target.uri,
+            new vscode.Range(
+              target.positionAt(move.sourceSpan.start),
+              target.positionAt(move.sourceSpan.end),
+            ),
+            replacement,
+          );
+          return (await vscode.workspace.applyEdit(edit)) ? "applied" : "failed";
         },
       },
     );
@@ -243,8 +323,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   }
 
   function handleManagedDocument(document: vscode.TextDocument | undefined): void {
-    if (!document || !isManagedDocument(document, managedPatterns(document), matchesManagedGlob))
-      return;
+    if (!document || !isManaged(document)) return;
     openPreview(document, true);
     void offerLatexWorkshopIgnore(document).catch((error) => {
       void vscode.window.showErrorMessage(
@@ -254,27 +333,24 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   }
 
   context.subscriptions.push(
-    vscode.workspace.onDidOpenTextDocument((document) => {
-      openDocumentUris.add(document.uri.toString());
-      dismissedAutoPreviewUris.clear(document.uri);
-      handleManagedDocument(document);
-    }),
     vscode.workspace.onDidCloseTextDocument((document) => {
-      openDocumentUris.delete(document.uri.toString());
+      const owner = previewControllers.get(document.uri);
+      if (owner) {
+        previewControllers.delete(document.uri);
+        owner.controller.close();
+      }
       dismissedAutoPreviewUris.clear(document.uri);
     }),
     vscode.window.onDidChangeActiveTextEditor((editor) => handleManagedDocument(editor?.document)),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (!event.affectsConfiguration("beamerEditor.managedFiles")) return;
+      managedPatternCache.clear();
       dismissedAutoPreviewUris.clearAll();
-      latexWorkshopPrompted = false;
+      latexWorkshopSessionPrompted.clear();
       lintController.refresh(vscode.workspace.textDocuments);
       for (const owner of previewControllers.automaticEntries()) {
-        if (
-          owner.automatic &&
-          !isManagedDocument(owner.document, managedPatterns(owner.document), matchesManagedGlob)
-        ) {
-          configurationClosedAutoPreviewUris.add(owner.document.uri.toString());
+        if (!isManaged(owner.document)) {
+          previewControllers.delete(owner.document.uri);
           owner.controller.close();
         }
       }
@@ -291,13 +367,6 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         return;
       }
 
-      const existing = previewControllers.get(editor.document.uri);
-      if (existing) {
-        previewControllers.promoteManual(editor.document.uri);
-        existing.controller.reveal();
-        previewController = existing.controller;
-        return;
-      }
       openPreview(editor.document, false);
     }),
   );
@@ -306,9 +375,10 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 }
 
 export function deactivate(): void {
-  for (const [, owner] of [...previewControllers.entries()]) owner.controller.close();
+  for (const [uri, owner] of [...previewControllers.entries()]) {
+    previewControllers.delete({ toString: () => uri });
+    owner.controller.close();
+  }
   previewController = undefined;
   dismissedAutoPreviewUris.clearAll();
-  configurationClosedAutoPreviewUris.clear();
-  latexWorkshopPrompted = false;
 }

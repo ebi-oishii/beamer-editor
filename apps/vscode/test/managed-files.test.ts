@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   AutoPreviewDismissals,
   appendUniqueIgnorePatterns,
+  chooseLatexWorkshopTarget,
   DEFAULT_MANAGED_FILE_PATTERNS,
-  globalOrDefaultArray,
+  effectiveArray,
   isManagedDocument,
   needsLatexWorkshopIgnorePrompt,
   normalizeLatexWorkshopIgnorePatterns,
@@ -42,7 +43,7 @@ describe("managed file helpers", () => {
     const documentUri = uri("file:///work/talk.slide.tex");
     registry.add(documentUri, { controller: 1, document, automatic: true });
 
-    expect(registry.has(documentUri)).toBe(true);
+    expect(registry.get(documentUri)).toBeDefined();
     expect(registry.get(documentUri)).toMatchObject({ controller: 1, document, automatic: true });
     registry.promoteManual(documentUri);
     expect(registry.get(documentUri)?.automatic).toBe(false);
@@ -61,7 +62,7 @@ describe("managed file helpers", () => {
       },
     ]);
     registry.delete(documentUri);
-    expect(registry.has(documentUri)).toBe(false);
+    expect(registry.get(documentUri)).toBeUndefined();
   });
 
   it("does not restore auto-preview dismissal when a document closes before its panel disposes", () => {
@@ -111,23 +112,37 @@ describe("managed file helpers", () => {
     ]);
   });
 
-  it("uses global then default ignore values and never workspace values", () => {
+  it("uses the same workspace-folder precedence as VS Code resource settings", () => {
     expect(
-      globalOrDefaultArray({
+      effectiveArray({
         defaultValue: ["default"],
         globalValue: ["global"],
         workspaceValue: ["workspace"],
         workspaceFolderValue: ["folder"],
       }),
-    ).toEqual(["global"]);
+    ).toEqual(["folder"]);
     expect(
-      globalOrDefaultArray({
+      effectiveArray({
         defaultValue: ["default"],
         workspaceValue: ["workspace"],
         workspaceFolderValue: ["folder"],
       }),
-    ).toEqual(["default"]);
-    expect(globalOrDefaultArray(undefined)).toEqual([]);
+    ).toEqual(["folder"]);
+    expect(effectiveArray(undefined)).toEqual([]);
+  });
+
+  it("writes Workshop ignores at the more specific managed or Workshop scope", () => {
+    expect(
+      chooseLatexWorkshopTarget({ workspaceValue: ["slides/**/*.tex"] }, { globalValue: [] }, true),
+    ).toBe("workspace");
+    expect(
+      chooseLatexWorkshopTarget(
+        { globalValue: ["**/*.slide.tex"] },
+        { workspaceFolderValue: [] },
+        true,
+      ),
+    ).toBe("workspaceFolder");
+    expect(chooseLatexWorkshopTarget(undefined, undefined, false)).toBe("global");
   });
 
   it("prompts until both ignore arrays include every managed pattern", () => {
@@ -144,5 +159,11 @@ describe("managed file helpers", () => {
     expect(needsLatexWorkshopIgnorePrompt([patterns[0] as string], patterns, patterns)).toBe(true);
     expect(needsLatexWorkshopIgnorePrompt([], [], patterns)).toBe(true);
     expect(needsLatexWorkshopIgnorePrompt([], [], [])).toBe(false);
+  });
+
+  it("drops blank patterns before normalizing them", () => {
+    expect(normalizeLatexWorkshopIgnorePatterns(["", "  ", " ./slides/**/*.tex "])).toEqual([
+      "**/slides/**/*.tex",
+    ]);
   });
 });

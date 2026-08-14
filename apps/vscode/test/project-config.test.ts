@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_MANAGED_FILE_PATTERNS } from "../src/managed-files";
 
 const packageJson = JSON.parse(
   readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
@@ -46,7 +47,7 @@ describe("VS Code extension project configuration", () => {
       configuration: { properties: Record<string, unknown> };
     };
     expect(contributes.configuration.properties["beamerEditor.managedFiles"]).toMatchObject({
-      default: ["**/*.slide.tex"],
+      default: DEFAULT_MANAGED_FILE_PATTERNS,
       scope: "resource",
     });
     const settingsPath = fileURLToPath(new URL("../../../.vscode/settings.json", import.meta.url));

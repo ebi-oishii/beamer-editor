@@ -48,6 +48,23 @@ describe("parseWebviewToExtension", () => {
       type: "activeFrameChanged",
       frameIndex: 0,
     });
+    expect(
+      parseWebviewToExtension({
+        type: "moveCanvasElement",
+        frameIndex: 0,
+        elementId: "canvas-image-0",
+        version: 2,
+        x: -0.2,
+        y: 1.1,
+      }),
+    ).toEqual({
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 2,
+      x: -0.2,
+      y: 1.1,
+    });
   });
 
   it("不正なものは null にする", () => {
@@ -62,5 +79,25 @@ describe("parseWebviewToExtension", () => {
     expect(parseWebviewToExtension({ type: "jumpToSource", frameIndex: 4 })).toBeNull();
     // frameIndex 欠落
     expect(parseWebviewToExtension({ type: "activeFrameChanged" })).toBeNull();
+    expect(
+      parseWebviewToExtension({
+        type: "moveCanvasElement",
+        frameIndex: -1,
+        elementId: "x",
+        version: 1,
+        x: 0,
+        y: 0,
+      }),
+    ).toBeNull();
+    expect(
+      parseWebviewToExtension({
+        type: "moveCanvasElement",
+        frameIndex: 0,
+        elementId: "x",
+        version: 1.5,
+        x: Number.NaN,
+        y: 0,
+      }),
+    ).toBeNull();
   });
 });

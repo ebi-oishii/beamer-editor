@@ -34,10 +34,6 @@ export interface PreviewOwner<TController, TDocument> {
 export class PreviewRegistry<TController, TDocument> {
   private readonly entriesByUri = new Map<string, PreviewOwner<TController, TDocument>>();
 
-  has(uri: { toString(): string }): boolean {
-    return this.entriesByUri.has(uri.toString());
-  }
-
   get(uri: { toString(): string }): PreviewOwner<TController, TDocument> | undefined {
     return this.entriesByUri.get(uri.toString());
   }
@@ -96,16 +92,19 @@ export class AutoPreviewDismissals {
 export function normalizeLatexWorkshopIgnorePatterns(patterns: readonly string[]): string[] {
   return [
     ...new Set(
-      patterns.map((pattern) => {
-        const normalized = pattern.replace(/^\.\/+/, "");
-        if (
-          normalized.startsWith("**/") ||
-          /^(?:[A-Za-z]:[\\/]|\/|[A-Za-z][A-Za-z\d+.-]*:\/\/)/.test(normalized)
-        ) {
-          return normalized;
-        }
-        return `**/${normalized}`;
-      }),
+      patterns
+        .map((pattern) => pattern.trim())
+        .filter((pattern) => pattern.length > 0)
+        .map((pattern) => {
+          const normalized = pattern.replace(/^\.\/+/, "");
+          if (
+            normalized.startsWith("**/") ||
+            /^(?:[A-Za-z]:[\\/]|\/|[A-Za-z][A-Za-z\d+.-]*:\/\/)/.test(normalized)
+          ) {
+            return normalized;
+          }
+          return `**/${normalized}`;
+        }),
     ),
   ];
 }
@@ -126,18 +125,50 @@ export function appendUniqueIgnorePatterns(
   return result;
 }
 
-/** Global user settings の値を優先し、未設定なら extension/default 値だけを基底にする。 */
-export function globalOrDefaultArray(
-  inspected:
-    | {
-        defaultValue?: readonly string[];
-        globalValue?: readonly string[];
-        workspaceValue?: readonly string[];
-        workspaceFolderValue?: readonly string[];
-      }
-    | undefined,
-): readonly string[] {
-  return inspected?.globalValue ?? inspected?.defaultValue ?? [];
+export type ConfigurationScope = "default" | "global" | "workspace" | "workspaceFolder";
+
+export interface InspectedArray {
+  defaultValue?: readonly string[];
+  globalValue?: readonly string[];
+  workspaceValue?: readonly string[];
+  workspaceFolderValue?: readonly string[];
+}
+
+/** VS Code の resource 設定と同じ優先順位で実効値を取得する。 */
+export function effectiveArray(inspected: InspectedArray | undefined): readonly string[] {
+  return (
+    inspected?.workspaceFolderValue ??
+    inspected?.workspaceValue ??
+    inspected?.globalValue ??
+    inspected?.defaultValue ??
+    []
+  );
+}
+
+export function explicitScope(inspected: InspectedArray | undefined): ConfigurationScope {
+  if (inspected?.workspaceFolderValue !== undefined) return "workspaceFolder";
+  if (inspected?.workspaceValue !== undefined) return "workspace";
+  if (inspected?.globalValue !== undefined) return "global";
+  return "default";
+}
+
+/** managedFiles と対象 Workshop key の、より具体的な明示 scope に書き込む。 */
+export function chooseLatexWorkshopTarget(
+  managed: InspectedArray | undefined,
+  workshop: InspectedArray | undefined,
+  workspaceDocument: boolean,
+): ConfigurationScope {
+  const rank: Record<ConfigurationScope, number> = {
+    default: 0,
+    global: 1,
+    workspace: 2,
+    workspaceFolder: 3,
+  };
+  const target =
+    rank[explicitScope(managed)] >= rank[explicitScope(workshop)]
+      ? explicitScope(managed)
+      : explicitScope(workshop);
+  return target === "default" ? (workspaceDocument ? "workspace" : "global") : target;
 }
 
 /** 両方の ignore 設定が managed patterns の全要素を含むときだけ確認不要。 */
