@@ -31,6 +31,7 @@ import {
   resolveFont,
 } from "./fonts.ts";
 
+/** 既定で取得する標準フォント(theme-design.md §4)。 */
 const DEFAULT_FAMILY = "Noto Sans CJK JP";
 
 export const EXIT_CODE = {
@@ -53,17 +54,25 @@ export function exitCodeForError(code: CliErrorCode): number {
 }
 
 export interface ParsedArgs {
+  /** トップコマンド(例 "fonts")。省略時は undefined。 */
   command: string | undefined;
+  /** サブコマンド(例 "status" / "fetch")。省略時は undefined。 */
   sub: string | undefined;
+  /** 位置引数の family(fetch の対象)。省略時は undefined。 */
   family: string | undefined;
+  /** --json フラグ。 */
   json: boolean;
+  /** --write フラグ。 */
   write: boolean;
+  /** 未対応のオプション。 */
   unknownOptions: string[];
 }
 
 /**
  * argv(process.argv.slice(2) 相当)を解析する純関数。
- * フラグは位置に依存せず拾い、family は空白を含みうるため残りの位置引数を連結する。
+ * --json / --write はどこに来ても拾う。フラグ以外の非フラグ語を command / sub / family
+ * の順に割り当てる。family は空白を含みうるので、複数語の非フラグ引数は 3 つ目以降も
+ * 連結して 1 つの family とする。
  */
 export function parseArgs(argv: readonly string[]): ParsedArgs {
   const positional: string[] = [];
@@ -113,8 +122,9 @@ function statusLine(r: FontResolution): string {
 async function runFontsStatus(json: boolean): Promise<number> {
   const paths = defaultFontPaths();
   const resolutions: FontResolution[] = [];
-  for (const entry of FONT_CATALOG)
+  for (const entry of FONT_CATALOG) {
     resolutions.push(await resolveFont(entry.family, paths, nodeFontIO));
+  }
   if (json) {
     process.stdout.write(
       `${JSON.stringify(
@@ -130,8 +140,12 @@ async function runFontsStatus(json: boolean): Promise<number> {
     return EXIT_CODE.success;
   }
   process.stdout.write(`フォント解決状態(cache: ${paths.cacheDir})\n`);
-  if (resolutions.length === 0) process.stdout.write("  (カタログが空です)\n");
-  for (const resolution of resolutions) process.stdout.write(`${statusLine(resolution)}\n`);
+  if (resolutions.length === 0) {
+    process.stdout.write("  (カタログが空です)\n");
+  }
+  for (const r of resolutions) {
+    process.stdout.write(`${statusLine(r)}\n`);
+  }
   return EXIT_CODE.success;
 }
 
@@ -139,6 +153,7 @@ async function runFontsFetch(family: string, json: boolean): Promise<number> {
   const paths = defaultFontPaths();
   const before = await resolveFont(family, paths, nodeFontIO);
   if (before.status === "unknown-family") {
+    // カタログ外は取得できない。名前参照のみとして案内し、非 0 で終える。
     if (json) {
       process.stdout.write(
         `${JSON.stringify({ family, status: "unknown-family", fetched: [], installed: [] }, null, 2)}\n`,
@@ -160,11 +175,12 @@ async function runFontsFetch(family: string, json: boolean): Promise<number> {
   process.stdout.write(
     `  取得 ${result.fetched.length} / スキップ ${result.skipped.length} / 配置 ${result.installed.length}\n`,
   );
-  for (const file of result.fetched) process.stdout.write(`  取得: ${file}\n`);
-  for (const file of result.skipped) process.stdout.write(`  スキップ(キャッシュ済み): ${file}\n`);
-  for (const file of result.installed) process.stdout.write(`  配置: ${file}\n`);
-  if (paths.userFontDir === null)
+  for (const f of result.fetched) process.stdout.write(`  取得: ${f}\n`);
+  for (const f of result.skipped) process.stdout.write(`  スキップ(キャッシュ済み): ${f}\n`);
+  for (const f of result.installed) process.stdout.write(`  配置: ${f}\n`);
+  if (paths.userFontDir === null) {
     process.stdout.write("  (userFontDir 不明のため配置はスキップ・キャッシュのみ)\n");
+  }
   return EXIT_CODE.success;
 }
 

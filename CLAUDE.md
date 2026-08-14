@@ -26,7 +26,7 @@ pnpm --dir apps/vscode package  # 開発用配布物 beamer-editor.vsix を生�
 
 依存方向は `ui → renderer → core` の一方向に固定。`core` / `renderer` / `ui` に `vscode` API を import しない。シェル固有 API を知るのは `apps/*` だけ。
 
-CLI の subprocess テストは `tsx` を `--import` して workspace TypeScript と `.js` specifier の ESM 解決を実行する。
+CLI の subprocess テストは `tsx` を `--import` して workspace TypeScript と `.js` specifier の ESM 解決を実行する。Node 組み込みの strip-types は `node_modules` 配下の TypeScript を拒否し、pnpm link 経由の workspace `@beamer-editor/core` もこの制約に当たるためである。
 
 ## PR・ブランチ運用
 
