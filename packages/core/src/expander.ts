@@ -56,6 +56,42 @@ export interface ExpansionSegment {
 
 export type ExpansionMap = ExpansionSegment[];
 
+/**
+ * 展開後の範囲を元ソースへ戻す。ただし途中に synthetic / gap / 非連続な区間が
+ * 一つでもあれば null を返す。編集はこの厳格な対応が取れる範囲だけに限る。
+ */
+export function mapExpandedRangeToSourceExact(
+  map: ExpansionMap,
+  range: SourceSpan,
+): SourceSpan | null {
+  if (!Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start > range.end) {
+    return null;
+  }
+  if (range.start === range.end) return null;
+  let expectedExpanded = range.start;
+  let sourceStart: number | undefined;
+  let sourceEnd: number | undefined;
+  for (const segment of map) {
+    if (segment.expandedEnd <= expectedExpanded) continue;
+    if (segment.expandedStart > expectedExpanded) return null;
+    if (!segment.exact) return null;
+    const from = Math.max(expectedExpanded, segment.expandedStart);
+    const to = Math.min(range.end, segment.expandedEnd);
+    const mappedFrom = segment.sourceStart + (from - segment.expandedStart);
+    const mappedTo = segment.sourceStart + (to - segment.expandedStart);
+    if (sourceStart === undefined) sourceStart = mappedFrom;
+    if (sourceEnd !== undefined && sourceEnd !== mappedFrom) return null;
+    sourceEnd = mappedTo;
+    expectedExpanded = to;
+    if (expectedExpanded === range.end) {
+      return sourceStart === undefined || sourceEnd === undefined
+        ? null
+        : { start: sourceStart, end: sourceEnd };
+    }
+  }
+  return null;
+}
+
 export interface ExpandResult {
   /** 展開後ソース全文。 */
   source: string;

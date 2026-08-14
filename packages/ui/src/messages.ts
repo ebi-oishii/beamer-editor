@@ -18,7 +18,15 @@ export type WebviewToExtension =
   | { type: "ready" }
   /** version はプレビューが表示中の deck の document version(古い版からのジャンプ検出に使う)。 */
   | { type: "jumpToSource"; frameIndex: number; version: number }
-  | { type: "activeFrameChanged"; frameIndex: number };
+  | { type: "activeFrameChanged"; frameIndex: number }
+  | {
+      type: "moveCanvasElement";
+      frameIndex: number;
+      elementId: string;
+      version: number;
+      x: number;
+      y: number;
+    };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -71,6 +79,29 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
     case "activeFrameChanged":
       if (typeof raw.frameIndex === "number") {
         return { type: "activeFrameChanged", frameIndex: raw.frameIndex };
+      }
+      return null;
+    case "moveCanvasElement":
+      if (
+        typeof raw.frameIndex === "number" &&
+        Number.isInteger(raw.frameIndex) &&
+        raw.frameIndex >= 0 &&
+        typeof raw.elementId === "string" &&
+        typeof raw.version === "number" &&
+        Number.isInteger(raw.version) &&
+        typeof raw.x === "number" &&
+        Number.isFinite(raw.x) &&
+        typeof raw.y === "number" &&
+        Number.isFinite(raw.y)
+      ) {
+        return {
+          type: "moveCanvasElement",
+          frameIndex: raw.frameIndex,
+          elementId: raw.elementId,
+          version: raw.version,
+          x: raw.x,
+          y: raw.y,
+        };
       }
       return null;
     default:

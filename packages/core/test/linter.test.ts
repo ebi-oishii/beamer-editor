@@ -11,6 +11,386 @@ ${body}
 }
 
 describe("lintDeck", () => {
+  it("マクロ領域の未展開・未対応な定義を L002 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\newcommand{\\conditional}[1]{\\ifx#1x yes\\fi}
+\\def\\legacy{value}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L002");
+
+    expect(diagnostics).toMatchObject([
+      { severity: "warning", message: "このマクロ定義は展開に対応していません" },
+      { severity: "warning", message: "このマクロ領域の内容は展開に対応していません" },
+    ]);
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\newcommand{\\conditional}[1]{\\ifx#1x yes\\fi}",
+      "\\def\\legacy{value}",
+    ]);
+    const structured = "\\newcommand{\\conditional}[1]{\\ifx#1x yes\\fi}";
+    const raw = "\\def\\legacy{value}";
+    expect(diagnostics.map((entry) => entry.span)).toEqual(
+      [structured, raw].map((text) => {
+        const start = source.indexOf(text);
+        return { start, end: start + text.length };
+      }),
+    );
+  });
+
+  it("deck で始まるマクロ名だけを L016 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\renewcommand{\\deckimage}[1]{#1}
+\\newenvironment{deckfoo}{}{}
+\\newcommand{\\DeckFoo}[1]{#1}
+\\newcommand{\\ordinary}[1]{#1}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics).toMatchObject([{ severity: "error" }, { severity: "error" }]);
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\renewcommand{\\deckimage}[1]{#1}",
+      "\\newenvironment{deckfoo}{}{}",
+    ]);
+  });
+
+  it("生の def 系primitiveによる deck* 再定義も L016 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def
+\\deckdef{}
+\\global \\def \\deckglobal{}
+\\gdef\\deckgdef{}
+\\edef\\deckedef{}
+\\xdef\\deckxdef{}
+\\long
+\\protected
+\\def
+\\deckmultiline{}
+\\def% comment
+\\deckcomment{}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\def\n\\deckdef{}",
+      "\\global \\def \\deckglobal{}",
+      "\\gdef\\deckgdef{}",
+      "\\edef\\deckedef{}",
+      "\\xdef\\deckxdef{}",
+      "\\long\n\\protected\n\\def\n\\deckmultiline{}",
+      "\\def% comment\n\\deckcomment{}",
+    ]);
+  });
+
+  it("生の \\def は予約済みの対象制御綴だけを L016 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def\\deckimage{}
+\\def\\ordinary{%
+  \\gdef\\deckinside{}
+}
+\\def\\DeckFoo{}
+\\deckfoo{}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics).toHaveLength(1);
+    const [diagnostic] = diagnostics;
+    if (diagnostic === undefined) throw new Error("expected an L016 diagnostic");
+    expect(sourceText(source, diagnostic)).toBe("\\def\\deckimage{}");
+  });
+
+  it("同じ RawBlock で定義本文の後ろに続く予約名定義を L016 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def\\ordinary{value}\\gdef\\deckafter{}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics).toHaveLength(1);
+    expect(sourceText(source, diagnostics[0] as NonNullable<(typeof diagnostics)[number]>)).toBe(
+      "\\gdef\\deckafter{}",
+    );
+  });
+
+  it("同じ RawBlock の複数の直接予約名定義を順に L016 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def\\deckfirst{}\\edef\\decksecond{}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\def\\deckfirst{}",
+      "\\edef\\decksecond{}",
+    ]);
+  });
+
+  it("RawBlock をまたぐ target と本文でも予約名定義を L016 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def\\decksplit
+{value}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\def\\decksplit\n{value}",
+    ]);
+  });
+
+  it("複数 RawBlock にまたがる予約名本文の L016 span は閉じ括弧までを含む", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def\\deckmultiline
+{
+  value
+}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\def\\deckmultiline\n{\n  value\n}",
+    ]);
+  });
+
+  it("複数 RawBlock にまたがる本文内の予約名らしい def は L016 として再走査しない", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def\\ordinary
+{
+  \\gdef\\deckinside{}
+}
+%% macros:end`,
+    );
+
+    expect(lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016")).toEqual([]);
+  });
+
+  it("raw の通常マクロ本文で構造化された予約名定義は top-level L016 として報告しない", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def\\ordinary{
+\\newcommand{\\deckinside}{value}
+}
+%% macros:end`,
+    );
+
+    expect(lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016")).toEqual([]);
+  });
+
+  it("raw の予約名マクロ本文では内側を報告せず、外側だけを L016 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def\\deckouter{
+\\newcommand{\\deckinside}{value}
+}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\def\\deckouter{\n\\newcommand{\\deckinside}{value}\n}",
+    ]);
+  });
+
+  it("pending primitive の後の構造化予約名は通常 lint し、後続の直接定義と別々に L016 を報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\global
+\\newcommand{\\deckinside}{value}
+\\def\\deckouter{}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\newcommand{\\deckinside}{value}",
+      "\\def\\deckouter{}",
+    ]);
+  });
+
+  it("pending primitive は無関係な RawBlock で終了し、後続の直接定義へ持ち越さない", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\global
+ordinary text
+\\def\\deckouter{}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual(["\\def\\deckouter{}"]);
+  });
+
+  it("pending target の構造化予約名は抑制し、その後の top-level 定義は L016 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def
+\\newcommand{\\deckinside}{value}
+\\newcommand{\\decktop}{value}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\newcommand{\\decktop}{value}",
+    ]);
+  });
+
+  it("body 未開始の後の構造化予約名は抑制し、その後の top-level 定義は L016 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def\\ordinary
+\\newcommand{\\deckinside}{value}
+\\newcommand{\\decktop}{value}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\newcommand{\\decktop}{value}",
+    ]);
+  });
+
+  it("予約名本文の nested/comment/escaped braces を閉じ括弧として早期確定しない", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def\\deckouter{
+  {nested \\{ escaped} % } comment
+  value
+}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\def\\deckouter{\n  {nested \\{ escaped} % } comment\n  value\n}",
+    ]);
+  });
+
+  it("本文を閉じた RawBlock の残りにある予約名定義を L016 で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def\\ordinary
+{value}\\xdef\\deckafter{}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual(["\\xdef\\deckafter{}"]);
+  });
+
+  it("定義本文内の予約名らしい def は L016 として再走査しない", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\def\\ordinary{\\gdef\\deckinside{}}\\def\\deckoutside{}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L016");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual(["\\def\\deckoutside{}"]);
+  });
+
+  it("複数RawBlockの定義はL001/L002を維持しL016を一度だけ報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\global
+\\def
+\\deckfoo{}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source));
+
+    expect(diagnostics.map((entry) => entry.code)).toEqual([
+      "L001",
+      "L002",
+      "L016",
+      "L001",
+      "L002",
+      "L001",
+      "L002",
+    ]);
+    const diagnostic = diagnostics[2];
+    if (diagnostic === undefined) throw new Error("expected an L016 diagnostic");
+    expect(sourceText(source, diagnostic)).toBe("\\global\n\\def\n\\deckfoo{}");
+  });
+
+  it("通常の展開可能なマクロは L002/L016 の対象外", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\newcommand{\\ordinary}[1]{Hello, #1!}
+%% macros:end`,
+    );
+
+    expect(
+      lintDeck(parseDeck(source)).filter((entry) => entry.code === "L002" || entry.code === "L016"),
+    ).toEqual([]);
+  });
+
+  it("同じマクロ定義の L002 と L016 を安定した順で報告する", () => {
+    const source = deck(
+      "",
+      `%% macros:begin
+\\newcommand{\\deckconditional}[1]{\\ifx#1x yes\\fi}
+%% macros:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source));
+
+    expect(diagnostics.map((entry) => entry.code)).toEqual(["L002", "L016"]);
+    expect(diagnostics.map((entry) => entry.span)).toEqual([
+      diagnostics[0]?.span,
+      diagnostics[0]?.span,
+    ]);
+  });
+
   it("注入された fileExists で通常・ネスト画像とスタイルロゴを L004 として報告する", () => {
     const source = deck(
       `

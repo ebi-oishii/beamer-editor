@@ -63,6 +63,37 @@ describe("parseDeck: basic.tex", () => {
   });
 });
 
+describe("parseDeck: canvas top-level items", () => {
+  it("unsupported command/environment 内の deckimage を直下画像として再同期しない", () => {
+    const source = String.raw`\begin{document}
+\begin{frame}[label=canvas]{C}
+\begin{deckcanvas}
+\foo{\deckimage[x=0,y=0,w=.2]{nested.png}}
+\foo[opt]{\deckimage[x=0,y=0,w=.2]{optional.png}}
+\foo[{\deckimage[x=0,y=0,w=.2]{nested-option.png}}]{body}
+\foo{first}{\deckimage[x=0,y=0,w=.2]{second-argument.png}}
+\foo[opt] {\deckimage[x=0,y=0,w=.2]{spaced.png}}
+% \deckimage[x=0,y=0,w=.2]{comment.png}
+\begin{unknown}
+% \end{unknown}
+\deckimage[x=0,y=0,w=.2]{env.png}
+\end{unknown}
+\deckimage[x=.2,y=.3,w=.4]{top.png}
+\end{deckcanvas}
+\end{frame}
+\end{document}`;
+    const frame = framesOf(parseDeck(source))[0];
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    const canvas = frame.body.find((block) => block.type === "canvas");
+    expect(
+      canvas?.type === "canvas" && canvas.items.filter((item) => item.type === "canvasImage"),
+    ).toHaveLength(1);
+    expect(
+      canvas?.type === "canvas" && canvas.items.find((item) => item.type === "canvasImage")?.path,
+    ).toBe("top.png");
+  });
+});
+
 describe("parseDeck: kitchen-sink.tex", () => {
   const doc = parseDeck(fixture("kitchen-sink.tex"));
   const frames = framesOf(doc);
@@ -176,7 +207,8 @@ describe("parseDeck: canvas.tex", () => {
 });
 
 describe("parseDeck: macros.tex", () => {
-  const doc = parseDeck(fixture("macros.tex"));
+  const macroSource = fixture("macros.tex");
+  const doc = parseDeck(macroSource);
 
   it("マクロ定義を読む(展開可能性の判定込み)", () => {
     const defs = doc.macros.entries.filter((e) => e.type === "macroDefinition");
@@ -189,6 +221,9 @@ describe("parseDeck: macros.tex", () => {
     const code = defs.find((d) => d.name === "code");
     expect(code?.expandable).toBe(true);
     expect(code?.paramCount).toBe(1);
+    for (const definition of defs) {
+      expect(definition.tex).toBe(macroSource.slice(definition.span.start, definition.span.end));
+    }
   });
 
   it("\\def は生ブロックとして保持する", () => {

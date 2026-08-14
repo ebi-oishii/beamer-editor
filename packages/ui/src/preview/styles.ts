@@ -355,6 +355,9 @@ export const PREVIEW_CSS = `
   position: absolute;
   margin: 0;
 }
+.slide .canvas-editable { cursor: grab; touch-action: none; }
+.slide .canvas-editable.canvas-selected { outline: 2px solid #2e5cb8; outline-offset: 2px; }
+.slide .canvas-editable.canvas-dragging { cursor: grabbing; }
 .slide .canvas-text p {
   margin: 0;
 }

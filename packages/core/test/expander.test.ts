@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { framesOf } from "../src/ast.js";
-import { expandDeck, mapExpandedToSource } from "../src/expander.js";
+import { expandDeck, mapExpandedRangeToSourceExact, mapExpandedToSource } from "../src/expander.js";
 import { parseDeck } from "../src/parser.js";
 
 const fixture = (name: string) => readFileSync(join(__dirname, "../../../fixtures", name), "utf8");
@@ -293,5 +293,42 @@ describe("expandDeck: スキップ領域", () => {
     expect(result.source).toContain("% comment keeps \\R raw");
     expect(result.source).toContain("\\R stays raw");
     expect(result.source).toContain("Inline \\mathbb{R} expands.");
+  });
+});
+
+describe("mapExpandedRangeToSourceExact", () => {
+  it("連続した exact segments だけを元ソースの連続範囲へ写す", () => {
+    expect(
+      mapExpandedRangeToSourceExact(
+        [
+          { expandedStart: 0, expandedEnd: 2, sourceStart: 10, sourceEnd: 12, exact: true },
+          { expandedStart: 2, expandedEnd: 4, sourceStart: 12, sourceEnd: 14, exact: true },
+        ],
+        { start: 1, end: 3 },
+      ),
+    ).toEqual({ start: 11, end: 13 });
+  });
+  it("synthetic, gap, noncontiguous source は編集可能にしない", () => {
+    expect(
+      mapExpandedRangeToSourceExact(
+        [{ expandedStart: 0, expandedEnd: 3, sourceStart: 0, sourceEnd: 3, exact: false }],
+        { start: 0, end: 2 },
+      ),
+    ).toBeNull();
+    expect(
+      mapExpandedRangeToSourceExact(
+        [{ expandedStart: 1, expandedEnd: 3, sourceStart: 1, sourceEnd: 3, exact: true }],
+        { start: 0, end: 2 },
+      ),
+    ).toBeNull();
+    expect(
+      mapExpandedRangeToSourceExact(
+        [
+          { expandedStart: 0, expandedEnd: 1, sourceStart: 0, sourceEnd: 1, exact: true },
+          { expandedStart: 1, expandedEnd: 2, sourceStart: 4, sourceEnd: 5, exact: true },
+        ],
+        { start: 0, end: 2 },
+      ),
+    ).toBeNull();
   });
 });
