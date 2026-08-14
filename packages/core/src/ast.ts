@@ -114,6 +114,8 @@ export interface MacroSection extends BaseNode {
 
 export interface MacroDefinition extends BaseNode {
   type: "macroDefinition";
+  /** span と一致する元ソース。lint の有限 scanner が RawBlock と同じ入力として使う。 */
+  tex: string;
   kind: "newcommand" | "renewcommand" | "newenvironment";
   /** バックスラッシュを除いた名前。`deck` 始まりは予約(L016)。 */
   name: string;

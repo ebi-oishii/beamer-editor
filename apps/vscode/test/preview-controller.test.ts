@@ -83,6 +83,35 @@ function makeDoc(uri = "file:///deck.tex") {
 type DeckMessage = { type: string; version: number; activeFrame: number };
 
 const ASSETS = { scriptUri: "webview.js", styleUri: "webview.css" };
+const canvasRender = (_text: string, version: number): RenderOutcome => ({
+  deck: {
+    title: "t",
+    css: "",
+    frames: [
+      {
+        index: 1,
+        label: null,
+        titleText: "one",
+        html: "",
+        stepCount: 1,
+        isRaw: false,
+        sourceSpan: { start: 0, end: 1 },
+        canvasElements: [
+          {
+            id: "canvas-image-0",
+            kind: "image",
+            position: { x: 0, y: 0, width: 1 },
+            sourceSpan: { start: 10, end: 25 },
+            editable: true,
+          },
+        ],
+      },
+    ],
+  },
+  version,
+  expansionMap: [],
+  expandDiagnostics: [],
+});
 
 describe("rewriteImageSources", () => {
   it("エスケープ済みパスを復元して resolve し、結果を再エスケープする", () => {
@@ -336,6 +365,288 @@ describe("PreviewController", () => {
 
     expect(navigate).not.toHaveBeenCalled();
     expect(posted).toHaveLength(1);
+  });
+
+  it("moveCanvasElement: 最新・editable な画像だけを一度 callback へ渡す", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const moveCanvasElement = vi.fn(async () => "applied" as const);
+    const render = (_text: string, version: number): RenderOutcome => ({
+      deck: {
+        title: "t",
+        css: "",
+        frames: [
+          {
+            index: 1,
+            label: null,
+            titleText: "one",
+            html: "",
+            stepCount: 1,
+            isRaw: false,
+            sourceSpan: { start: 0, end: 1 },
+            canvasElements: [
+              {
+                id: "canvas-image-0",
+                kind: "image",
+                position: { x: 0, y: 0, width: 1 },
+                sourceSpan: { start: 10, end: 25 },
+                editable: true,
+              },
+            ],
+          },
+        ],
+      },
+      version,
+      expansionMap: [],
+      expandDiagnostics: [],
+    });
+    new PreviewController(panel, ASSETS, doc, events, vi.fn(), { render, moveCanvasElement });
+    fire({ type: "ready" });
+    fire({
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 7,
+      x: -0.25,
+      y: 1.5,
+    });
+    await Promise.resolve();
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith({
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 7,
+      x: -0.25,
+      y: 1.5,
+      sourceSpan: { start: 10, end: 25 },
+      document: doc,
+      expectedOptions: doc.getText().slice(10, 25),
+    });
+  });
+
+  it.each([
+    "failed" as const,
+    new Error("reject"),
+  ])("move callback failure (%s) re-renders and reports once", async (result) => {
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    const error = vi.fn();
+    const warning = vi.fn();
+    const callback = vi.fn(() =>
+      result instanceof Error ? Promise.reject(result) : Promise.resolve(result),
+    );
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      render: canvasRender,
+      onError: error,
+      onWarning: warning,
+      moveCanvasElement: callback,
+    });
+    fire({ type: "ready" });
+    fire({
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 7,
+      x: 1,
+      y: 1,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(warning).not.toHaveBeenCalled();
+    expect(posted).toHaveLength(2);
+  });
+
+  it("unchanged move silently redraws and permits another move at the same version", async () => {
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    const callback = vi.fn(async () => "unchanged" as const);
+    const warning = vi.fn();
+    const error = vi.fn();
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      render: canvasRender,
+      onWarning: warning,
+      onError: error,
+      moveCanvasElement: callback,
+    });
+    fire({ type: "ready" });
+    const move = {
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 7,
+      x: 0.25,
+      y: 0.5,
+    } as const;
+
+    fire(move);
+    await Promise.resolve();
+    fire({ ...move, x: 0.75 });
+    await Promise.resolve();
+
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(posted).toHaveLength(3);
+    expect(warning).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("cancelled move warns, redraws, and permits a retry", async () => {
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    const callback = vi.fn(async () => "cancelled" as const);
+    const warning = vi.fn();
+    const error = vi.fn();
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      render: canvasRender,
+      onWarning: warning,
+      onError: error,
+      moveCanvasElement: callback,
+    });
+    fire({ type: "ready" });
+    const move = {
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 7,
+      x: 0.25,
+      y: 0.5,
+    } as const;
+
+    fire(move);
+    await Promise.resolve();
+    fire({ ...move, x: 0.75 });
+    await Promise.resolve();
+
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(posted).toHaveLength(3);
+    expect(warning).toHaveBeenCalledWith(
+      "Canvas image position was not updated. Try dragging it again.",
+    );
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("applyEdit 中は同じ旧 version の追加 move を無視し、再描画後に解除する", async () => {
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    let settle: ((value: "failed") => void) | undefined;
+    const pending = new Promise<"failed">((resolve) => {
+      settle = resolve;
+    });
+    const callback = vi.fn(() => pending);
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      render: canvasRender,
+      moveCanvasElement: callback,
+    });
+    fire({ type: "ready" });
+    const first = {
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 7,
+      x: 0.25,
+      y: 0.5,
+    } as const;
+    fire(first);
+    fire({ ...first, x: 0.75 });
+    expect(callback).toHaveBeenCalledTimes(1);
+
+    settle?.("failed");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(posted).toHaveLength(2);
+
+    fire({ ...first, x: 0.75 });
+    expect(callback).toHaveBeenCalledTimes(2);
+  });
+
+  it("成功した move は更新後 version の再描画まで次の move を待たせる", async () => {
+    const { panel, fire } = makePanel();
+    const { events, change } = makeEvents();
+    const doc = makeDoc();
+    const callback = vi.fn(async () => "applied" as const);
+    new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      moveCanvasElement: callback,
+    });
+    fire({ type: "ready" });
+    const move = {
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 7,
+      x: 0.25,
+      y: 0.5,
+    } as const;
+    fire(move);
+    await Promise.resolve();
+    fire({ ...move, x: 0.75 });
+    expect(callback).toHaveBeenCalledTimes(1);
+
+    doc.edit(`${doc.getText()} `);
+    change(doc);
+    vi.advanceTimersByTime(RENDER_DEBOUNCE_MS);
+    fire({ ...move, version: 8, x: 0.75 });
+    expect(callback).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    "failed" as const,
+    new Error("reject"),
+  ])("disposed pending callback (%s) is silent", async (result) => {
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    const error = vi.fn();
+    let settle: ((value: "failed") => void) | undefined;
+    let reject: ((reason: unknown) => void) | undefined;
+    const pending = new Promise<"failed">((resolve, rejectPromise) => {
+      settle = resolve;
+      reject = rejectPromise;
+    });
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      render: canvasRender,
+      onError: error,
+      moveCanvasElement: () => pending,
+    });
+    fire({ type: "ready" });
+    fire({
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 7,
+      x: 1,
+      y: 1,
+    });
+    controller.dispose();
+    if (result instanceof Error) reject?.(result);
+    else settle?.(result);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(error).not.toHaveBeenCalled();
+    expect(posted).toHaveLength(1);
+  });
+
+  it("same URI/version replacement document cannot use old latest descriptors", () => {
+    const { panel, posted, fire } = makePanel();
+    const { events, change } = makeEvents();
+    const doc = makeDoc();
+    const callback = vi.fn();
+    new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      moveCanvasElement: callback,
+    });
+    fire({ type: "ready" });
+    const replacement = { ...makeDoc(), getText: () => "different same-version text" };
+    change(replacement);
+    fire({
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 7,
+      x: 1,
+      y: 1,
+    });
+    expect(callback).not.toHaveBeenCalled();
+    expect(posted).toHaveLength(2);
   });
 
   it("resolveResource 指定時は送信する deck の <img src> だけを書き換える", () => {

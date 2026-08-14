@@ -43,7 +43,7 @@ describe("createMessageShellHost", () => {
     ]);
   });
 
-  it("ナビ状態を WebviewStateStore へ保存・復元し、型不一致は捨てる", () => {
+  it("ナビ状態を WebviewStateStore へ保存・復元し、旧 state と不正 zoom を fit として扱う", () => {
     const { transport } = makeTransport();
     let stored: unknown;
     const host = createMessageShellHost(transport, {
@@ -54,8 +54,23 @@ describe("createMessageShellHost", () => {
     });
 
     expect(host.loadNavState?.()).toBeUndefined();
-    host.saveNavState?.({ current: 2, step: 3 });
-    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3 });
+    host.saveNavState?.({ current: 2, step: 3, zoom: 1.5 });
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: 1.5 });
+
+    stored = { current: 2, step: 3 };
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
+    stored = { current: 2, step: 3, zoom: "invalid" };
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
+    stored = { current: 2, step: 3, zoom: 0.24 };
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
+    stored = { current: 2, step: 3, zoom: 3.01 };
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
+    stored = { current: 2, step: 3, zoom: Number.POSITIVE_INFINITY };
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
+    stored = { current: 2, step: 3, zoom: 0.25 };
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: 0.25 });
+    stored = { current: 2, step: 3, zoom: 3 };
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: 3 });
 
     stored = { current: "2", step: 3 };
     expect(host.loadNavState?.()).toBeUndefined();
@@ -77,7 +92,7 @@ describe("createMessageShellHost", () => {
     const host = createMessageShellHost(transport);
 
     expect(host.loadNavState?.()).toBeUndefined();
-    expect(() => host.saveNavState?.({ current: 0, step: 1 })).not.toThrow();
+    expect(() => host.saveNavState?.({ current: 0, step: 1, zoom: "fit" })).not.toThrow();
   });
 
   it("ready / jumpToSource / activeFrameChanged を transport へ post する", () => {

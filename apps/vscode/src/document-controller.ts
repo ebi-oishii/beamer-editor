@@ -3,7 +3,12 @@
  * (移植計画 VS-3 手順 1)。`vscode` API には依存せず、PreviewController から使う。
  */
 
-import { type ExpandDiagnostic, type ExpansionMap, expandDeck } from "@beamer-editor/core";
+import {
+  type ExpandDiagnostic,
+  type ExpansionMap,
+  expandDeck,
+  mapExpandedRangeToSourceExact,
+} from "@beamer-editor/core";
 import { type RenderedDeck, renderDeck } from "@beamer-editor/renderer";
 
 export interface RenderOutcome {
@@ -22,8 +27,18 @@ export interface RenderOutcome {
 /** 全文をマクロ展開し、展開後 AST を HTML デッキへレンダリングする。 */
 export function renderDocument(text: string, version: number): RenderOutcome {
   const expanded = expandDeck(text);
+  const rendered = renderDeck(expanded.doc);
   return {
-    deck: renderDeck(expanded.doc),
+    deck: {
+      ...rendered,
+      frames: rendered.frames.map((frame) => ({
+        ...frame,
+        canvasElements: (frame.canvasElements ?? []).map((element) => {
+          const sourceSpan = mapExpandedRangeToSourceExact(expanded.map, element.sourceSpan);
+          return sourceSpan === null ? element : { ...element, sourceSpan, editable: true };
+        }),
+      })),
+    },
     version,
     expansionMap: expanded.map,
     expandDiagnostics: expanded.diagnostics,

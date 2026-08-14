@@ -69,17 +69,23 @@ export const PREVIEW_CSS = `
 }
 .slide-holder {
   flex: 1;
+  min-width: 0;
   overflow: auto;
   padding: 12px;
   display: flex;
-  justify-content: center;
   align-items: flex-start;
+}
+.slide-layout {
+  margin-left: auto;
+  margin-right: auto;
+  flex: 0 0 auto;
 }
 .slide-scale {
   transform-origin: top left;
 }
 .controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   justify-content: center;
@@ -87,6 +93,16 @@ export const PREVIEW_CSS = `
   border-top: 1px solid var(--vscode-panel-border, #ddd);
   background: var(--vscode-editorWidget-background, #fafafa);
   font-size: 13px;
+}
+.zoom-box,
+.step-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.zoom-indicator {
+  min-width: 72px;
+  text-align: center;
 }
 .controls button {
   border: 1px solid var(--vscode-button-border, #bbb);
@@ -339,6 +355,9 @@ export const PREVIEW_CSS = `
   position: absolute;
   margin: 0;
 }
+.slide .canvas-editable { cursor: grab; touch-action: none; }
+.slide .canvas-editable.canvas-selected { outline: 2px solid #2e5cb8; outline-offset: 2px; }
+.slide .canvas-editable.canvas-dragging { cursor: grabbing; }
 .slide .canvas-text p {
   margin: 0;
 }

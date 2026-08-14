@@ -340,7 +340,7 @@ Claude Code、Codex、CLIなどがディスク上の`.tex`を書き換えるケ�
 
 ### VS-7: 状態・テーマ・アクセシビリティ
 
-- 現在フレームとoverlay stepだけを `getState` / `setState` で保存する。
+- 現在フレーム・overlay step・スライド zoomだけを `getState` / `setState` で保存する。
 - ソース本文やASTをWebview stateへ複製保存しない。
 - `retainContextWhenHidden` は原則使わない。
 - VS Codeのtheme CSS variablesを使う。

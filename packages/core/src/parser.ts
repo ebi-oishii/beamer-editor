@@ -120,6 +120,69 @@ function findEnvEnd(src: string, name: string, from: number): number | null {
   return null;
 }
 
+/**
+ * Unsupported canvas content の後から、brace / bracket / environment の外側にある
+ * 次の公認 item だけを探す。判定できない構文では raw のまま末尾まで保持する。
+ */
+function findNextTopLevelCanvasItem(src: string, from: number, end: number): number | null {
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  const environments: string[] = [];
+
+  for (let i = from; i < end; i++) {
+    const ch = src[i] as string;
+    if (ch === "%" && src[i - 1] !== "\\") {
+      const newline = src.indexOf("\n", i + 1);
+      if (newline === -1 || newline >= end) return null;
+      i = newline;
+      continue;
+    }
+    if (ch === "\\") {
+      const beginPrefix = "\\begin{";
+      const endPrefix = "\\end{";
+      if (src.startsWith(beginPrefix, i)) {
+        const nameEnd = src.indexOf("}", i + beginPrefix.length);
+        if (nameEnd === -1 || nameEnd >= end) return null;
+        const name = src.slice(i + beginPrefix.length, nameEnd);
+        const topLevel = braceDepth === 0 && bracketDepth === 0 && environments.length === 0;
+        if (topLevel && name === "decktext") return i;
+        environments.push(name);
+        i = nameEnd;
+        continue;
+      }
+      if (src.startsWith(endPrefix, i)) {
+        const nameEnd = src.indexOf("}", i + endPrefix.length);
+        if (nameEnd === -1 || nameEnd >= end) return null;
+        const name = src.slice(i + endPrefix.length, nameEnd);
+        if (environments.at(-1) !== name) return null;
+        environments.pop();
+        i = nameEnd;
+        continue;
+      }
+      if (
+        braceDepth === 0 &&
+        bracketDepth === 0 &&
+        environments.length === 0 &&
+        src.startsWith("\\deckimage[", i)
+      ) {
+        return i;
+      }
+      if ("\\%{}[]".includes(src[i + 1] ?? "")) i++;
+      continue;
+    }
+    if (ch === "{") braceDepth++;
+    else if (ch === "}") {
+      if (braceDepth === 0) return null;
+      braceDepth--;
+    } else if (ch === "[") bracketDepth++;
+    else if (ch === "]") {
+      if (bracketDepth === 0) return null;
+      bracketDepth--;
+    }
+  }
+  return null;
+}
+
 function commandNameAt(src: string, backslash: number): string {
   let i = backslash + 1;
   let name = "";
@@ -935,11 +998,9 @@ class Parser {
         cursor = pathClose + 1;
         continue;
       }
-      // 許容外の直下要素: 次の要素または環境末尾までを生ブロックに(L014)
-      const nextText = this.src.indexOf("\\begin{decktext}", cursor);
-      const nextImg = this.src.indexOf("\\deckimage", cursor);
-      const candidates = [nextText, nextImg].filter((v) => v !== -1 && v < bodyEnd);
-      const stop = candidates.length > 0 ? Math.min(...candidates) : bodyEnd;
+      // 許容外の直下要素: 入れ子を飛び越えて、次の公認 top-level item までを
+      // 一つの raw block として保持する。不確実な場合は canvas 末尾まで raw にする。
+      const stop = findNextTopLevelCanvasItem(this.src, cursor, bodyEnd) ?? bodyEnd;
       items.push(this.rawBlock(cursor, stop, null, "canvas-unsupported-content"));
       cursor = stop;
     }
@@ -1075,6 +1136,7 @@ class Parser {
           );
           entries.push({
             type: "macroDefinition",
+            tex: this.src.slice(cursor, i),
             kind,
             name,
             paramCount,
