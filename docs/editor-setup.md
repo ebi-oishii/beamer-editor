@@ -32,13 +32,16 @@ Beamer Editor の `.tex` は、VS Code に組み込まれた LaTeX 言語サポ�
 このリポジトリをVS Codeで開くと、`.vscode/extensions.json` により LaTeX Workshop が
 推奨される。インストールは任意であり、基本的な構文強調だけなら不要である。
 
-LaTeX Workshop を使う場合も、通常の `.tex` の自動ビルドは維持する。自動ビルド全体を
-無効にしない。
+通常の `.tex` と Beamer Editor の managed slide が混在する workspace では、LaTeX Workshop
+の自動ビルドを有効に保つのが推奨である。managed slide を初めてアクティブにすると、Beamer
+Editor 拡張が確認を表示し、監視・保存時自動ビルドの ignore へ managed pattern を追加できる。
+書込先は `beamerEditor.managedFiles` と各 LaTeX Workshop 設定のうち、より具体的な resource
+scope (Workspace Folder / Workspace / Global) になる。これは managed slide にだけ適用され、
+通常の `.tex` と手動の **Build LaTeX project** は引き続き利用できる。
 
-Beamer Editor の managed slide は、拡張機能が初回に確認したうえで LaTeX Workshop の
-Global user settings の監視・保存時自動ビルド ignore へ managed pattern を追加する。この
-扱いは managed slide だけに限定され、通常の `.tex` や手動の **Build LaTeX project** は
-引き続き利用できる。
+workspace 全体が Beamer Editor 専用で、LaTeX Workshop による自動ビルドを一切使わない場合に
+限り、利用者自身の workspace settings で `"latex-workshop.latex.autoBuild.run": "never"` を
+選んでもよい。混在 workspace や、このリポジトリの共有設定には加えない。
 
 このリポジトリにコミットする ignore は、テスト fixture への対象限定設定だけである。
 `.vscode/settings.json` の `**/fixtures/**/*.tex` は絶対パスの workspace でも一致し、fixture
@@ -56,7 +59,7 @@ PDF が必要な場合は、現時点では LaTeX Workshop の **Build LaTeX pro
 | 候補 | 基本LaTeX | `%% deck` | `deckcanvas` / `decktext` | 判断 |
 |---|---|---|---|---|
 | VS Code組み込みのLaTeXサポート | 対応 | コメントとして対応 | 一般環境として対応 | 必須基盤。追加インストール不要 |
-| LaTeX Workshop 10.16.1 | 対応 | コメントとして対応 | 一般環境として対応 | 編集支援が必要な場合に任意で利用。通常の `.tex` 自動ビルドは維持し、managed slide/fixture だけを scoped ignore |
+| LaTeX Workshop 10.16.1 | 対応 | コメントとして対応 | 一般環境として対応 | 編集支援が必要な場合に任意で利用。混在 workspace では通常の `.tex` 自動ビルドを維持し、managed slide/fixture だけを scoped ignore |
 | `mathematic.vscode-latex` 2.0.0 | 対応 | コメントとして対応 | 一般環境として対応 | grammar、lint、formatが既存機能と重複するため非推奨 |
 
 3候補とも、コメント、コマンド、環境、数式とプロジェクト独自環境を正しくscopeへ分類した。
