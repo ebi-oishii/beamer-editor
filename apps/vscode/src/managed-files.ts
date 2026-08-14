@@ -86,6 +86,78 @@ export class AutoPreviewDismissals {
 }
 
 /**
+ * extension.ts の panel 作成・dispose イベントを結ぶ managed preview の状態機械。
+ * controller 自体は host 側で作るため、ここは URI ownership と dismissal だけを持つ。
+ */
+export class ManagedPreviewLifecycle<TController, TDocument> {
+  readonly registry = new PreviewRegistry<TController, TDocument>();
+  readonly dismissals = new AutoPreviewDismissals();
+
+  prepareOpen(
+    uri: { toString(): string },
+    automatic: boolean,
+  ): { kind: "create" } | { kind: "existing"; controller: TController } | { kind: "dismissed" } {
+    const existing = this.registry.get(uri);
+    if (existing) {
+      if (!automatic) this.registry.promoteManual(uri);
+      return { kind: "existing", controller: existing.controller };
+    }
+    return automatic && this.dismissals.has(uri) ? { kind: "dismissed" } : { kind: "create" };
+  }
+
+  register(
+    uri: { toString(): string },
+    controller: TController,
+    document: TDocument,
+    automatic: boolean,
+  ): void {
+    this.registry.add(uri, { controller, document, automatic });
+  }
+
+  panelDisposed(uri: { toString(): string }, controller: TController): boolean {
+    const owner = this.registry.get(uri);
+    if (owner?.controller !== controller) return false;
+    this.registry.delete(uri);
+    this.dismissals.dismiss(uri, true);
+    return true;
+  }
+
+  sourceClosed(uri: { toString(): string }): TController | undefined {
+    const owner = this.registry.get(uri);
+    if (owner) this.registry.delete(uri);
+    this.dismissals.clear(uri);
+    return owner?.controller;
+  }
+
+  managedFilesChanged(isManaged: (document: TDocument) => boolean): TController[] {
+    this.dismissals.clearAll();
+    const closed: TController[] = [];
+    for (const owner of this.registry.automaticEntries()) {
+      if (!isManaged(owner.document)) {
+        for (const [uri, candidate] of this.registry.entries()) {
+          if (candidate === owner) {
+            this.registry.delete({ toString: () => uri });
+            break;
+          }
+        }
+        closed.push(owner.controller);
+      }
+    }
+    return closed;
+  }
+
+  deactivate(): TController[] {
+    const controllers: TController[] = [];
+    for (const [uri, owner] of [...this.registry.entries()]) {
+      this.registry.delete({ toString: () => uri });
+      controllers.push(owner.controller);
+    }
+    this.dismissals.clearAll();
+    return controllers;
+  }
+}
+
+/**
  * LaTeX Workshop 用の glob は workspace-relative な managed glob と意味域が違う。
  * relative glob を全 workspace から一致する形へそろえるが、absolute glob はそのまま残す。
  */
@@ -107,6 +179,11 @@ export function normalizeLatexWorkshopIgnorePatterns(patterns: readonly string[]
         }),
     ),
   ];
+}
+
+/** 永続的な prompt refusal を、文書ではなく設定が共有される scope に紐づける。 */
+export function latexWorkshopPromptSignature(scope: string, patterns: readonly string[]): string {
+  return `${scope}\u0000${normalizeLatexWorkshopIgnorePatterns(patterns).sort().join("\u0000")}`;
 }
 
 /** 既存の ignore 配列を壊さず managed patterns を正規化して重複なく加える。 */

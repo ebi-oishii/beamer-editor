@@ -6,21 +6,20 @@ import {
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
 import {
-  AutoPreviewDismissals,
   appendUniqueIgnorePatterns,
   chooseLatexWorkshopTarget,
   DEFAULT_MANAGED_FILE_PATTERNS,
   effectiveArray,
   isManagedDocument,
+  latexWorkshopPromptSignature,
+  ManagedPreviewLifecycle,
   needsLatexWorkshopIgnorePrompt,
-  PreviewRegistry,
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
 import { resolveSourceViewColumn } from "./source-navigation";
 
 let previewController: PreviewController | undefined;
-const previewControllers = new PreviewRegistry<PreviewController, vscode.TextDocument>();
-const dismissedAutoPreviewUris = new AutoPreviewDismissals();
+const previewLifecycle = new ManagedPreviewLifecycle<PreviewController, vscode.TextDocument>();
 
 const LINT_SEVERITIES: Record<LintSeverity, vscode.DiagnosticSeverity> = {
   error: vscode.DiagnosticSeverity.Error,
@@ -176,7 +175,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     const watchIgnore = effectiveArray(watch);
     const autoBuildIgnore = effectiveArray(autoBuild);
     if (!needsLatexWorkshopIgnorePrompt(watchIgnore, autoBuildIgnore, patterns)) return;
-    const signature = `${document.uri.toString()}\u0000${patterns.join("\u0000")}`;
+    const folderScope =
+      vscode.workspace.getWorkspaceFolder(document.uri)?.uri.toString() ?? "global";
+    const signature = latexWorkshopPromptSignature(folderScope, patterns);
     const refusalKey = `latexWorkshopIgnoreRefused:${signature}`;
     if (latexWorkshopSessionPrompted.has(signature) || context.globalState.get<boolean>(refusalKey))
       return;
@@ -223,16 +224,15 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   }
 
   function openPreview(document: vscode.TextDocument, automatic: boolean): void {
-    const existing = previewControllers.get(document.uri);
-    if (existing) {
+    const prepared = previewLifecycle.prepareOpen(document.uri, automatic);
+    if (prepared.kind === "existing") {
       if (!automatic) {
-        previewControllers.promoteManual(document.uri);
-        existing.controller.reveal();
-        previewController = existing.controller;
+        prepared.controller.reveal();
+        previewController = prepared.controller;
       }
       return;
     }
-    if (automatic && dismissedAutoPreviewUris.has(document.uri)) return;
+    if (prepared.kind === "dismissed") return;
     const sourceViewColumn = vscode.window.visibleTextEditors.find(
       (editor) => editor.document.uri.toString() === document.uri.toString(),
     )?.viewColumn;
@@ -264,10 +264,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
       },
       () => {
-        const owner = previewControllers.get(document.uri);
-        if (owner?.controller !== controller) return;
-        previewControllers.delete(document.uri);
-        dismissedAutoPreviewUris.dismiss(document.uri, true);
+        if (!previewLifecycle.panelDisposed(document.uri, controller)) return;
         if (previewController === controller) previewController = undefined;
       },
       {
@@ -318,7 +315,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         },
       },
     );
-    previewControllers.add(document.uri, { controller, document, automatic });
+    previewLifecycle.register(document.uri, controller, document, automatic);
     previewController = controller;
   }
 
@@ -334,26 +331,15 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
   context.subscriptions.push(
     vscode.workspace.onDidCloseTextDocument((document) => {
-      const owner = previewControllers.get(document.uri);
-      if (owner) {
-        previewControllers.delete(document.uri);
-        owner.controller.close();
-      }
-      dismissedAutoPreviewUris.clear(document.uri);
+      previewLifecycle.sourceClosed(document.uri)?.close();
     }),
     vscode.window.onDidChangeActiveTextEditor((editor) => handleManagedDocument(editor?.document)),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (!event.affectsConfiguration("beamerEditor.managedFiles")) return;
       managedPatternCache.clear();
-      dismissedAutoPreviewUris.clearAll();
       latexWorkshopSessionPrompted.clear();
       lintController.refresh(vscode.workspace.textDocuments);
-      for (const owner of previewControllers.automaticEntries()) {
-        if (!isManaged(owner.document)) {
-          previewControllers.delete(owner.document.uri);
-          owner.controller.close();
-        }
-      }
+      for (const controller of previewLifecycle.managedFilesChanged(isManaged)) controller.close();
       handleManagedDocument(vscode.window.activeTextEditor?.document);
     }),
   );
@@ -375,10 +361,6 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 }
 
 export function deactivate(): void {
-  for (const [uri, owner] of [...previewControllers.entries()]) {
-    previewControllers.delete({ toString: () => uri });
-    owner.controller.close();
-  }
+  for (const controller of previewLifecycle.deactivate()) controller.close();
   previewController = undefined;
-  dismissedAutoPreviewUris.clearAll();
 }

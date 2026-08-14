@@ -6,6 +6,8 @@ import {
   DEFAULT_MANAGED_FILE_PATTERNS,
   effectiveArray,
   isManagedDocument,
+  latexWorkshopPromptSignature,
+  ManagedPreviewLifecycle,
   needsLatexWorkshopIgnorePrompt,
   normalizeLatexWorkshopIgnorePatterns,
   PreviewRegistry,
@@ -165,5 +167,50 @@ describe("managed file helpers", () => {
     expect(normalizeLatexWorkshopIgnorePatterns(["", "  ", " ./slides/**/*.tex "])).toEqual([
       "**/slides/**/*.tex",
     ]);
+  });
+
+  it("shares persistent Workshop prompt refusal across files in a scope, but not other scopes", () => {
+    const first = latexWorkshopPromptSignature("file:///work", [
+      "slides/**/*.tex",
+      "**/*.slide.tex",
+    ]);
+    const second = latexWorkshopPromptSignature("file:///work", [
+      "**/*.slide.tex",
+      "slides/**/*.tex",
+    ]);
+    const otherScope = latexWorkshopPromptSignature("file:///other", ["**/*.slide.tex"]);
+    expect(second).toBe(first);
+    expect(otherScope).not.toBe(first);
+  });
+
+  it("coordinates actual preview lifecycle transitions without duplicate automatic panels", () => {
+    const lifecycle = new ManagedPreviewLifecycle<
+      number,
+      { uri: ReturnType<typeof uri>; managed: boolean }
+    >();
+    const documentUri = uri("file:///work/talk.slide.tex");
+    const document = { uri: documentUri, managed: true };
+
+    // openTextDocument alone does not call prepareOpen; only an active-editor event does.
+    expect(lifecycle.registry.get(documentUri)).toBeUndefined();
+    expect(lifecycle.prepareOpen(documentUri, true)).toEqual({ kind: "create" });
+    lifecycle.register(documentUri, 1, document, true);
+    expect(lifecycle.prepareOpen(documentUri, true)).toEqual({ kind: "existing", controller: 1 });
+    // Manual command promotes the same panel. Its user-close suppresses later automatic reopen.
+    expect(lifecycle.prepareOpen(documentUri, false)).toEqual({ kind: "existing", controller: 1 });
+    expect(lifecycle.panelDisposed(documentUri, 1)).toBe(true);
+    expect(lifecycle.prepareOpen(documentUri, true)).toEqual({ kind: "dismissed" });
+
+    // Closing the source removes ownership and dismissal, then a new active session can create once.
+    lifecycle.sourceClosed(documentUri);
+    expect(lifecycle.prepareOpen(documentUri, true)).toEqual({ kind: "create" });
+    lifecycle.register(documentUri, 2, document, true);
+
+    const manualUri = uri("file:///work/manual.slide.tex");
+    lifecycle.register(manualUri, 3, { uri: manualUri, managed: false }, false);
+    document.managed = false;
+    expect(lifecycle.managedFilesChanged((candidate) => candidate.managed)).toEqual([2]);
+    expect(lifecycle.registry.get(documentUri)).toBeUndefined();
+    expect(lifecycle.registry.get(manualUri)?.controller).toBe(3);
   });
 });
