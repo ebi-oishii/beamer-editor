@@ -1,7 +1,7 @@
 # VS Code 移植計画
 
-更新日: 2026-07-24  
-対象: Phase 5（共有 UI + VS Code シェル）  
+更新日: 2026-08-14<br>
+対象: Phase 5（共有 UI + VS Code シェル）<br>
 目的: Phase 7 の GUI 編集へ進む前に、VS Code 上で編集・プレビュー・診断の基盤を成立させる
 
 ## 1. 結論
@@ -49,19 +49,11 @@ Phase 5 の完了条件は、開発計画の M2（書ける）を満たすこと
 ここまで通過してから、Phase 7 のドラッグ移動・画像拡縮・表編集など「ソースを書き換える
 GUI 編集」へ進む。
 
-### 2.1 現在の未マージPRとの関係
+### 2.1 反映済み範囲と継続作業
 
-2026-07-24時点では、次のPRがレビュー待ちである。
+Phase 5 のPRチェーン #27〜#34 はマージ済みで、VS-1〜VS-9（`.vsix`生成とCI artifactを含む）が反映されている。その後、ソースペインを維持するpreview jump、preview zoom、キャンバス画像ドラッグも追加された。
 
-- [PR #14](https://github.com/ebi-oishii/beamer-editor/pull/14):
-  rendererへのsource span引き継ぎとWeb版のsource jump。VS-4が利用する。
-- [PR #15](https://github.com/ebi-oishii/beamer-editor/pull/15):
-  キャンバス正規形フォーマッタ。読取り専用のPhase 5には必須ではないが、Phase 7開始ゲートになる。
-- [PR #16](https://github.com/ebi-oishii/beamer-editor/pull/16):
-  core linter基盤。VS-5が利用する。
-
-VS-1〜3はこれらを待たずmainから開始できる。VS-4・5へ進む時点で必要なPRを取り込み、
-Phase 5全体を未マージブランチの上へ積まない。
+継続中の変更は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)で確認する。Phase 5 の完了は本書 §2 と §9 の受け入れ項目で判断し、実機確認が終わるまで恒久状態を更新しない。
 
 ## 3. 移植するもの・しないもの
 
@@ -395,15 +387,16 @@ Phase 6のtectonic実行はWorkspace Trustがない場合に無効化する。
 | VS-4 | プレビュー → ソースジャンプ、文書version検査 | VS-3、source span |
 | VS-5 | `lintDeck` → DiagnosticCollection | VS-3、core linter |
 | VS-6 | 外部編集・dirty buffer・dispose・状態復元の統合テスト | VS-3〜5 |
-| VS-7 | theme / accessibility / CSP / Workspace Trust | VS-2〜6 |
-| VS-8 | `.vsix`生成とチーム内ドッグフーディング | VS-1〜7 |
+| VS-7 | theme / accessibility | VS-2〜6 |
+| VS-8 | CSP / Workspace Trust | VS-2〜7 |
+| VS-9 | 統合テスト、`.vsix`生成とチーム内ドッグフーディング | VS-1〜8 |
 
 PRを積み上げる場合でも、各PRは単独でbuild・typecheckできる状態にする。未マージの
 formatterやlinterへ依存するPRはbase branchを明記し、無関係な差分を混ぜない。
 
 ## 9. GUI編集へ進むためのゲート
 
-次をすべて満たすまでPhase 7の編集機能へ着手しない。
+次のチェックは実装有無の一覧ではなく、Phase 7へ進むために実機で確認する受け入れゲートである。実装済み項目も、実機受け入れが終わるまで未チェックとして残す。
 
 - [ ] VS Code標準エディタとWebviewプレビューの分離が安定している
 - [ ] `basic.tex` / `canvas.tex` / `japanese.tex` がライブ更新できる

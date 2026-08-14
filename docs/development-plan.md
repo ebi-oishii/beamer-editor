@@ -1,6 +1,6 @@
 # 開発計画
 
-ステータス: 改訂版(追加要件・レビュー統合)/ 最終更新: 2026-07-29
+ステータス: 改訂版(追加要件・レビュー統合)/ 最終更新: 2026-08-14
 
 [beamer-editor-additional-requirements.md](beamer-editor-additional-requirements.md)(キャンバス前倒し・VS Code 1 本化・AgentAdapter)と [issues-to-resolve.md](issues-to-resolve.md)(A/B/C 指摘)を初版計画に統合した改訂版。
 
@@ -27,10 +27,10 @@
 
 | 項目 | 状況 |
 |---|---|
-| C-1: 本文領域の定義 | **決定済み(2026-07-10)**。案①(タイトル帯 1 行固定高、2 行以上は L019 警告)を採用。default テーマ 16:9 の実測値は [subset-spec.md](subset-spec.md) §2.8 に記録(スライド 160×90mm、左右マージン各 1cm、タイトル 1 行時の本文先頭ベースライン 28.58pt、タイトル 1 行追加ごと +18.0pt)。境界定数の最終確定は Phase 0.5 |
+| C-1: 本文領域の定義 | **確定済み(2026-07-10)**。案①(タイトル帯 1 行固定高、2 行以上は L019 警告)を採用。Tectonic 0.16.9 と `zref-savepos` で `fixtures/measure-body-area.tex` を計測し、結果を [subset-spec.md](subset-spec.md) §2.8、renderer の境界定数、計測 artifact に記録した |
 | C-2〜C-8: 設計の穴 | 仕様へ反映済み(savepos 検証 = L012 実装方式、decktext 内語彙、canvas オーバーレイ対象外、寸法プローブ注入、L016〜L019、adjust 時の label 自動付与)。[issues-to-resolve.md](issues-to-resolve.md) の解決状況を参照 |
 | A-1〜A-6: 文書リコンサイル | 反映済み(subset-spec v1.1、design.md、ai-protocol.md §7、本書) |
-| AST 型ドラフト | ドラフト作成済み(`packages/core/src/ast.ts`)。**レビューと合意が未了** |
+| AST 型 | 実装済み(`packages/core/src/ast.ts`。キャンバスノード・decktext 内語彙制約・source span・コメント保持を含む) |
 
 ## フェーズ詳細
 
@@ -52,7 +52,7 @@
 キャンバスの「ソース表現と操作セマンティクス」を実装前に固定する。**TeX 側マクロは textpos 統合・minipage 幅・fontsize 切替・縦横比保持を含む本物の TeX エンジニアリングであり、独立した工数として計上する**(レビュー B-2)。
 
 - `deckcanvas` / `decktext` / `deckimage` の TeX 実装(ツール管理プリアンブルに入る本物の LaTeX 定義)。
-- 本文領域の境界定数を savepos 実測で最終確定し、fixture として固定(C-1 の続き。計測デッキは `fixtures/measure-body-area.tex` を出発点にする)。
+- C-1 で確定した本文領域の境界定数を TeX 実装と fixture へ適用する(計測デッキは `fixtures/measure-body-area.tex`)。
 - `zref-savepos` によるはみ出し・重なり計測のプロトタイプ(Phase 6 の check 統合の土台。C-2)。
 - 座標系・数値精度・文字サイズ enum・キャンバス frame の正規形を fixture とテストで固定。
 - `canvas.tex` の PDF 期待画像を生成し、受け入れ基準にする。
@@ -71,10 +71,10 @@
 
 ### Phase 2: core — フォーマッタ + リンター(M)
 
-**一部実装済(2026-07-24)。** キャンバス正規形フォーマッタ(`packages/core/src/formatter.ts`、PR #15)と AST ベースのリンター基盤 + L009/L011/L017/L018/L020(`packages/core/src/linter.ts`、PR #16)。残りは正規形の全域化(キャンバス以外)と冪等性テストの全 fixture 適用、残りのリント規則(L004/L015 のファイルアクセス・画像寸法プローブ注入を含む)。
+キャンバス正規形フォーマッタ、canonical fixture 全体の冪等性・semantic round-trip property tests、AST ベースのリンター基盤を備える。残りは正規形の全域化(キャンバス以外)と L003/L006/L008/L010 の整備である。
 
 - 正規形の実装(キャンバスの座標 3 桁固定・key 順序の正規化を含む)。冪等性テスト(`format(format(x)) == format(x)`)、コメント保持テスト。
-- リント規則 L001〜L019。L004 / L015 は環境非依存にするため、ファイルアクセスと画像寸法プローブ(PNG/JPEG ヘッダ・PDF MediaBox)を注入可能にする(C-5)。
+- リント規則 L001〜L020。L004 / L015 は環境非依存にするため、ファイルアクセスと画像寸法プローブ(PNG/JPEG ヘッダ・PDF MediaBox)を注入可能にする(C-5)。
 - 完了条件: サンプル 4 本の正規形がレビューで合意され、fixture として固定される。
 
 ### Phase 3: core — マクロ展開器(M)
@@ -98,7 +98,7 @@
 
 ### Phase 5: 共有 UI + VS Code シェル
 
-**進行中。** VS-1(拡張スキャフォールド、PR #19)・VS-2(共有プレビュー UI `packages/ui` + ShellHost 契約、PR #20)・VS-3(TextDocument 同期: 変更購読 + debounce + version guard + マクロ展開統合)・VS-4(プレビュー → ソースジャンプ: ExpansionMap で元ソースへ解決 + 古い版検出時は再描画要求)・VS-5(lint → DiagnosticCollection: 開いている .tex ごとに独立管理)・VS-6(外部編集と競合: @vscode/test-electron による実 VS Code 統合テストで clean buffer 追従・dirty buffer 保全を検証。`pnpm --dir apps/vscode test:integration`)・VS-7(テーマ変数 + KaTeX CSS・ナビ状態の getState/setState 保存・ARIA/キーボード・CSP default-src 'none' + nonce・Workspace Trust 対応)・VS-8/VS-9(`pnpm --dir apps/vscode package` で .vsix 生成、CI へ統合テスト(xvfb)と .vsix artifact を追加)は実装済(2026-07-29)。**M2 の残りは実機での受け入れ確認**(移植計画 §2 の 8 項目、特に別環境への .vsix 導入)と PR チェーン #27〜#33 のマージ。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
+VS-1〜VS-9（拡張スキャフォールド、共有プレビューUI、編集追従、ソースジャンプ、lint診断、外部編集統合テスト、テーマ/a11y(VS-7)、CSP/Workspace Trust(VS-8)、テスト・`.vsix`生成・CI artifact(VS-9)）は Phase 5 のPRチェーン #27〜#34 でマージ済み。その後、ソースペインを維持するpreview jump、preview zoom、キャンバス画像ドラッグも追加された。**M2 の残りは実機での受け入れ確認**(移植計画 §2 の8項目、特に別環境への`.vsix`導入)。継続中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
 
 **5a. packages/ui — 共有 UI と ShellHost 契約(S)**
 
@@ -211,10 +211,8 @@ Electron は次が VS Code 版で安定してから着手する(追加要件 §6
 - compiler は tectonic 依存のため CI ではキャッシュ・キュー・ハッシュ・savepos ログ解析のロジックのみ単体テストし、実コンパイルはローカルの統合テストとする。
 - 「AI が書いたデッキが lint を通る率」を M4 以降の品質指標として fixture に蓄積する。
 
-## 最初の一歩(着手チェックリスト)
+## 現在の次手
 
-1. AST の型定義ドラフト(`packages/core/src/ast.ts`)をレビューして合意(キャンバスノード・decktext 内語彙制約・source span・コメント保持を含む)
-2. Phase 0 のモノレポ雛形(git リポジトリは docs 先行で初期化済み)
-3. ゴールデンサンプル 4 本の執筆(サブセット仕様の妥当性検証を兼ねる — 書いてみて窮屈な箇所は仕様へフィードバック)
-4. Phase 0.5: `deck*` マクロの TeX 実装と本文領域定数の最終確定(`fixtures/measure-body-area.tex` を出発点にする)
-5. Phase 1 のトークナイザから実装開始
+1. M2 の実機受け入れを完了する（移植計画 §2 の8項目、特に別環境への`.vsix`導入）。
+2. Phase 2 の正規形をキャンバス外へ広げ、L003/L006/L008/L010を実装する。
+3. 受け入れ結果を反映し、ドッグフーディング開始条件を満たす。
