@@ -187,6 +187,8 @@ describe("parseArgs(純関数)", () => {
       sub: "status",
       family: undefined,
       json: false,
+      write: false,
+      unknownOptions: [],
     });
   });
 
@@ -213,6 +215,8 @@ describe("parseArgs(純関数)", () => {
       sub: undefined,
       family: undefined,
       json: false,
+      write: false,
+      unknownOptions: [],
     });
   });
 });
