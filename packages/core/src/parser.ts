@@ -1075,6 +1075,7 @@ class Parser {
           );
           entries.push({
             type: "macroDefinition",
+            tex: this.src.slice(cursor, i),
             kind,
             name,
             paramCount,

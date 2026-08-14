@@ -176,7 +176,8 @@ describe("parseDeck: canvas.tex", () => {
 });
 
 describe("parseDeck: macros.tex", () => {
-  const doc = parseDeck(fixture("macros.tex"));
+  const macroSource = fixture("macros.tex");
+  const doc = parseDeck(macroSource);
 
   it("マクロ定義を読む(展開可能性の判定込み)", () => {
     const defs = doc.macros.entries.filter((e) => e.type === "macroDefinition");
@@ -189,6 +190,9 @@ describe("parseDeck: macros.tex", () => {
     const code = defs.find((d) => d.name === "code");
     expect(code?.expandable).toBe(true);
     expect(code?.paramCount).toBe(1);
+    for (const definition of defs) {
+      expect(definition.tex).toBe(macroSource.slice(definition.span.start, definition.span.end));
+    }
   });
 
   it("\\def は生ブロックとして保持する", () => {
