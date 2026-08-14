@@ -3,7 +3,7 @@ import type { RenderedDeck } from "@beamer-editor/renderer";
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountPreview } from "../src/preview/mount.js";
-import type { ShellHost } from "../src/shell-host.js";
+import type { NavState, ShellHost } from "../src/shell-host.js";
 
 // React の act() を有効化する（createRoot の flush を同期させる）。
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -86,7 +86,7 @@ describe("mountPreview", () => {
     const saved: unknown[] = [];
     const host = {
       ...fakeHost(),
-      loadNavState: () => ({ current: 1, step: 1 }),
+      loadNavState: () => ({ current: 1, step: 1, zoom: "fit" as const }),
       saveNavState: (state: unknown) => {
         saved.push(state);
       },
@@ -102,14 +102,14 @@ describe("mountPreview", () => {
     // 復元された current=1 のサムネイルがアクティブになる。
     const thumbs = [...container.querySelectorAll(".thumb")];
     expect(thumbs[1]?.classList.contains("active")).toBe(true);
-    expect(saved.at(-1)).toEqual({ current: 1, step: 1 });
+    expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: "fit" });
 
     // 前へ移動すると新しいナビ状態が保存される。
     const prev = container.querySelector<HTMLButtonElement>('button[aria-label="前のフレーム"]');
     act(() => {
       prev?.click();
     });
-    expect(saved.at(-1)).toEqual({ current: 0, step: 1 });
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: "fit" });
   });
 
   it("復元した step は現在フレームの stepCount へクランプされる(P2 指摘)", () => {
@@ -119,7 +119,7 @@ describe("mountPreview", () => {
     const host = {
       ...fakeHost(),
       // frames[0] の stepCount は 2。壊れていないが上限超えの state を復元する。
-      loadNavState: () => ({ current: 0, step: 999 }),
+      loadNavState: () => ({ current: 0, step: 999, zoom: "fit" as const }),
       saveNavState: (state: unknown) => {
         saved.push(state);
       },
@@ -132,7 +132,65 @@ describe("mountPreview", () => {
       host.push(DECK);
     });
 
-    expect(saved.at(-1)).toEqual({ current: 0, step: 2 });
+    expect(saved.at(-1)).toEqual({ current: 0, step: 2, zoom: "fit" });
+  });
+
+  it("ズーム操作を反映・保存し、fit と 100% 表示を切り替える", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: unknown[] = [];
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: "fit" as const }),
+      saveNavState: (state: unknown) => saved.push(state),
+    };
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    expect(container.querySelector(".zoom-indicator")?.textContent).toMatch(/^フィット /);
+    const actual = container.querySelector<HTMLButtonElement>('button[aria-label="100%表示"]');
+    act(() => actual?.click());
+    expect(container.querySelector(".slide-scale")?.getAttribute("style")).toContain("scale(1)");
+    expect(container.querySelector<HTMLElement>(".slide-layout")?.style.width).toBe("607px");
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.width).toBe("");
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1 });
+
+    const increase = container.querySelector<HTMLButtonElement>('button[aria-label="拡大"]');
+    act(() => increase?.click());
+    expect(container.querySelector(".slide-scale")?.getAttribute("style")).toContain("scale(1.1)");
+    expect(container.querySelector<HTMLElement>(".slide-layout")?.style.width).toBe("667.7px");
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.1 });
+
+    const fit = container.querySelector<HTMLButtonElement>('button[aria-label="画面に合わせる"]');
+    act(() => fit?.click());
+    expect(container.querySelector(".zoom-indicator")?.textContent).toMatch(/^フィット /);
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: "fit" });
+  });
+
+  it("zoom のない旧ナビ状態を fit として保存する", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: unknown[] = [];
+    const host = {
+      ...fakeHost(),
+      // 旧 Webview state は runtime では zoom を持たない。
+      loadNavState: () => ({ current: 1, step: 1 }) as unknown as NavState,
+      saveNavState: (state: unknown) => saved.push(state),
+    };
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: "fit" });
   });
 
   it("「ソースへ」ボタンと Ctrl+Enter でキーボードからジャンプできる", () => {

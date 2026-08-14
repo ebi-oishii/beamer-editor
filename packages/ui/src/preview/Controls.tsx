@@ -4,6 +4,7 @@
  */
 
 import type { RenderedFrame } from "@beamer-editor/renderer";
+import { formatZoom, type ZoomState } from "./zoom.js";
 
 export function Controls({
   frame,
@@ -13,6 +14,12 @@ export function Controls({
   onNext,
   onStep,
   onJump,
+  zoom,
+  fitScale,
+  onZoomOut,
+  onZoomIn,
+  onZoomFit,
+  onZoomActual,
 }: {
   frame: RenderedFrame | undefined;
   total: number;
@@ -21,6 +28,12 @@ export function Controls({
   onNext: () => void;
   onStep: (step: number) => void;
   onJump: () => void;
+  zoom: ZoomState;
+  fitScale: number;
+  onZoomOut: () => void;
+  onZoomIn: () => void;
+  onZoomFit: () => void;
+  onZoomActual: () => void;
 }): JSX.Element {
   const stepCount = frame?.stepCount ?? 1;
   const indicator = frame
@@ -38,6 +51,23 @@ export function Controls({
       <button type="button" aria-label="次のフレーム" onClick={onNext}>
         ▶
       </button>
+      <span className="zoom-box">
+        <button type="button" aria-label="縮小" disabled={!frame} onClick={onZoomOut}>
+          −
+        </button>
+        <span className="zoom-indicator" aria-live="polite">
+          {formatZoom(zoom, fitScale)}
+        </span>
+        <button type="button" aria-label="拡大" disabled={!frame} onClick={onZoomIn}>
+          ＋
+        </button>
+        <button type="button" aria-label="画面に合わせる" disabled={!frame} onClick={onZoomFit}>
+          フィット
+        </button>
+        <button type="button" aria-label="100%表示" disabled={!frame} onClick={onZoomActual}>
+          100%
+        </button>
+      </span>
       {/* キーボードだけでもソースジャンプできる明示ボタン(サムネイルのダブルクリックと等価) */}
       <button
         type="button"

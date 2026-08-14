@@ -38,7 +38,7 @@ const transport: MessageTransport = {
   },
 };
 
-// ナビ状態(現在フレーム・step)だけを getState / setState で保存する(移植計画 VS-7)。
+// ナビ状態(現在フレーム・step・zoom)だけを getState / setState で保存する(移植計画 VS-7)。
 const host = createMessageShellHost(transport, {
   getState: () => api.getState(),
   setState: (state) => api.setState(state),
