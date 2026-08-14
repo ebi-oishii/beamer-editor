@@ -1,4 +1,8 @@
-import type { LintDiagnostic, LintSeverity } from "@beamer-editor/core";
+import {
+  canvasImagePositionReplacement,
+  type LintDiagnostic,
+  type LintSeverity,
+} from "@beamer-editor/core";
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
 import { PreviewController } from "./preview-controller";
@@ -163,6 +167,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           onError: (message) => {
             void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
           },
+          onWarning: (message) => {
+            void vscode.window.showWarningMessage(`Beamer preview: ${message}`);
+          },
           navigate: (offset) => {
             // タブを閉じて close された場合、元の TextDocument は凍結するため
             // 同じ uri の最新インスタンスを引き直してからジャンプする。
@@ -177,6 +184,32 @@ export function activate(context: vscode.ExtensionContext): TestApi {
               ? vscode.Uri.file(path)
               : vscode.Uri.joinPath(documentDir, path);
             return panel.webview.asWebviewUri(uri).toString();
+          },
+          moveCanvasElement: async (move) => {
+            const target = vscode.workspace.textDocuments.find(
+              (candidate) => candidate === move.document,
+            );
+            if (
+              !target ||
+              target.uri.toString() !== move.document.uri.toString() ||
+              target.version !== move.version
+            )
+              return "cancelled";
+            const original = target.getText().slice(move.sourceSpan.start, move.sourceSpan.end);
+            if (original !== move.expectedOptions) return "cancelled";
+            const replacement = canvasImagePositionReplacement(original, move.x, move.y);
+            if (replacement === null) return "failed";
+            if (replacement === original) return "unchanged";
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+              target.uri,
+              new vscode.Range(
+                target.positionAt(move.sourceSpan.start),
+                target.positionAt(move.sourceSpan.end),
+              ),
+              replacement,
+            );
+            return (await vscode.workspace.applyEdit(edit)) ? "applied" : "failed";
           },
         },
       );
