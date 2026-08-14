@@ -1,6 +1,6 @@
 # 開発計画
 
-ステータス: 改訂版(追加要件・レビュー統合)/ 最終更新: 2026-08-02
+ステータス: 改訂版(追加要件・レビュー統合)/ 最終更新: 2026-08-14
 
 [beamer-editor-additional-requirements.md](beamer-editor-additional-requirements.md)(キャンバス前倒し・VS Code 1 本化・AgentAdapter)と [issues-to-resolve.md](issues-to-resolve.md)(A/B/C 指摘)を初版計画に統合した改訂版。
 
@@ -71,7 +71,7 @@
 
 ### Phase 2: core — フォーマッタ + リンター(M)
 
-キャンバス正規形フォーマッタと AST ベースのリンター基盤を備える。残りは正規形の全域化(キャンバス以外)、冪等性テストの全 fixture 適用、L003/L006/L008/L010 を含む未実装規則の整備である。
+キャンバス正規形フォーマッタ、canonical fixture 全体の冪等性・semantic round-trip property tests、AST ベースのリンター基盤を備える。残りは正規形の全域化(キャンバス以外)と L003/L006/L008/L010 の整備である。
 
 - 正規形の実装(キャンバスの座標 3 桁固定・key 順序の正規化を含む)。冪等性テスト(`format(format(x)) == format(x)`)、コメント保持テスト。
 - リント規則 L001〜L020。L004 / L015 は環境非依存にするため、ファイルアクセスと画像寸法プローブ(PNG/JPEG ヘッダ・PDF MediaBox)を注入可能にする(C-5)。
@@ -98,7 +98,7 @@
 
 ### Phase 5: 共有 UI + VS Code シェル
 
-VS-1〜VS-9（拡張スキャフォールド、共有プレビューUI、編集追従、ソースジャンプ、lint診断、外部編集統合テスト、テーマ/a11y(VS-7)、CSP/Workspace Trust(VS-8)、テスト・`.vsix`生成・CI artifact(VS-9)）は Phase 5 のPRチェーン #27〜#34 でマージ済み。**M2 の残りは実機での受け入れ確認**(移植計画 §2 の8項目、特に別環境への`.vsix`導入)。継続中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
+VS-1〜VS-9（拡張スキャフォールド、共有プレビューUI、編集追従、ソースジャンプ、lint診断、外部編集統合テスト、テーマ/a11y(VS-7)、CSP/Workspace Trust(VS-8)、テスト・`.vsix`生成・CI artifact(VS-9)）は Phase 5 のPRチェーン #27〜#34 でマージ済み。その後、ソースペインを維持するpreview jump、preview zoom、キャンバス画像ドラッグも追加された。**M2 の残りは実機での受け入れ確認**(移植計画 §2 の8項目、特に別環境への`.vsix`導入)。継続中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
 
 **5a. packages/ui — 共有 UI と ShellHost 契約(S)**
 

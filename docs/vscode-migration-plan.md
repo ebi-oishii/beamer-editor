@@ -1,6 +1,6 @@
 # VS Code 移植計画
 
-更新日: 2026-08-02<br>
+更新日: 2026-08-14<br>
 対象: Phase 5（共有 UI + VS Code シェル）<br>
 目的: Phase 7 の GUI 編集へ進む前に、VS Code 上で編集・プレビュー・診断の基盤を成立させる
 
@@ -51,7 +51,7 @@ GUI 編集」へ進む。
 
 ### 2.1 反映済み範囲と継続作業
 
-Phase 5 のPRチェーン #27〜#34 はマージ済みで、VS-1〜VS-9（`.vsix`生成とCI artifactを含む）が反映されている。
+Phase 5 のPRチェーン #27〜#34 はマージ済みで、VS-1〜VS-9（`.vsix`生成とCI artifactを含む）が反映されている。その後、ソースペインを維持するpreview jump、preview zoom、キャンバス画像ドラッグも追加された。
 
 継続中の変更は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)で確認する。Phase 5 の完了は本書 §2 と §9 の受け入れ項目で判断し、実機確認が終わるまで恒久状態を更新しない。
 
