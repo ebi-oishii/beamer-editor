@@ -1,4 +1,42 @@
 {
-  "latex-workshop.latex.watch.files.ignore": ["**/fixtures/**/*.tex"],
-  "latex-workshop.latex.autoBuild.onSave.files.ignore": ["**/fixtures/**/*.tex"]
+  "latex-workshop.latex.watch.files.ignore": [
+    "**/*.aux",
+    "**/*.bbx",
+    "**/*.bbl",
+    "**/*.cbx",
+    "**/*.cfg",
+    "**/*.clo",
+    "**/*.cnf",
+    "**/*.def",
+    "**/*.dfu",
+    "**/*.enc",
+    "**/*.fd",
+    "**/*.fmt",
+    "**/*.gls",
+    "**/*.lbx",
+    "**/*.map",
+    "**/*.mkii",
+    "**/*.out",
+    "**/*.pfb",
+    "**/*.tfm",
+    "**/*.vf",
+    "**/*.code.tex",
+    "**/*.sty",
+    "**/texmf-{dist,var}/**",
+    "**/Local/MiKTeX/**",
+    "**/Local/Programs/MiKTeX/**",
+    "**/Roaming/MiKTeX/**",
+    "**/Program*/MiKTeX*/**",
+    "**/.miktex/texmfs/**",
+    "/var/cache/miktex-texmf/**",
+    "/usr/local/share/miktex-texmf/**",
+    "**/Library/Application Support/MiKTeX/texmfs/**",
+    "/dev/null",
+    "**/fixtures/**/*.tex"
+  ],
+  "latex-workshop.latex.autoBuild.onSave.files.ignore": [
+    "**/*.sty",
+    "**/*.cls",
+    "**/fixtures/**/*.tex"
+  ]
 }

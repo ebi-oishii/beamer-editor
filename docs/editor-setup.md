@@ -45,8 +45,9 @@ workspace 全体が Beamer Editor 専用で、LaTeX Workshop による自動ビ�
 
 このリポジトリにコミットする ignore は、テスト fixture への対象限定設定だけである。
 `.vscode/settings.json` の `**/fixtures/**/*.tex` は絶対パスの workspace でも一致し、fixture
-の監視・保存時自動ビルドだけを除外する。managed slide の設定をワークスペース設定へ
-固定したり、すべての LaTeX 自動ビルドを止めたりしない。
+の監視・保存時自動ビルドだけを除外する。LaTeX Workshop 10.16.1 の各 ignore 設定の既定値も
+保持したうえで追加している。managed slide の設定をワークスペース設定へ固定したり、すべての
+LaTeX 自動ビルドを止めたりしない。
 
 PDF が必要な場合は、現時点では LaTeX Workshop の **Build LaTeX project** を明示的に実行するか、
 利用中の LaTeX compiler を直接実行する。Beamer Editor 自身の PDF export は Phase 6 で予定している。
