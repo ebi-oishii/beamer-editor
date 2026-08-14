@@ -161,7 +161,9 @@ describe("deck lint", () => {
     const usage = runCli("lint", "--write", "missing.tex", "--json");
     expect(usage.status).toBe(3);
     expect(usage.stdout).toBe("");
-    expect(JSON.parse(usage.stderr).error.code).toBe("E_USAGE");
+    expect(JSON.parse(usage.stderr)).toEqual({
+      error: { code: "E_USAGE", message: "lint は --write をサポートしません" },
+    });
     const io = runCli("format", "missing.tex");
     expect(io.status).toBe(3);
     expect(io.stdout).toBe("");
@@ -169,7 +171,11 @@ describe("deck lint", () => {
     const ioJson = runCli("format", "missing.tex", "--json");
     expect(ioJson.status).toBe(3);
     expect(ioJson.stdout).toBe("");
-    expect(JSON.parse(ioJson.stderr)).toMatchObject({ error: { code: "E_IO" } });
+    const ioError = JSON.parse(ioJson.stderr) as { error: Record<string, unknown> };
+    expect(Object.keys(ioError)).toEqual(["error"]);
+    expect(Object.keys(ioError.error)).toEqual(["code", "message"]);
+    expect(ioError.error.code).toBe("E_IO");
+    expect(ioError.error.message).toContain("読み込みに失敗しました: missing.tex:");
   });
 
   it("maps all E_* operational failures to the stable exit code", () => {
@@ -200,13 +206,29 @@ describe("deck lint", () => {
     const json = runCli("--json");
     expect(json.status).toBe(3);
     expect(json.stdout).toBe("");
-    expect(JSON.parse(json.stderr)).toMatchObject({ error: { code: "E_USAGE" } });
+    expect(JSON.parse(json.stderr)).toEqual({
+      error: { code: "E_USAGE", message: "コマンドを指定してください" },
+    });
 
     const write = runCli("--write");
     expect(write.status).toBe(3);
     expect(write.stdout).toBe("");
     expect(write.stderr).toContain("コマンドを指定してください");
     expect(write.stderr).toContain("使い方: deck");
+  });
+
+  it("keeps human usage errors on stderr and operational exit code 3", () => {
+    const result = runCli("unknown-command");
+    expect(result.status).toBe(EXIT_CODE.operationalFailure);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "不明なコマンド: unknown-command\n" +
+        "使い方: deck <command> ...\n\n" +
+        "  deck lint <file> [--json]           デッキを検査\n" +
+        "  deck format <file> [--write] [--json]  デッキを正規化\n" +
+        "  deck fonts status [--json]          フォントカタログ全 family の解決状態\n" +
+        '  deck fonts fetch [family] [--json]  family(既定 "Noto Sans CJK JP")を取得・配置\n',
+    );
   });
 });
 

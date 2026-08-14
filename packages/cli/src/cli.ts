@@ -1,5 +1,6 @@
 /**
- * `deck` command line entry point.
+ * `deck` コマンドライン本体。lint / format は core の解析・整形結果を、fonts は
+ * スタイルトラック S2 のフォント解決結果をそのまま境界へ出す。
  *
  *   deck lint <file> [--json]             診断を stdout に出す
  *   deck format <file> [--write] [--json] 整形結果または書き込み結果を stdout に出す
@@ -60,7 +61,10 @@ export interface ParsedArgs {
   unknownOptions: string[];
 }
 
-/** Parses options independently of their position. */
+/**
+ * argv(process.argv.slice(2) 相当)を解析する純関数。
+ * フラグは位置に依存せず拾い、family は空白を含みうるため残りの位置引数を連結する。
+ */
 export function parseArgs(argv: readonly string[]): ParsedArgs {
   const positional: string[] = [];
   const unknownOptions: string[] = [];
@@ -83,6 +87,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   };
 }
 
+/** status の 1 family 分を JSON 向けの素な形へ落とす。 */
 function resolutionToJson(r: FontResolution) {
   return {
     family: r.family,
@@ -96,6 +101,7 @@ function resolutionToJson(r: FontResolution) {
   };
 }
 
+/** 状態の 1 行テキスト表現。 */
 function statusLine(r: FontResolution): string {
   const detail =
     r.status === "unknown-family"
@@ -170,6 +176,7 @@ const USAGE = `使い方: deck <command> ...
   deck fonts fetch [family] [--json]  family(既定 "${DEFAULT_FAMILY}")を取得・配置
 `;
 
+/** E_* は成功出力と混ざらないよう常に stderr へ出す。 */
 function writeError(code: CliErrorCode, message: string, json: boolean): void {
   if (json) {
     process.stderr.write(`${JSON.stringify({ error: { code, message } }, null, 2)}\n`);
@@ -282,7 +289,7 @@ function usageError(message: string, json: boolean): number {
   return exitCodeForError("E_USAGE");
 }
 
-/** Dispatches subcommands and returns a process exit code. */
+/** サブコマンドのディスパッチ。終了コードを返す(副作用は stdout/stderr のみ)。 */
 export async function run(argv: readonly string[]): Promise<number> {
   const { command, sub, family, json, write, unknownOptions } = parseArgs(argv);
   if (unknownOptions.length > 0) return usageError(`不明なオプション: ${unknownOptions[0]}`, json);
@@ -311,6 +318,8 @@ export async function run(argv: readonly string[]): Promise<number> {
   return usageError(`不明なコマンド: ${command}`, json);
 }
 
+// エントリポイント(import されたときは実行しない)。Windows のパス形式でも一致するよう
+// pathToFileURL で比較する(Node 標準イディオム)。
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   run(process.argv.slice(2))
     .then((code) => {
