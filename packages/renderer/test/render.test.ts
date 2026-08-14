@@ -74,6 +74,16 @@ describe("renderDeck: canvas.tex", () => {
   it("PDF 画像はプレースホルダになる", () => {
     expect(deck.frames[1]?.html).toContain("image-placeholder");
   });
+
+  it("deckimage だけが frame 内で一意の drag descriptor と data 属性を持つ", () => {
+    const frame = deck.frames[1];
+    const elements = frame?.canvasElements ?? [];
+    expect(elements.length).toBeGreaterThan(0);
+    const ids = elements.map((element) => element.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(frame?.html).toContain('data-canvas-element-id="canvas-image-0"');
+    expect(elements.every((element) => element.kind === "image")).toBe(true);
+  });
 });
 
 describe("renderDeck: kitchen-sink.tex", () => {

@@ -35,6 +35,17 @@ export interface RenderedFrame {
   /** オーバーレイの総ステップ数(1 なら段階表示なし)。 */
   stepCount: number;
   isRaw: boolean;
+  /** deckcanvas 直下の画像。ID はこの描画 version の frame 内だけで有効。 */
+  canvasElements?: RenderedCanvasElement[];
+}
+
+export interface RenderedCanvasElement {
+  id: string;
+  kind: "image";
+  position: { x: number; y: number; width: number };
+  /** 展開後ソースの `[...]` 範囲。host が strict map を通して editable 化する。 */
+  sourceSpan: SourceSpan;
+  editable?: boolean;
 }
 
 export interface RenderedDeck {
@@ -126,6 +137,7 @@ class FrameRenderer {
   private maxStep = 1;
 
   private readonly style: CollectedStyle;
+  private canvasElements: RenderedCanvasElement[] = [];
 
   constructor(
     private readonly doc: DeckDocument,
@@ -335,10 +347,18 @@ class FrameRenderer {
           if (item.type === "canvasText") {
             html += `<div class="canvas-item canvas-text" style="${posStyle(item.position.x, item.position.y, item.position.width)};font-size:${this.theme.fontSizesPt[item.size]}pt">${this.renderBlocks(item.children)}</div>`;
           } else if (item.type === "canvasImage") {
+            const id = `canvas-image-${this.canvasElements.length}`;
+            this.canvasElements.push({
+              id,
+              kind: "image",
+              position: { x: item.position.x, y: item.position.y, width: item.position.width },
+              sourceSpan: item.position.span,
+            });
+            const attrs = ` data-canvas-element-id="${id}" data-canvas-element-kind="image"`;
             if (item.path.toLowerCase().endsWith(".pdf")) {
-              html += `<div class="canvas-item image-placeholder" style="${posStyle(item.position.x, item.position.y, item.position.width)}">PDF 画像: ${escapeHtml(item.path)}</div>`;
+              html += `<div class="canvas-item image-placeholder"${attrs} style="${posStyle(item.position.x, item.position.y, item.position.width)}">PDF 画像: ${escapeHtml(item.path)}</div>`;
             } else {
-              html += `<img class="canvas-item" src="${escapeHtml(item.path)}" style="${posStyle(item.position.x, item.position.y, item.position.width)}">`;
+              html += `<img class="canvas-item"${attrs} src="${escapeHtml(item.path)}" style="${posStyle(item.position.x, item.position.y, item.position.width)}">`;
             }
           } else {
             html += `<div class="canvas-item raw-block"><pre>${escapeHtml(item.tex)}</pre></div>`;
@@ -383,9 +403,10 @@ class FrameRenderer {
     frame: FrameNode,
     frameIndex: number,
     frameTotal: number,
-  ): { html: string; stepCount: number } {
+  ): { html: string; stepCount: number; canvasElements: RenderedCanvasElement[] } {
     this.pauseCount = 0;
     this.maxStep = 1;
+    this.canvasElements = [];
     const body = this.renderBlocks(frame.body);
     const title =
       frame.title && frame.title.length > 0
@@ -394,6 +415,7 @@ class FrameRenderer {
     return {
       html: `<div class="slide${frame.options.plain ? " plain" : ""}">${this.decorations(frameIndex, frameTotal)}${title}<div class="slide-body">${body}</div></div>`,
       stepCount: this.maxStep,
+      canvasElements: this.canvasElements,
     };
   }
 
@@ -451,9 +473,10 @@ export function renderDeck(doc: DeckDocument, theme: Theme = DEFAULT_THEME): Ren
         sourceSpan: frame.span,
         stepCount: 1,
         isRaw: true,
+        canvasElements: [],
       };
     }
-    const { html, stepCount } = renderer.renderFrame(frame, i + 1, total);
+    const { html, stepCount, canvasElements } = renderer.renderFrame(frame, i + 1, total);
     const titleText =
       frame.title && frame.title.length > 0 ? inlineToPlain(frame.title) : `frame ${i + 1}`;
     return {
@@ -464,6 +487,7 @@ export function renderDeck(doc: DeckDocument, theme: Theme = DEFAULT_THEME): Ren
       sourceSpan: frame.span,
       stepCount,
       isRaw: false,
+      canvasElements,
     };
   });
   return {

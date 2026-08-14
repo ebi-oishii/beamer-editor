@@ -5,12 +5,13 @@
  */
 
 import type { RenderedDeck } from "@beamer-editor/renderer";
-import { type KeyboardEvent, useEffect, useReducer, useRef, useState } from "react";
+import { type KeyboardEvent, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ShellHost } from "../shell-host.js";
 import { Controls } from "./Controls.js";
 import { SlideList } from "./SlideList.js";
 import { Stage } from "./Stage.js";
 import { type PreviewAction, type PreviewState, previewReducer } from "./state.js";
+import { stepZoom, type ZoomState } from "./zoom.js";
 
 const EMPTY_DECK: RenderedDeck = { title: "", frames: [], css: "" };
 const INITIAL_STATE: PreviewState = { current: 0, step: 1 };
@@ -19,6 +20,9 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const [deck, setDeck] = useState<RenderedDeck>(EMPTY_DECK);
   // 表示中 deck の document version。jumpToSource に添えて古い版からのジャンプを検出させる。
   const [version, setVersion] = useState(Number.NEGATIVE_INFINITY);
+  const [restoredNav] = useState(() => host.loadNavState?.());
+  const [zoom, setZoom] = useState<ZoomState>(() => restoredNav?.zoom ?? "fit");
+  const [fitScale, setFitScale] = useState(1);
 
   // frameCount を reducer へ渡すため ref に写す（reducer の同一性を保つ）。
   const frameCountRef = useRef(0);
@@ -27,13 +31,13 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     (s: PreviewState, a: PreviewAction) => previewReducer(s, a, frameCountRef.current),
     INITIAL_STATE,
     // パネル再表示時は前回のナビ状態から復元する(範囲外は deckLoaded がクランプ)。
-    (initial) => host.loadNavState?.() ?? initial,
+    (initial) => restoredNav ?? initial,
   );
 
-  // ナビ状態を保存する(VS-7: current / step のみ。ソース本文や AST は保存しない)。
+  // ナビ状態を保存する(VS-7: current / step / zoom のみ。ソース本文や AST は保存しない)。
   useEffect(() => {
-    host.saveNavState?.({ current: state.current, step: state.step });
-  }, [host, state.current, state.step]);
+    host.saveNavState?.({ current: state.current, step: state.step, zoom });
+  }, [host, state.current, state.step, zoom]);
 
   // ホストからの deck 更新を購読する。
   useEffect(
@@ -73,6 +77,9 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   }, [host, state.current]);
 
   const frame = deck.frames[state.current];
+  const handleFitScaleChange = useCallback((next: number) => {
+    setFitScale((current) => (current === next ? current : next));
+  }, []);
 
   // step を現在フレームの stepCount 内へ収める。復元 state が上限を超えていた場合の
   // ほか、文書編集で表示中フレームの stepCount が減った場合もここでクランプされる。
@@ -110,7 +117,16 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         onJump={(i) => host.jumpToSource(i, version)}
       />
       <section className="stage">
-        <Stage frame={frame} step={state.step} />
+        <Stage
+          frame={frame}
+          step={state.step}
+          zoom={zoom}
+          version={version}
+          onMoveCanvasElement={(elementId, x, y) =>
+            host.moveCanvasElement?.(state.current, elementId, version, x, y)
+          }
+          onFitScaleChange={handleFitScaleChange}
+        />
         <Controls
           frame={frame}
           total={deck.frames.length}
@@ -119,6 +135,12 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
           onNext={() => dispatch({ type: "next" })}
           onStep={(s) => dispatch({ type: "setStep", step: s })}
           onJump={() => host.jumpToSource(state.current, version)}
+          zoom={zoom}
+          fitScale={fitScale}
+          onZoomOut={() => setZoom((current) => stepZoom(current, fitScale, -1))}
+          onZoomIn={() => setZoom((current) => stepZoom(current, fitScale, 1))}
+          onZoomFit={() => setZoom("fit")}
+          onZoomActual={() => setZoom(1)}
         />
       </section>
     </div>
