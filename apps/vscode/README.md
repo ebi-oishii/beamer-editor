@@ -24,4 +24,4 @@ code --install-extension apps/vscode/beamer-editor.vsix
 
 PDF 書き出し(tectonic)は Phase 6 で追加予定です。
 
-このリポジトリで LaTeX Workshop を併用する場合の、混在 workspace と専用 workspace の設定方針は[エディタセットアップ](../../docs/editor-setup.md)を参照してください。
+このリポジトリで LaTeX Workshop を併用する場合の、混在 workspace と専用 workspace の設定方針は[エディタセットアップ](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/editor-setup.md)を参照してください。
