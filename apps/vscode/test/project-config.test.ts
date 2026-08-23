@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_MANAGED_FILE_PATTERNS } from "../src/managed-files";
 
 const packageJson = JSON.parse(
   readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
@@ -90,5 +91,15 @@ describe("VS Code extension project configuration", () => {
       ...AUTO_BUILD_ON_SAVE_IGNORE_DEFAULTS_10_16_1,
       fixtureGlob,
     ]);
+  });
+
+  it("declares the managed slide-file default without disabling LaTeX Workshop auto-build", () => {
+    const contributes = packageJson.contributes as {
+      configuration: { properties: Record<string, unknown> };
+    };
+    expect(contributes.configuration.properties["beamerEditor.managedFiles"]).toMatchObject({
+      default: DEFAULT_MANAGED_FILE_PATTERNS,
+      scope: "resource",
+    });
   });
 });

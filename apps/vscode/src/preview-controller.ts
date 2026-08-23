@@ -14,6 +14,7 @@ export interface PreviewPanel {
     onDidReceiveMessage(listener: (msg: unknown) => void): vscode.Disposable;
   };
   onDidDispose(listener: () => void): vscode.Disposable;
+  reveal(): void;
   dispose(): void;
 }
 
@@ -366,6 +367,11 @@ export class PreviewController implements vscode.Disposable {
   close(): void {
     this.panel.dispose();
     this.dispose();
+  }
+
+  /** 既存パネルを前面に出す。手動 Open Preview の再実行時に使う。 */
+  reveal(): void {
+    this.panel.reveal();
   }
 
   dispose(): void {

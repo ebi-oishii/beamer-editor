@@ -22,9 +22,9 @@ Beamer Editor の `.tex` は、VS Code に組み込まれた LaTeX 言語サポ�
 - `\documentclass`、`\frametitle` などのコマンド
 - `\begin{frame}` / `\end{frame}` などの環境
 - `$...$` などの数式
-- `deckcanvas`、`decktext`、`deckimage` などの独自環境
+- `deckcanvas`、`decktext` などの独自環境と、`\deckimage` などの独自コマンド
 
-独自環境は一般的な LaTeX 環境として強調される。Beamer Editor 固有の意味に応じた色分けは
+独自環境と独自コマンドは一般的な LaTeX 構文として強調される。Beamer Editor 固有の意味に応じた色分けは
 行わず、誤りや未対応構文は Beamer Editor の Diagnostics で示す。
 
 ## 任意の編集支援: LaTeX Workshop

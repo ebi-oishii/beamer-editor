@@ -209,7 +209,7 @@ apps/
 - 対応する最小 VS Code バージョン（`engines.vscode`）
 - 開発時に使う pnpm バージョンをルート `package.json` の `packageManager` で固定する
 - 最初はデスクトップ版 VS Code の Node Extension Hostだけを対象にする
-- プレビューは「コマンドで開いた `.tex` 一つに紐づく単一パネル」とする
+- managed 文書はアクティブ時に URI ごとの自動プレビューを開く。通常のローカル `.tex` はコマンドによる手動プレビューのみとし、複数 URI の panel は同時に存在できる
 
 VS Code for the Web対応は、tectonicなどNode側機能との分離方針が固まるまで対象外とする。
 
@@ -319,7 +319,7 @@ VS Code側のCodeAction設計が揃ってから追加する。
 
 - lint対象fixtureでProblemsパネルに規則番号・メッセージ・位置が出る。
 - 修正すると診断が消える。
-- 複数の`.tex`を開いても診断が混ざらない。
+- 複数の managed `.tex` を開いても診断が混ざらず、対象外になった文書の診断は消える。
 
 ### VS-6: 外部編集と競合を確認する
 
