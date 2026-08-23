@@ -37,3 +37,5 @@ managed 文書をアクティブなエディタで開くと、自動プレビュ
 LaTeX Workshop が入っている環境で managed file を初めて開くと、Beamer Editor は自動監視と保存時自動ビルドの ignore リストへ managed patterns を追加するか確認します。書込先は managedFiles と各 Workshop 設定のうち、より具体的な scope (Workspace Folder / Workspace / Global) です。明示的に確認した場合だけ追加され、通常の `.tex` の既定自動ビルド設定は変わりません。「今後表示しない」は同じ workspace scope と managed pattern の組合せに対して永続化されます。managed `.slide.tex` でも language id は `latex` のままなので、LaTeX Workshop の手動 **Build LaTeX project** による PDF build は引き続き利用できます。
 
 PDF 書き出し(tectonic)は Phase 6 で追加予定です。
+
+このリポジトリで LaTeX Workshop を併用する場合の、混在 workspace と専用 workspace の設定方針は[エディタセットアップ](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/editor-setup.md)を参照してください。

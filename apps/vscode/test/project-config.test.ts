@@ -24,6 +24,44 @@ const vscodeIgnore = readFileSync(
   fileURLToPath(new URL("../.vscodeignore", import.meta.url)),
   "utf8",
 );
+const workspaceSettings = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../../.vscode/settings.json", import.meta.url)), "utf8"),
+) as Record<string, unknown>;
+const WATCH_IGNORE_DEFAULTS_10_16_1 = [
+  "**/*.aux",
+  "**/*.bbx",
+  "**/*.bbl",
+  "**/*.cbx",
+  "**/*.cfg",
+  "**/*.clo",
+  "**/*.cnf",
+  "**/*.def",
+  "**/*.dfu",
+  "**/*.enc",
+  "**/*.fd",
+  "**/*.fmt",
+  "**/*.gls",
+  "**/*.lbx",
+  "**/*.map",
+  "**/*.mkii",
+  "**/*.out",
+  "**/*.pfb",
+  "**/*.tfm",
+  "**/*.vf",
+  "**/*.code.tex",
+  "**/*.sty",
+  "**/texmf-{dist,var}/**",
+  "**/Local/MiKTeX/**",
+  "**/Local/Programs/MiKTeX/**",
+  "**/Roaming/MiKTeX/**",
+  "**/Program*/MiKTeX*/**",
+  "**/.miktex/texmfs/**",
+  "/var/cache/miktex-texmf/**",
+  "/usr/local/share/miktex-texmf/**",
+  "**/Library/Application Support/MiKTeX/texmfs/**",
+  "/dev/null",
+] as const;
+const AUTO_BUILD_ON_SAVE_IGNORE_DEFAULTS_10_16_1 = ["**/*.sty", "**/*.cls"] as const;
 
 describe("VS Code extension project configuration", () => {
   it("uses the approved extension ID and F5 watch task readiness protocol", () => {
@@ -42,6 +80,19 @@ describe("VS Code extension project configuration", () => {
     expect(vscodeIgnore).toContain("**/*.map");
   });
 
+  it("keeps ordinary LaTeX auto-build enabled while ignoring only repository fixtures", () => {
+    const fixtureGlob = "**/fixtures/**/*.tex";
+    expect(workspaceSettings).not.toHaveProperty("latex-workshop.latex.autoBuild.run");
+    expect(workspaceSettings["latex-workshop.latex.watch.files.ignore"]).toEqual([
+      ...WATCH_IGNORE_DEFAULTS_10_16_1,
+      fixtureGlob,
+    ]);
+    expect(workspaceSettings["latex-workshop.latex.autoBuild.onSave.files.ignore"]).toEqual([
+      ...AUTO_BUILD_ON_SAVE_IGNORE_DEFAULTS_10_16_1,
+      fixtureGlob,
+    ]);
+  });
+
   it("declares the managed slide-file default without disabling LaTeX Workshop auto-build", () => {
     const contributes = packageJson.contributes as {
       configuration: { properties: Record<string, unknown> };
@@ -50,13 +101,5 @@ describe("VS Code extension project configuration", () => {
       default: DEFAULT_MANAGED_FILE_PATTERNS,
       scope: "resource",
     });
-    const settingsPath = fileURLToPath(new URL("../../../.vscode/settings.json", import.meta.url));
-    let settings: Record<string, unknown> = {};
-    try {
-      settings = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
-    } catch (error) {
-      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
-    }
-    expect(settings["latex-workshop.latex.autoBuild.run"]).not.toBe("never");
   });
 });
