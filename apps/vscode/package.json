@@ -20,7 +20,8 @@
     "commands": [
       {
         "command": "beamerEditor.openPreview",
-        "title": "Beamer Editor: Open Preview"
+        "title": "Beamer Editor: Open Preview",
+        "icon": "$(open-preview)"
       }
     ],
     "configuration": {
@@ -43,7 +44,7 @@
       "editor/title": [
         {
           "command": "beamerEditor.openPreview",
-          "when": "resourceExtname == .tex",
+          "when": "resourceScheme == file && resourceExtname == .tex",
           "group": "navigation"
         }
       ]
