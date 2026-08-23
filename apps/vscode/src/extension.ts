@@ -5,6 +5,7 @@ import {
 } from "@beamer-editor/core";
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
+import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
 import {
   appendUniqueIgnorePatterns,
   chooseLatexWorkshopTarget,
@@ -112,6 +113,7 @@ export interface TestApi {
 
 export function activate(context: vscode.ExtensionContext): TestApi {
   const managedPatternCache = new Map<string, readonly string[]>();
+  const frameFoldCache = new FrameFoldCache();
   const latexWorkshopSessionPrompted = new Set<string>();
   const lineFlash = createLineFlash();
   context.subscriptions.push(lineFlash);
@@ -162,6 +164,18 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   function isManaged(document: vscode.TextDocument): boolean {
     return isManagedDocument(document, managedPatterns(document), matchesManagedGlob);
   }
+
+  context.subscriptions.push(
+    vscode.languages.registerFoldingRangeProvider(
+      { scheme: "file", language: "latex" },
+      {
+        provideFoldingRanges(document, _context, token) {
+          const ranges = provideFrameFoldRanges(document, isManaged, token, frameFoldCache);
+          return ranges?.map((range) => new vscode.FoldingRange(range.start, range.end));
+        },
+      },
+    ),
+  );
 
   async function offerLatexWorkshopIgnore(document: vscode.TextDocument): Promise<void> {
     if (!vscode.extensions.getExtension("James-Yu.latex-workshop")) return;
