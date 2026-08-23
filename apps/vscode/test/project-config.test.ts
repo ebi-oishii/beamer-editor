@@ -80,6 +80,23 @@ describe("VS Code extension project configuration", () => {
     expect(vscodeIgnore).toContain("**/*.map");
   });
 
+  it("declares the preview command icon and editor-title placement contract", () => {
+    const contributes = packageJson.contributes as {
+      commands: Array<{ command: string; title: string; icon?: string }>;
+      menus: { "editor/title": Array<{ command: string; when?: string; group?: string }> };
+    };
+    expect(contributes.commands).toContainEqual({
+      command: "beamerEditor.openPreview",
+      title: "Beamer Editor: Open Preview",
+      icon: "$(open-preview)",
+    });
+    expect(contributes.menus["editor/title"]).toContainEqual({
+      command: "beamerEditor.openPreview",
+      when: "resourceScheme == file && resourceExtname == .tex",
+      group: "navigation",
+    });
+  });
+
   it("keeps ordinary LaTeX auto-build enabled while ignoring only repository fixtures", () => {
     const fixtureGlob = "**/fixtures/**/*.tex";
     expect(workspaceSettings).not.toHaveProperty("latex-workshop.latex.autoBuild.run");
