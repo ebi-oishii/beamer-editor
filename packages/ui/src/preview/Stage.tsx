@@ -52,6 +52,10 @@ function useFitScale(
       const effectiveScale = zoom === "fit" ? fitScale : zoom;
       // ResizeObserver 内からの state 更新は、親側の stable callback と同値 no-op guard が前提。
       onFitScaleChange(fitScale);
+      // transform 自体はレイアウト寸法を変えない。内側を論理サイズに固定し、外側だけを
+      // 見た目の scaled size にすることで transform のはみ出しを二重に数えない。
+      scaleBox.style.width = `${slideW}px`;
+      scaleBox.style.height = `${slideH}px`;
       scaleBox.style.transform = `scale(${effectiveScale})`;
       layoutBox.style.width = `${slideW * effectiveScale}px`;
       layoutBox.style.height = `${slideH * effectiveScale}px`;

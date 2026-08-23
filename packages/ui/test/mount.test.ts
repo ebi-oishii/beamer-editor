@@ -2,6 +2,7 @@
 import type { RenderedDeck } from "@beamer-editor/renderer";
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PREVIEW_CSS } from "../src/preview/styles.js";
 import type { NavState, ShellHost } from "../src/shell-host.js";
 
 // React の act() を有効化する（createRoot の flush を同期させる）。
@@ -194,6 +195,7 @@ function mountCanvasPreview() {
 describe("mountPreview", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     document.body.innerHTML = "";
     document.head.innerHTML = "";
   });
@@ -297,19 +299,90 @@ describe("mountPreview", () => {
     act(() => actual?.click());
     expect(container.querySelector(".slide-scale")?.getAttribute("style")).toContain("scale(1)");
     expect(container.querySelector<HTMLElement>(".slide-layout")?.style.width).toBe("607px");
-    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.width).toBe("");
+    expect(container.querySelector<HTMLElement>(".slide-layout")?.style.height).toBe("341px");
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.width).toBe("607px");
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.height).toBe("341px");
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1 });
 
     const increase = container.querySelector<HTMLButtonElement>('button[aria-label="拡大"]');
     act(() => increase?.click());
     expect(container.querySelector(".slide-scale")?.getAttribute("style")).toContain("scale(1.1)");
     expect(container.querySelector<HTMLElement>(".slide-layout")?.style.width).toBe("667.7px");
+    expect(container.querySelector<HTMLElement>(".slide-layout")?.style.height).toBe("375.1px");
+    // Manual zoom changes only the outer layout; the transform target remains logical size.
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.width).toBe("607px");
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.height).toBe("341px");
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.1 });
 
     const fit = container.querySelector<HTMLButtonElement>('button[aria-label="画面に合わせる"]');
     act(() => fit?.click());
     expect(container.querySelector(".zoom-indicator")?.textContent).toMatch(/^フィット /);
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.width).toBe("607px");
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.height).toBe("341px");
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: "fit" });
+  });
+
+  it("resize 後も内側は論理サイズのまま、fit layout だけを再計算する", () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const holder = container.querySelector<HTMLElement>(".slide-holder");
+    const layout = container.querySelector<HTMLElement>(".slide-layout");
+    const scale = container.querySelector<HTMLElement>(".slide-scale");
+    if (!holder || !layout || !scale) throw new Error("stage fixture missing");
+    Object.defineProperties(holder, {
+      clientWidth: { configurable: true, value: 1_000 },
+      clientHeight: { configurable: true, value: 700 },
+    });
+    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+    expect(layout.style.width).toBe("971.2px");
+    expect(layout.style.height).toBe("545.6px");
+
+    Object.defineProperties(holder, {
+      clientWidth: { configurable: true, value: 300 },
+      clientHeight: { configurable: true, value: 250 },
+    });
+    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+    expect(layout.style.width).toBe("276px");
+    expect(Number.parseFloat(layout.style.height)).toBeCloseTo(155.05, 2);
+    expect(scale.style.width).toBe("607px");
+    expect(scale.style.height).toBe("341px");
+  });
+
+  it("scaled layout clips transform overflow while thumbnails keep their own slide shadow", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    expect(PREVIEW_CSS).toContain(".slide-layout {\n  margin-left: auto;");
+    expect(PREVIEW_CSS).toContain("overflow: hidden;\n  box-shadow: 0 1px 6px");
+    expect(PREVIEW_CSS).toContain(".slide-layout .slide {\n  box-shadow: none;");
+    expect(PREVIEW_CSS).toContain("line-height: 1.24;\n  box-shadow: 0 1px 6px");
+    expect(PREVIEW_CSS).toContain(".thumb-scale .slide {\n  transform: scale(0.264);");
   });
 
   it("zoom のない旧ナビ状態を fit として保存する", () => {

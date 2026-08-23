@@ -79,9 +79,14 @@ export const PREVIEW_CSS = `
   margin-left: auto;
   margin-right: auto;
   flex: 0 0 auto;
+  overflow: hidden;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25);
 }
 .slide-scale {
   transform-origin: top left;
+}
+.slide-layout .slide {
+  box-shadow: none;
 }
 .controls {
   display: flex;
