@@ -6,6 +6,7 @@ import {
   DEFAULT_MANAGED_FILE_PATTERNS,
   effectiveArray,
   isManagedDocument,
+  latexWorkshopPromptInputChanged,
   latexWorkshopPromptSignature,
   ManagedPreviewLifecycle,
   needsLatexWorkshopIgnorePrompt,
@@ -169,18 +170,72 @@ describe("managed file helpers", () => {
     ]);
   });
 
-  it("shares persistent Workshop prompt refusal across files in a scope, but not other scopes", () => {
-    const first = latexWorkshopPromptSignature("file:///work", [
-      "slides/**/*.tex",
-      "**/*.slide.tex",
-    ]);
-    const second = latexWorkshopPromptSignature("file:///work", [
-      "**/*.slide.tex",
-      "slides/**/*.tex",
-    ]);
-    const otherScope = latexWorkshopPromptSignature("file:///other", ["**/*.slide.tex"]);
-    expect(second).toBe(first);
-    expect(otherScope).not.toBe(first);
+  it("keys persistent Workshop prompt refusal by the resolved setting identities", () => {
+    const multiRootFirstFolder = latexWorkshopPromptSignature(
+      {
+        watch: "workspace:file:///work.code-workspace",
+        autoBuild: "workspace:file:///work.code-workspace",
+      },
+      ["slides/**/*.tex", "**/*.slide.tex"],
+    );
+    const multiRootSecondFolder = latexWorkshopPromptSignature(
+      {
+        watch: "workspace:file:///work.code-workspace",
+        autoBuild: "workspace:file:///work.code-workspace",
+      },
+      ["**/*.slide.tex", "slides/**/*.tex"],
+    );
+    const otherFolder = latexWorkshopPromptSignature(
+      {
+        watch: "workspaceFolder:file:///work/other",
+        autoBuild: "workspaceFolder:file:///work/other",
+      },
+      ["**/*.slide.tex"],
+    );
+    const globalFromFirstFolder = latexWorkshopPromptSignature(
+      { watch: "global", autoBuild: "global" },
+      ["**/*.slide.tex"],
+    );
+    const globalFromSecondFolder = latexWorkshopPromptSignature(
+      { watch: "global", autoBuild: "global" },
+      ["**/*.slide.tex"],
+    );
+    expect(multiRootSecondFolder).toBe(multiRootFirstFolder);
+    expect(otherFolder).not.toBe(multiRootFirstFolder);
+    expect(globalFromSecondFolder).toBe(globalFromFirstFolder);
+    expect(globalFromFirstFolder).not.toBe(otherFolder);
+
+    const splitTargets = latexWorkshopPromptSignature(
+      { watch: "global", autoBuild: "workspace:file:///work.code-workspace" },
+      ["**/*.slide.tex"],
+    );
+    const swappedTargets = latexWorkshopPromptSignature(
+      { watch: "workspace:file:///work.code-workspace", autoBuild: "global" },
+      ["**/*.slide.tex"],
+    );
+    expect(swappedTargets).not.toBe(splitTargets);
+  });
+
+  it("re-prompts after a pending consent changes patterns or write targets, but not ignore values", () => {
+    const before = {
+      patterns: ["**/*.slide.tex"],
+      watchTarget: "workspace" as const,
+      autoBuildTarget: "workspace" as const,
+    };
+    expect(
+      latexWorkshopPromptInputChanged(before, {
+        ...before,
+        patterns: ["slides/**/*.tex"],
+      }),
+    ).toBe(true);
+    expect(
+      latexWorkshopPromptInputChanged(before, {
+        ...before,
+        watchTarget: "workspaceFolder",
+      }),
+    ).toBe(true);
+    // Concurrent ignore-array edits are safe: extension.ts re-reads and merges them before update.
+    expect(latexWorkshopPromptInputChanged(before, { ...before })).toBe(false);
   });
 
   it("coordinates actual preview lifecycle transitions without duplicate automatic panels", () => {
@@ -212,5 +267,20 @@ describe("managed file helpers", () => {
     expect(lifecycle.managedFilesChanged((candidate) => candidate.managed)).toEqual([2]);
     expect(lifecycle.registry.get(documentUri)).toBeUndefined();
     expect(lifecycle.registry.get(manualUri)?.controller).toBe(3);
+  });
+
+  it("keeps a dismissal through managed-file and unrelated folder configuration changes", () => {
+    const lifecycle = new ManagedPreviewLifecycle<number, { managed: boolean }>();
+    const dismissedUri = uri("file:///first/talk.slide.tex");
+    lifecycle.register(dismissedUri, 1, { managed: true }, true);
+    lifecycle.panelDisposed(dismissedUri, 1);
+
+    // This mirrors a managedFiles edit (including one in another workspace folder): dismissals
+    // belong to the open source document, not to the current managed pattern configuration.
+    expect(lifecycle.managedFilesChanged(() => true)).toEqual([]);
+    expect(lifecycle.prepareOpen(dismissedUri, true)).toEqual({ kind: "dismissed" });
+
+    lifecycle.sourceClosed(dismissedUri);
+    expect(lifecycle.prepareOpen(dismissedUri, true)).toEqual({ kind: "create" });
   });
 });

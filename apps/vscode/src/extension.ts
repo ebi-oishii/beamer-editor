@@ -11,6 +11,7 @@ import {
   DEFAULT_MANAGED_FILE_PATTERNS,
   effectiveArray,
   isManagedDocument,
+  latexWorkshopPromptInputChanged,
   latexWorkshopPromptSignature,
   ManagedPreviewLifecycle,
   needsLatexWorkshopIgnorePrompt,
@@ -164,33 +165,67 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
   async function offerLatexWorkshopIgnore(document: vscode.TextDocument): Promise<void> {
     if (!vscode.extensions.getExtension("James-Yu.latex-workshop")) return;
-    const patterns = managedPatterns(document);
+    // Consent is asynchronous: use an uncached value here, then resolve it again before writing.
+    const readManagedPatterns = () =>
+      vscode.workspace
+        .getConfiguration("beamerEditor", document.uri)
+        .get<readonly string[]>("managedFiles") ?? DEFAULT_MANAGED_FILE_PATTERNS;
+    const patterns = readManagedPatterns();
     if (patterns.length === 0) return;
     const workshop = vscode.workspace.getConfiguration("latex-workshop", document.uri);
-    const managed = vscode.workspace
-      .getConfiguration("beamerEditor", document.uri)
-      .inspect<readonly string[]>("managedFiles");
-    const watch = workshop.inspect<readonly string[]>("latex.watch.files.ignore");
-    const autoBuild = workshop.inspect<readonly string[]>("latex.autoBuild.onSave.files.ignore");
-    const watchIgnore = effectiveArray(watch);
-    const autoBuildIgnore = effectiveArray(autoBuild);
-    if (!needsLatexWorkshopIgnorePrompt(watchIgnore, autoBuildIgnore, patterns)) return;
-    const folderScope =
-      vscode.workspace.getWorkspaceFolder(document.uri)?.uri.toString() ?? "global";
-    const signature = latexWorkshopPromptSignature(folderScope, patterns);
+    const readSettings = () => {
+      const managed = vscode.workspace
+        .getConfiguration("beamerEditor", document.uri)
+        .inspect<readonly string[]>("managedFiles");
+      const watch = workshop.inspect<readonly string[]>("latex.watch.files.ignore");
+      const autoBuild = workshop.inspect<readonly string[]>("latex.autoBuild.onSave.files.ignore");
+      const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+      return {
+        managed,
+        watch,
+        autoBuild,
+        watchIgnore: effectiveArray(watch),
+        autoBuildIgnore: effectiveArray(autoBuild),
+        input: {
+          patterns: readManagedPatterns(),
+          watchTarget: chooseLatexWorkshopTarget(managed, watch, !!folder),
+          autoBuildTarget: chooseLatexWorkshopTarget(managed, autoBuild, !!folder),
+        },
+      };
+    };
+    const settings = readSettings();
+    const currentPatterns = settings.input.patterns;
+    if (
+      !needsLatexWorkshopIgnorePrompt(
+        settings.watchIgnore,
+        settings.autoBuildIgnore,
+        currentPatterns,
+      )
+    )
+      return;
+    const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+    const targetIdentity = (scope: string) => {
+      if (scope === "global") return "global";
+      if (scope === "workspaceFolder") return `workspaceFolder:${folder?.uri.toString() ?? "none"}`;
+      return `workspace:${vscode.workspace.workspaceFile?.toString() ?? folder?.uri.toString() ?? "none"}`;
+    };
+    const signature = latexWorkshopPromptSignature(
+      {
+        watch: targetIdentity(settings.input.watchTarget),
+        autoBuild: targetIdentity(settings.input.autoBuildTarget),
+      },
+      currentPatterns,
+    );
     const refusalKey = `latexWorkshopIgnoreRefused:${signature}`;
     if (latexWorkshopSessionPrompted.has(signature) || context.globalState.get<boolean>(refusalKey))
       return;
     latexWorkshopSessionPrompted.add(signature);
-    const folder = vscode.workspace.getWorkspaceFolder(document.uri);
     const scopeName = (scope: string) =>
       scope === "workspaceFolder"
         ? "Workspace Folder"
         : scope === "workspace"
           ? "Workspace"
           : "Global";
-    const watchTarget = chooseLatexWorkshopTarget(managed, watch, !!folder);
-    const autoBuildTarget = chooseLatexWorkshopTarget(managed, autoBuild, !!folder);
     const target = (scope: string): vscode.ConfigurationTarget =>
       scope === "workspaceFolder"
         ? vscode.ConfigurationTarget.WorkspaceFolder
@@ -199,7 +234,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           : vscode.ConfigurationTarget.Global;
 
     const choice = await vscode.window.showInformationMessage(
-      `Beamer Editor の managed slide files を LaTeX Workshop の自動監視・保存時自動ビルドから除外しますか？ ${scopeName(watchTarget)} / ${scopeName(autoBuildTarget)} Settings を更新します。`,
+      `Beamer Editor の managed slide files を LaTeX Workshop の自動監視・保存時自動ビルドから除外しますか？ ${scopeName(settings.input.watchTarget)} / ${scopeName(settings.input.autoBuildTarget)} Settings を更新します。`,
       "追加",
       "今はしない",
       "今後表示しない",
@@ -209,16 +244,22 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       return;
     }
     if (choice !== "追加") return;
+    const latest = readSettings();
+    if (latexWorkshopPromptInputChanged(settings.input, latest.input)) {
+      // The consent text no longer describes the write targets or managed input.
+      latexWorkshopSessionPrompted.delete(signature);
+      return offerLatexWorkshopIgnore(document);
+    }
     await Promise.all([
       workshop.update(
         "latex.watch.files.ignore",
-        appendUniqueIgnorePatterns(watchIgnore, patterns),
-        target(watchTarget),
+        appendUniqueIgnorePatterns(latest.watchIgnore, latest.input.patterns),
+        target(latest.input.watchTarget),
       ),
       workshop.update(
         "latex.autoBuild.onSave.files.ignore",
-        appendUniqueIgnorePatterns(autoBuildIgnore, patterns),
-        target(autoBuildTarget),
+        appendUniqueIgnorePatterns(latest.autoBuildIgnore, latest.input.patterns),
+        target(latest.input.autoBuildTarget),
       ),
     ]);
   }
@@ -337,7 +378,6 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (!event.affectsConfiguration("beamerEditor.managedFiles")) return;
       managedPatternCache.clear();
-      latexWorkshopSessionPrompted.clear();
       lintController.refresh(vscode.workspace.textDocuments);
       for (const controller of previewLifecycle.managedFilesChanged(isManaged)) controller.close();
       handleManagedDocument(vscode.window.activeTextEditor?.document);

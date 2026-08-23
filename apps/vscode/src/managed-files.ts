@@ -130,7 +130,6 @@ export class ManagedPreviewLifecycle<TController, TDocument> {
   }
 
   managedFilesChanged(isManaged: (document: TDocument) => boolean): TController[] {
-    this.dismissals.clearAll();
     const closed: TController[] = [];
     for (const owner of this.registry.automaticEntries()) {
       if (!isManaged(owner.document)) {
@@ -181,9 +180,15 @@ export function normalizeLatexWorkshopIgnorePatterns(patterns: readonly string[]
   ];
 }
 
-/** 永続的な prompt refusal を、文書ではなく設定が共有される scope に紐づける。 */
-export function latexWorkshopPromptSignature(scope: string, patterns: readonly string[]): string {
-  return `${scope}\u0000${normalizeLatexWorkshopIgnorePatterns(patterns).sort().join("\u0000")}`;
+/**
+ * 永続的な prompt refusal を、実際に更新する設定の identity に紐づける。
+ * Workspace Folder は folder URI、Workspace は workspace URI、Global は共通 identity を渡す。
+ */
+export function latexWorkshopPromptSignature(
+  targetIdentities: { readonly watch: string; readonly autoBuild: string },
+  patterns: readonly string[],
+): string {
+  return `watch:${targetIdentities.watch}\u0000autoBuild:${targetIdentities.autoBuild}\u0000${normalizeLatexWorkshopIgnorePatterns(patterns).sort().join("\u0000")}`;
 }
 
 /** 既存の ignore 配列を壊さず managed patterns を正規化して重複なく加える。 */
@@ -246,6 +251,25 @@ export function chooseLatexWorkshopTarget(
       ? explicitScope(managed)
       : explicitScope(workshop);
   return target === "default" ? (workspaceDocument ? "workspace" : "global") : target;
+}
+
+/** consent を待つ間に、表示した書込先または managed pattern が変わったかを比較する。 */
+export interface LatexWorkshopPromptInput {
+  readonly patterns: readonly string[];
+  readonly watchTarget: ConfigurationScope;
+  readonly autoBuildTarget: ConfigurationScope;
+}
+
+export function latexWorkshopPromptInputChanged(
+  before: LatexWorkshopPromptInput,
+  after: LatexWorkshopPromptInput,
+): boolean {
+  return (
+    before.watchTarget !== after.watchTarget ||
+    before.autoBuildTarget !== after.autoBuildTarget ||
+    normalizeLatexWorkshopIgnorePatterns(before.patterns).sort().join("\u0000") !==
+      normalizeLatexWorkshopIgnorePatterns(after.patterns).sort().join("\u0000")
+  );
 }
 
 /** 両方の ignore 設定が managed patterns の全要素を含むときだけ確認不要。 */
