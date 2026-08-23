@@ -1,6 +1,6 @@
 # VS Code 移植計画
 
-更新日: 2026-08-14<br>
+更新日: 2026-08-24<br>
 対象: Phase 5（共有 UI + VS Code シェル）<br>
 目的: Phase 7 の GUI 編集へ進む前に、VS Code 上で編集・プレビュー・診断の基盤を成立させる
 
@@ -46,12 +46,13 @@ Phase 5 の完了条件は、開発計画の M2（書ける）を満たすこと
 7. 未保存変更との競合を黙って上書きしない。
 8. 開発用 `.vsix` をチームメンバーがインストールして試せる。
 
-ここまで通過してから、Phase 7 のドラッグ移動・画像拡縮・表編集など「ソースを書き換える
-GUI 編集」へ進む。
+ここまでの受け入れを通過してから、Phase 7 の一般的なドラッグ移動・画像拡縮・表編集など
+「ソースを書き換える GUI 編集」へ進む。キャンバス画像のドラッグ移動（`x` / `y`）だけは、この
+ゲートより先行した限定的な Phase 7 slice として実装済みである。
 
 ### 2.1 反映済み範囲と継続作業
 
-Phase 5 のPRチェーン #27〜#34 はマージ済みで、VS-1〜VS-9（`.vsix`生成とCI artifactを含む）が反映されている。その後、ソースペインを維持するpreview jump、preview zoom、キャンバス画像ドラッグも追加された。
+VS-1 の拡張スキャフォールドと VS-2 の共有プレビュー UI は #21 / #20 でマージ済みである。VS-3〜VS-9 とその後の支援変更により、`.vsix`生成とCI artifact、ソースペインを維持するpreview jump、preview zoom が反映された。キャンバス画像ドラッグは先行した限定的な Phase 7 slice として追加済みである。
 
 継続中の変更は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)で確認する。Phase 5 の完了は本書 §2 と §9 の受け入れ項目で判断し、実機確認が終わるまで恒久状態を更新しない。
 
@@ -66,7 +67,7 @@ Phase 5 のPRチェーン #27〜#34 はマージ済みで、VS-1〜VS-9（`.vsix
 | `apps/web` の `textarea` | 移植しない |
 | Web 独自の Tab・自動インデント・構文強調 | 実装しない |
 | Web 独自のペイン幅保存・折り畳み | 実装しない。VS Code のエディタグループで検証する |
-| WYSIWYG 表編集、キャンバスのドラッグ編集 | Phase 7 まで保留する |
+| WYSIWYG 表編集、一般的なキャンバスGUI編集 | Phase 7 まで保留する。キャンバス画像のドラッグ移動（`x` / `y`）だけは先行した限定 slice として実装済み |
 | アプリ内 AI チャット | Phase 9 まで保留する |
 | tectonic 実行・PDF 書き出し | Phase 6 で追加する |
 | Electron / 正式 Web 版 | M4 後まで保留する |
@@ -193,17 +194,19 @@ apps/
 
 ## 7. 実装プロセス
 
-### VS-0: 着手条件を揃える
+### VS-0: 決定・状態の記録
 
-実装前に次を確定する。
+実装前の決定は次のとおり実装へ反映済みである。
 
-- 拡張ID（`publisher.name`）
-- 対応する最小 VS Code バージョン（`engines.vscode`）
-- 開発時に使う pnpm バージョンをルート `package.json` の `packageManager` で固定する
-- 最初はデスクトップ版 VS Code の Node Extension Hostだけを対象にする
-- プレビューは「コマンドで開いた `.tex` 一つに紐づく単一パネル」とする
+- 拡張 ID は `ebi-oishii.beamer-editor`。
+- 対応する最小 VS Code は 1.130（`engines.vscode`）。
+- 開発時に使う pnpm はルート `package.json` の `packageManager` で固定する。
+- 対象はデスクトップ版 VS Code の Node Extension Host。
+- managed 文書はアクティブ時に URI ごとの自動プレビューを開き、通常のローカル `.tex` はコマンドによる手動プレビューだけを開く。複数 URI の panel は同時に存在できる（#45）。
+- VS Code 組み込み LaTeX grammar を基本とし、LaTeX Workshop は任意の編集支援として扱う（#52）。
+- Workspace Trust は実装済みで、Restricted Mode では parse / render / lint を利用できる。外部プロセスを使う Phase 6 の機能は無効化する。
 
-VS Code for the Web対応は、tectonicなどNode側機能との分離方針が固まるまで対象外とする。
+未決は VS Code for the Web 対応のみで、tectonicなどNode側機能との分離方針が固まるまで対象外とする。
 
 ### VS-1: 拡張の最小スキャフォールド
 
@@ -311,7 +314,7 @@ VS Code側のCodeAction設計が揃ってから追加する。
 
 - lint対象fixtureでProblemsパネルに規則番号・メッセージ・位置が出る。
 - 修正すると診断が消える。
-- 複数の`.tex`を開いても診断が混ざらない。
+- 複数の managed `.tex` を開いても診断が混ざらず、対象外になった文書の診断は消える。
 
 ### VS-6: 外部編集と競合を確認する
 
@@ -396,7 +399,7 @@ formatterやlinterへ依存するPRはbase branchを明記し、無関係な差�
 
 ## 9. GUI編集へ進むためのゲート
 
-次のチェックは実装有無の一覧ではなく、Phase 7へ進むために実機で確認する受け入れゲートである。実装済み項目も、実機受け入れが終わるまで未チェックとして残す。
+次のチェックは実装有無の一覧ではなく、残る一般的な Phase 7 GUI 編集へ進むために実機で確認する受け入れゲートである。実装済み項目も、実機受け入れが終わるまで未チェックとして残す。先行してマージ済みのキャンバス画像ドラッグ slice を未実装と示すものではない。
 
 - [ ] VS Code標準エディタとWebviewプレビューの分離が安定している
 - [ ] `basic.tex` / `canvas.tex` / `japanese.tex` がライブ更新できる
@@ -409,7 +412,7 @@ formatterやlinterへ依存するPRはbase branchを明記し、無関係な差�
 - [ ] Restricted Modeでparse / render / lintだけが安全に動く
 - [ ] `.vsix`を別環境へインストールして再現できる
 
-Phase 7開始時には、これに加えて次が必要になる。
+残る Phase 7 の一般 GUI 編集を広げるには、これに加えて次が必要になる。
 
 - formatterの正規形と冪等性が合意済み
 - `ShellHost.applyEdits`の契約が確定済み
@@ -423,27 +426,20 @@ Phase 7開始時には、これに加えて次が必要になる。
 | #6 editor内でTabが効かない | VS Code標準エディタで期待どおりか確認する。Web独自実装はしない |
 | #8 円記号とbackslash | core lint / Quick Fix候補として別途扱う |
 | #9 編集画面幅などの調整 | エディタグループとWebviewPanelで満たせるか実機確認する |
-| #10 syntax highlight | 使用するLaTeX言語サポートで確認する。Phase 5では独自highlighterを作らない |
+| #10 syntax highlight | VS Code 組み込みの LaTeX grammar で対象構文を確認済み。Phase 5では独自highlighterを作らない（[editor-setup.md](editor-setup.md)参照） |
 | #12 表のWYSIWYG編集 | Phase 7以降 |
 | #13 フォント管理 | 既存CLIとrendererを利用し、任意フォント管理GUIは作らない |
 
-注意: LaTeXの構文強調が対象環境で標準提供されるか、チームが既存のLaTeX拡張を
-利用するかは実機で確認する。未確認のまま「VS Codeが必ず提供する」とは扱わない。
+注意: VS Code 組み込みの LaTeX grammar を基本とし、LaTeX Workshop は任意の編集支援として
+利用する。対象構文と managed slide の扱いは [editor-setup.md](editor-setup.md) を参照する。
 
-## 11. 実装前に決める未決事項
+## 11. 残る未決事項
 
-推奨初期値を併記する。
+決定済みの拡張 ID、最小 VS Code、preview の数と開くタイミング、LaTeX language support、
+Workspace Trust は [VS-0 の決定・状態の記録](#vs-0-決定状態の記録)を参照する。
 
-| 項目 | 推奨初期値 |
-|---|---|
-| 最小VS Codeバージョン | 実装開始時のチーム最古環境を確認して固定 |
-| previewの数 | 1 documentにつき1 panelではなく、最初は1つのpanelを1 documentへ固定 |
-| previewを開くタイミング | 自動ではなくCommand Paletteから明示的に開く |
-| previewの位置 | `ViewColumn.Beside`を初期値にし、以後の配置はユーザーに任せる |
-| LaTeX language support | チーム環境を確認し、必要なら推奨拡張を文書化する |
-| formatter未完時のGUI編集 | 実装しない |
-| Workspace Trust | parse / render / lintは対応、外部プロセス実行は無効 |
-| Marketplace公開 | M2では行わず`.vsix`共有 |
+残る未決は VS Code for the Web 対応である。tectonicなどNode側機能との分離方針が固まるまで
+対象外とする。
 
 ## 12. 公式資料
 

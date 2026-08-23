@@ -1,6 +1,6 @@
 # 開発計画
 
-ステータス: 改訂版(追加要件・レビュー統合)/ 最終更新: 2026-08-14
+ステータス: 改訂版(追加要件・レビュー統合)/ 最終更新: 2026-08-24
 
 [beamer-editor-additional-requirements.md](beamer-editor-additional-requirements.md)(キャンバス前倒し・VS Code 1 本化・AgentAdapter)と [issues-to-resolve.md](issues-to-resolve.md)(A/B/C 指摘)を初版計画に統合した改訂版。
 
@@ -98,7 +98,7 @@
 
 ### Phase 5: 共有 UI + VS Code シェル
 
-VS-1〜VS-9（拡張スキャフォールド、共有プレビューUI、編集追従、ソースジャンプ、lint診断、外部編集統合テスト、テーマ/a11y(VS-7)、CSP/Workspace Trust(VS-8)、テスト・`.vsix`生成・CI artifact(VS-9)）は Phase 5 のPRチェーン #27〜#34 でマージ済み。その後、ソースペインを維持するpreview jump、preview zoom、キャンバス画像ドラッグも追加された。**M2 の残りは実機での受け入れ確認**(移植計画 §2 の8項目、特に別環境への`.vsix`導入)。継続中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
+VS-1 の拡張スキャフォールドと VS-2 の共有プレビュー UI は #21 / #20 でマージ済みである。VS-3〜VS-9 とその後の支援変更により、編集追従、ソースジャンプ、lint診断、外部編集統合テスト、theme/a11y、CSP/Workspace Trust、テスト・`.vsix`生成・CI artifact が反映された。さらにソースペインを維持するpreview jump、preview zoom、先行した限定的な Phase 7 slice であるキャンバス画像ドラッグ、managed slide の自動プレビュー・lint と LaTeX Workshop との scoped な共存、LaTeX 言語サポートの方針を追加した。**M2 の残りは実機での受け入れ確認**(移植計画 §2 の8項目、特に別環境への`.vsix`導入)。継続中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
 
 **5a. packages/ui — 共有 UI と ShellHost 契約(S)**
 
@@ -147,7 +147,7 @@ Electron(旧 5c)はここでは作らない(「後続」参照)。
 
 [ai-protocol.md](ai-protocol.md) の実装フェーズ。Phase 7 とは独立。
 
-- CLI の完全なセット: `deck outline` / `deck lint` / `deck format` / `deck check` / `deck snapshot` / `deck export` / `deck init`(各 `--json` 対応。check / snapshot は Phase 6 の機構を使う)。
+- `deck lint` / `deck format`（各 `--json`対応）は実装済み。残りの CLI は `deck outline` / `deck check` / `deck snapshot` / `deck export` / `deck init`（check / snapshot は Phase 6 の機構を使う）。
 - SKILL.md と `references/subset-cheatsheet.md` を `docs/subset-spec.md` から**ビルドで生成**する仕組み。`deck init` が新規デッキプロジェクトに `.claude/skills/beamer-deck/` として同梱する(版ずれは L010 で警告)。
 - 指示パターン集(examples/prompts.md)。このリポジトリ自身にもスキルを配置し、資料作成で運用検証する。
 - 完了条件: AI に「アウトライン提案 → 合意 → 生成 → lint/check 通過」の流れで新規デッキを作らせ、人間がエディタで微調整して PDF 書き出しまでの一連が実演できる。
