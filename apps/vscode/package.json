@@ -23,6 +23,22 @@
         "title": "Beamer Editor: Open Preview"
       }
     ],
+    "configuration": {
+      "title": "Beamer Editor",
+      "properties": {
+        "beamerEditor.managedFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/*.slide.tex"
+          ],
+          "scope": "resource",
+          "description": "Glob patterns for Beamer Editor managed slide files."
+        }
+      }
+    },
     "menus": {
       "editor/title": [
         {

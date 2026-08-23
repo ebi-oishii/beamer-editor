@@ -166,6 +166,33 @@ describe("LintController", () => {
     expect(byUri.size).toBe(0);
   });
 
+  it("managed predicate に一致した文書だけを lint する", () => {
+    const { events, open } = makeEvents();
+    const { sink, byUri } = makeSink();
+    new LintController(events, sink, [], (document) => document.fileName.endsWith(".slide.tex"));
+
+    open(makeDoc("/work/normal.tex"));
+    open(makeDoc("/work/talk.slide.tex"));
+
+    expect(byUri.size).toBe(1);
+  });
+
+  it("refresh は設定変更で対象外になった文書の診断を消す", () => {
+    const { events, open } = makeEvents();
+    const { sink, byUri, deleted } = makeSink();
+    let enabled = true;
+    const controller = new LintController(events, sink, [], () => enabled);
+    const doc = makeDoc("/work/talk.slide.tex");
+    open(doc);
+    expect(byUri.size).toBe(1);
+
+    enabled = false;
+    controller.refresh([doc]);
+
+    expect(byUri.size).toBe(0);
+    expect(deleted).toEqual([doc.uri.toString()]);
+  });
+
   it("連続入力は 1 回の lint へまとめられる", () => {
     const { events, open, change } = makeEvents();
     const { sink, byUri } = makeSink();

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_MANAGED_FILE_PATTERNS } from "../src/managed-files";
 
 const packageJson = JSON.parse(
   readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
@@ -39,5 +40,23 @@ describe("VS Code extension project configuration", () => {
 
   it("excludes source maps from packaged extensions", () => {
     expect(vscodeIgnore).toContain("**/*.map");
+  });
+
+  it("declares the managed slide-file default without disabling LaTeX Workshop auto-build", () => {
+    const contributes = packageJson.contributes as {
+      configuration: { properties: Record<string, unknown> };
+    };
+    expect(contributes.configuration.properties["beamerEditor.managedFiles"]).toMatchObject({
+      default: DEFAULT_MANAGED_FILE_PATTERNS,
+      scope: "resource",
+    });
+    const settingsPath = fileURLToPath(new URL("../../../.vscode/settings.json", import.meta.url));
+    let settings: Record<string, unknown> = {};
+    try {
+      settings = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+    }
+    expect(settings["latex-workshop.latex.autoBuild.run"]).not.toBe("never");
   });
 });
