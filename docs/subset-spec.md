@@ -286,6 +286,7 @@ DECKGEOM frame=<番号> kind=<text|image> x=<pt> y=<pt> w=<pt> h=<pt>
 | L018 | 4:3(`aspectratio=43`)デッキでの `deckcanvas` 使用 | warning |
 | L019 | キャンバスフレームのタイトルが 2 行以上(固定タイトル帯を超えて本文領域に重なる) | warning |
 | L020 | `%% style` 領域に語彙外の記述(不明なコマンド・役割名・色値・キー) | error |
+| L021 | TeX command の開始に使われた円記号(`¥` / `￥`) | warning。バックスラッシュへ置換する Quick Fix を提供 |
 
 オブジェクト同士の重なりは意図的な場合があるため lint 対象にしない(`deck check` の実測レポートで info 表示のみ。§2.8)。
 

@@ -52,6 +52,23 @@ afterEach(async () => {
 });
 
 describe("deck lint", () => {
+  it("reports L021 as a warning in text and JSON with UTF-16-aware locations", async () => {
+    const source = await fixture("yen.tex", deck("😀日本語 ¥section{Title}"));
+    const text = runCli("lint", source.argvPath);
+    expect(text.status).toBe(1);
+    expect(text.stdout).toContain("warning L021");
+    expect(text.stdout).toContain(":4:7:");
+
+    const json = runCli("lint", source.argvPath, "--json");
+    expect(json.status).toBe(1);
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      diagnostics: [
+        { code: "L021", severity: "warning", location: { line: 4, column: 7, endColumn: 8 } },
+      ],
+      summary: { errors: 0, warnings: 1, infos: 0 },
+    });
+  });
+
   it("uses the deck directory for relative logo and image probes", async () => {
     const directory = await temporaryDirectory();
     await writeFile(
