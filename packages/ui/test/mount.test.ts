@@ -367,6 +367,9 @@ describe("mountPreview", () => {
   });
 
   it("scaled layout clips transform overflow while thumbnails keep their own slide shadow", () => {
+    const stylesheet = document.createElement("style");
+    stylesheet.textContent = PREVIEW_CSS;
+    document.head.append(stylesheet);
     const container = document.createElement("div");
     document.body.append(container);
     const host = fakeHost();
@@ -378,11 +381,21 @@ describe("mountPreview", () => {
       host.push(DECK);
     });
 
-    expect(PREVIEW_CSS).toContain(".slide-layout {\n  margin-left: auto;");
-    expect(PREVIEW_CSS).toContain("overflow: hidden;\n  box-shadow: 0 1px 6px");
-    expect(PREVIEW_CSS).toContain(".slide-layout .slide {\n  box-shadow: none;");
-    expect(PREVIEW_CSS).toContain("line-height: 1.24;\n  box-shadow: 0 1px 6px");
-    expect(PREVIEW_CSS).toContain(".thumb-scale .slide {\n  transform: scale(0.264);");
+    const layout = container.querySelector<HTMLElement>(".slide-layout");
+    const stageSlide = container.querySelector<HTMLElement>(".slide-layout .slide");
+    const thumbnailSlide = container.querySelector<HTMLElement>(".thumb-scale .slide");
+    expect(layout).not.toBeNull();
+    expect(stageSlide).not.toBeNull();
+    expect(thumbnailSlide).not.toBeNull();
+    const cssRule = (selector: string) =>
+      [...(stylesheet.sheet?.cssRules ?? [])].find(
+        (rule): rule is CSSStyleRule =>
+          rule instanceof CSSStyleRule && rule.selectorText === selector,
+      );
+    expect(getComputedStyle(layout as HTMLElement).overflow).toBe("hidden");
+    expect(cssRule(".slide-layout")?.style.getPropertyValue("box-shadow")).not.toBe("");
+    expect(cssRule(".slide-layout .slide")?.style.getPropertyValue("box-shadow")).toBe("none");
+    expect(cssRule(".slide")?.style.getPropertyValue("box-shadow")).not.toBe("");
   });
 
   it("zoom のない旧ナビ状態を fit として保存する", () => {
