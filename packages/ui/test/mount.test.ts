@@ -393,6 +393,7 @@ describe("mountPreview", () => {
           rule instanceof CSSStyleRule && rule.selectorText === selector,
       );
     expect(getComputedStyle(layout as HTMLElement).overflow).toBe("hidden");
+    expect(getComputedStyle(thumbnailSlide as HTMLElement).boxShadow).not.toBe("none");
     expect(cssRule(".slide-layout")?.style.getPropertyValue("box-shadow")).not.toBe("");
     expect(cssRule(".slide-layout .slide")?.style.getPropertyValue("box-shadow")).toBe("none");
     expect(cssRule(".slide")?.style.getPropertyValue("box-shadow")).not.toBe("");
