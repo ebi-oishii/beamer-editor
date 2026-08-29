@@ -83,7 +83,7 @@ const NAMED_COLORS: Record<string, string> = {
   white: "#ffffff",
 };
 
-/** フレーム装飾の集約結果(同じ役割は後勝ち)。 */
+/** フレーム装飾の集約結果(同種の指定が複数あれば後の指定を使う)。 */
 interface FrameDecorations {
   logo: StyleLogoNode | null;
   footerHtml: string | null;
@@ -133,40 +133,41 @@ class FrameRenderer {
   /** フレーム内で観測したオーバーレイの最大ステップ。 */
   private maxStep = 1;
 
-  private readonly decorationsStyle: FrameDecorations;
+  private readonly decorations: FrameDecorations = { logo: null, footerHtml: null };
   private canvasElements: RenderedCanvasElement[] = [];
 
   constructor(
     private readonly doc: DeckDocument,
     private readonly theme: Theme,
   ) {
-    const style: FrameDecorations = { logo: null, footerHtml: null };
     for (const entry of doc.style.entries) {
-      if (entry.type === "styleLogo") style.logo = entry;
-      else if (entry.type === "styleFooter") style.footerHtml = this.renderInlines(entry.text);
+      if (entry.type === "styleLogo") this.decorations.logo = entry;
+      else if (entry.type === "styleFooter")
+        this.decorations.footerHtml = this.renderInlines(entry.text);
     }
-    this.decorationsStyle = style;
   }
 
   /**
    * ロゴ・フッターのオーバーレイ(TeX 側の背景テンプレートに対応)。
    * .slide 直下の先頭に入れ、CSS の z-index で本文の背面に置く。
    */
-  private decorations(frameIndex: number, frameTotal: number): string {
+  private renderDecorations(frameIndex: number, frameTotal: number): string {
     let out = "";
     const { slideWidthPt, slideHeightPt, bodyAreaPt: body } = this.theme.metrics;
-    if (this.decorationsStyle.logo) {
-      const { x, y, width } = this.decorationsStyle.logo.position;
+    const logo = this.decorations.logo;
+    if (logo) {
+      const { x, y, width } = logo.position;
       const leftPct = (((body.left + x * body.width) / slideWidthPt) * 100).toFixed(2);
       const topPct = (((body.top + y * body.height) / slideHeightPt) * 100).toFixed(2);
       const widthPct = (((width * body.width) / slideWidthPt) * 100).toFixed(2);
       const pos = `left:${leftPct}%;top:${topPct}%;width:${widthPct}%`;
-      out += this.decorationsStyle.logo.path.toLowerCase().endsWith(".pdf")
-        ? `<div class="deck-logo image-placeholder" style="${pos}">PDF ロゴ: ${escapeHtml(this.decorationsStyle.logo.path)}</div>`
-        : `<img class="deck-logo" src="${escapeHtml(this.decorationsStyle.logo.path)}" style="${pos}">`;
+      out += logo.path.toLowerCase().endsWith(".pdf")
+        ? `<div class="deck-logo image-placeholder" style="${pos}">PDF ロゴ: ${escapeHtml(logo.path)}</div>`
+        : `<img class="deck-logo" src="${escapeHtml(logo.path)}" style="${pos}">`;
     }
-    if (this.decorationsStyle.footerHtml !== null) {
-      out += `<div class="deck-footer"><span>${this.decorationsStyle.footerHtml}</span><span>${frameIndex} / ${frameTotal}</span></div>`;
+    const footerHtml = this.decorations.footerHtml;
+    if (footerHtml !== null) {
+      out += `<div class="deck-footer"><span>${footerHtml}</span><span>${frameIndex} / ${frameTotal}</span></div>`;
     }
     return out;
   }
@@ -408,7 +409,7 @@ class FrameRenderer {
         ? `<div class="frametitle">${this.renderInlines(frame.title)}</div>`
         : "";
     return {
-      html: `<div class="slide${frame.options.plain ? " plain" : ""}">${this.decorations(frameIndex, frameTotal)}${title}<div class="slide-body">${body}</div></div>`,
+      html: `<div class="slide${frame.options.plain ? " plain" : ""}">${this.renderDecorations(frameIndex, frameTotal)}${title}<div class="slide-body">${body}</div></div>`,
       stepCount: this.maxStep,
       canvasElements: this.canvasElements,
     };
@@ -416,7 +417,7 @@ class FrameRenderer {
 
   renderRawFrame(frame: RawFrameNode, frameIndex: number, frameTotal: number): string {
     return (
-      `<div class="slide raw-frame">${this.decorations(frameIndex, frameTotal)}` +
+      `<div class="slide raw-frame">${this.renderDecorations(frameIndex, frameTotal)}` +
       `<div class="frametitle">${escapeHtml(frame.title ?? "(生フレーム)")}</div>` +
       '<div class="slide-body"><div class="raw-block"><div class="raw-badge">解釈不能フレーム(一覧・並べ替えのみ可能。プレビューは Phase 6 で画像に)</div>' +
       `<pre>${escapeHtml(frame.tex)}</pre></div></div></div>`
