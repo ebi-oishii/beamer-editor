@@ -345,6 +345,11 @@ Claude Code、Codex、CLIなどがディスク上の`.tex`を書き換えるケ�
 エディタグループの幅・配置はVS Codeへ任せる。Issue #9の要件は、実際の
 WebviewPanel配置で不足があるかをこの段階で確認する。
 
+### Issue #38: フレーム折りたたみ
+
+managed な LaTeX 文書では、完全な `frame` 環境を VS Code の Folding Range として提供する。
+コメントおよび verbatim 系環境内の delimiter は無視し、managedFiles 設定の変更時は範囲を再取得する。
+
 ### VS-8: セキュリティとWorkspace Trust
 
 Webviewは次を必須にする。

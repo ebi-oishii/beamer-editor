@@ -22,22 +22,13 @@ export interface FrameFoldCancellation {
 
 const FRAME_BEGIN = "\\begin{frame}";
 const FRAME_END = "\\end{frame}";
+const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlisting", "minted"]);
 
 /** 直前にある連続バックスラッシュ数が奇数なら、その位置の文字は TeX でエスケープされる。 */
 function isEscaped(source: string, position: number): boolean {
   let slashes = 0;
   for (let cursor = position - 1; cursor >= 0 && source[cursor] === "\\"; cursor--) slashes++;
   return slashes % 2 === 1;
-}
-
-/** 候補位置までの同一行に、エスケープされていない `%` コメント開始があるか。 */
-function isInTeXComment(source: string, candidate: number): boolean {
-  const lineStart =
-    Math.max(source.lastIndexOf("\n", candidate - 1), source.lastIndexOf("\r", candidate - 1)) + 1;
-  for (let cursor = lineStart; cursor < candidate; cursor++) {
-    if (source[cursor] === "%" && !isEscaped(source, cursor)) return true;
-  }
-  return false;
 }
 
 /** 終端以降が空白または非エスケープ `%` コメントだけかを検査する。 */
@@ -57,31 +48,48 @@ function hasOnlyTrailingTrivia(source: string, start: number, end: number): bool
  * parser の frame span 内で、コメント・エスケープを考慮して frame delimiter の深さを追う。
  * 外側を閉じる end だけを受け入れ、その後には trailing trivia だけを許可する。
  */
-function hasCompleteOuterFrame(source: string, start: number, end: number): boolean {
+function completeOuterFrameEnd(source: string, start: number, end: number): number | undefined {
   let depth = 0;
   let cursor = start;
+  let slashes = 0;
   while (cursor < end) {
-    const begin = source.indexOf(FRAME_BEGIN, cursor);
-    const frameEnd = source.indexOf(FRAME_END, cursor);
-    const candidate = begin === -1 || (frameEnd !== -1 && frameEnd < begin) ? frameEnd : begin;
-    if (candidate === -1 || candidate >= end) return false;
-    const delimiter = candidate === begin ? FRAME_BEGIN : FRAME_END;
-    cursor = candidate + delimiter.length;
-    if (
-      candidate + delimiter.length > end ||
-      isEscaped(source, candidate) ||
-      isInTeXComment(source, candidate)
-    )
-      continue;
-    if (delimiter === FRAME_BEGIN) {
-      depth++;
+    const char = source[cursor] as string;
+    if (char === "%" && slashes % 2 === 0) {
+      while (cursor < end && source[cursor] !== "\n" && source[cursor] !== "\r") cursor++;
+      slashes = 0;
       continue;
     }
-    if (depth === 0) return false;
-    depth--;
-    if (depth === 0) return hasOnlyTrailingTrivia(source, cursor, end);
+    if (slashes % 2 === 0 && source.startsWith("\\begin{", cursor)) {
+      const close = source.indexOf("}", cursor + 7);
+      const environment = close === -1 ? "" : source.slice(cursor + 7, close);
+      if (VERBATIM_ENVS.has(environment)) {
+        const verbatimEnd = `\\end{${environment}}`;
+        const endPos = source.indexOf(verbatimEnd, close + 1);
+        if (endPos === -1 || endPos >= end) return undefined;
+        cursor = endPos + verbatimEnd.length;
+        slashes = 0;
+        continue;
+      }
+    }
+    if (slashes % 2 === 0 && source.startsWith(FRAME_BEGIN, cursor)) {
+      depth++;
+      cursor += FRAME_BEGIN.length;
+      slashes = 0;
+      continue;
+    }
+    if (slashes % 2 === 0 && source.startsWith(FRAME_END, cursor)) {
+      if (depth === 0) return undefined;
+      depth--;
+      const outerEnd = cursor + FRAME_END.length;
+      if (depth === 0) return hasOnlyTrailingTrivia(source, outerEnd, end) ? outerEnd : undefined;
+      cursor = outerEnd;
+      slashes = 0;
+      continue;
+    }
+    slashes = char === "\\" ? slashes + 1 : 0;
+    cursor++;
   }
-  return false;
+  return undefined;
 }
 
 /**
@@ -98,9 +106,10 @@ export function frameFoldRanges(
 ): FrameFoldRange[] {
   return framesOf(parseDeck(source)).flatMap((frame) => {
     const { start, end } = frame.span;
-    if (!hasCompleteOuterFrame(source, start, end)) return [];
+    const outerEnd = completeOuterFrameEnd(source, start, end);
+    if (outerEnd === undefined) return [];
     const startLine = positionAt(start).line;
-    const endLine = positionAt(end - 1).line;
+    const endLine = positionAt(outerEnd - 1).line;
     return endLine > startLine ? [{ start: startLine, end: endLine }] : [];
   });
 }
@@ -118,7 +127,7 @@ export class FrameFoldCache {
   }
 }
 
-/** provider の VS Code 非依存部分。キャンセル時は `undefined`、非対象文書は空配列。 */
+/** provider の VS Code 非依存部分。キャンセル時・非対象文書は `undefined`。 */
 export function provideFrameFoldRanges<Document extends FrameFoldDocument>(
   document: Document,
   isManaged: (document: Document) => boolean,
@@ -126,7 +135,7 @@ export function provideFrameFoldRanges<Document extends FrameFoldDocument>(
   cache: FrameFoldCache,
 ): FrameFoldRange[] | undefined {
   if (cancellation.isCancellationRequested) return undefined;
-  if (!isManaged(document)) return [];
+  if (!isManaged(document)) return undefined;
   const ranges = cache.get(document);
   return cancellation.isCancellationRequested ? undefined : ranges;
 }

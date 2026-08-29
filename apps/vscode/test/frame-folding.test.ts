@@ -31,7 +31,7 @@ after`;
     ]);
   });
 
-  it("folds a complete raw frame but not terminal raw frames closed only in comments", () => {
+  it("folds a complete raw frame but not terminal raw frames closed only in comments or verbatim", () => {
     const complete = `\\begin{frame}[unsupported]{raw}
 text
 \\end{frame}`;
@@ -39,9 +39,14 @@ text
 text`;
     const commentedEnd = `\\begin{frame}{unfinished}
 % \\end{frame}`;
+    const verbatimEnd = `\\begin{frame}{unfinished}
+\\begin{verbatim}
+\\end{frame}
+\\end{verbatim}`;
     expect(ranges(complete)).toEqual([{ start: 0, end: 2 }]);
     expect(ranges(unmatched)).toEqual([]);
     expect(ranges(commentedEnd)).toEqual([]);
+    expect(ranges(verbatimEnd)).toEqual([]);
   });
 
   it("distinguishes escaped percent from a TeX comment before a closing delimiter", () => {
@@ -99,7 +104,7 @@ inner
     const first = provideFrameFoldRanges(doc, () => true, active, cache);
     const second = provideFrameFoldRanges(doc, () => true, active, cache);
     expect(first).toBe(second);
-    expect(provideFrameFoldRanges(doc, () => false, active, cache)).toEqual([]);
+    expect(provideFrameFoldRanges(doc, () => false, active, cache)).toBeUndefined();
     expect(
       provideFrameFoldRanges(doc, () => true, { isCancellationRequested: true }, cache),
     ).toBeUndefined();

@@ -6,7 +6,18 @@ import * as vscode from "vscode";
 
 const tempDirs: string[] = [];
 
-suite("VS-7: フレーム折りたたみ", () => {
+suite("Issue #38: フレーム折りたたみ", () => {
+  teardown(async () => {
+    // dirty なまま閉じると保存ダイアログでハングし得るため、先に revert する。
+    for (const document of vscode.workspace.textDocuments) {
+      if (document.isDirty) {
+        await vscode.window.showTextDocument(document);
+        await vscode.commands.executeCommand("workbench.action.files.revert");
+      }
+    }
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+  });
+
   suiteTeardown(async () => {
     for (const directory of tempDirs.splice(0))
       await rm(directory, { recursive: true, force: true });

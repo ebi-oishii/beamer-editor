@@ -63,6 +63,24 @@ describe("parseDeck: basic.tex", () => {
   });
 });
 
+describe("parseDeck: frame environment ends", () => {
+  it("ignores frame delimiters in TeX comments and supported verbatim environments", () => {
+    const source = String.raw`\begin{document}
+\begin{frame}{outer}
+% \end{frame}
+\begin{verbatim}
+\end{frame}
+\end{verbatim}
+\begin{frame}{inner}
+\end{frame}
+\end{frame}
+\end{document}`;
+    const frames = framesOf(parseDeck(source));
+    expect(frames).toHaveLength(1);
+    expect(frames[0]?.span.end).toBe(source.lastIndexOf("\\end{frame}") + "\\end{frame}".length);
+  });
+});
+
 describe("parseDeck: canvas top-level items", () => {
   it("unsupported command/environment 内の deckimage を直下画像として再同期しない", () => {
     const source = String.raw`\begin{document}
