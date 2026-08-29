@@ -907,7 +907,8 @@ code
 
 describe("lintSource L021", () => {
   it("円記号で始まる TeX command だけを warning として報告する", () => {
-    const source = "😀日本語 ¥section{ok}\n￥%\n¥\\\n¥¥foo\n¥100 ￥1,000 ¥ 日本語";
+    const source =
+      "😀日本語 ¥section{ok}\n￥%\n¥\\\n¥¥foo\n¥[ ￥]\n¥100 ￥1,000 ¥(税込) ￥) ¥ 日本語";
     const diagnostics = lintSource(source).filter((diagnostic) => diagnostic.code === "L021");
     expect(diagnostics.map((diagnostic) => sourceText(source, diagnostic))).toEqual([
       "¥",
@@ -915,6 +916,8 @@ describe("lintSource L021", () => {
       "¥",
       "¥",
       "¥",
+      "¥",
+      "￥",
     ]);
     expect(diagnostics.every((diagnostic) => diagnostic.severity === "warning")).toBe(true);
     expect(diagnostics[0]?.span).toEqual({

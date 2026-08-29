@@ -899,7 +899,8 @@ function findLineEnd(source: string, position: number): number {
 function isYenCommandStart(source: string, position: number): boolean {
   const next = source[position + 1];
   return (
-    next !== undefined && (/[A-Za-z@]/.test(next) || "%#$&_{}~^\\".includes(next) || YEN.has(next))
+    next !== undefined &&
+    (/[A-Za-z@]/.test(next) || "%#$&_{}~^\\[]".includes(next) || YEN.has(next))
   );
 }
 
