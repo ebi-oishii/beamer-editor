@@ -88,6 +88,11 @@ inner
     expect(ranges("\\section{No frames}\nplain text")).toEqual([]);
   });
 
+  it("handles many malformed begin markers without a closing brace", () => {
+    const source = `\\begin{frame}{raw}\n${"\\begin{".repeat(10_000)}`;
+    expect(ranges(source)).toEqual([]);
+  });
+
   it("caches by document identity and version, while preserving managed and cancellation gates", () => {
     let source = "\\begin{frame}{one}\nbody\n\\end{frame}";
     let version = 1;

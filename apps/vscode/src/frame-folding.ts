@@ -60,8 +60,21 @@ function completeOuterFrameEnd(source: string, start: number, end: number): numb
       continue;
     }
     if (slashes % 2 === 0 && source.startsWith("\\begin{", cursor)) {
-      const close = source.indexOf("}", cursor + 7);
-      const environment = close === -1 ? "" : source.slice(cursor + 7, close);
+      let close = cursor + 7;
+      while (
+        close < end &&
+        source[close] !== "}" &&
+        source[close] !== "\\" &&
+        source[close] !== "\n" &&
+        source[close] !== "\r"
+      )
+        close++;
+      if (source[close] !== "}") {
+        cursor += "\\begin{".length;
+        slashes = 0;
+        continue;
+      }
+      const environment = source.slice(cursor + 7, close);
       if (VERBATIM_ENVS.has(environment)) {
         const verbatimEnd = `\\end{${environment}}`;
         const endPos = source.indexOf(verbatimEnd, close + 1);

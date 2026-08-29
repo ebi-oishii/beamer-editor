@@ -98,6 +98,11 @@ function readBalanced(src: string, open: number, o = "{", c = "}"): number | nul
 function findEnvEnd(src: string, name: string, from: number): number | null {
   const begin = `\\begin{${name}}`;
   const end = `\\end{${name}}`;
+  // verbatim 自身では本文を解釈しない。最初の literal end tag が終端になる。
+  if (VERBATIM_ENVS.has(name)) {
+    const endPos = src.indexOf(end, from);
+    return endPos === -1 ? null : endPos;
+  }
   let depth = 1;
   let slashes = 0;
   for (let pos = from; pos < src.length; pos++) {
@@ -108,8 +113,21 @@ function findEnvEnd(src: string, name: string, from: number): number | null {
       continue;
     }
     if (slashes % 2 === 0 && src.startsWith("\\begin{", pos)) {
-      const close = src.indexOf("}", pos + 7);
-      const environment = close === -1 ? "" : src.slice(pos + 7, close);
+      let close = pos + 7;
+      while (
+        close < src.length &&
+        src[close] !== "}" &&
+        src[close] !== "\\" &&
+        src[close] !== "\n" &&
+        src[close] !== "\r"
+      )
+        close++;
+      if (src[close] !== "}") {
+        pos += "\\begin{".length - 1;
+        slashes = 0;
+        continue;
+      }
+      const environment = src.slice(pos + 7, close);
       if (VERBATIM_ENVS.has(environment)) {
         const verbatimEnd = `\\end{${environment}}`;
         const endPos = src.indexOf(verbatimEnd, close + 1);
