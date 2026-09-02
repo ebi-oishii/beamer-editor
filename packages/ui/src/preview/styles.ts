@@ -68,12 +68,13 @@ export const PREVIEW_CSS = `
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 左詰めにして step スライダーだけ右端へ寄せる。center だと step の有無で他のボタンが動く。 */
 .controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  justify-content: center;
+  justify-content: flex-start;
   padding: 8px;
   border-top: 1px solid var(--vscode-panel-border, #ddd);
   background: var(--vscode-editorWidget-background, #fafafa);
@@ -84,6 +85,9 @@ export const PREVIEW_CSS = `
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+.step-box {
+  margin-left: auto;
 }
 .zoom-indicator {
   min-width: 72px;
