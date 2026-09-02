@@ -8,7 +8,7 @@
  * 常に元ソース座標になる(プレビューのマクロ展開とは独立)。
  */
 
-import { type LintDiagnostic, lintDeck, parseDeck } from "@beamer-editor/core";
+import { type LintDiagnostic, lintSource } from "@beamer-editor/core";
 
 /** lint 対象文書の最小面(vscode.TextDocument が満たす)。 */
 export interface LintableDocument {
@@ -37,7 +37,7 @@ export const LINT_DEBOUNCE_MS = 120;
 
 /** 全文を parse して lint する。span は元ソースの UTF-16 オフセット。 */
 export function lintDocumentText(text: string): LintDiagnostic[] {
-  return lintDeck(parseDeck(text));
+  return lintSource(text);
 }
 
 /**

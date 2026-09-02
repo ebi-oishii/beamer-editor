@@ -19,7 +19,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { formatDeck, type LintDiagnostic, lintDeck, parseDeck } from "@beamer-editor/core";
+import { formatDeck, type LintDiagnostic, lintSource } from "@beamer-editor/core";
 import { createNodeFileProbes } from "./file-probes.ts";
 import {
   defaultFontPaths,
@@ -243,7 +243,7 @@ async function runLint(file: string, json: boolean): Promise<number> {
     return exitCodeForError("E_IO");
   }
   const probes = createNodeFileProbes(dirname(resolve(file)));
-  const diagnostics = lintDeck(parseDeck(source), probes);
+  const diagnostics = lintSource(source, probes);
   const result = lintJson(file, source, diagnostics);
   if (json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else if (diagnostics.length === 0) process.stdout.write(`${file}: OK\n`);

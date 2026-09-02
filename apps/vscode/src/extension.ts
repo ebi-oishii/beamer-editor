@@ -19,6 +19,7 @@ import {
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
 import { resolveSourceViewColumn } from "./source-navigation";
+import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 
 let previewController: PreviewController | undefined;
 const previewLifecycle = new ManagedPreviewLifecycle<PreviewController, vscode.TextDocument>();
@@ -165,6 +166,21 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   function isManaged(document: vscode.TextDocument): boolean {
     return isManagedDocument(document, managedPatterns(document), matchesManagedGlob);
   }
+
+  const yenCodeActions = new YenBackslashCodeActionProvider();
+  context.subscriptions.push(
+    vscode.languages.registerCodeActionsProvider(
+      { scheme: "file", language: "latex" },
+      {
+        provideCodeActions(document, range, context, token) {
+          return isManaged(document)
+            ? yenCodeActions.provideCodeActions(document, range, context, token)
+            : [];
+        },
+      },
+      { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] },
+    ),
+  );
 
   context.subscriptions.push(
     vscode.languages.registerFoldingRangeProvider(

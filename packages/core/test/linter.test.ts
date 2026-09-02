@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { lintDeck, parseDeck } from "../src/index.js";
+import { lintDeck, lintSource, parseDeck } from "../src/index.js";
 
 function deck(body: string, preamble = ""): string {
   return `%% deck-source-version: 1
@@ -902,6 +902,101 @@ code
     for (const code of ["L001", "L005", "L007", "L012", "L013", "L014", "L019"]) {
       expect(codes).toContain(code);
     }
+  });
+});
+
+describe("lintSource L021", () => {
+  it("円記号で始まる TeX command だけを warning として報告する", () => {
+    const source =
+      "😀日本語 ¥section{ok}\n￥%\n¥\\\n¥¥foo\n¥[ ￥]\n¥100 ￥1,000 ¥(税込) ￥) ¥ 日本語";
+    const diagnostics = lintSource(source).filter((diagnostic) => diagnostic.code === "L021");
+    expect(diagnostics.map((diagnostic) => sourceText(source, diagnostic))).toEqual([
+      "¥",
+      "￥",
+      "¥",
+      "¥",
+      "¥",
+      "¥",
+      "￥",
+    ]);
+    expect(diagnostics.every((diagnostic) => diagnostic.severity === "warning")).toBe(true);
+    expect(diagnostics[0]?.span).toEqual({
+      start: source.indexOf("¥section"),
+      end: source.indexOf("¥section") + 1,
+    });
+  });
+
+  it("comments, verb literals, verbatim environments, and malformed literals are ignored", () => {
+    const source = `¥section{visible}
+% ¥section{comment}
+\\\\% ¥section{also comment}
+\\verb|¥section{literal}|
+\\begin{verbatim}
+¥section{literal}
+\\end{verbatim}
+\\verb|¥section{unclosed}`;
+    expect(lintSource(source).filter((diagnostic) => diagnostic.code === "L021")).toEqual([
+      expect.objectContaining({ span: { start: 0, end: 1 } }),
+    ]);
+  });
+
+  it("treats an escaped percent as text rather than a comment", () => {
+    const source = "\\% ¥section{visible}";
+    expect(lintSource(source).filter((diagnostic) => diagnostic.code === "L021")).toEqual([
+      expect.objectContaining({
+        span: { start: source.indexOf("¥"), end: source.indexOf("¥") + 1 },
+      }),
+    ]);
+  });
+
+  it("resumes after an unclosed verb literal line and does not use a later-line delimiter", () => {
+    const source = "\\verb|¥section{literal}\r\n¥section{report}\r\n|";
+    const diagnostics = lintSource(source).filter((diagnostic) => diagnostic.code === "L021");
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        span: {
+          start: source.indexOf("¥section{report}"),
+          end: source.indexOf("¥section{report}") + 1,
+        },
+      }),
+    ]);
+  });
+
+  it("handles long backslash runs in one forward pass while preserving odd/even escaping", () => {
+    const source = `${"\\".repeat(20_000)}¥section{long}\n\\% ¥section{visible}\n\\\\% ¥section{comment}`;
+    const diagnostics = lintSource(source).filter((diagnostic) => diagnostic.code === "L021");
+    expect(diagnostics.map((diagnostic) => sourceText(source, diagnostic))).toEqual(["¥", "¥"]);
+    expect(diagnostics[0]?.span.start).toBe(20_000);
+  });
+
+  it("continues after malformed begin lines without repeatedly scanning later lines", () => {
+    const source = `${"\\begin{\n".repeat(2_000)}¥section{after}`;
+    const diagnostics = lintSource(source).filter((diagnostic) => diagnostic.code === "L021");
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        span: { start: source.lastIndexOf("¥"), end: source.lastIndexOf("¥") + 1 },
+      }),
+    ]);
+  });
+
+  it("scans same-line begin-like and verb sequences without swallowing a later command", () => {
+    const source = `${"\\begin{not-verbatim}".repeat(2_000)}${"\\verb|¥ignored|".repeat(2_000)}¥section{after}`;
+    const finalYen = source.lastIndexOf("¥");
+    expect(lintSource(source).filter((diagnostic) => diagnostic.code === "L021")).toEqual([
+      expect.objectContaining({ span: { start: finalYen, end: finalYen + 1 } }),
+    ]);
+  });
+
+  it("keeps lintDeck AST-only while lintSource merges and orders L021", () => {
+    const source = deck("¥section{bad}\n\\unknowncommand{raw}");
+    expect(lintDeck(parseDeck(source)).some((diagnostic) => diagnostic.code === "L021")).toBe(
+      false,
+    );
+    const diagnostics = lintSource(source);
+    expect(diagnostics.some((diagnostic) => diagnostic.code === "L021")).toBe(true);
+    expect(diagnostics).toEqual(
+      [...diagnostics].sort((a, b) => a.span.start - b.span.start || a.code.localeCompare(b.code)),
+    );
   });
 });
 

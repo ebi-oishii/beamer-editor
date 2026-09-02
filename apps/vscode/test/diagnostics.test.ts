@@ -103,6 +103,13 @@ describe("lintDocumentText", () => {
   it("違反のないデッキでは空", () => {
     expect(lintDocumentText(CLEAN)).toEqual([]);
   });
+
+  it("L021 は円記号だけの UTF-16 source range を返す", () => {
+    const source = deckSource("😀日本語 ¥section{Title}");
+    const diagnostic = lintDocumentText(source).find((entry) => entry.code === "L021");
+    expect(diagnostic).toMatchObject({ severity: "warning" });
+    expect(source.slice(diagnostic?.span.start, diagnostic?.span.end)).toBe("¥");
+  });
 });
 
 describe("LintController", () => {

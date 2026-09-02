@@ -307,8 +307,9 @@ coreの `lintDeck` が返す診断を次へ変換する。
 `languages.createDiagnosticCollection("beamer-editor")` で文書ごとの診断を管理する。
 文書変更時に更新し、文書を閉じた時または拡張をdisposeした時に削除する。
 
-Phase 5ではProblems表示と波線までを対象にする。Quick Fixはcore側の安全なTextEdit表現と
-VS Code側のCodeAction設計が揃ってから追加する。
+Phase 5ではProblems表示と波線を対象にする。L021（円記号で始まる TeX command）だけは、
+managed local LaTeX 文書で円記号だけをバックスラッシュへ置換する限定 Quick Fix を提供する。
+fix-all、保存時・入力時の自動修正は行わない。
 
 完了条件:
 
@@ -429,7 +430,7 @@ formatterやlinterへ依存するPRはbase branchを明記し、無関係な差�
 | Issue | Phase 5で行うこと |
 |---|---|
 | #6 editor内でTabが効かない | VS Code標準エディタで期待どおりか確認する。Web独自実装はしない |
-| #8 円記号とbackslash | core lint / Quick Fix候補として別途扱う |
+| #8 円記号とbackslash | core の L021 warning と、managed local LaTeX 文書向けの限定 Quick Fix で扱う |
 | #9 編集画面幅などの調整 | エディタグループとWebviewPanelで満たせるか実機確認する |
 | #10 syntax highlight | VS Code 組み込みの LaTeX grammar で対象構文を確認済み。Phase 5では独自highlighterを作らない（[editor-setup.md](editor-setup.md)参照） |
 | #12 表のWYSIWYG編集 | Phase 7以降 |

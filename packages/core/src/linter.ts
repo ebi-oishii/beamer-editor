@@ -10,6 +10,7 @@ import {
   type SourceSpan,
 } from "./ast.js";
 import type { FileExistsProbe, ImageFormat, ImageProbe } from "./image.js";
+import { parseDeck } from "./parser.js";
 
 export type LintCode =
   | "L001"
@@ -27,7 +28,8 @@ export type LintCode =
   | "L017"
   | "L018"
   | "L019"
-  | "L020";
+  | "L020"
+  | "L021";
 
 export type LintSeverity = "info" | "warning" | "error";
 
@@ -52,6 +54,11 @@ export const CURRENT_DECK_SOURCE_VERSION = 1;
 type AnyFrame = FrameNode | RawFrameNode;
 
 const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlisting", "minted"]);
+const VERBATIM_DELIMITERS = [...VERBATIM_ENVS].map((environment) => ({
+  begin: `\\begin{${environment}}`,
+  end: `\\end{${environment}}`,
+}));
+const YEN = new Set(["¥", "￥"]);
 function frameLabel(frame: AnyFrame): string | null {
   const label = frame.type === "frame" ? frame.options.label : frame.label;
   return label?.trim() || null;
@@ -881,4 +888,80 @@ export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiag
   ];
 
   return diagnostics.sort((a, b) => a.span.start - b.span.start || a.code.localeCompare(b.code));
+}
+
+function findLineEnd(source: string, position: number): number {
+  let cursor = position;
+  while (cursor < source.length && source[cursor] !== "\n" && source[cursor] !== "\r") cursor++;
+  return cursor;
+}
+
+function isYenCommandStart(source: string, position: number): boolean {
+  const next = source[position + 1];
+  return (
+    next !== undefined &&
+    (/[A-Za-z@]/.test(next) || "%#$&_{}~^\\[]".includes(next) || YEN.has(next))
+  );
+}
+
+/** source-dependent な円記号/全角円記号の TeX command 誤記を検出する。 */
+function lintYenBackslashes(source: string): LintDiagnostic[] {
+  const diagnostics: LintDiagnostic[] = [];
+  let precedingBackslashes = 0;
+  let lineEnd = findLineEnd(source, 0);
+  for (let cursor = 0; cursor < source.length; cursor++) {
+    if (cursor > lineEnd) lineEnd = findLineEnd(source, cursor);
+    const char = source[cursor] as string;
+    const escaped = precedingBackslashes % 2 === 1;
+    if (char === "%" && !escaped) {
+      cursor = lineEnd;
+      precedingBackslashes = 0;
+      continue;
+    }
+    if (char === "\\" && !escaped) {
+      if (source.startsWith("\\verb", cursor) && !/[A-Za-z@]/.test(source[cursor + 5] ?? "")) {
+        let literal = cursor + 5;
+        if (source[literal] === "*") literal++;
+        const delimiter = source[literal];
+        if (delimiter === undefined || /\s/.test(delimiter)) {
+          cursor = lineEnd;
+          precedingBackslashes = 0;
+          continue;
+        }
+        let close = literal + 1;
+        while (close < lineEnd && source[close] !== delimiter) close++;
+        cursor = close;
+        precedingBackslashes = 0;
+        continue;
+      }
+      let skippedVerbatim = false;
+      for (const delimiter of VERBATIM_DELIMITERS) {
+        if (!source.startsWith(delimiter.begin, cursor)) continue;
+        const endAt = source.indexOf(delimiter.end, cursor + delimiter.begin.length);
+        if (endAt === -1) return diagnostics;
+        cursor = endAt + delimiter.end.length - 1;
+        precedingBackslashes = 0;
+        skippedVerbatim = true;
+        break;
+      }
+      if (skippedVerbatim) continue;
+    }
+    if (YEN.has(char) && isYenCommandStart(source, cursor)) {
+      diagnostics.push({
+        code: "L021",
+        severity: "warning",
+        message: "円記号ではなくバックスラッシュを使って TeX コマンドを書いてください",
+        span: { start: cursor, end: cursor + 1 },
+      });
+    }
+    precedingBackslashes = char === "\\" ? precedingBackslashes + 1 : 0;
+  }
+  return diagnostics;
+}
+
+/** 元ソースを必要とする規則を含めて lint する公開 API。 */
+export function lintSource(source: string, options: LintOptions = {}): LintDiagnostic[] {
+  return [...lintDeck(parseDeck(source), options), ...lintYenBackslashes(source)].sort(
+    (a, b) => a.span.start - b.span.start || a.code.localeCompare(b.code),
+  );
 }
