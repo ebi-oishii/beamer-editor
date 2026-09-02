@@ -366,6 +366,53 @@ describe("mountPreview", () => {
     expect(scale.style.height).toBe("341px");
   });
 
+  it("computed style の端数論理サイズを整数 offset より優先する", () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    const originalGetComputedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((element) => {
+      const style = originalGetComputedStyle(element);
+      if (!(element instanceof HTMLElement) || !element.classList.contains("slide")) return style;
+      return { ...style, width: "606.9867px", height: "341.4267px" } as CSSStyleDeclaration;
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: 3 as const }),
+    };
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    const layout = container.querySelector<HTMLElement>(".slide-layout");
+    const scale = container.querySelector<HTMLElement>(".slide-scale");
+    const slide = scale?.querySelector<HTMLElement>(".slide");
+    if (!layout || !scale || !slide) throw new Error("stage fixture missing");
+    Object.defineProperties(slide, {
+      offsetWidth: { configurable: true, value: 606 },
+      offsetHeight: { configurable: true, value: 341 },
+    });
+    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+
+    expect(Number.parseFloat(scale.style.width)).toBeCloseTo(606.9867, 4);
+    expect(Number.parseFloat(scale.style.height)).toBeCloseTo(341.4267, 4);
+    expect(Number.parseFloat(layout.style.width)).toBeCloseTo(606.9867 * 3, 4);
+    expect(Number.parseFloat(layout.style.height)).toBeCloseTo(341.4267 * 3, 4);
+  });
+
   it("scaled layout clips transform overflow while thumbnails keep their own slide shadow", () => {
     const stylesheet = document.createElement("style");
     stylesheet.textContent = PREVIEW_CSS;

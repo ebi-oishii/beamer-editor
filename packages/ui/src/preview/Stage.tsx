@@ -15,6 +15,23 @@ const FALLBACK_W = 607;
 const FALLBACK_H = 341;
 const MIN_FIT_SCALE = 0.1;
 
+function computedPixelSize(slide: HTMLElement, property: "width" | "height"): number | undefined {
+  const value = slide.ownerDocument.defaultView?.getComputedStyle(slide)[property];
+  if (!value?.endsWith("px")) return undefined;
+  const size = Number.parseFloat(value);
+  return Number.isFinite(size) && size > 0 ? size : undefined;
+}
+
+function slideSize(
+  slide: HTMLElement | null,
+  property: "width" | "height",
+  fallback: number,
+): number {
+  if (!slide) return fallback;
+  const offsetSize = property === "width" ? slide.offsetWidth : slide.offsetHeight;
+  return computedPixelSize(slide, property) ?? (offsetSize || fallback);
+}
+
 function releasePointerCapture(element: HTMLElement, pointerId: number): void {
   try {
     if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
@@ -44,8 +61,8 @@ function useFitScale(
 
     const applyFit = () => {
       const slide = scaleBox.querySelector<HTMLElement>(".slide");
-      const slideW = slide?.offsetWidth || FALLBACK_W;
-      const slideH = slide?.offsetHeight || FALLBACK_H;
+      const slideW = slideSize(slide, "width", FALLBACK_W);
+      const slideH = slideSize(slide, "height", FALLBACK_H);
       const availW = Math.max(0, holder.clientWidth - 24);
       const availH = Math.max(0, holder.clientHeight - 24);
       const fitScale = Math.max(MIN_FIT_SCALE, Math.min(availW / slideW, availH / slideH, 1.6));
