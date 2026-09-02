@@ -134,6 +134,32 @@ describe("renderDeck: 自由配置候補の識別属性", () => {
     expect(html).not.toContain(`data-source-start="${source.indexOf("canvas paragraph")}"`);
     expect(html.match(/data-flow-block=/g)).toHaveLength(4);
   });
+
+  it("リスト項目の唯一の内容(画像・入れ子リスト)には付けず、他の内容と並ぶものには付ける", () => {
+    const list = `\\documentclass[aspectratio=169]{beamer}
+\\begin{document}
+\\begin{frame}{T}
+  \\begin{itemize}
+    \\item \\includegraphics[width=0.4\\textwidth]{only.png}
+    \\item text \\includegraphics[width=0.4\\textwidth]{with-text.png}
+    \\item
+    \\begin{itemize}
+      \\item deeper \\includegraphics[width=0.2\\textwidth]{deep.png}
+    \\end{itemize}
+  \\end{itemize}
+\\end{frame}
+\\end{document}
+`;
+    const rendered = renderDeck(parseDeck(list)).frames[0]?.html ?? "";
+    expect(rendered).toContain('<img src="only.png"');
+    expect(rendered).toContain('<img data-flow-block="image"');
+    expect(rendered).toContain('src="with-text.png"');
+    expect(rendered).toContain('src="deep.png"');
+    expect(rendered).not.toContain('<ul data-flow-block="list"');
+    // with-text.png / deep.png の 2 つだけが候補になる(外側のリストは唯一の入れ子を持つ項目を含むが、
+    // リスト自体はフレーム直下なので候補になる)。
+    expect(rendered.match(/data-flow-block="image"/g)).toHaveLength(2);
+  });
 });
 
 describe("renderDeck: kitchen-sink.tex", () => {

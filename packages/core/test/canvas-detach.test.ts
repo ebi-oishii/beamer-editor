@@ -169,6 +169,76 @@ describe("detachBlockToCanvas", () => {
     ).toBeNull();
   });
 
+  it("リスト項目の唯一の内容(画像・入れ子リスト)は候補にせず、他の内容があれば取り出せる", () => {
+    const source = deck(`\\begin{frame}{T}
+  \\begin{itemize}
+    \\item \\includegraphics[width=0.4\\textwidth]{only.png}
+    \\item text \\includegraphics[width=0.4\\textwidth]{with-text.png}
+    \\item
+    \\begin{itemize}
+      \\item deeper \\includegraphics[width=0.2\\textwidth]{deep.png}
+    \\end{itemize}
+  \\end{itemize}
+\\end{frame}`);
+    const placement = { x: 0.1, y: 0.1, width: 0.3 };
+    // 唯一の子の画像 → 空の \item が残るので不可
+    expect(
+      detachBlockToCanvas(
+        source,
+        spanOf(source, "\\includegraphics[width=0.4\\textwidth]{only.png}"),
+        placement,
+      ),
+    ).toBeNull();
+    // 段落と並ぶ画像 → 可
+    const withText = detachBlockToCanvas(
+      source,
+      spanOf(source, "\\includegraphics[width=0.4\\textwidth]{with-text.png}"),
+      placement,
+    );
+    expect(withText?.text).toContain("\\item text\n");
+    expect(withText?.text).toContain("\\deckimage[x=0.100,y=0.100,w=0.300]{with-text.png}");
+    // 唯一の子の入れ子リスト → 不可。その中の、段落と並ぶ画像 → 可
+    const nested = spanOf(
+      source,
+      "\\begin{itemize}\n      \\item deeper \\includegraphics[width=0.2\\textwidth]{deep.png}\n    \\end{itemize}",
+    );
+    expect(detachBlockToCanvas(source, nested, placement)).toBeNull();
+    expect(
+      detachBlockToCanvas(
+        source,
+        spanOf(source, "\\includegraphics[width=0.2\\textwidth]{deep.png}"),
+        placement,
+      ),
+    ).not.toBeNull();
+  });
+
+  it("CRLF 文書では生成部分も CRLF にし、取り除いた行に CR を残さない", () => {
+    const source = deck(`\\begin{frame}{T}
+  lead text
+  \\begin{itemize}
+    \\item A
+  \\end{itemize}
+\\end{frame}`).replaceAll("\n", "\r\n");
+    const start = source.indexOf("lead text");
+    const end = source.indexOf("\\begin{itemize}");
+    const result = detachBlockToCanvas(source, { start, end }, { x: 0, y: 0, width: 1 });
+    const applied = apply(source, must(result));
+    expect(applied).toBe(
+      deck(`\\begin{frame}{T}
+  \\begin{itemize}
+    \\item A
+  \\end{itemize}
+  \\begin{deckcanvas}
+    \\begin{decktext}[x=0.000,y=0.000,w=1.000,size=normal]
+      lead text
+    \\end{decktext}
+  \\end{deckcanvas}
+\\end{frame}`).replaceAll("\n", "\r\n"),
+    );
+    // LF 単独は一つも残らない。
+    expect(applied.replaceAll("\r\n", "")).not.toContain("\n");
+  });
+
   it("移せない種類・span 不一致・deckcanvas が 2 つのフレームは null", () => {
     const columns = deck(`\\begin{frame}{T}
   \\begin{columns}

@@ -8,7 +8,14 @@
  * 取り出した要素の位置は呼び出し側(プレビュー上の表示位置)が決める。
  */
 
-import type { BlockNode, CanvasNode, FrameNode, ListNode, SourceSpan } from "./ast.js";
+import type {
+  BlockNode,
+  CanvasNode,
+  FrameNode,
+  ListItemNode,
+  ListNode,
+  SourceSpan,
+} from "./ast.js";
 import { formatCanvasCoordinate } from "./canvas-edit.js";
 import { parseDeck } from "./parser.js";
 
@@ -55,28 +62,42 @@ export function isDetachableBlock(block: BlockNode): boolean {
 }
 
 /**
- * フレーム本文のブロックを深さ優先で列挙する。リスト項目直下の段落は項目の本文そのもの
- * なので対象にしない(取り出すと空の \item が残る)。canvas の中身は対象外。
+ * リスト項目の子のうち、取り出してよいもの。項目直下の段落は項目の本文そのものなので不可。
+ * 画像や入れ子リストも、それが項目の唯一の内容なら不可(取り出すと空の \item と記号が残る)。
+ * renderer の候補属性も同じ規則で付ける。
  */
+export function isDetachableListItemChild(item: ListItemNode, child: BlockNode): boolean {
+  return child.type !== "paragraph" && item.children.length > 1;
+}
+
+/** ブロックの子孫を深さ優先で列挙する(自身は含まない)。canvas の中身は対象外。 */
+function* walkChildren(block: BlockNode): Generator<BlockNode> {
+  switch (block.type) {
+    case "columns":
+      for (const column of block.columns) yield* walkBlocks(column.children);
+      break;
+    case "blockEnv":
+    case "center":
+      yield* walkBlocks(block.children);
+      break;
+    case "list":
+      for (const item of block.items) {
+        for (const child of item.children) {
+          if (isDetachableListItemChild(item, child)) yield child;
+          yield* walkChildren(child);
+        }
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+/** フレーム本文のブロックを深さ優先で列挙する。 */
 function* walkBlocks(blocks: BlockNode[]): Generator<BlockNode> {
   for (const block of blocks) {
     yield block;
-    switch (block.type) {
-      case "columns":
-        for (const column of block.columns) yield* walkBlocks(column.children);
-        break;
-      case "blockEnv":
-      case "center":
-        yield* walkBlocks(block.children);
-        break;
-      case "list":
-        for (const item of block.items) {
-          yield* walkBlocks(item.children.filter((child) => child.type !== "paragraph"));
-        }
-        break;
-      default:
-        break;
-    }
+    yield* walkChildren(block);
   }
 }
 
@@ -96,8 +117,15 @@ function lineEnd(source: string, offset: number): number {
   return index === -1 ? source.length : index;
 }
 
+/** 行内の空白判定。CRLF 文書では行末の CR も空白として扱う。 */
 function isBlank(text: string): boolean {
-  return /^[ \t]*$/.test(text);
+  return /^[ \t\r]*$/.test(text);
+}
+
+/** 文書の改行コード。生成・再インデント・行削除をこれに揃える(混在文書は最初に見つかった方)。 */
+function detectEol(source: string): string {
+  const index = source.indexOf("\n");
+  return index > 0 && source[index - 1] === "\r" ? "\r\n" : "\n";
 }
 
 /** 段落の span は次の環境の直前まで(改行・字下げ込み)伸びることがあるので、末尾の空白を落とす。 */
@@ -107,9 +135,9 @@ function trimmedSpan(source: string, span: SourceSpan): SourceSpan {
   return { start: span.start, end };
 }
 
-/** 複数行の原文を、先頭行の位置に合わせて indent で揃え直す。 */
-function reindent(text: string, indent: string): string {
-  const lines = text.split("\n");
+/** 複数行の原文を、先頭行の位置に合わせて indent で揃え直す。改行は eol に統一する。 */
+function reindent(text: string, indent: string, eol: string): string {
+  const lines = text.split(/\r?\n/);
   const rest = lines.slice(1).filter((line) => line.trim() !== "");
   const common =
     rest.length === 0 ? 0 : Math.min(...rest.map((line) => /^[ \t]*/.exec(line)?.[0].length ?? 0));
@@ -119,7 +147,7 @@ function reindent(text: string, indent: string): string {
       const body = index === 0 ? line.trimStart() : line.slice(common);
       return `${indent}${body}`;
     })
-    .join("\n");
+    .join(eol);
 }
 
 function buildObject(
@@ -127,13 +155,14 @@ function buildObject(
   block: BlockNode,
   placement: CanvasPlacement,
   indent: string,
+  eol: string,
 ): string {
   const f = formatCanvasCoordinate;
   const position = `x=${f(placement.x)},y=${f(placement.y)},w=${f(placement.width)}`;
   if (block.type === "image") return `${indent}\\deckimage[${position}]{${block.path}}`;
   const span = trimmedSpan(source, block.span);
-  const content = reindent(source.slice(span.start, span.end), `${indent}  `);
-  return `${indent}\\begin{decktext}[${position},size=normal]\n${content}\n${indent}\\end{decktext}`;
+  const content = reindent(source.slice(span.start, span.end), `${indent}  `, eol);
+  return `${indent}\\begin{decktext}[${position},size=normal]${eol}${content}${eol}${indent}\\end{decktext}`;
 }
 
 interface Edit {
@@ -150,6 +179,7 @@ function rewriteFrame(
   placement: CanvasPlacement,
 ): SourceReplacement {
   const edits: Edit[] = [];
+  const eol = detectEol(source);
 
   // 1. 対象ブロックの原文を取り除く。行を占有していれば改行ごと消す。
   const span = trimmedSpan(source, block.span);
@@ -157,8 +187,14 @@ function rewriteFrame(
   const blockLineEnd = lineEnd(source, span.end);
   const ownsLineStart = isBlank(source.slice(blockLineStart, span.start));
   const ownsLineEnd = isBlank(source.slice(span.end, blockLineEnd));
+  // 行末に居る場合は直前の空白も消し、`\item text ` のような末尾空白を残さない。
+  let removeStart = ownsLineStart ? blockLineStart : span.start;
+  if (!ownsLineStart && ownsLineEnd) {
+    while (removeStart > blockLineStart && /[ \t]/.test(source[removeStart - 1] as string))
+      removeStart--;
+  }
   edits.push({
-    start: ownsLineStart ? blockLineStart : span.start,
+    start: removeStart,
     end: ownsLineStart && ownsLineEnd ? Math.min(blockLineEnd + 1, source.length) : span.end,
     text: "",
   });
@@ -169,11 +205,11 @@ function rewriteFrame(
     const endLineStart = lineStart(source, endIndex);
     if (isBlank(source.slice(endLineStart, endIndex))) {
       const canvasIndent = source.slice(endLineStart, endIndex);
-      const object = buildObject(source, block, placement, `${canvasIndent}  `);
-      edits.push({ start: endLineStart, end: endLineStart, text: `${object}\n` });
+      const object = buildObject(source, block, placement, `${canvasIndent}  `, eol);
+      edits.push({ start: endLineStart, end: endLineStart, text: `${object}${eol}` });
     } else {
-      const object = buildObject(source, block, placement, "    ");
-      edits.push({ start: endIndex, end: endIndex, text: `\n${object}\n  ` });
+      const object = buildObject(source, block, placement, "    ", eol);
+      edits.push({ start: endIndex, end: endIndex, text: `${eol}${object}${eol}  ` });
     }
   } else {
     const endIndex = source.lastIndexOf("\\end{frame}", frame.span.end);
@@ -181,10 +217,10 @@ function rewriteFrame(
     const ownsLine = isBlank(source.slice(endLineStart, endIndex));
     const frameIndent = ownsLine ? source.slice(endLineStart, endIndex) : "";
     const bodyIndent = `${frameIndent}  `;
-    const object = buildObject(source, block, placement, `${bodyIndent}  `);
-    const text = `${bodyIndent}\\begin{deckcanvas}\n${object}\n${bodyIndent}\\end{deckcanvas}\n`;
+    const object = buildObject(source, block, placement, `${bodyIndent}  `, eol);
+    const text = `${bodyIndent}\\begin{deckcanvas}${eol}${object}${eol}${bodyIndent}\\end{deckcanvas}${eol}`;
     if (ownsLine) edits.push({ start: endLineStart, end: endLineStart, text });
-    else edits.push({ start: endIndex, end: endIndex, text: `\n${text}` });
+    else edits.push({ start: endIndex, end: endIndex, text: `${eol}${text}` });
   }
 
   // 3. フレーム範囲内で後ろから適用し、フレーム全体の置換として返す(1 操作 = 1 undo)。

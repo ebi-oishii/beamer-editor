@@ -21,7 +21,7 @@ import type {
   SourceSpan,
   StyleLogoNode,
 } from "@beamer-editor/core";
-import { framesOf, isDetachableBlock } from "@beamer-editor/core";
+import { framesOf, isDetachableBlock, isDetachableListItemChild } from "@beamer-editor/core";
 import katex from "katex";
 import { DEFAULT_THEME, type Theme } from "./theme.js";
 
@@ -239,15 +239,16 @@ class FrameRenderer {
    * \item の中身。段落を <p>(ブロック)にするとリストマーカーと本文が
    * 別の行に分かれてしまうため、段落はインラインの span として描画する。
    */
-  private renderListItemChildren(blocks: BlockNode[]): string {
+  private renderListItemChildren(item: ListItemNode): string {
     let out = "";
     let prevParagraph = false;
-    for (const block of blocks) {
+    for (const block of item.children) {
       if (block.type === "paragraph") {
         out += `${prevParagraph ? "<br>" : ""}<span${this.overlayAttrs(null)}>${this.renderInlines(block.children)}</span>`;
         prevParagraph = true;
       } else {
-        out += this.renderBlock(block);
+        // 項目の唯一の内容は「自由配置にする」候補にしない(core の walk と同じ規則)。
+        out += this.renderBlock(block, isDetachableListItemChild(item, block));
         prevParagraph = false;
       }
     }
@@ -258,24 +259,26 @@ class FrameRenderer {
    * 「自由配置にする」で deckcanvas へ移せるフロー要素に、ui が右クリック位置から候補を
    * 拾うための識別属性を付ける(span は展開後ソース。host が元ソースへ戻す)。
    */
-  private flowBlockAttrs(block: BlockNode): string {
-    if (this.canvasDepth > 0 || !isDetachableBlock(block)) return "";
+  private flowBlockAttrs(block: BlockNode, detachable: boolean): string {
+    if (!detachable || this.canvasDepth > 0 || !isDetachableBlock(block)) return "";
     return ` data-flow-block="${block.type}" data-source-start="${block.span.start}" data-source-end="${block.span.end}"`;
   }
 
-  private renderBlock(block: BlockNode): string {
+  /** detachable=false は、親(リスト項目)の都合で「自由配置にする」候補にしないブロック。 */
+  private renderBlock(block: BlockNode, detachable = true): string {
     switch (block.type) {
       case "paragraph":
-        return `<p${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}>${this.renderInlines(block.children)}</p>`;
+        return `<p${this.flowBlockAttrs(block, detachable)}${this.overlayAttrs(null)}>${this.renderInlines(block.children)}</p>`;
       case "list": {
         const tag = block.kind === "itemize" ? "ul" : "ol";
+        const flow = this.flowBlockAttrs(block, detachable);
         const items = block.items
           .map(
             (item) =>
-              `<li${this.overlayAttrs(item.overlay)}>${this.renderListItemChildren(item.children)}</li>`,
+              `<li${this.overlayAttrs(item.overlay)}>${this.renderListItemChildren(item)}</li>`,
           )
           .join("");
-        return `<${tag}${this.flowBlockAttrs(block)}>${items}</${tag}>`;
+        return `<${tag}${flow}>${items}</${tag}>`;
       }
       case "columns": {
         const cols = block.columns
@@ -321,7 +324,7 @@ class FrameRenderer {
       }
       case "image": {
         const width = block.width ? `width:${(block.width.factor * 100).toFixed(1)}%` : "";
-        const flow = this.flowBlockAttrs(block);
+        const flow = this.flowBlockAttrs(block, detachable);
         if (block.path.toLowerCase().endsWith(".pdf")) {
           return `<div class="image-placeholder"${flow} style="${width}"${this.overlayAttrs(null)}>PDF 画像(部分コンパイルは Phase 6): ${escapeHtml(block.path)}</div>`;
         }
