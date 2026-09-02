@@ -194,6 +194,7 @@ function mountCanvasPreview() {
 describe("mountPreview", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     document.body.innerHTML = "";
     document.head.innerHTML = "";
   });
@@ -215,7 +216,7 @@ describe("mountPreview", () => {
     expect(document.getElementById("beamer-preview-styles")).not.toBeNull();
     // beamer-preview のルートが描画され、フレームのスライドが入る。
     expect(container.querySelector(".beamer-preview")).not.toBeNull();
-    expect(container.querySelectorAll(".thumb")).toHaveLength(2);
+    expect(container.querySelectorAll(".slide-card")).toHaveLength(2);
 
     expect(() => act(() => unmount())).not.toThrow();
   });
@@ -239,9 +240,9 @@ describe("mountPreview", () => {
       host.push(DECK);
     });
 
-    // 復元された current=1 のサムネイルがアクティブになる。
-    const thumbs = [...container.querySelectorAll(".thumb")];
-    expect(thumbs[1]?.classList.contains("active")).toBe(true);
+    // 復元された current=1 のスライドがアクティブになる。
+    const cards = [...container.querySelectorAll(".slide-card")];
+    expect(cards[1]?.classList.contains("active")).toBe(true);
     expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: "fit" });
 
     // 前へ移動すると新しいナビ状態が保存される。
@@ -297,19 +298,128 @@ describe("mountPreview", () => {
     act(() => actual?.click());
     expect(container.querySelector(".slide-scale")?.getAttribute("style")).toContain("scale(1)");
     expect(container.querySelector<HTMLElement>(".slide-layout")?.style.width).toBe("607px");
-    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.width).toBe("");
+    expect(container.querySelector<HTMLElement>(".slide-layout")?.style.height).toBe("341px");
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.width).toBe("607px");
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.height).toBe("341px");
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1 });
 
     const increase = container.querySelector<HTMLButtonElement>('button[aria-label="拡大"]');
     act(() => increase?.click());
     expect(container.querySelector(".slide-scale")?.getAttribute("style")).toContain("scale(1.1)");
     expect(container.querySelector<HTMLElement>(".slide-layout")?.style.width).toBe("667.7px");
+    expect(container.querySelector<HTMLElement>(".slide-layout")?.style.height).toBe("375.1px");
+    // 手動ズームは外側だけを変え、transform 対象は論理サイズのまま(#58 の幾何契約)。
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.width).toBe("607px");
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.height).toBe("341px");
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.1 });
 
     const fit = container.querySelector<HTMLButtonElement>('button[aria-label="画面に合わせる"]');
     act(() => fit?.click());
     expect(container.querySelector(".zoom-indicator")?.textContent).toMatch(/^フィット /);
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: "fit" });
+  });
+
+  it("resize 後も内側は論理サイズのまま、幅合わせの外側だけを再計算する", () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const scroll = container.querySelector<HTMLElement>(".slide-scroll");
+    const layout = container.querySelector<HTMLElement>(".slide-layout");
+    const scale = container.querySelector<HTMLElement>(".slide-scale");
+    if (!scroll || !layout || !scale) throw new Error("stage fixture missing");
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 1_004 },
+      clientHeight: { configurable: true, value: 700 },
+    });
+    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+    // (1004 - 32) / 607 は上限 1.6 でクランプされる(32 = scroll padding 24 + card padding 8)。
+    expect(layout.style.width).toBe("971.2px");
+    expect(layout.style.height).toBe("545.6px");
+
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 308 },
+      clientHeight: { configurable: true, value: 250 },
+    });
+    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+    expect(Number.parseFloat(layout.style.width)).toBeCloseTo(276, 6);
+    expect(Number.parseFloat(layout.style.height)).toBeCloseTo(155.05, 2);
+    expect(scale.style.width).toBe("607px");
+    expect(scale.style.height).toBe("341px");
+  });
+
+  it("computed style の端数論理サイズを整数 offset より優先し、3x では外側だけが 3 倍になる", () => {
+    const originalGetComputedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((element) => {
+      const style = originalGetComputedStyle(element);
+      if (!(element instanceof HTMLElement) || !element.classList.contains("slide")) return style;
+      return { ...style, width: "606.9867px", height: "341.4267px" } as CSSStyleDeclaration;
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(606);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(341);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: 3 as const }),
+    };
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    const layout = container.querySelector<HTMLElement>(".slide-layout");
+    const scale = container.querySelector<HTMLElement>(".slide-scale");
+    if (!layout || !scale) throw new Error("stage fixture missing");
+    expect(Number.parseFloat(scale.style.width)).toBeCloseTo(606.9867, 4);
+    expect(Number.parseFloat(scale.style.height)).toBeCloseTo(341.4267, 4);
+    expect(Number.parseFloat(layout.style.width)).toBeCloseTo(606.9867 * 3, 4);
+    expect(Number.parseFloat(layout.style.height)).toBeCloseTo(341.4267 * 3, 4);
+  });
+
+  it("外側の .slide-layout が transform のはみ出しを閉じ、影を持つ", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    const stylesheet = document.getElementById("beamer-preview-styles") as HTMLStyleElement | null;
+    const layout = container.querySelector<HTMLElement>(".slide-layout");
+    if (!stylesheet || !layout) throw new Error("stage fixture missing");
+    const cssRule = (selector: string) =>
+      [...(stylesheet.sheet?.cssRules ?? [])].find(
+        (rule): rule is CSSStyleRule =>
+          rule instanceof CSSStyleRule && rule.selectorText === selector,
+      );
+    expect(getComputedStyle(layout).overflow).toBe("hidden");
+    expect(cssRule(".slide-layout")?.style.getPropertyValue("box-shadow")).not.toBe("");
+    expect(cssRule(".slide-layout .slide")?.style.getPropertyValue("box-shadow")).toBe("none");
+    expect(cssRule(".slide")?.style.getPropertyValue("box-shadow")).not.toBe("");
   });
 
   it("zoom のない旧ナビ状態を fit として保存する", () => {
@@ -354,14 +464,94 @@ describe("mountPreview", () => {
     });
     expect(jumpToSource).toHaveBeenLastCalledWith(0, 1);
 
-    // サムネイル上の Ctrl+Enter はダブルクリックと等価にジャンプする。
-    const thumb = container.querySelectorAll<HTMLElement>(".thumb")[1];
+    // スライド上の Ctrl+Enter はダブルクリックと等価にジャンプする。
+    const card = container.querySelectorAll<HTMLElement>(".slide-card")[1];
     act(() => {
-      thumb?.dispatchEvent(
+      card?.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
       );
     });
     expect(jumpToSource).toHaveBeenLastCalledWith(1, 1);
+  });
+
+  it("全フレームを縦一列に描画し、現在フレームだけに step を適用する", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    // サムネイル一覧は無く、スライド本体が全フレーム分並ぶ。
+    expect(container.querySelector(".slide-list")).toBeNull();
+    const scales = container.querySelectorAll<HTMLElement>(".slide-scale");
+    expect(scales).toHaveLength(2);
+    // 現在フレーム(0)は step=1 なので data-min="2" の要素は covered、他フレームは全ステップ表示。
+    expect(scales[0]?.querySelector("[data-min]")?.classList.contains("covered")).toBe(true);
+    const captions = [...container.querySelectorAll(".slide-caption")].map((c) => c.textContent);
+    expect(captions).toEqual(["1. one", "2. two（label=f2）"]);
+
+    // クリックで選択すると active が移り、frame indicator も追従する。
+    const cards = container.querySelectorAll<HTMLElement>(".slide-card");
+    act(() => {
+      cards[1]?.click();
+    });
+    expect(cards[1]?.classList.contains("active")).toBe(true);
+    expect(container.querySelector(".frame-indicator")?.textContent).toBe("2 / 2");
+    // 総数の桁から幅を固定し、フレームが変わっても右側のボタンが動かない。
+    expect(container.querySelector<HTMLElement>(".frame-indicator")?.style.minWidth).toBe("5ch");
+  });
+
+  it("スクロールで上端に来たフレームが現在フレームになる", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const notifyActiveFrame = vi.fn();
+    const host = { ...fakeHost(), notifyActiveFrame };
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    const scroll = container.querySelector<HTMLElement>(".slide-scroll");
+    const cards = container.querySelectorAll<HTMLElement>(".slide-card");
+    if (!scroll || cards.length !== 2) throw new Error("scroll fixture missing");
+    // jsdom はレイアウトを持たないので offsetTop / offsetHeight / scrollTop を与える。
+    cards.forEach((card, i) => {
+      Object.defineProperties(card, {
+        offsetTop: { configurable: true, value: 12 + i * 416 },
+        offsetHeight: { configurable: true, value: 400 },
+      });
+    });
+    let scrollTop = 0;
+    Object.defineProperty(scroll, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+
+    scrollTop = 300;
+    act(() => {
+      scroll.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    expect(cards[1]?.classList.contains("active")).toBe(true);
+    expect(notifyActiveFrame).toHaveBeenLastCalledWith(1);
+
+    // ◀ で戻ると移動先のカードが上端へ揃うようにスクロールされる。
+    const prev = container.querySelector<HTMLButtonElement>('button[aria-label="前のフレーム"]');
+    act(() => {
+      prev?.click();
+    });
+    expect(cards[0]?.classList.contains("active")).toBe(true);
+    expect(scrollTop).toBe(0);
   });
 
   it("canvas image は pointerup で一度だけ範囲外座標を clamp せず送る", () => {
