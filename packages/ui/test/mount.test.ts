@@ -215,7 +215,7 @@ describe("mountPreview", () => {
     expect(document.getElementById("beamer-preview-styles")).not.toBeNull();
     // beamer-preview のルートが描画され、フレームのスライドが入る。
     expect(container.querySelector(".beamer-preview")).not.toBeNull();
-    expect(container.querySelectorAll(".thumb")).toHaveLength(2);
+    expect(container.querySelectorAll(".slide-card")).toHaveLength(2);
 
     expect(() => act(() => unmount())).not.toThrow();
   });
@@ -239,9 +239,9 @@ describe("mountPreview", () => {
       host.push(DECK);
     });
 
-    // 復元された current=1 のサムネイルがアクティブになる。
-    const thumbs = [...container.querySelectorAll(".thumb")];
-    expect(thumbs[1]?.classList.contains("active")).toBe(true);
+    // 復元された current=1 のスライドがアクティブになる。
+    const cards = [...container.querySelectorAll(".slide-card")];
+    expect(cards[1]?.classList.contains("active")).toBe(true);
     expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: "fit" });
 
     // 前へ移動すると新しいナビ状態が保存される。
@@ -354,14 +354,92 @@ describe("mountPreview", () => {
     });
     expect(jumpToSource).toHaveBeenLastCalledWith(0, 1);
 
-    // サムネイル上の Ctrl+Enter はダブルクリックと等価にジャンプする。
-    const thumb = container.querySelectorAll<HTMLElement>(".thumb")[1];
+    // スライド上の Ctrl+Enter はダブルクリックと等価にジャンプする。
+    const card = container.querySelectorAll<HTMLElement>(".slide-card")[1];
     act(() => {
-      thumb?.dispatchEvent(
+      card?.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
       );
     });
     expect(jumpToSource).toHaveBeenLastCalledWith(1, 1);
+  });
+
+  it("全フレームを縦一列に描画し、現在フレームだけに step を適用する", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    // サムネイル一覧は無く、スライド本体が全フレーム分並ぶ。
+    expect(container.querySelector(".slide-list")).toBeNull();
+    const scales = container.querySelectorAll<HTMLElement>(".slide-scale");
+    expect(scales).toHaveLength(2);
+    // 現在フレーム(0)は step=1 なので data-min="2" の要素は covered、他フレームは全ステップ表示。
+    expect(scales[0]?.querySelector("[data-min]")?.classList.contains("covered")).toBe(true);
+    const captions = [...container.querySelectorAll(".slide-caption")].map((c) => c.textContent);
+    expect(captions).toEqual(["1. one", "2. two"]);
+
+    // クリックで選択すると active が移り、frame indicator も追従する。
+    const cards = container.querySelectorAll<HTMLElement>(".slide-card");
+    act(() => {
+      cards[1]?.click();
+    });
+    expect(cards[1]?.classList.contains("active")).toBe(true);
+    expect(container.querySelector(".frame-indicator")?.textContent).toBe("2 / 2（label=f2）");
+  });
+
+  it("スクロールで上端に来たフレームが現在フレームになる", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const notifyActiveFrame = vi.fn();
+    const host = { ...fakeHost(), notifyActiveFrame };
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    const scroll = container.querySelector<HTMLElement>(".slide-scroll");
+    const cards = container.querySelectorAll<HTMLElement>(".slide-card");
+    if (!scroll || cards.length !== 2) throw new Error("scroll fixture missing");
+    // jsdom はレイアウトを持たないので offsetTop / offsetHeight / scrollTop を与える。
+    cards.forEach((card, i) => {
+      Object.defineProperties(card, {
+        offsetTop: { configurable: true, value: 12 + i * 416 },
+        offsetHeight: { configurable: true, value: 400 },
+      });
+    });
+    let scrollTop = 0;
+    Object.defineProperty(scroll, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+
+    scrollTop = 300;
+    act(() => {
+      scroll.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    expect(cards[1]?.classList.contains("active")).toBe(true);
+    expect(notifyActiveFrame).toHaveBeenLastCalledWith(1);
+
+    // ◀ で戻ると移動先のカードが上端へ揃うようにスクロールされる。
+    const prev = container.querySelector<HTMLButtonElement>('button[aria-label="前のフレーム"]');
+    act(() => {
+      prev?.click();
+    });
+    expect(cards[0]?.classList.contains("active")).toBe(true);
+    expect(scrollTop).toBe(0);
   });
 
   it("canvas image は pointerup で一度だけ範囲外座標を clamp せず送る", () => {

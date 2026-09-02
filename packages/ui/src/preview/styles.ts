@@ -1,7 +1,7 @@
 /**
  * プレビュー描画に必要な CSS を文字列で保持する。
  *
- * apps/web/style.css からスライド・サムネイル・ステージ・コントロール・オーバーレイの
+ * apps/web/style.css からスライド・縦一列表示・コントロール・オーバーレイの
  * 描画に必要な部分だけを抜き出し、id セレクタを ui のクラス名へ置き換えたもの。
  * header / textarea / 左右ペインなど apps/web 固有の chrome は含めない。
  * vite / esbuild の css-loader 差を避けるため CSS は文字列で持ち、mountPreview が注入する。
@@ -11,7 +11,11 @@
 export const PREVIEW_CSS = `
 .beamer-preview {
   display: flex;
+  flex-direction: column;
   flex: 1;
+  /* ホスト(#app / #preview-host)は横方向 flex。min-width: auto のままだとカード幅に
+     引っ張られて広がり、幅合わせの倍率が膨らみ続けるので 0 にする。 */
+  min-width: 0;
   min-height: 0;
   height: 100%;
   box-sizing: border-box;
@@ -26,62 +30,43 @@ export const PREVIEW_CSS = `
   box-sizing: border-box;
 }
 
-.slide-list {
-  width: 190px;
-  overflow-y: auto;
-  border-right: 1px solid var(--vscode-panel-border, #ddd);
-  padding: 8px;
-  background: var(--vscode-sideBar-background, #f4f4f6);
-}
-.thumb {
-  cursor: pointer;
-  margin-bottom: 10px;
-  border-radius: 4px;
-  padding: 3px;
-}
-.thumb.active {
-  outline: 2px solid var(--vscode-focusBorder, #3344b3);
-  background: var(--vscode-list-activeSelectionBackground, #e8eaf9);
-}
-.thumb-scale {
-  width: 160px;
-  height: 90px;
-  overflow: hidden;
+/* 全フレームを縦一列に並べるスクロール領域(Marp のプレビューと同じ読み方)。
+   padding は SlideScroll.tsx の SCROLL_PADDING と揃える。下端の余白は末尾フレームも
+   上端まで送れるよう SlideScroll が inline style で伸ばす。 */
+.slide-scroll {
   position: relative;
-  border: 1px solid var(--vscode-panel-border, #ccc);
-  background: #fff;
-}
-.thumb-label {
-  font-size: 11px;
-  color: var(--vscode-descriptionForeground, #444);
-  padding: 2px 2px 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.stage {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  background: var(--vscode-editor-background, #e9e9ee);
-}
-.slide-holder {
-  flex: 1;
-  min-width: 0;
+  min-height: 0;
   overflow: auto;
   padding: 12px;
-  display: flex;
-  align-items: flex-start;
+  background: var(--vscode-editor-background, #e9e9ee);
 }
-.slide-layout {
-  margin-left: auto;
-  margin-right: auto;
-  flex: 0 0 auto;
+.slide-card {
+  width: fit-content;
+  margin: 0 auto 16px;
+  padding: 4px;
+  border-radius: 6px;
+  outline: 2px solid transparent;
+  cursor: pointer;
+}
+.slide-card.active {
+  outline-color: var(--vscode-focusBorder, #3344b3);
+  background: var(--vscode-list-activeSelectionBackground, #e8eaf9);
 }
 .slide-scale {
   transform-origin: top left;
+}
+/* キャプションはスライド幅に収めて省略する(幅 0 + min-width でカード幅を広げない)。 */
+.slide-caption {
+  width: 0;
+  min-width: 100%;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #444);
+  padding: 4px 2px 0;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .controls {
   display: flex;
@@ -161,10 +146,6 @@ export const PREVIEW_CSS = `
 }
 .slide img {
   max-width: 100%;
-}
-.thumb-scale .slide {
-  transform: scale(0.264);
-  transform-origin: top left;
 }
 .slide .it {
   font-style: italic;
