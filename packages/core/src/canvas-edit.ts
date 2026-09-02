@@ -1,11 +1,7 @@
 import type { SourceSpan } from "./ast.js";
 
-/** options 原文内の x/y だけを小数 3 桁で置換する。 */
-export function canvasImagePositionReplacement(
-  options: string,
-  x: number,
-  y: number,
-): string | null {
+/** canvas オブジェクト(deckimage / decktext)の options 原文内の x/y だけを小数 3 桁で置換する。 */
+export function canvasPositionReplacement(options: string, x: number, y: number): string | null {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   if (!options.startsWith("[") || !options.endsWith("]")) return null;
   const value = (n: number) => {
@@ -45,7 +41,7 @@ export function canvasImagePositionReplacement(
 }
 
 /** x/y のみを小数 3 桁で置換する。options span は `[...]` 全体でなければならない。 */
-export function updateCanvasImagePosition(
+export function updateCanvasPosition(
   source: string,
   optionsSpan: SourceSpan,
   x: number,
@@ -59,7 +55,7 @@ export function updateCanvasImagePosition(
     optionsSpan.start >= optionsSpan.end
   )
     return null;
-  const replacement = canvasImagePositionReplacement(
+  const replacement = canvasPositionReplacement(
     source.slice(optionsSpan.start, optionsSpan.end),
     x,
     y,

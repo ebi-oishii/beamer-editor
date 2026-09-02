@@ -35,13 +35,13 @@ export interface RenderedFrame {
   /** オーバーレイの総ステップ数(1 なら段階表示なし)。 */
   stepCount: number;
   isRaw: boolean;
-  /** deckcanvas 直下の画像。ID はこの描画 version の frame 内だけで有効。 */
+  /** deckcanvas 直下の画像・テキスト。ID はこの描画 version の frame 内だけで有効。 */
   canvasElements?: RenderedCanvasElement[];
 }
 
 export interface RenderedCanvasElement {
   id: string;
-  kind: "image";
+  kind: "image" | "text";
   position: { x: number; y: number; width: number };
   /** 展開後ソースの `[...]` 範囲。host が strict map を通して editable 化する。 */
   sourceSpan: SourceSpan;
@@ -341,20 +341,29 @@ class FrameRenderer {
         const width = (body.width / slideWidthPt) * 100;
         const height = (body.height / slideHeightPt) * 100;
         let html = `<div class="canvas" style="left:${left.toFixed(3)}%;top:${top.toFixed(3)}%;width:${width.toFixed(3)}%;height:${height.toFixed(3)}%">`;
+        // ドラッグ対象の descriptor。ID は種類ごとの連番で、frame 内で一意になる。
+        const describe = (
+          kind: RenderedCanvasElement["kind"],
+          position: { x: number; y: number; width: number; span: SourceSpan },
+        ): string => {
+          const count = this.canvasElements.filter((element) => element.kind === kind).length;
+          const id = `canvas-${kind}-${count}`;
+          this.canvasElements.push({
+            id,
+            kind,
+            position: { x: position.x, y: position.y, width: position.width },
+            sourceSpan: position.span,
+          });
+          return ` data-canvas-element-id="${id}" data-canvas-element-kind="${kind}"`;
+        };
         for (const item of block.items) {
           const posStyle = (x: number, y: number, w: number) =>
             `left:${(x * 100).toFixed(2)}%;top:${(y * 100).toFixed(2)}%;width:${(w * 100).toFixed(2)}%`;
           if (item.type === "canvasText") {
-            html += `<div class="canvas-item canvas-text" style="${posStyle(item.position.x, item.position.y, item.position.width)};font-size:${this.theme.fontSizesPt[item.size]}pt">${this.renderBlocks(item.children)}</div>`;
+            const attrs = describe("text", item.position);
+            html += `<div class="canvas-item canvas-text"${attrs} style="${posStyle(item.position.x, item.position.y, item.position.width)};font-size:${this.theme.fontSizesPt[item.size]}pt">${this.renderBlocks(item.children)}</div>`;
           } else if (item.type === "canvasImage") {
-            const id = `canvas-image-${this.canvasElements.length}`;
-            this.canvasElements.push({
-              id,
-              kind: "image",
-              position: { x: item.position.x, y: item.position.y, width: item.position.width },
-              sourceSpan: item.position.span,
-            });
-            const attrs = ` data-canvas-element-id="${id}" data-canvas-element-kind="image"`;
+            const attrs = describe("image", item.position);
             if (item.path.toLowerCase().endsWith(".pdf")) {
               html += `<div class="canvas-item image-placeholder"${attrs} style="${posStyle(item.position.x, item.position.y, item.position.width)}">PDF 画像: ${escapeHtml(item.path)}</div>`;
             } else {
