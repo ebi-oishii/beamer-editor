@@ -194,6 +194,7 @@ function mountCanvasPreview() {
 describe("mountPreview", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     document.body.innerHTML = "";
     document.head.innerHTML = "";
   });
@@ -297,19 +298,128 @@ describe("mountPreview", () => {
     act(() => actual?.click());
     expect(container.querySelector(".slide-scale")?.getAttribute("style")).toContain("scale(1)");
     expect(container.querySelector<HTMLElement>(".slide-layout")?.style.width).toBe("607px");
-    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.width).toBe("");
+    expect(container.querySelector<HTMLElement>(".slide-layout")?.style.height).toBe("341px");
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.width).toBe("607px");
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.height).toBe("341px");
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1 });
 
     const increase = container.querySelector<HTMLButtonElement>('button[aria-label="拡大"]');
     act(() => increase?.click());
     expect(container.querySelector(".slide-scale")?.getAttribute("style")).toContain("scale(1.1)");
     expect(container.querySelector<HTMLElement>(".slide-layout")?.style.width).toBe("667.7px");
+    expect(container.querySelector<HTMLElement>(".slide-layout")?.style.height).toBe("375.1px");
+    // 手動ズームは外側だけを変え、transform 対象は論理サイズのまま(#58 の幾何契約)。
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.width).toBe("607px");
+    expect(container.querySelector<HTMLElement>(".slide-scale")?.style.height).toBe("341px");
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.1 });
 
     const fit = container.querySelector<HTMLButtonElement>('button[aria-label="画面に合わせる"]');
     act(() => fit?.click());
     expect(container.querySelector(".zoom-indicator")?.textContent).toMatch(/^フィット /);
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: "fit" });
+  });
+
+  it("resize 後も内側は論理サイズのまま、幅合わせの外側だけを再計算する", () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const scroll = container.querySelector<HTMLElement>(".slide-scroll");
+    const layout = container.querySelector<HTMLElement>(".slide-layout");
+    const scale = container.querySelector<HTMLElement>(".slide-scale");
+    if (!scroll || !layout || !scale) throw new Error("stage fixture missing");
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 1_004 },
+      clientHeight: { configurable: true, value: 700 },
+    });
+    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+    // (1004 - 32) / 607 は上限 1.6 でクランプされる(32 = scroll padding 24 + card padding 8)。
+    expect(layout.style.width).toBe("971.2px");
+    expect(layout.style.height).toBe("545.6px");
+
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 308 },
+      clientHeight: { configurable: true, value: 250 },
+    });
+    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+    expect(Number.parseFloat(layout.style.width)).toBeCloseTo(276, 6);
+    expect(Number.parseFloat(layout.style.height)).toBeCloseTo(155.05, 2);
+    expect(scale.style.width).toBe("607px");
+    expect(scale.style.height).toBe("341px");
+  });
+
+  it("computed style の端数論理サイズを整数 offset より優先し、3x では外側だけが 3 倍になる", () => {
+    const originalGetComputedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((element) => {
+      const style = originalGetComputedStyle(element);
+      if (!(element instanceof HTMLElement) || !element.classList.contains("slide")) return style;
+      return { ...style, width: "606.9867px", height: "341.4267px" } as CSSStyleDeclaration;
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(606);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(341);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: 3 as const }),
+    };
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    const layout = container.querySelector<HTMLElement>(".slide-layout");
+    const scale = container.querySelector<HTMLElement>(".slide-scale");
+    if (!layout || !scale) throw new Error("stage fixture missing");
+    expect(Number.parseFloat(scale.style.width)).toBeCloseTo(606.9867, 4);
+    expect(Number.parseFloat(scale.style.height)).toBeCloseTo(341.4267, 4);
+    expect(Number.parseFloat(layout.style.width)).toBeCloseTo(606.9867 * 3, 4);
+    expect(Number.parseFloat(layout.style.height)).toBeCloseTo(341.4267 * 3, 4);
+  });
+
+  it("外側の .slide-layout が transform のはみ出しを閉じ、影を持つ", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    const stylesheet = document.getElementById("beamer-preview-styles") as HTMLStyleElement | null;
+    const layout = container.querySelector<HTMLElement>(".slide-layout");
+    if (!stylesheet || !layout) throw new Error("stage fixture missing");
+    const cssRule = (selector: string) =>
+      [...(stylesheet.sheet?.cssRules ?? [])].find(
+        (rule): rule is CSSStyleRule =>
+          rule instanceof CSSStyleRule && rule.selectorText === selector,
+      );
+    expect(getComputedStyle(layout).overflow).toBe("hidden");
+    expect(cssRule(".slide-layout")?.style.getPropertyValue("box-shadow")).not.toBe("");
+    expect(cssRule(".slide-layout .slide")?.style.getPropertyValue("box-shadow")).toBe("none");
+    expect(cssRule(".slide")?.style.getPropertyValue("box-shadow")).not.toBe("");
   });
 
   it("zoom のない旧ナビ状態を fit として保存する", () => {

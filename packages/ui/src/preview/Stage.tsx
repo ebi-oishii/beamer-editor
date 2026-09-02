@@ -208,10 +208,16 @@ export function Stage({
       className="slide-layout"
       style={{ width: slideSize.width * scale, height: slideSize.height * scale }}
     >
+      {/* transform はレイアウト寸法を変えない。内側を論理サイズに固定し、外側だけを見た目の
+          scaled size にすることで、transform のはみ出しを二重に数えない(#58 の移植)。 */}
       <div
         className="slide-scale"
         ref={scaleRef}
-        style={{ transform: `scale(${scale})` }}
+        style={{
+          width: slideSize.width,
+          height: slideSize.height,
+          transform: `scale(${scale})`,
+        }}
         // biome-ignore lint/security/noDangerouslySetInnerHtml: renderer が escape 済みの信頼 HTML
         dangerouslySetInnerHTML={{ __html: frame.html }}
       />

@@ -53,8 +53,17 @@ export const PREVIEW_CSS = `
   outline-color: var(--vscode-focusBorder, #3344b3);
   background: var(--vscode-list-activeSelectionBackground, #e8eaf9);
 }
+/* 外側は見た目の scaled size、内側(.slide-scale)は論理サイズのまま transform する。
+   transform のはみ出しは外側で閉じ、影も外側に持たせる(#58 の移植)。 */
+.slide-layout {
+  overflow: hidden;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25);
+}
 .slide-scale {
   transform-origin: top left;
+}
+.slide-layout .slide {
+  box-shadow: none;
 }
 /* キャプションはスライド幅に収めて省略する(幅 0 + min-width でカード幅を広げない)。 */
 .slide-caption {

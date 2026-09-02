@@ -14,12 +14,34 @@ import type { ZoomState } from "./zoom.js";
 const FALLBACK_SLIDE: SlideSize = { width: 607, height: 341 };
 /** .slide-scroll の padding(styles.ts の値と揃える)。 */
 const SCROLL_PADDING = 12;
+/** .slide-card の padding(styles.ts の値と揃える)。幅合わせで横スクロールを出さないために差し引く。 */
+const CARD_PADDING = 4;
 /** 現在フレーム以外は全ステップ表示(旧サムネイルと同じ step=99 相当)。 */
 const ALL_STEPS = 99;
 
 /** aria-label に載せる修飾キー名(mac は Cmd、それ以外は Ctrl。判定不能時は Ctrl)。 */
 const MODIFIER_LABEL =
   typeof navigator !== "undefined" && /mac/i.test(navigator.platform) ? "Cmd" : "Ctrl";
+
+/** computed style の有限な正の px 値。取れないときは undefined。 */
+function computedPixelSize(slide: HTMLElement, property: "width" | "height"): number | undefined {
+  const value = slide.ownerDocument.defaultView?.getComputedStyle(slide)[property];
+  if (!value?.endsWith("px")) return undefined;
+  const size = Number.parseFloat(value);
+  return Number.isFinite(size) && size > 0 ? size : undefined;
+}
+
+/**
+ * スライドの論理サイズ。pt 指定の端数を保つため computed style を優先し、取れなければ
+ * 整数の offset、それも無ければ近似値へ落とす(#58 と同じ優先順)。
+ */
+function measureSlideSize(slide: HTMLElement | null): SlideSize {
+  if (!slide) return FALLBACK_SLIDE;
+  return {
+    width: computedPixelSize(slide, "width") ?? (slide.offsetWidth || FALLBACK_SLIDE.width),
+    height: computedPixelSize(slide, "height") ?? (slide.offsetHeight || FALLBACK_SLIDE.height),
+  };
+}
 
 /** 指定フレームを表示領域の上端へスクロールする要求。token が変わるたびに実行する。 */
 export interface RevealRequest {
@@ -132,16 +154,20 @@ export function SlideScroll({
     return () => observer.disconnect();
   }, []);
 
-  // スライド論理サイズ(offsetWidth は transform の影響を受けない)。全フレーム同一なので先頭で測る。
+  // スライド論理サイズ(レイアウト寸法は transform の影響を受けない)。全フレーム同一なので先頭で測る。
   // biome-ignore lint/correctness/useExhaustiveDependencies: frames の html 差し替え時に再計測したい
   useLayoutEffect(() => {
-    const slide = containerRef.current?.querySelector<HTMLElement>(".slide");
-    const width = slide?.offsetWidth || FALLBACK_SLIDE.width;
-    const height = slide?.offsetHeight || FALLBACK_SLIDE.height;
-    setSlideSize((cur) => (cur.width === width && cur.height === height ? cur : { width, height }));
+    const next = measureSlideSize(
+      containerRef.current?.querySelector<HTMLElement>(".slide") ?? null,
+    );
+    setSlideSize((cur) => (cur.width === next.width && cur.height === next.height ? cur : next));
   }, [frames]);
 
-  const fitScale = fitWidthScale(viewport.width, slideSize.width, SCROLL_PADDING * 2);
+  const fitScale = fitWidthScale(
+    viewport.width,
+    slideSize.width,
+    (SCROLL_PADDING + CARD_PADDING) * 2,
+  );
   const scale = zoom === "fit" ? fitScale : zoom;
   useEffect(() => {
     onFitScaleChange(fitScale);
