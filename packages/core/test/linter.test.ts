@@ -749,8 +749,29 @@ ordinary flow
 
     const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L014");
 
-    expect(diagnostics).toHaveLength(3);
+    // 通常フロー要素("ordinary flow")との共存は違反にしない。\pause と block の 2 件。
+    expect(diagnostics).toHaveLength(2);
     expect(diagnostics.every((entry) => entry.span.end > entry.span.start)).toBe(true);
+  });
+
+  it("フロー要素と deckcanvas の共存は L014 にせず、deckcanvas が 2 つあれば 2 つ目を報告する", () => {
+    const shared = deck(`
+\\begin{frame}[label=mixed]{Mixed}
+\\begin{itemize}\\item flow\\end{itemize}
+\\begin{deckcanvas}
+\\begin{decktext}[x=0,y=0.5,w=1]moved\\end{decktext}
+\\end{deckcanvas}
+\\end{frame}`);
+    expect(lintDeck(parseDeck(shared)).filter((entry) => entry.code === "L014")).toHaveLength(0);
+
+    const twice = deck(`
+\\begin{frame}[label=twice]{Twice}
+\\begin{deckcanvas}\\end{deckcanvas}
+\\begin{deckcanvas}\\end{deckcanvas}
+\\end{frame}`);
+    const diagnostics = lintDeck(parseDeck(twice)).filter((entry) => entry.code === "L014");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.span.start).toBe(twice.lastIndexOf("\\begin{deckcanvas}"));
   });
 
   it("decktext 内の list item オーバーレイを L014 で指定箇所に報告する", () => {

@@ -198,7 +198,8 @@ export interface FrameNode extends BaseNode {
   title: InlineNode[] | null;
   /**
    * フレーム本文。CanvasNode を含むフレームはキャンバスフレーム(§2.8)。
-   * キャンバスと通常フロー要素の混在は構文上は保持し、L014 が検出する。
+   * 通常フロー要素と CanvasNode は共存できる(フローの上に重なる層)。
+   * deckcanvas はフレームに 1 つまでで、2 つ以上は L014 が検出する。
    */
   body: BlockNode[];
 }

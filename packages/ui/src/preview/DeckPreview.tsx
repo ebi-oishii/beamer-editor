@@ -126,6 +126,13 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
             host.moveCanvasElement?.(state.current, elementId, version, x, y)
           }
           onFitScaleChange={handleFitScaleChange}
+          onDetachToCanvas={
+            host.detachToCanvas
+              ? (request) => {
+                  host.detachToCanvas?.(state.current, version, request.sourceSpan, request.rect);
+                }
+              : undefined
+          }
         />
         <Controls
           frame={frame}

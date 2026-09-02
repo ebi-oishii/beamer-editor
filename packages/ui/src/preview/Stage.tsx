@@ -5,10 +5,23 @@
  */
 
 import type { RenderedFrame } from "@beamer-editor/renderer";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { canvasPointFromPointer, normalizeCanvasCoordinate } from "./canvas-drag.js";
+import { collectDetachCandidates, type DetachCandidate, slideRelativeRect } from "./detach.js";
 import { applyOverlay } from "./overlay.js";
 import type { ZoomState } from "./zoom.js";
+
+/** 「自由配置にする」の要求。sourceSpan は展開後ソース、rect はスライド全体を 1 とした値。 */
+export interface DetachRequest {
+  sourceSpan: { start: number; end: number };
+  rect: { x: number; y: number; width: number };
+}
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  candidates: DetachCandidate[];
+}
 
 /** スライド論理サイズが取れないときの近似フォールバック（apps/web の fitSlide 相当）。 */
 const FALLBACK_W = 607;
@@ -72,6 +85,7 @@ export function Stage({
   version,
   onMoveCanvasElement,
   onFitScaleChange,
+  onDetachToCanvas,
 }: {
   frame: RenderedFrame | undefined;
   step: number;
@@ -79,6 +93,8 @@ export function Stage({
   version: number;
   onMoveCanvasElement: (elementId: string, x: number, y: number) => void;
   onFitScaleChange: (scale: number) => void;
+  /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
+  onDetachToCanvas?: ((request: DetachRequest) => void) | undefined;
 }): JSX.Element {
   const holderRef = useRef<HTMLDivElement>(null);
   const layoutRef = useRef<HTMLDivElement>(null);
@@ -93,8 +109,54 @@ export function Stage({
     pointerId: number;
   }>();
   const [selected, setSelected] = useState<string | null>(null);
+  const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const highlightRef = useRef<HTMLElement | null>(null);
 
   useFitScale(holderRef, layoutRef, scaleRef, frame, zoom, onFitScaleChange);
+
+  /** 候補要素の dev tools 風強調を付け替える(null で解除)。 */
+  const highlight = useCallback((element: HTMLElement | null) => {
+    highlightRef.current?.classList.remove("flow-target");
+    highlightRef.current = element;
+    element?.classList.add("flow-target");
+  }, []);
+  const closeMenu = useCallback(() => {
+    highlight(null);
+    setMenu(null);
+  }, [highlight]);
+
+  // 右クリック位置から外側へ向かう候補を集めてメニューを出す。候補が無ければ標準メニューに任せる。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scale 要素は frame が定義されたときに現れるので frame に依存させる。
+  useEffect(() => {
+    const scale = scaleRef.current;
+    if (!scale || !onDetachToCanvas) return;
+    const onContextMenu = (event: MouseEvent) => {
+      const candidates = collectDetachCandidates(event.target as HTMLElement, scale);
+      if (candidates.length === 0) return;
+      event.preventDefault();
+      highlight(candidates[0]?.element ?? null);
+      setMenu({ x: event.clientX, y: event.clientY, candidates });
+    };
+    scale.addEventListener("contextmenu", onContextMenu);
+    return () => scale.removeEventListener("contextmenu", onContextMenu);
+  }, [frame, onDetachToCanvas, highlight]);
+
+  // メニュー外の pointerdown / Escape で閉じる。
+  useEffect(() => {
+    if (!menu) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!(event.target as HTMLElement).closest(".context-menu")) closeMenu();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menu, closeMenu]);
 
   // frame（html）または step が変わるたびに covered を再適用する。
   // biome-ignore lint/correctness/useExhaustiveDependencies: frame の html 差し替え時に再適用したい
@@ -102,7 +164,7 @@ export function Stage({
     if (scaleRef.current) applyOverlay(scaleRef.current, step);
   }, [frame, step]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: deck replacement must cancel a captured drag.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deck replacement must cancel a captured drag and close the menu.
   useEffect(() => {
     const drag = dragRef.current;
     if (drag) {
@@ -113,6 +175,7 @@ export function Stage({
       dragRef.current = undefined;
     }
     setSelected(null);
+    closeMenu();
   }, [frame, version]);
   useEffect(() => {
     const editable = new Set(
@@ -256,6 +319,13 @@ export function Stage({
     );
   }
 
+  const choose = (candidate: DetachCandidate) => {
+    const slide = scaleRef.current?.querySelector<HTMLElement>(".slide");
+    const rect = slide ? slideRelativeRect(candidate.element, slide) : null;
+    closeMenu();
+    if (rect) onDetachToCanvas?.({ sourceSpan: candidate.sourceSpan, rect });
+  };
+
   return (
     <div className="slide-holder" ref={holderRef}>
       {/* html は renderer が escape 済みの信頼データ（design.md §6） */}
@@ -267,6 +337,27 @@ export function Stage({
           dangerouslySetInnerHTML={{ __html: frame.html }}
         />
       </div>
+      {menu && onDetachToCanvas ? (
+        <div
+          className="context-menu"
+          role="menu"
+          aria-label="自由配置にする候補"
+          style={{ left: menu.x, top: menu.y }}
+        >
+          {menu.candidates.map((candidate) => (
+            <button
+              key={`${candidate.sourceSpan.start}-${candidate.sourceSpan.end}`}
+              type="button"
+              role="menuitem"
+              onMouseEnter={() => highlight(candidate.element)}
+              onFocus={() => highlight(candidate.element)}
+              onClick={() => choose(candidate)}
+            >
+              {candidate.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
