@@ -266,8 +266,7 @@ export class PreviewController implements vscode.Disposable {
     const latest = this.latest;
     const frame = latest?.deck.frames[move.frameIndex];
     const element = frame?.canvasElements?.find(
-      (candidate) =>
-        candidate.id === move.elementId && candidate.kind === "image" && candidate.editable,
+      (candidate) => candidate.id === move.elementId && candidate.editable,
     );
     if (
       !latest ||
@@ -314,7 +313,7 @@ export class PreviewController implements vscode.Disposable {
         return;
       }
       if (result === "cancelled") {
-        this.onWarning("Canvas image position was not updated. Try dragging it again.");
+        this.onWarning("Canvas element position was not updated. Try dragging it again.");
         this.sendDeck();
         return;
       }
@@ -323,7 +322,7 @@ export class PreviewController implements vscode.Disposable {
       if (this.disposed) return;
     }
     if (!this.disposed) {
-      this.onError("failed to update canvas image position.");
+      this.onError("failed to update canvas element position.");
       this.sendDeck();
     }
   }

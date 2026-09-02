@@ -1,11 +1,12 @@
 import {
-  canvasImagePositionReplacement,
+  canvasPositionReplacement,
   detachBlockToCanvas,
   type LintDiagnostic,
   type LintSeverity,
 } from "@beamer-editor/core";
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
+import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
 import {
   appendUniqueIgnorePatterns,
   chooseLatexWorkshopTarget,
@@ -113,9 +114,11 @@ export interface TestApi {
 
 export function activate(context: vscode.ExtensionContext): TestApi {
   const managedPatternCache = new Map<string, readonly string[]>();
+  const frameFoldCache = new FrameFoldCache();
+  const foldingRangesChanged = new vscode.EventEmitter<void>();
   const latexWorkshopSessionPrompted = new Set<string>();
   const lineFlash = createLineFlash();
-  context.subscriptions.push(lineFlash);
+  context.subscriptions.push(lineFlash, foldingRangesChanged);
 
   // lint → Problems パネル・波線(VS-5)。開いている .tex 文書ごとに独立管理する。
   const diagnosticCollection = vscode.languages.createDiagnosticCollection("beamer-editor");
@@ -163,6 +166,19 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   function isManaged(document: vscode.TextDocument): boolean {
     return isManagedDocument(document, managedPatterns(document), matchesManagedGlob);
   }
+
+  context.subscriptions.push(
+    vscode.languages.registerFoldingRangeProvider(
+      { scheme: "file", language: "latex" },
+      {
+        onDidChangeFoldingRanges: foldingRangesChanged.event,
+        provideFoldingRanges(document, _context, token) {
+          const ranges = provideFrameFoldRanges(document, isManaged, token, frameFoldCache);
+          return ranges?.map((range) => new vscode.FoldingRange(range.start, range.end));
+        },
+      },
+    ),
+  );
 
   async function offerLatexWorkshopIgnore(document: vscode.TextDocument): Promise<void> {
     if (!vscode.extensions.getExtension("James-Yu.latex-workshop")) return;
@@ -341,7 +357,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
             return "cancelled";
           const original = target.getText().slice(move.sourceSpan.start, move.sourceSpan.end);
           if (original !== move.expectedOptions) return "cancelled";
-          const replacement = canvasImagePositionReplacement(original, move.x, move.y);
+          const replacement = canvasPositionReplacement(original, move.x, move.y);
           if (replacement === null) return "failed";
           if (replacement === original) return "unchanged";
           const edit = new vscode.WorkspaceEdit();
@@ -406,6 +422,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (!event.affectsConfiguration("beamerEditor.managedFiles")) return;
       managedPatternCache.clear();
+      foldingRangesChanged.fire();
       lintController.refresh(vscode.workspace.textDocuments);
       for (const controller of previewLifecycle.managedFilesChanged(isManaged)) controller.close();
       handleManagedDocument(vscode.window.activeTextEditor?.document);

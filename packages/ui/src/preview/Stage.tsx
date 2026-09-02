@@ -1,7 +1,7 @@
 /**
- * 現在フレームの描画ステージ。renderer が escape 済みの html を .slide-scale へ流し込み、
- * fit-scale（スライド論理サイズを holder に合わせて transform: scale）と
- * オーバーレイ（step に応じた covered トグル）を適用する。
+ * 1 フレームの描画ステージ。renderer が escape 済みの html を .slide-scale へ流し込み、
+ * 親(SlideScroll)が決めた倍率で transform: scale し、オーバーレイ(step に応じた covered
+ * トグル)とキャンバス画像のドラッグを適用する。倍率の計算は持たない。
  */
 
 import type { RenderedFrame } from "@beamer-editor/renderer";
@@ -9,7 +9,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { canvasPointFromPointer, normalizeCanvasCoordinate } from "./canvas-drag.js";
 import { collectDetachCandidates, type DetachCandidate, slideRelativeRect } from "./detach.js";
 import { applyOverlay } from "./overlay.js";
-import type { ZoomState } from "./zoom.js";
 
 /** 「自由配置にする」の要求。sourceSpan は展開後ソース、rect はスライド全体を 1 とした値。 */
 export interface DetachRequest {
@@ -23,10 +22,11 @@ interface ContextMenuState {
   candidates: DetachCandidate[];
 }
 
-/** スライド論理サイズが取れないときの近似フォールバック（apps/web の fitSlide 相当）。 */
-const FALLBACK_W = 607;
-const FALLBACK_H = 341;
-const MIN_FIT_SCALE = 0.1;
+/** スライドの論理サイズ(px)。transform はレイアウト寸法を変えないため外側の box に持たせる。 */
+export interface SlideSize {
+  width: number;
+  height: number;
+}
 
 function releasePointerCapture(element: HTMLElement, pointerId: number): void {
   try {
@@ -36,68 +36,24 @@ function releasePointerCapture(element: HTMLElement, pointerId: number): void {
   }
 }
 
-/**
- * ResizeObserver で holder のサイズ変化を監視し、.slide を holder に収まるよう縮小する。
- * transform はレイアウト寸法を変えないため、外側の layout box に見た目サイズを持たせる。
- */
-function useFitScale(
-  holderRef: React.RefObject<HTMLElement | null>,
-  layoutRef: React.RefObject<HTMLElement | null>,
-  scaleRef: React.RefObject<HTMLElement | null>,
-  frame: RenderedFrame | undefined,
-  zoom: ZoomState,
-  onFitScaleChange: (scale: number) => void,
-): void {
-  // biome-ignore lint/correctness/useExhaustiveDependencies: frame の html 差し替え時に再フィットしたい
-  useEffect(() => {
-    const holder = holderRef.current;
-    const layoutBox = layoutRef.current;
-    const scaleBox = scaleRef.current;
-    if (!holder || !layoutBox || !scaleBox) return;
-
-    const applyFit = () => {
-      const slide = scaleBox.querySelector<HTMLElement>(".slide");
-      const slideW = slide?.offsetWidth || FALLBACK_W;
-      const slideH = slide?.offsetHeight || FALLBACK_H;
-      const availW = Math.max(0, holder.clientWidth - 24);
-      const availH = Math.max(0, holder.clientHeight - 24);
-      const fitScale = Math.max(MIN_FIT_SCALE, Math.min(availW / slideW, availH / slideH, 1.6));
-      const effectiveScale = zoom === "fit" ? fitScale : zoom;
-      // ResizeObserver 内からの state 更新は、親側の stable callback と同値 no-op guard が前提。
-      onFitScaleChange(fitScale);
-      scaleBox.style.transform = `scale(${effectiveScale})`;
-      layoutBox.style.width = `${slideW * effectiveScale}px`;
-      layoutBox.style.height = `${slideH * effectiveScale}px`;
-    };
-
-    applyFit();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(applyFit);
-    observer.observe(holder);
-    return () => observer.disconnect();
-  }, [holderRef, layoutRef, scaleRef, frame, zoom, onFitScaleChange]);
-}
-
 export function Stage({
   frame,
   step,
-  zoom,
+  scale,
+  slideSize,
   version,
   onMoveCanvasElement,
-  onFitScaleChange,
   onDetachToCanvas,
 }: {
-  frame: RenderedFrame | undefined;
+  frame: RenderedFrame;
   step: number;
-  zoom: ZoomState;
+  scale: number;
+  slideSize: SlideSize;
   version: number;
   onMoveCanvasElement: (elementId: string, x: number, y: number) => void;
-  onFitScaleChange: (scale: number) => void;
   /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
   onDetachToCanvas?: ((request: DetachRequest) => void) | undefined;
 }): JSX.Element {
-  const holderRef = useRef<HTMLDivElement>(null);
-  const layoutRef = useRef<HTMLDivElement>(null);
   const scaleRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{
     element: HTMLElement;
@@ -112,8 +68,6 @@ export function Stage({
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const highlightRef = useRef<HTMLElement | null>(null);
 
-  useFitScale(holderRef, layoutRef, scaleRef, frame, zoom, onFitScaleChange);
-
   /** 候補要素の dev tools 風強調を付け替える(null で解除)。 */
   const highlight = useCallback((element: HTMLElement | null) => {
     highlightRef.current?.classList.remove("flow-target");
@@ -126,7 +80,6 @@ export function Stage({
   }, [highlight]);
 
   // 右クリック位置から外側へ向かう候補を集めてメニューを出す。候補が無ければ標準メニューに任せる。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scale 要素は frame が定義されたときに現れるので frame に依存させる。
   useEffect(() => {
     const scale = scaleRef.current;
     if (!scale || !onDetachToCanvas) return;
@@ -139,7 +92,7 @@ export function Stage({
     };
     scale.addEventListener("contextmenu", onContextMenu);
     return () => scale.removeEventListener("contextmenu", onContextMenu);
-  }, [frame, onDetachToCanvas, highlight]);
+  }, [onDetachToCanvas, highlight]);
 
   // メニュー外の pointerdown / Escape で閉じる。
   useEffect(() => {
@@ -179,7 +132,7 @@ export function Stage({
   }, [frame, version]);
   useEffect(() => {
     const editable = new Set(
-      frame?.canvasElements?.filter((element) => element.editable).map((element) => element.id) ??
+      frame.canvasElements?.filter((element) => element.editable).map((element) => element.id) ??
         [],
     );
     scaleRef.current
@@ -215,13 +168,13 @@ export function Stage({
       setSelected(null);
     };
     const element = (event.target as HTMLElement).closest<HTMLElement>("[data-canvas-element-id]");
-    if (!element || !frame) {
+    if (!element) {
       clearSelection();
       return;
     }
     const id = element.dataset.canvasElementId;
     const descriptor = frame.canvasElements?.find(
-      (candidate) => candidate.id === id && candidate.kind === "image" && candidate.editable,
+      (candidate) => candidate.id === id && candidate.editable,
     );
     const canvas = element.closest<HTMLElement>(".canvas");
     if (!id || !descriptor || !canvas) {
@@ -311,14 +264,6 @@ export function Stage({
     };
   }, [frame, selected, version, onMoveCanvasElement]);
 
-  if (!frame) {
-    return (
-      <div className="slide-holder" ref={holderRef}>
-        <div className="empty">フレームがありません</div>
-      </div>
-    );
-  }
-
   const choose = (candidate: DetachCandidate) => {
     const slide = scaleRef.current?.querySelector<HTMLElement>(".slide");
     const rect = slide ? slideRelativeRect(candidate.element, slide) : null;
@@ -327,16 +272,24 @@ export function Stage({
   };
 
   return (
-    <div className="slide-holder" ref={holderRef}>
-      {/* html は renderer が escape 済みの信頼データ（design.md §6） */}
-      <div className="slide-layout" ref={layoutRef}>
-        <div
-          className="slide-scale"
-          ref={scaleRef}
-          // biome-ignore lint/security/noDangerouslySetInnerHtml: renderer が escape 済みの信頼 HTML
-          dangerouslySetInnerHTML={{ __html: frame.html }}
-        />
-      </div>
+    // html は renderer が escape 済みの信頼データ（design.md §6）
+    <div
+      className="slide-layout"
+      style={{ width: slideSize.width * scale, height: slideSize.height * scale }}
+    >
+      {/* transform はレイアウト寸法を変えない。内側を論理サイズに固定し、外側だけを見た目の
+          scaled size にすることで、transform のはみ出しを二重に数えない(#58 の移植)。 */}
+      <div
+        className="slide-scale"
+        ref={scaleRef}
+        style={{
+          width: slideSize.width,
+          height: slideSize.height,
+          transform: `scale(${scale})`,
+        }}
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: renderer が escape 済みの信頼 HTML
+        dangerouslySetInnerHTML={{ __html: frame.html }}
+      />
       {menu && onDetachToCanvas ? (
         <div
           className="context-menu"

@@ -105,6 +105,13 @@ const canvasRender = (_text: string, version: number): RenderOutcome => ({
             sourceSpan: { start: 10, end: 25 },
             editable: true,
           },
+          {
+            id: "canvas-text-0",
+            kind: "text",
+            position: { x: 0.5, y: 0.5, width: 0.4 },
+            sourceSpan: { start: 30, end: 45 },
+            editable: true,
+          },
         ],
       },
     ],
@@ -517,6 +524,37 @@ describe("PreviewController", () => {
     });
   });
 
+  it("moveCanvasElement: decktext も画像と同じ経路で callback へ渡す", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const moveCanvasElement = vi.fn(async () => "applied" as const);
+    new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      moveCanvasElement,
+    });
+    fire({ type: "ready" });
+    fire({
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-text-0",
+      version: 7,
+      x: 0.3,
+      y: 0.25,
+    });
+    await Promise.resolve();
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith({
+      frameIndex: 0,
+      elementId: "canvas-text-0",
+      version: 7,
+      x: 0.3,
+      y: 0.25,
+      sourceSpan: { start: 30, end: 45 },
+      document: doc,
+      expectedOptions: doc.getText().slice(30, 45),
+    });
+  });
+
   it.each([
     "failed" as const,
     new Error("reject"),
@@ -613,7 +651,7 @@ describe("PreviewController", () => {
     expect(callback).toHaveBeenCalledTimes(2);
     expect(posted).toHaveLength(3);
     expect(warning).toHaveBeenCalledWith(
-      "Canvas image position was not updated. Try dragging it again.",
+      "Canvas element position was not updated. Try dragging it again.",
     );
     expect(error).not.toHaveBeenCalled();
   });

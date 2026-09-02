@@ -1,15 +1,14 @@
 /**
  * プレビュー全体を束ねるトップレベルコンポーネント。
  * ShellHost から deck 更新を購読し、previewReducer でナビ状態を管理して
- * SlideList / Stage / Controls を合成する。deck.css は <style> として注入する。
+ * SlideScroll(全フレームの縦一列表示)/ Controls を合成する。deck.css は <style> として注入する。
  */
 
 import type { RenderedDeck } from "@beamer-editor/renderer";
 import { type KeyboardEvent, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ShellHost } from "../shell-host.js";
 import { Controls } from "./Controls.js";
-import { SlideList } from "./SlideList.js";
-import { Stage } from "./Stage.js";
+import { type RevealRequest, SlideScroll } from "./SlideScroll.js";
 import { type PreviewAction, type PreviewState, previewReducer } from "./state.js";
 import { stepZoom, type ZoomState } from "./zoom.js";
 
@@ -33,6 +32,17 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     // パネル再表示時は前回のナビ状態から復元する(範囲外は deckLoaded がクランプ)。
     (initial) => restoredNav ?? initial,
   );
+  const currentRef = useRef(state.current);
+  currentRef.current = state.current;
+
+  // 指定フレームを表示領域の上端へスクロールさせる要求(◀▶・矢印キー・復元・ズーム変更)。
+  // クリックやスクロール追従による選択では出さない(見ている場所を動かさない)。
+  const [reveal, setReveal] = useState<RevealRequest | undefined>();
+  const revealToken = useRef(0);
+  const requestReveal = useCallback((index: number) => {
+    revealToken.current += 1;
+    setReveal({ index, token: revealToken.current });
+  }, []);
 
   // ナビ状態を保存する(VS-7: current / step / zoom のみ。ソース本文や AST は保存しない)。
   useEffect(() => {
@@ -50,9 +60,23 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   );
 
   // deck が変わったら位置を保ったまま読み込み直す（編集中は現在フレームを維持）。
+  // 初回(復元を含む)だけは現在フレームまでスクロールし、表示と現在フレームを揃える。
+  const revealedInitial = useRef(false);
   useEffect(() => {
     dispatch({ type: "deckLoaded", frameCount: deck.frames.length, keepPosition: true });
-  }, [deck]);
+    if (!revealedInitial.current && deck.frames.length > 0) {
+      revealedInitial.current = true;
+      requestReveal(Math.min(currentRef.current, deck.frames.length - 1));
+    }
+  }, [deck, requestReveal]);
+
+  // ズームを変えても読んでいたフレームが上端に残るようにする(初回マウント時は対象なし)。
+  const lastZoom = useRef(zoom);
+  useEffect(() => {
+    if (lastZoom.current === zoom) return;
+    lastZoom.current = zoom;
+    requestReveal(currentRef.current);
+  }, [zoom, requestReveal]);
 
   // deck.css（%% style 由来の CSS 変数）を <style> として注入・更新する。
   const styleRef = useRef<HTMLStyleElement | null>(null);
@@ -89,16 +113,23 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     }
   }, [frame, state.step]);
 
+  /** フレーム移動(◀▶・矢印キー)。移動先を表示領域の上端へスクロールする。 */
+  const move = (action: PreviewAction) => {
+    const next = previewReducer(state, action, deck.frames.length);
+    dispatch(action);
+    if (next.current !== state.current) requestReveal(next.current);
+  };
+
   // フレーム移動のキーボード操作(スライダー等の入力要素の矢印キーは奪わない)。
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
     if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
     if (event.key === "ArrowLeft") {
       event.preventDefault();
-      dispatch({ type: "prev" });
+      move({ type: "prev" });
     } else if (event.key === "ArrowRight") {
       event.preventDefault();
-      dispatch({ type: "next" });
+      move({ type: "next" });
     }
   };
 
@@ -110,46 +141,43 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
       aria-label="Beamer スライドプレビュー"
       onKeyDown={handleKeyDown}
     >
-      <SlideList
+      <SlideScroll
         frames={deck.frames}
         current={state.current}
+        step={state.step}
+        zoom={zoom}
+        version={version}
+        reveal={reveal}
         onSelect={(i) => dispatch({ type: "goto", index: i })}
         onJump={(i) => host.jumpToSource(i, version)}
+        onScrollActive={(i) => dispatch({ type: "goto", index: i })}
+        onMoveCanvasElement={(frameIndex, elementId, x, y) =>
+          host.moveCanvasElement?.(frameIndex, elementId, version, x, y)
+        }
+        onDetachToCanvas={
+          host.detachToCanvas
+            ? (frameIndex, request) => {
+                host.detachToCanvas?.(frameIndex, version, request.sourceSpan, request.rect);
+              }
+            : undefined
+        }
+        onFitScaleChange={handleFitScaleChange}
       />
-      <section className="stage">
-        <Stage
-          frame={frame}
-          step={state.step}
-          zoom={zoom}
-          version={version}
-          onMoveCanvasElement={(elementId, x, y) =>
-            host.moveCanvasElement?.(state.current, elementId, version, x, y)
-          }
-          onFitScaleChange={handleFitScaleChange}
-          onDetachToCanvas={
-            host.detachToCanvas
-              ? (request) => {
-                  host.detachToCanvas?.(state.current, version, request.sourceSpan, request.rect);
-                }
-              : undefined
-          }
-        />
-        <Controls
-          frame={frame}
-          total={deck.frames.length}
-          step={state.step}
-          onPrev={() => dispatch({ type: "prev" })}
-          onNext={() => dispatch({ type: "next" })}
-          onStep={(s) => dispatch({ type: "setStep", step: s })}
-          onJump={() => host.jumpToSource(state.current, version)}
-          zoom={zoom}
-          fitScale={fitScale}
-          onZoomOut={() => setZoom((current) => stepZoom(current, fitScale, -1))}
-          onZoomIn={() => setZoom((current) => stepZoom(current, fitScale, 1))}
-          onZoomFit={() => setZoom("fit")}
-          onZoomActual={() => setZoom(1)}
-        />
-      </section>
+      <Controls
+        frame={frame}
+        total={deck.frames.length}
+        step={state.step}
+        onPrev={() => move({ type: "prev" })}
+        onNext={() => move({ type: "next" })}
+        onStep={(s) => dispatch({ type: "setStep", step: s })}
+        onJump={() => host.jumpToSource(state.current, version)}
+        zoom={zoom}
+        fitScale={fitScale}
+        onZoomOut={() => setZoom((current) => stepZoom(current, fitScale, -1))}
+        onZoomIn={() => setZoom((current) => stepZoom(current, fitScale, 1))}
+        onZoomFit={() => setZoom("fit")}
+        onZoomActual={() => setZoom(1)}
+      />
     </div>
   );
 }
