@@ -129,6 +129,8 @@ export const PREVIEW_CSS = `
 /* 論理サイズは実寸どおり pt で持ち、transform でスケールする（design.md §4.4） */
 .slide {
   position: relative;
+  /* 自前の stacking context にして、ロゴ・フッター(z-index: -1)を背景の上・本文の下に置く。 */
+  isolation: isolate;
   width: 455.24pt;
   height: 256.07pt;
   background: var(--deck-background, #fff);
@@ -369,19 +371,17 @@ export const PREVIEW_CSS = `
   max-width: none;
 }
 
-/* ---- スタイル語彙のロゴ・フッター（theme-design.md §2）---- */
-.slide .frametitle,
-.slide .slide-body {
-  position: relative;
-  z-index: 1;
-}
+/* ---- スタイル語彙のロゴ・フッター（theme-design.md §2）----
+   本文(.frametitle / .slide-body)は position を持たせない。.slide-body を包含ブロックに
+   すると、絶対配置の .canvas の top / height % が .slide ではなく高さ数 px の
+   .slide-body 基準で解決され、キャンバス要素の縦位置が潰れる。 */
 .slide .deck-logo {
   position: absolute;
-  z-index: 0;
+  z-index: -1;
 }
 .slide .deck-footer {
   position: absolute;
-  z-index: 0;
+  z-index: -1;
   left: 6.25%;
   right: 6.25%;
   bottom: 2pt;
