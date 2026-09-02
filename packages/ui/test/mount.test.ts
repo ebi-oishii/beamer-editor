@@ -383,7 +383,7 @@ describe("mountPreview", () => {
     // 現在フレーム(0)は step=1 なので data-min="2" の要素は covered、他フレームは全ステップ表示。
     expect(scales[0]?.querySelector("[data-min]")?.classList.contains("covered")).toBe(true);
     const captions = [...container.querySelectorAll(".slide-caption")].map((c) => c.textContent);
-    expect(captions).toEqual(["1. one", "2. two"]);
+    expect(captions).toEqual(["1. one", "2. two（label=f2）"]);
 
     // クリックで選択すると active が移り、frame indicator も追従する。
     const cards = container.querySelectorAll<HTMLElement>(".slide-card");
@@ -391,7 +391,9 @@ describe("mountPreview", () => {
       cards[1]?.click();
     });
     expect(cards[1]?.classList.contains("active")).toBe(true);
-    expect(container.querySelector(".frame-indicator")?.textContent).toBe("2 / 2（label=f2）");
+    expect(container.querySelector(".frame-indicator")?.textContent).toBe("2 / 2");
+    // 総数の桁から幅を固定し、フレームが変わっても右側のボタンが動かない。
+    expect(container.querySelector<HTMLElement>(".frame-indicator")?.style.minWidth).toBe("5ch");
   });
 
   it("スクロールで上端に来たフレームが現在フレームになる", () => {

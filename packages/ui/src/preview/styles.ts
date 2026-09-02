@@ -89,6 +89,11 @@ export const PREVIEW_CSS = `
 .step-box {
   margin-left: auto;
 }
+.frame-indicator {
+  display: inline-block;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 .zoom-indicator {
   min-width: 72px;
   text-align: center;

@@ -80,6 +80,7 @@ function SlideCard({
       />
       <div className="slide-caption">
         {frame.index}. {frame.titleText}
+        {frame.label ? `（label=${frame.label}）` : ""}
         {frame.isRaw ? " ⚠" : ""}
       </div>
     </div>

@@ -36,16 +36,17 @@ export function Controls({
   onZoomActual: () => void;
 }): JSX.Element {
   const stepCount = frame?.stepCount ?? 1;
-  const indicator = frame
-    ? `${frame.index} / ${total}${frame.label ? `（label=${frame.label}）` : ""}`
-    : `0 / ${total}`;
+  // label はスライドのキャプションに出す。ここは n / N だけにし、幅を総数の桁で固定して
+  // フレームが変わっても右側のボタンが動かないようにする。
+  const indicator = `${frame?.index ?? 0} / ${total}`;
+  const indicatorWidth = `${String(total).length * 2 + 3}ch`;
 
   return (
     <div className="controls">
       <button type="button" aria-label="前のフレーム" onClick={onPrev}>
         ◀
       </button>
-      <span className="frame-indicator" aria-live="polite">
+      <span className="frame-indicator" aria-live="polite" style={{ minWidth: indicatorWidth }}>
         {indicator}
       </span>
       <button type="button" aria-label="次のフレーム" onClick={onNext}>
