@@ -63,6 +63,45 @@ describe("parseDeck: basic.tex", () => {
   });
 });
 
+describe("parseDeck: frame environment ends", () => {
+  it("ignores frame delimiters in TeX comments and supported verbatim environments", () => {
+    const source = String.raw`\begin{document}
+\begin{frame}{outer}
+% \end{frame}
+\begin{verbatim}
+\end{frame}
+\end{verbatim}
+\begin{frame}{inner}
+\end{frame}
+\end{frame}
+\end{document}`;
+    const frames = framesOf(parseDeck(source));
+    expect(frames).toHaveLength(1);
+    expect(frames[0]?.span.end).toBe(source.lastIndexOf("\\end{frame}") + "\\end{frame}".length);
+  });
+
+  it("treats the first literal end tag as the end of a verbatim environment", () => {
+    const source = String.raw`\begin{document}
+\begin{frame}[fragile]{literal}
+\begin{verbatim}
+\begin{verbatim}
+\end{verbatim}
+after verbatim
+\end{frame}
+\end{document}`;
+    const frame = framesOf(parseDeck(source))[0];
+    expect(frame?.type).toBe("frame");
+    expect(frame?.span.end).toBe(source.indexOf("\\end{frame}") + "\\end{frame}".length);
+    if (frame?.type !== "frame") return;
+    expect(JSON.stringify(frame.body)).toContain("after verbatim");
+  });
+
+  it("handles many malformed begin markers without a closing brace", () => {
+    const source = `\\begin{document}\n${"\\begin{".repeat(10_000)}\n\\end{document}`;
+    expect(framesOf(parseDeck(source))).toEqual([]);
+  });
+});
+
 describe("parseDeck: canvas top-level items", () => {
   it("unsupported command/environment 内の deckimage を直下画像として再同期しない", () => {
     const source = String.raw`\begin{document}

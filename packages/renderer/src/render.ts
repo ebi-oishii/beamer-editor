@@ -18,7 +18,6 @@ import type {
   ListItemNode,
   RawFrameNode,
   SourceSpan,
-  StyleColorRole,
   StyleLogoNode,
 } from "@beamer-editor/core";
 import { framesOf } from "@beamer-editor/core";
@@ -35,13 +34,13 @@ export interface RenderedFrame {
   /** オーバーレイの総ステップ数(1 なら段階表示なし)。 */
   stepCount: number;
   isRaw: boolean;
-  /** deckcanvas 直下の画像。ID はこの描画 version の frame 内だけで有効。 */
+  /** deckcanvas 直下の画像・テキスト。ID はこの描画 version の frame 内だけで有効。 */
   canvasElements?: RenderedCanvasElement[];
 }
 
 export interface RenderedCanvasElement {
   id: string;
-  kind: "image";
+  kind: "image" | "text";
   position: { x: number; y: number; width: number };
   /** 展開後ソースの `[...]` 範囲。host が strict map を通して editable 化する。 */
   sourceSpan: SourceSpan;
@@ -84,10 +83,8 @@ const NAMED_COLORS: Record<string, string> = {
   white: "#ffffff",
 };
 
-/** `%% style` 領域の集約結果(同じ役割は後勝ち)。 */
-interface CollectedStyle {
-  colors: Partial<Record<StyleColorRole, string>>;
-  fonts: Partial<Record<"main" | "mono", string>>;
+/** フレーム装飾の集約結果(同種の指定が複数あれば後の指定を使う)。 */
+interface FrameDecorations {
   logo: StyleLogoNode | null;
   footerHtml: string | null;
 }
@@ -136,42 +133,41 @@ class FrameRenderer {
   /** フレーム内で観測したオーバーレイの最大ステップ。 */
   private maxStep = 1;
 
-  private readonly style: CollectedStyle;
+  private readonly decorations: FrameDecorations = { logo: null, footerHtml: null };
   private canvasElements: RenderedCanvasElement[] = [];
 
   constructor(
     private readonly doc: DeckDocument,
     private readonly theme: Theme,
   ) {
-    const style: CollectedStyle = { colors: {}, fonts: {}, logo: null, footerHtml: null };
     for (const entry of doc.style.entries) {
-      if (entry.type === "styleColor") style.colors[entry.role] = entry.hex;
-      else if (entry.type === "styleFont") style.fonts[entry.slot] = entry.family;
-      else if (entry.type === "styleLogo") style.logo = entry;
-      else if (entry.type === "styleFooter") style.footerHtml = this.renderInlines(entry.text);
+      if (entry.type === "styleLogo") this.decorations.logo = entry;
+      else if (entry.type === "styleFooter")
+        this.decorations.footerHtml = this.renderInlines(entry.text);
     }
-    this.style = style;
   }
 
   /**
    * ロゴ・フッターのオーバーレイ(TeX 側の背景テンプレートに対応)。
    * .slide 直下の先頭に入れ、CSS の z-index で本文の背面に置く。
    */
-  private decorations(frameIndex: number, frameTotal: number): string {
+  private renderDecorations(frameIndex: number, frameTotal: number): string {
     let out = "";
     const { slideWidthPt, slideHeightPt, bodyAreaPt: body } = this.theme.metrics;
-    if (this.style.logo) {
-      const { x, y, width } = this.style.logo.position;
+    const logo = this.decorations.logo;
+    if (logo) {
+      const { x, y, width } = logo.position;
       const leftPct = (((body.left + x * body.width) / slideWidthPt) * 100).toFixed(2);
       const topPct = (((body.top + y * body.height) / slideHeightPt) * 100).toFixed(2);
       const widthPct = (((width * body.width) / slideWidthPt) * 100).toFixed(2);
       const pos = `left:${leftPct}%;top:${topPct}%;width:${widthPct}%`;
-      out += this.style.logo.path.toLowerCase().endsWith(".pdf")
-        ? `<div class="deck-logo image-placeholder" style="${pos}">PDF ロゴ: ${escapeHtml(this.style.logo.path)}</div>`
-        : `<img class="deck-logo" src="${escapeHtml(this.style.logo.path)}" style="${pos}">`;
+      out += logo.path.toLowerCase().endsWith(".pdf")
+        ? `<div class="deck-logo image-placeholder" style="${pos}">PDF ロゴ: ${escapeHtml(logo.path)}</div>`
+        : `<img class="deck-logo" src="${escapeHtml(logo.path)}" style="${pos}">`;
     }
-    if (this.style.footerHtml !== null) {
-      out += `<div class="deck-footer"><span>${this.style.footerHtml}</span><span>${frameIndex} / ${frameTotal}</span></div>`;
+    const footerHtml = this.decorations.footerHtml;
+    if (footerHtml !== null) {
+      out += `<div class="deck-footer"><span>${footerHtml}</span><span>${frameIndex} / ${frameTotal}</span></div>`;
     }
     return out;
   }
@@ -341,20 +337,29 @@ class FrameRenderer {
         const width = (body.width / slideWidthPt) * 100;
         const height = (body.height / slideHeightPt) * 100;
         let html = `<div class="canvas" style="left:${left.toFixed(3)}%;top:${top.toFixed(3)}%;width:${width.toFixed(3)}%;height:${height.toFixed(3)}%">`;
+        // ドラッグ対象の descriptor。ID は種類ごとの連番で、frame 内で一意になる。
+        const describe = (
+          kind: RenderedCanvasElement["kind"],
+          position: { x: number; y: number; width: number; span: SourceSpan },
+        ): string => {
+          const count = this.canvasElements.filter((element) => element.kind === kind).length;
+          const id = `canvas-${kind}-${count}`;
+          this.canvasElements.push({
+            id,
+            kind,
+            position: { x: position.x, y: position.y, width: position.width },
+            sourceSpan: position.span,
+          });
+          return ` data-canvas-element-id="${id}" data-canvas-element-kind="${kind}"`;
+        };
         for (const item of block.items) {
           const posStyle = (x: number, y: number, w: number) =>
             `left:${(x * 100).toFixed(2)}%;top:${(y * 100).toFixed(2)}%;width:${(w * 100).toFixed(2)}%`;
           if (item.type === "canvasText") {
-            html += `<div class="canvas-item canvas-text" style="${posStyle(item.position.x, item.position.y, item.position.width)};font-size:${this.theme.fontSizesPt[item.size]}pt">${this.renderBlocks(item.children)}</div>`;
+            const attrs = describe("text", item.position);
+            html += `<div class="canvas-item canvas-text"${attrs} style="${posStyle(item.position.x, item.position.y, item.position.width)};font-size:${this.theme.fontSizesPt[item.size]}pt">${this.renderBlocks(item.children)}</div>`;
           } else if (item.type === "canvasImage") {
-            const id = `canvas-image-${this.canvasElements.length}`;
-            this.canvasElements.push({
-              id,
-              kind: "image",
-              position: { x: item.position.x, y: item.position.y, width: item.position.width },
-              sourceSpan: item.position.span,
-            });
-            const attrs = ` data-canvas-element-id="${id}" data-canvas-element-kind="image"`;
+            const attrs = describe("image", item.position);
             if (item.path.toLowerCase().endsWith(".pdf")) {
               html += `<div class="canvas-item image-placeholder"${attrs} style="${posStyle(item.position.x, item.position.y, item.position.width)}">PDF 画像: ${escapeHtml(item.path)}</div>`;
             } else {
@@ -413,7 +418,7 @@ class FrameRenderer {
         ? `<div class="frametitle">${this.renderInlines(frame.title)}</div>`
         : "";
     return {
-      html: `<div class="slide${frame.options.plain ? " plain" : ""}">${this.decorations(frameIndex, frameTotal)}${title}<div class="slide-body">${body}</div></div>`,
+      html: `<div class="slide${frame.options.plain ? " plain" : ""}">${this.renderDecorations(frameIndex, frameTotal)}${title}<div class="slide-body">${body}</div></div>`,
       stepCount: this.maxStep,
       canvasElements: this.canvasElements,
     };
@@ -421,7 +426,7 @@ class FrameRenderer {
 
   renderRawFrame(frame: RawFrameNode, frameIndex: number, frameTotal: number): string {
     return (
-      `<div class="slide raw-frame">${this.decorations(frameIndex, frameTotal)}` +
+      `<div class="slide raw-frame">${this.renderDecorations(frameIndex, frameTotal)}` +
       `<div class="frametitle">${escapeHtml(frame.title ?? "(生フレーム)")}</div>` +
       '<div class="slide-body"><div class="raw-block"><div class="raw-badge">解釈不能フレーム(一覧・並べ替えのみ可能。プレビューは Phase 6 で画像に)</div>' +
       `<pre>${escapeHtml(frame.tex)}</pre></div></div></div>`
