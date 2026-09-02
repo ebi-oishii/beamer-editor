@@ -98,7 +98,7 @@
 
 ### Phase 5: 共有 UI + VS Code シェル
 
-VS-1 の拡張スキャフォールドと VS-2 の共有プレビュー UI は #21 / #20 でマージ済みである。VS-3〜VS-9 とその後の支援変更により、編集追従、ソースジャンプ、lint診断、外部編集統合テスト、theme/a11y、CSP/Workspace Trust、テスト・`.vsix`生成・CI artifact が反映された。さらにソースペインを維持するpreview jump、preview zoom、先行した限定的な Phase 7 slice であるキャンバス画像ドラッグ、managed slide の自動プレビュー・lint と LaTeX Workshop との scoped な共存、LaTeX 言語サポートの方針を追加した。**M2 の残りは実機での受け入れ確認**(移植計画 §2 の8項目、特に別環境への`.vsix`導入)。継続中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
+VS-1 の拡張スキャフォールドと VS-2 の共有プレビュー UI は #21 / #20 でマージ済みである。VS-3〜VS-9 とその後の支援変更により、編集追従、ソースジャンプ、lint診断、外部編集統合テスト、theme/a11y、CSP/Workspace Trust、テスト・`.vsix`生成・CI artifact が反映された。さらにソースペインを維持するpreview jump、preview zoom、先行した限定的な Phase 7 slice であるキャンバス画像・テキストのドラッグ移動、managed slide の自動プレビュー・lint と LaTeX Workshop との scoped な共存、LaTeX 言語サポートの方針を追加した。**M2 の残りは実機での受け入れ確認**(移植計画 §2 の8項目、特に別環境への`.vsix`導入)。継続中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
 
 **5a. packages/ui — 共有 UI と ShellHost 契約(S)**
 

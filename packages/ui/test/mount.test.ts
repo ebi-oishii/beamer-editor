@@ -554,6 +554,63 @@ describe("mountPreview", () => {
     expect(scrollTop).toBe(0);
   });
 
+  it("canvas text も editable ならドラッグで move を送る", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const moveCanvasElement = vi.fn();
+    const host = { ...fakeHost(), moveCanvasElement };
+    const deck: RenderedDeck = {
+      title: "canvas-text",
+      css: "",
+      frames: [
+        {
+          index: 1,
+          label: "text",
+          titleText: "text",
+          html: `<div class="slide"><div class="slide-body"><div class="canvas">
+            <div class="canvas-item canvas-text" data-canvas-element-id="canvas-text-0" data-canvas-element-kind="text" style="left:10%;top:20%;width:40%">hello</div>
+          </div></div></div>`,
+          stepCount: 1,
+          isRaw: false,
+          sourceSpan: { start: 0, end: 100 },
+          canvasElements: [
+            {
+              id: "canvas-text-0",
+              kind: "text",
+              position: { x: 0.1, y: 0.2, width: 0.4 },
+              sourceSpan: { start: 10, end: 30 },
+              editable: true,
+            },
+          ],
+        },
+      ],
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(deck);
+    });
+    const scale = container.querySelector<HTMLElement>(".slide-scale");
+    const canvas = scale?.querySelector<HTMLElement>(".canvas");
+    const text = scale?.querySelector<HTMLElement>('[data-canvas-element-id="canvas-text-0"]');
+    if (!scale || !canvas || !text) throw new Error("canvas text fixture missing");
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue(domRect(100, 50, 400, 200));
+    vi.spyOn(text, "getBoundingClientRect").mockReturnValue(domRect(140, 90, 160, 40));
+    Object.defineProperties(text, {
+      setPointerCapture: { configurable: true, value: vi.fn() },
+      hasPointerCapture: { configurable: true, value: () => true },
+      releasePointerCapture: { configurable: true, value: vi.fn() },
+    });
+
+    expect(text.classList.contains("canvas-editable")).toBe(true);
+    firePointer(text, "pointerdown", 150, 100);
+    firePointer(scale, "pointermove", 250, 150);
+    firePointer(scale, "pointerup", 250, 150);
+    // grab offset (10, 10) を引いた左上 (240, 140) を canvas rect (100, 50, 400x200) で正規化。
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-text-0", 1, 0.35, 0.45);
+  });
+
   it("canvas image は pointerup で一度だけ範囲外座標を clamp せず送る", () => {
     const { editable, moveCanvasElement, releasePointerCapture, scale, setPointerCapture } =
       mountCanvasPreview();

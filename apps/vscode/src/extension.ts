@@ -1,5 +1,5 @@
 import {
-  canvasImagePositionReplacement,
+  canvasPositionReplacement,
   type LintDiagnostic,
   type LintSeverity,
 } from "@beamer-editor/core";
@@ -340,7 +340,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
             return "cancelled";
           const original = target.getText().slice(move.sourceSpan.start, move.sourceSpan.end);
           if (original !== move.expectedOptions) return "cancelled";
-          const replacement = canvasImagePositionReplacement(original, move.x, move.y);
+          const replacement = canvasPositionReplacement(original, move.x, move.y);
           if (replacement === null) return "failed";
           if (replacement === original) return "unchanged";
           const edit = new vscode.WorkspaceEdit();

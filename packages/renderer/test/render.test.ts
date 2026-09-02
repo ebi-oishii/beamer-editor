@@ -75,14 +75,21 @@ describe("renderDeck: canvas.tex", () => {
     expect(deck.frames[1]?.html).toContain("image-placeholder");
   });
 
-  it("deckimage だけが frame 内で一意の drag descriptor と data 属性を持つ", () => {
+  it("decktext と deckimage が frame 内で一意の drag descriptor と data 属性を持つ", () => {
     const frame = deck.frames[1];
     const elements = frame?.canvasElements ?? [];
-    expect(elements.length).toBeGreaterThan(0);
-    const ids = elements.map((element) => element.id);
-    expect(new Set(ids).size).toBe(ids.length);
+    expect(elements.map((element) => [element.id, element.kind])).toEqual([
+      ["canvas-text-0", "text"],
+      ["canvas-image-0", "image"],
+    ]);
+    expect(frame?.html).toContain(
+      'data-canvas-element-id="canvas-text-0" data-canvas-element-kind="text"',
+    );
     expect(frame?.html).toContain('data-canvas-element-id="canvas-image-0"');
-    expect(elements.every((element) => element.kind === "image")).toBe(true);
+    // sourceSpan は options の `[...]` 範囲(x/y 置換の対象)。
+    const text = elements[0];
+    expect(text?.position).toEqual({ x: 0.05, y: 0.1, width: 0.42 });
+    expect(text?.sourceSpan.end).toBeGreaterThan(text?.sourceSpan.start ?? 0);
   });
 });
 

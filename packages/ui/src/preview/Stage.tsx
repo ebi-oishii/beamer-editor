@@ -112,7 +112,7 @@ export function Stage({
     }
     const id = element.dataset.canvasElementId;
     const descriptor = frame.canvasElements?.find(
-      (candidate) => candidate.id === id && candidate.kind === "image" && candidate.editable,
+      (candidate) => candidate.id === id && candidate.editable,
     );
     const canvas = element.closest<HTMLElement>(".canvas");
     if (!id || !descriptor || !canvas) {
