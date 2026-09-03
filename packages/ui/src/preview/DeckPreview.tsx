@@ -1,13 +1,13 @@
 /**
  * プレビュー全体を束ねるトップレベルコンポーネント。
  * ShellHost から deck 更新を購読し、previewReducer でナビ状態を管理して
- * SlideScroll(全フレームの縦一列表示)/ Controls を合成する。deck.css は <style> として注入する。
+ * SlideScroll(全フレームの縦一列表示)と現在フレームの step 操作を合成する。
+ * deck.css は <style> として注入する。
  */
 
 import type { RenderedDeck } from "@beamer-editor/renderer";
 import { type KeyboardEvent, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ShellHost } from "../shell-host.js";
-import { Controls } from "./Controls.js";
 import { type RevealRequest, SlideScroll } from "./SlideScroll.js";
 import { type PreviewAction, type PreviewState, previewReducer } from "./state.js";
 import { stepZoom, type ZoomState } from "./zoom.js";
@@ -22,6 +22,9 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const [restoredNav] = useState(() => host.loadNavState?.());
   const [zoom, setZoom] = useState<ZoomState>(() => restoredNav?.zoom ?? "fit");
   const [fitScale, setFitScale] = useState(1);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const pendingWheelDirection = useRef<1 | -1 | undefined>();
+  const wheelAnimationFrame = useRef<number | undefined>();
 
   // frameCount を reducer へ渡すため ref に写す（reducer の同一性を保つ）。
   const frameCountRef = useRef(0);
@@ -113,6 +116,34 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     }
   }, [frame, state.step]);
 
+  // wheel は React の passive 設定に依存せず native listener で扱う。高精度ホイールの
+  // 多数のイベントは一描画フレームにつき一段階へ畳み、通常スクロールは一切妨げない。
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      if (event.deltaY === 0) return;
+      event.preventDefault();
+      pendingWheelDirection.current = event.deltaY > 0 ? -1 : 1;
+      if (wheelAnimationFrame.current !== undefined) return;
+      wheelAnimationFrame.current = requestAnimationFrame(() => {
+        wheelAnimationFrame.current = undefined;
+        const direction = pendingWheelDirection.current;
+        pendingWheelDirection.current = undefined;
+        if (direction) setZoom((current) => stepZoom(current, fitScale, direction));
+      });
+    };
+    preview.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      preview.removeEventListener("wheel", onWheel);
+      if (wheelAnimationFrame.current !== undefined) {
+        cancelAnimationFrame(wheelAnimationFrame.current);
+        wheelAnimationFrame.current = undefined;
+      }
+    };
+  }, [fitScale]);
+
   /** フレーム移動(◀▶・矢印キー)。移動先を表示領域の上端へスクロールする。 */
   const move = (action: PreviewAction) => {
     const next = previewReducer(state, action, deck.frames.length);
@@ -123,7 +154,23 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   // フレーム移動のキーボード操作(スライダー等の入力要素の矢印キーは奪わない)。
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
-    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+    if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+      if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        setZoom((current) => stepZoom(current, fitScale, 1));
+      } else if (event.key === "-") {
+        event.preventDefault();
+        setZoom((current) => stepZoom(current, fitScale, -1));
+      } else if (event.key === "0") {
+        event.preventDefault();
+        setZoom("fit");
+      }
+      return;
+    }
+    // range の左右キーは値変更へ委ね、フレーム移動に使わない。
+    if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && target.tagName === "INPUT") {
+      return;
+    }
     if (event.key === "ArrowLeft") {
       event.preventDefault();
       move({ type: "prev" });
@@ -137,6 +184,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     // biome-ignore lint/a11y/useSemanticElements: 矢印キーのフレーム移動を束ねるコンテナ。
     <div
       className="beamer-preview"
+      ref={previewRef}
       role="group"
       aria-label="Beamer スライドプレビュー"
       onKeyDown={handleKeyDown}
@@ -156,21 +204,24 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         }
         onFitScaleChange={handleFitScaleChange}
       />
-      <Controls
-        frame={frame}
-        total={deck.frames.length}
-        step={state.step}
-        onPrev={() => move({ type: "prev" })}
-        onNext={() => move({ type: "next" })}
-        onStep={(s) => dispatch({ type: "setStep", step: s })}
-        onJump={() => host.jumpToSource(state.current, version)}
-        zoom={zoom}
-        fitScale={fitScale}
-        onZoomOut={() => setZoom((current) => stepZoom(current, fitScale, -1))}
-        onZoomIn={() => setZoom((current) => stepZoom(current, fitScale, 1))}
-        onZoomFit={() => setZoom("fit")}
-        onZoomActual={() => setZoom(1)}
-      />
+      {frame && frame.stepCount > 1 ? (
+        <div className="step-control">
+          <label>
+            step{" "}
+            <input
+              type="range"
+              min={1}
+              max={frame.stepCount}
+              value={state.step}
+              aria-label={`オーバーレイ step（${frame.stepCount} 段階）`}
+              onChange={(event) => dispatch({ type: "setStep", step: Number(event.target.value) })}
+            />
+          </label>
+          <span className="step-indicator" aria-live="polite">
+            {state.step}/{frame.stepCount}
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }

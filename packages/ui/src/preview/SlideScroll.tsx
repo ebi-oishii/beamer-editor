@@ -75,7 +75,7 @@ function SlideCard({
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
-    // Ctrl/Cmd+Enter はダブルクリックと等価のソースジャンプ(コントロールの「ソースへ」でも可)。
+    // Ctrl/Cmd+Enter はダブルクリックと等価のソースジャンプ。
     if (event.ctrlKey || event.metaKey) onJump(index);
     else onSelect(index);
   };
