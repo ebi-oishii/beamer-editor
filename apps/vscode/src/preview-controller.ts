@@ -14,6 +14,9 @@ export interface PreviewPanel {
     onDidReceiveMessage(listener: (msg: unknown) => void): vscode.Disposable;
   };
   onDidDispose(listener: () => void): vscode.Disposable;
+  onDidChangeViewState(
+    listener: (event: { webviewPanel: { active: boolean } }) => void,
+  ): vscode.Disposable;
   reveal(): void;
   dispose(): void;
 }
@@ -76,6 +79,8 @@ export interface PreviewControllerOptions {
     document: PreviewDocument;
     expectedOptions: string;
   }) => Promise<CanvasImageMoveResult>;
+  /** Preview panel が active になった通知。host 側の view state 更新に使う。 */
+  onDidBecomeActive?: () => void;
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -198,6 +203,9 @@ export class PreviewController implements vscode.Disposable {
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
+      this.panel.onDidChangeViewState((event) => {
+        if (event.webviewPanel.active) options.onDidBecomeActive?.();
+      }),
       this.panel.webview.onDidReceiveMessage((raw) => this.handleMessage(raw)),
       events.onDidChangeTextDocument((event) => this.handleDocumentChange(event)),
     ];

@@ -15,8 +15,10 @@ function makePanel() {
   const posted: unknown[] = [];
   let receive: ((msg: unknown) => void) | undefined;
   let disposeListener: (() => void) | undefined;
+  let viewStateListener: ((event: { webviewPanel: { active: boolean } }) => void) | undefined;
   const listenerDisposable = { dispose: vi.fn() };
   const receiveDisposable = { dispose: vi.fn() };
+  const viewStateDisposable = { dispose: vi.fn() };
   const panel: PreviewPanel & { webview: { html: string } } = {
     webview: {
       html: "",
@@ -34,6 +36,10 @@ function makePanel() {
       disposeListener = listener;
       return listenerDisposable;
     },
+    onDidChangeViewState(listener: (event: { webviewPanel: { active: boolean } }) => void) {
+      viewStateListener = listener;
+      return viewStateDisposable;
+    },
     reveal: vi.fn(),
     dispose: vi.fn(),
   };
@@ -44,6 +50,8 @@ function makePanel() {
     fireDispose: () => disposeListener?.(),
     listenerDisposable,
     receiveDisposable,
+    viewStateDisposable,
+    fireViewState: (active: boolean) => viewStateListener?.({ webviewPanel: { active } }),
   };
 }
 
@@ -149,7 +157,8 @@ describe("PreviewController", () => {
   });
 
   it("releases its listeners and notifies its owner exactly once", () => {
-    const { panel, fireDispose, listenerDisposable, receiveDisposable } = makePanel();
+    const { panel, fireDispose, listenerDisposable, receiveDisposable, viewStateDisposable } =
+      makePanel();
     const { events, disposable } = makeEvents();
     const onDispose = vi.fn();
     const controller = new PreviewController(panel, ASSETS, makeDoc(), events, onDispose);
@@ -159,9 +168,24 @@ describe("PreviewController", () => {
 
     expect(listenerDisposable.dispose).toHaveBeenCalledTimes(1);
     expect(receiveDisposable.dispose).toHaveBeenCalledTimes(1);
+    expect(viewStateDisposable.dispose).toHaveBeenCalledTimes(1);
     expect(disposable.dispose).toHaveBeenCalledTimes(1);
     expect(onDispose).toHaveBeenCalledTimes(1);
     expect(panel.webview.html).toContain('id="app"');
+  });
+
+  it("owns the preview active-state listener and notifies only for active panels", () => {
+    const { panel, fireViewState, fireDispose, viewStateDisposable } = makePanel();
+    const { events } = makeEvents();
+    const onDidBecomeActive = vi.fn();
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), { onDidBecomeActive });
+
+    fireViewState(false);
+    fireViewState(true);
+    fireDispose();
+
+    expect(onDidBecomeActive).toHaveBeenCalledTimes(1);
+    expect(viewStateDisposable.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("closes the panel before releasing its resources", () => {

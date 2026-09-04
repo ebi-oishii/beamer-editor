@@ -14,7 +14,8 @@
   "main": "./dist/extension.cjs",
   "activationEvents": [
     "onLanguage:latex",
-    "onCommand:beamerEditor.openPreview"
+    "onCommand:beamerEditor.openPreview",
+    "onView:beamerEditor.slides"
   ],
   "contributes": {
     "commands": [
@@ -46,6 +47,14 @@
           "command": "beamerEditor.openPreview",
           "when": "resourceScheme == file && resourceExtname == .tex",
           "group": "navigation"
+        }
+      ]
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "beamerEditor.slides",
+          "name": "Beamer Slides"
         }
       ]
     }

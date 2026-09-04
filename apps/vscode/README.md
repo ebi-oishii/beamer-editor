@@ -12,6 +12,7 @@ Beamer サブセットの `.tex` を編集しながら、LaTeX コンパイル�
 - managed slide の lint 結果は Problems パネルとエディタの波線に表示(規則番号付き)
 - ←/→ キーでフレーム移動、スライダーでオーバーレイの step 表示
 - 縮小・拡大・フィット・100%表示で、プレビューのスライド倍率を調整
+- Explorer の **Beamer Slides** には、現在の managed slide のフレーム一覧を表示。項目を選ぶと対応するソースへ移動する。View は VS Code の標準機能で Side Bar、Secondary Side Bar、Panel の任意の場所へ移動できる
 
 ## 開発版のインストール
 
