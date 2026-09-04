@@ -9,6 +9,7 @@
     "deck": "tsx src/cli.ts"
   },
   "dependencies": {
+    "@beamer-editor/compiler": "workspace:*",
     "@beamer-editor/core": "workspace:*"
   },
   "devDependencies": {
