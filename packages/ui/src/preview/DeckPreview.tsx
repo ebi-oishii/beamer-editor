@@ -10,7 +10,7 @@ import { type KeyboardEvent, useCallback, useEffect, useReducer, useRef, useStat
 import type { ShellHost } from "../shell-host.js";
 import { type RevealRequest, SlideScroll } from "./SlideScroll.js";
 import { type PreviewAction, type PreviewState, previewReducer } from "./state.js";
-import { stepZoom, type ZoomState } from "./zoom.js";
+import { shouldRevealForEffectiveZoom, stepZoom, type ZoomState } from "./zoom.js";
 
 const EMPTY_DECK: RenderedDeck = { title: "", frames: [], css: "" };
 const INITIAL_STATE: PreviewState = { current: 0, step: 1 };
@@ -21,7 +21,9 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const [version, setVersion] = useState(Number.NEGATIVE_INFINITY);
   const [restoredNav] = useState(() => host.loadNavState?.());
   const [zoom, setZoom] = useState<ZoomState>(() => restoredNav?.zoom ?? "fit");
-  const [fitScale, setFitScale] = useState(1);
+  // fit の初回計測前は未確定として扱う。仮の倍率を記録すると、初回計測が
+  // resize と誤認されて不要な reveal を起こすため。
+  const [fitScale, setFitScale] = useState<number | undefined>();
   const previewRef = useRef<HTMLDivElement>(null);
   const pendingWheelDirection = useRef<1 | -1 | undefined>();
   const wheelAnimationFrame = useRef<number | undefined>();
@@ -73,13 +75,18 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     }
   }, [deck, requestReveal]);
 
-  // ズームを変えても読んでいたフレームが上端に残るようにする(初回マウント時は対象なし)。
-  const lastZoom = useRef(zoom);
+  // 実効倍率が変わっても読んでいたフレームが上端に残るようにする。
+  // fit 中は viewport の幅変更も倍率変更になるが、手動倍率では resize しても変化しない。
+  const effectiveZoom = zoom === "fit" ? fitScale : zoom;
+  const lastEffectiveZoom = useRef<number | undefined>();
   useEffect(() => {
-    if (lastZoom.current === zoom) return;
-    lastZoom.current = zoom;
+    const previousEffectiveZoom = lastEffectiveZoom.current;
+    if (effectiveZoom === undefined) return;
+    lastEffectiveZoom.current = effectiveZoom;
+    // 初回の fitScale 実測は基準値として記録し、既存の初期 reveal に任せる。
+    if (!shouldRevealForEffectiveZoom(previousEffectiveZoom, effectiveZoom)) return;
     requestReveal(currentRef.current);
-  }, [zoom, requestReveal]);
+  }, [effectiveZoom, requestReveal]);
 
   // deck.css（%% style 由来の CSS 変数）を <style> として注入・更新する。
   const styleRef = useRef<HTMLStyleElement | null>(null);
@@ -107,6 +114,8 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const handleFitScaleChange = useCallback((next: number) => {
     setFitScale((current) => (current === next ? current : next));
   }, []);
+  // 初回計測前にズーム操作された場合だけ、従来どおり 100% を基準にする。
+  const zoomReferenceScale = fitScale ?? 1;
 
   // step を現在フレームの stepCount 内へ収める。復元 state が上限を超えていた場合の
   // ほか、文書編集で表示中フレームの stepCount が減った場合もここでクランプされる。
@@ -131,7 +140,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         wheelAnimationFrame.current = undefined;
         const direction = pendingWheelDirection.current;
         pendingWheelDirection.current = undefined;
-        if (direction) setZoom((current) => stepZoom(current, fitScale, direction));
+        if (direction) setZoom((current) => stepZoom(current, zoomReferenceScale, direction));
       });
     };
     preview.addEventListener("wheel", onWheel, { passive: false });
@@ -142,7 +151,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         wheelAnimationFrame.current = undefined;
       }
     };
-  }, [fitScale]);
+  }, [zoomReferenceScale]);
 
   /** フレーム移動(◀▶・矢印キー)。移動先を表示領域の上端へスクロールする。 */
   const move = (action: PreviewAction) => {
@@ -157,10 +166,10 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     if ((event.ctrlKey || event.metaKey) && !event.altKey) {
       if (event.key === "+" || event.key === "=") {
         event.preventDefault();
-        setZoom((current) => stepZoom(current, fitScale, 1));
+        setZoom((current) => stepZoom(current, zoomReferenceScale, 1));
       } else if (event.key === "-") {
         event.preventDefault();
-        setZoom((current) => stepZoom(current, fitScale, -1));
+        setZoom((current) => stepZoom(current, zoomReferenceScale, -1));
       } else if (event.key === "0") {
         event.preventDefault();
         setZoom("fit");

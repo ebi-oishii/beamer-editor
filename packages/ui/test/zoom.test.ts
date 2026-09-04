@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stepZoom } from "../src/preview/zoom.js";
+import { shouldRevealForEffectiveZoom, stepZoom } from "../src/preview/zoom.js";
 
 describe("stepZoom", () => {
   it("下限で縮小しても 0.25 を下回らない", () => {
@@ -13,5 +13,19 @@ describe("stepZoom", () => {
 
   it("上限で拡大しても 3 を超えない", () => {
     expect(stepZoom(3, 1, 1)).toBe(3);
+  });
+});
+
+describe("shouldRevealForEffectiveZoom", () => {
+  it("未計測から初回実測へは reveal しない", () => {
+    expect(shouldRevealForEffectiveZoom(undefined, 0.8)).toBe(false);
+  });
+
+  it("同じ実測倍率では reveal しない", () => {
+    expect(shouldRevealForEffectiveZoom(0.8, 0.8)).toBe(false);
+  });
+
+  it("実測倍率が変わったときだけ reveal する", () => {
+    expect(shouldRevealForEffectiveZoom(0.8, 1.2)).toBe(true);
   });
 });

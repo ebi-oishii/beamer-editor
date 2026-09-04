@@ -472,6 +472,130 @@ describe("mountPreview", () => {
     expect(scale.style.height).toBe("341px");
   });
 
+  it("fit 中の resize は表示中フレームを新しい上端へ揃え直す", () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("slide-scroll") ? 632 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("slide-scroll") ? 500 : 0;
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const notifyActiveFrame = vi.fn();
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 1, step: 1, zoom: "fit" as const }),
+      notifyActiveFrame,
+    };
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    const scroll = container.querySelector<HTMLElement>(".slide-scroll");
+    const cards = container.querySelectorAll<HTMLElement>(".slide-card");
+    if (!scroll || cards.length !== 2) throw new Error("scroll fixture missing");
+    let scrollTop = 0;
+    let scrollWrites = 0;
+    Object.defineProperty(scroll, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollWrites += 1;
+        scrollTop = value;
+      },
+    });
+    cards.forEach((card, i) => {
+      Object.defineProperty(card, "offsetTop", { configurable: true, value: 12 + i * 400 });
+    });
+    // 同寸法の observer 通知では、deck 読み込み時の reveal 以外を追加で発生させない。
+    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+    expect(scrollWrites).toBe(0);
+
+    // resize による再レイアウト後の2枚目の位置。現在フレームをここへ揃え直す。
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 308 },
+      clientHeight: { configurable: true, value: 250 },
+    });
+    Object.defineProperty(cards[1] as HTMLElement, "offsetTop", { configurable: true, value: 700 });
+    scrollTop = 123;
+    scrollWrites = 0;
+    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+
+    expect(scrollTop).toBe(688);
+    expect(scrollWrites).toBe(1);
+    expect(cards[1]?.classList.contains("active")).toBe(true);
+    expect(notifyActiveFrame).toHaveBeenLastCalledWith(1);
+  });
+
+  it("手動 zoom 中の resize は表示位置とナビ状態を変えない", () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: unknown[] = [];
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 1, step: 1, zoom: 1 as const }),
+      saveNavState: (state: unknown) => saved.push(state),
+    };
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    const scroll = container.querySelector<HTMLElement>(".slide-scroll");
+    const cards = container.querySelectorAll<HTMLElement>(".slide-card");
+    if (!scroll || cards.length !== 2) throw new Error("scroll fixture missing");
+    let scrollTop = 321;
+    Object.defineProperty(scroll, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 308 },
+      clientHeight: { configurable: true, value: 250 },
+    });
+    Object.defineProperty(cards[1] as HTMLElement, "offsetTop", { configurable: true, value: 700 });
+
+    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+
+    expect(scrollTop).toBe(321);
+    expect(cards[1]?.classList.contains("active")).toBe(true);
+    expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: 1 });
+  });
+
   it("computed style の端数論理サイズを整数 offset より優先し、3x では外側だけが 3 倍になる", () => {
     const originalGetComputedStyle = window.getComputedStyle.bind(window);
     vi.spyOn(window, "getComputedStyle").mockImplementation((element) => {

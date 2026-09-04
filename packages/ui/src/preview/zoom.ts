@@ -31,6 +31,17 @@ export function stepZoom(zoom: ZoomState, fitScale: number, direction: 1 | -1): 
   return clampZoom((zoom === "fit" ? fitScale : zoom) + direction * ZOOM_STEP);
 }
 
+/**
+ * 実効倍率の変化で、読んでいたフレームを上端へ戻すべきか判定する。
+ * 未計測の初回 fit 値は基準値として記録するだけで、reveal は要求しない。
+ */
+export function shouldRevealForEffectiveZoom(
+  previous: number | undefined,
+  current: number | undefined,
+): boolean {
+  return previous !== undefined && current !== undefined && previous !== current;
+}
+
 export function formatZoom(zoom: ZoomState, fitScale: number): string {
   const percent = Math.round((zoom === "fit" ? fitScale : zoom) * 100);
   return zoom === "fit" ? `フィット ${percent}%` : `${percent}%`;
