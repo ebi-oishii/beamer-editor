@@ -82,44 +82,87 @@ function placeholderHtml(
 
 /** 大きさの指定が無いときの箱: 本文幅の 6 割、4:3。 */
 const DEFAULT_PLACEHOLDER_WIDTH = 0.6;
-
-function placeholderStyle(widthFactor: number | null, heightPt: number | null): string {
-  const width = `width:${((widthFactor ?? DEFAULT_PLACEHOLDER_WIDTH) * 100).toFixed(1)}%`;
-  return heightPt !== null
-    ? `${width};height:${heightPt.toFixed(1)}pt`
-    : `${width};aspect-ratio:4 / 3`;
-}
+/** `\\resizebox{0\\textwidth}` などで不可視の箱にならないよう、幅の下限。 */
+const MIN_PLACEHOLDER_WIDTH = 0.05;
 
 /**
- * 生ブロックの原文にある大きさの指定を拾う(`\\resizebox{0.8\\textwidth}{!}{…}`、`width=0.5\\linewidth`、
- * `height=0.4\\textheight`)。係数が省かれていれば 1。無ければ null。
+ * 箱の style。幅は親(段組みなら段)に対する % で、高さは幅との比(aspect-ratio)で出す。
+ * pt の絶対値にすると段組みの中で幅だけ縮んで高さが溢れるので、縦も CSS に解決させる。
  */
-function placeholderSize(tex: string): { width: number | null; height: number | null } {
+function placeholderStyle(widthFactor: number | null, aspectRatio: number | null): string {
+  const width = Math.max(MIN_PLACEHOLDER_WIDTH, widthFactor ?? DEFAULT_PLACEHOLDER_WIDTH);
+  const aspect = aspectRatio !== null && aspectRatio > 0 ? aspectRatio.toFixed(3) : "4 / 3";
+  return `width:${(width * 100).toFixed(1)}%;aspect-ratio:${aspect}`;
+}
+
+/** 幅と高さの係数(どちらも行幅に対する比)から aspect-ratio。高さだけの指定なら既定幅との比。 */
+function aspectOf(widthFactor: number | null, heightFactor: number | null): number | null {
+  if (heightFactor === null || heightFactor <= 0) return null;
+  return Math.max(MIN_PLACEHOLDER_WIDTH, widthFactor ?? DEFAULT_PLACEHOLDER_WIDTH) / heightFactor;
+}
+
+const WIDTH_UNIT = "(?:textwidth|linewidth|columnwidth)";
+const HEIGHT_UNIT = "(?:textheight|paperheight)";
+const FACTOR = "([0-9]*\\.?[0-9]+)?";
+
+/**
+ * 生ブロックを包む外枠の大きさ指定を拾う。見るのは最初の `\\begin{` より前(`\\resizebox{0.8\\textwidth}{!}{`
+ * や `\\includegraphics[width=…]` の部分)だけで、環境の中身(`\\node[text width=…, minimum height=…]` など)
+ * は見ない。`width=` / `height=` はオプションのキー先頭(`[` か `,` の直後)にあるものだけを取る。
+ * 高さは \\textheight 基準なので、行幅に対する比へ換算して返す。係数が省かれていれば 1、無ければ null。
+ */
+function placeholderSize(
+  tex: string,
+  textheightInLinewidth: number,
+): { width: number | null; height: number | null } {
+  const begin = tex.indexOf("\\begin{");
+  const wrapper = begin === -1 ? tex : tex.slice(0, begin);
   const factor = (match: RegExpExecArray | null): number | null =>
     match === null ? null : match[1] ? Number(match[1]) : 1;
+  const width =
+    factor(new RegExp(`\\\\resizebox\\{\\s*${FACTOR}\\\\${WIDTH_UNIT}\\s*\\}`).exec(wrapper)) ??
+    factor(new RegExp(`[\\[,]\\s*width\\s*=\\s*${FACTOR}\\\\${WIDTH_UNIT}`).exec(wrapper));
+  const heightInTextheight =
+    factor(
+      new RegExp(`\\\\resizebox\\{[^}]*\\}\\{\\s*${FACTOR}\\\\${HEIGHT_UNIT}\\s*\\}`).exec(wrapper),
+    ) ?? factor(new RegExp(`[\\[,]\\s*height\\s*=\\s*${FACTOR}\\\\${HEIGHT_UNIT}`).exec(wrapper));
   return {
-    width: factor(
-      /(?:\\resizebox\{|width\s*=\s*)([0-9]*\.?[0-9]+)?\\(?:textwidth|linewidth|columnwidth)/.exec(
-        tex,
-      ),
-    ),
-    height: factor(/height\s*=\s*([0-9]*\.?[0-9]+)?\\(?:textheight|paperheight)/.exec(tex)),
+    width,
+    height: heightInTextheight === null ? null : heightInTextheight * textheightInLinewidth,
   };
 }
 
 const basename = (path: string): string => path.split(/[\\/]/).pop() ?? path;
+const environmentOf = (tex: string): string | null => /\\begin\{([^}]+)\}/.exec(tex)?.[1] ?? null;
 
-/** 段落の中身が(空白を除いて)環境を含む生インライン 1 つだけなら、それを返す。 */
+/** 図を包む命令。段落がこれで始まり、中身が描画系の環境なら「図」として箱にする。 */
+const FIGURE_WRAPPERS =
+  /^\s*\\(resizebox|scalebox|rotatebox|adjustbox|makebox|centerline|fbox|mbox)\b/;
+/** 描画系の環境。tabular や small のような本文を持つ環境は含めない(本文が消える)。 */
+const FIGURE_ENVIRONMENTS = new Set([
+  "tikzpicture",
+  "pgfpicture",
+  "picture",
+  "tikzcd",
+  "circuitikz",
+  "forest",
+  "pspicture",
+]);
+
+/**
+ * 段落の中身が(空白を除いて)生インライン 1 つだけで、それが図を包む命令(`\\resizebox{…}{!}{\\begin{tikzpicture}…}`
+ * など)なら、それを返す。`\\myemph{text \\begin{small}…\\end{small}}` のような本文を持つものは対象にしない。
+ */
 function figureLikeRawInline(children: InlineNode[]): RawInlineNode | null {
   const meaningful = children.filter(
     (child) => !(child.type === "text" && child.value.trim() === ""),
   );
   const only = meaningful[0];
-  return meaningful.length === 1 && only?.type === "rawInline" && /\\begin\{/.test(only.tex)
-    ? only
-    : null;
+  if (meaningful.length !== 1 || only?.type !== "rawInline") return null;
+  if (!FIGURE_WRAPPERS.test(only.tex)) return null;
+  const environment = environmentOf(only.tex);
+  return environment !== null && FIGURE_ENVIRONMENTS.has(environment) ? only : null;
 }
-const environmentOf = (tex: string): string | null => /\\begin\{([^}]+)\}/.exec(tex)?.[1] ?? null;
 
 const NAMED_COLORS: Record<string, string> = {
   red: "#e74c3c",
@@ -390,14 +433,12 @@ class FrameRenderer {
         // 図として置かれているので、生ブロックと同じ箱にする(原文を本文に流し込まない)。
         const figure = figureLikeRawInline(block.children);
         if (figure) {
-          const size = placeholderSize(figure.tex);
-          const heightPt =
-            size.height !== null ? size.height * this.theme.metrics.bodyAreaPt.height : null;
+          const size = placeholderSize(figure.tex, this.textheightInLinewidth());
           return placeholderHtml(
             "raw-block",
             environmentOf(figure.tex) ?? "生 LaTeX",
             figure.tex,
-            placeholderStyle(size.width, heightPt),
+            placeholderStyle(size.width, aspectOf(size.width, size.height)),
             `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}`,
           );
         }
@@ -461,14 +502,15 @@ class FrameRenderer {
         const flow = this.flowBlockAttrs(block);
         if (block.path.toLowerCase().endsWith(".pdf")) {
           // PDF は Webview で描けないので、部分コンパイル(#81)までは箱で場所だけ確保する。
-          const heightPt = block.height
-            ? block.height.factor * this.theme.metrics.bodyAreaPt.width
-            : null;
+          // width / height はどちらも行幅基準(DimFactor)なので、そのまま比にできる。
           return placeholderHtml(
             "image-placeholder",
             basename(block.path),
             block.path,
-            placeholderStyle(block.width?.factor ?? null, heightPt),
+            placeholderStyle(
+              block.width?.factor ?? null,
+              aspectOf(block.width?.factor ?? null, block.height?.factor ?? null),
+            ),
             `${flow}${this.overlayAttrs(null)}`,
           );
         }
@@ -493,18 +535,22 @@ class FrameRenderer {
       case "canvas":
         return this.renderCanvas(block);
       case "rawBlock": {
-        const size = placeholderSize(block.tex);
-        const heightPt =
-          size.height !== null ? size.height * this.theme.metrics.bodyAreaPt.height : null;
+        const size = placeholderSize(block.tex, this.textheightInLinewidth());
         return placeholderHtml(
           "raw-block",
           block.environment ?? "生 LaTeX",
           block.tex,
-          placeholderStyle(size.width, heightPt),
+          placeholderStyle(size.width, aspectOf(size.width, size.height)),
           `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}`,
         );
       }
     }
+  }
+
+  /** \\textheight を行幅に対する比で表す(箱の縦寸法を aspect-ratio に畳むため)。 */
+  private textheightInLinewidth(): number {
+    const { bodyAreaPt: body } = this.theme.metrics;
+    return body.height / body.width;
   }
 
   private renderCanvas(block: CanvasNode): string {

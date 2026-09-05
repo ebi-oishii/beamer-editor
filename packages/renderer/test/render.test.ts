@@ -231,6 +231,10 @@ ${body}
 \\end{document}
 `;
   const html = (body: string) => renderDeck(parseDeck(src(body))).frames[0]?.html ?? "";
+  // \\textheight を行幅に対する比にした値(本文領域 236.97pt / 398.34pt)。高さは aspect-ratio に畳む。
+  const TEXTHEIGHT_IN_LINEWIDTH = 236.97 / 398.34;
+  const aspect = (width: number, heightInLinewidth: number) =>
+    (width / heightInLinewidth).toFixed(3);
 
   it("生ブロックは中身を描かず、環境名だけの箱にする(既定は本文幅 6 割・4:3)", () => {
     const out = html("\\begin{tikzpicture}\n\\draw (0,0) -- (1,1);\n\\end{tikzpicture}");
@@ -242,19 +246,36 @@ ${body}
     expect(out).toContain('title="\\begin{tikzpicture}');
   });
 
-  it("\\resizebox / width= / height= の指定があれば箱の大きさに使う", () => {
+  it("外枠の \\resizebox の指定は箱の大きさに使い、高さは幅との比(aspect-ratio)で出す", () => {
     expect(
       html("\\resizebox{0.8\\textwidth}{!}{\\begin{tikzpicture}\\end{tikzpicture}}"),
-    ).toContain("width:80.0%");
-    expect(html("\\begin{tikzpicture}[width=0.5\\linewidth]\\end{tikzpicture}")).toContain(
-      "width:50.0%",
-    );
-    expect(html("\\begin{tikzpicture}[height=0.5\\textheight]\\end{tikzpicture}")).toMatch(
-      /width:60\.0%;height:\d+\.\d+pt/,
+    ).toContain("width:80.0%;aspect-ratio:4 / 3");
+    // 高さだけの指定は既定幅との比。pt の絶対値にしない(段組みの中で溢れる)。
+    expect(
+      html("\\resizebox{!}{0.5\\textheight}{\\begin{tikzpicture}\\end{tikzpicture}}"),
+    ).toContain(`width:60.0%;aspect-ratio:${aspect(0.6, 0.5 * TEXTHEIGHT_IN_LINEWIDTH)}`);
+    expect(
+      html("\\resizebox{!}{0.5\\textheight}{\\begin{tikzpicture}\\end{tikzpicture}}"),
+    ).not.toMatch(/height:\d/);
+    // 幅 0 の指定でも不可視にならない。
+    expect(html("\\resizebox{0\\textwidth}{!}{\\begin{tikzpicture}\\end{tikzpicture}}")).toContain(
+      "width:5.0%",
     );
   });
 
-  it("環境を命令で包んだ生インラインだけの段落(\\resizebox で包んだ tikz など)も箱にし、原文を本文に出さない", () => {
+  it("環境の中身の width= / height=(\\node の text width や minimum height)は箱の大きさに使わない", () => {
+    expect(
+      html("\\begin{tikzpicture}\n\\node[text width=0.2\\textwidth] {x};\n\\end{tikzpicture}"),
+    ).toContain("width:60.0%;aspect-ratio:4 / 3");
+    expect(
+      html("\\begin{tikzpicture}\n\\node[minimum height=0.9\\textheight] {x};\n\\end{tikzpicture}"),
+    ).toContain("width:60.0%;aspect-ratio:4 / 3");
+    expect(
+      html("\\begin{figure}\n\\includegraphics[width=\\textwidth]{a.png}\n\\end{figure}"),
+    ).toContain("width:60.0%;aspect-ratio:4 / 3");
+  });
+
+  it("図を包む命令 + 描画系の環境だけの段落は箱にし、本文を持つ生インラインは従来どおり残す", () => {
     const out = html(
       "\\resizebox{0.8\\textwidth}{!}{%\n\\begin{tikzpicture}\n\\draw (0,0) -- (1,1);\n\\end{tikzpicture}}",
     );
@@ -262,15 +283,29 @@ ${body}
     expect(out).toContain('<span class="placeholder-label">tikzpicture</span>');
     expect(out).toContain("width:80.0%");
     expect(out).not.toContain("raw-inline");
-    // 短い生インライン(命令だけ)は従来どおり段落内に残す。
-    expect(html("before \\textsc{Small} after")).toContain("raw-inline");
+    // 本文のある段落は潰さない(小さい環境を含む文、表を包んだもの、命令だけの短い生インライン)。
+    for (const body of [
+      "\\myemph{text with \\begin{small}stuff\\end{small} inside}",
+      "\\scalebox{0.8}{\\begin{tabular}{ll}a&b\\\\\\end{tabular}}",
+      "before \\textsc{Small} after",
+    ]) {
+      const rendered = html(body);
+      expect(rendered, body).toContain("raw-inline");
+      expect(rendered, body).not.toContain("placeholder");
+    }
   });
 
-  it("PDF 画像はファイル名だけの箱にし、幅指定を使う", () => {
+  it("PDF 画像はファイル名だけの箱にし、幅は %、高さは幅との比で出す(段組みでも溢れない)", () => {
     const out = html("\\includegraphics[width=0.4\\textwidth]{figs/plot.pdf}");
     expect(out).toContain('<div class="image-placeholder placeholder"');
     expect(out).toContain('<span class="placeholder-label">plot.pdf</span>');
     expect(out).toContain("width:40.0%;aspect-ratio:4 / 3");
+    // height=0.5\\linewidth は既定幅 0.6 との比 1.2 になり、段の幅に追従する。
+    const inColumn = html(
+      "\\begin{columns}\n\\begin{column}{0.3\\textwidth}\n\\includegraphics[height=0.5\\linewidth]{f.pdf}\n\\end{column}\n\\end{columns}",
+    );
+    expect(inColumn).toContain(`width:60.0%;aspect-ratio:${aspect(0.6, 0.5)}`);
+    expect(inColumn).not.toMatch(/height:\d/);
   });
 });
 

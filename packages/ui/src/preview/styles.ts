@@ -377,15 +377,6 @@ export const PREVIEW_CSS = `
   font-size: 0.85em;
   padding: 0 2pt;
 }
-.slide .image-placeholder {
-  border: 1.2pt dashed #7f8c8d;
-  background: #eceff1;
-  color: #546e7a;
-  font-size: 7.5pt;
-  padding: 8pt 6pt;
-  text-align: center;
-  border-radius: 3pt;
-}
 /* コンパイルしないと描けないもの(生ブロック・PDF 画像)の箱(#93)。中身は描かず、ラベルだけを中央に出す。 */
 .slide .placeholder {
   display: flex;
