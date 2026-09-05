@@ -331,9 +331,13 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     // グループにしか掛けられないので、パネルが初めてフォーカスされたとき(手動オープン直後か、利用者
     // がプレビューをクリックしたとき)に 1 回だけ行い、自動オープンでフォーカスを奪わない。
     // 問題が起きるのは「プレビューがアクティブなときに別ファイルを開く」場面だけなのでこれで足りる。
+    // lockEditorGroup は「その時点でアクティブなグループ」に掛かる。パネル作成直後は workbench 側の
+    // 切り替えが終わっておらずソース側がまだアクティブなことがあるため、アクティブなタブがこの
+    // パネルであることを確かめてから実行する(違うグループをロックしない)。
     let groupLocked = false;
     const lockGroupIfActive = (): void => {
       if (groupLocked || !panel.active) return;
+      if (vscode.window.tabGroups.activeTabGroup.activeTab?.label !== panel.title) return;
       const enabled =
         vscode.workspace.getConfiguration("beamerEditor").get<boolean>("preview.lockGroup") ?? true;
       if (!enabled) return;
