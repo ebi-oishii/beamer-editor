@@ -26,6 +26,11 @@ export interface NavState {
 export interface ShellHost {
   /** ホストからの deck 更新を購読する。unsubscribe を返す。 */
   subscribe(listener: (deck: RenderedDeck, version: number) => void): () => void;
+  /**
+   * ホスト → ui: 指定フレームを表示する要求(ソース側の CodeLens・コマンド・カーソル追従)。
+   * version は要求の基になった deck の document version。表示中の版と違えば ui は無視する。
+   */
+  onRevealFrame?(listener: (frameIndex: number, version: number) => void): () => void;
   /** 前回のナビ状態(パネル再表示時の復元用)。無ければ undefined。 */
   loadNavState?(): NavState | undefined;
   /** ナビ状態の保存。current / step 以外を渡さない。 */
@@ -97,6 +102,11 @@ export function createMessageShellHost(
           lastVersion = msg.version;
           listener(msg.deck, msg.version);
         }
+      });
+    },
+    onRevealFrame(listener) {
+      return transport.subscribe((msg) => {
+        if (msg.type === "activeFrameChanged") listener(msg.frameIndex, msg.version);
       });
     },
     jumpToSource(frameIndex, version) {
