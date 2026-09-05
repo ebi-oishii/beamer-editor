@@ -919,6 +919,58 @@ describe("PreviewController", () => {
     expect(controller.latestOutcome?.deck.frames[0]?.html).toBe(html);
   });
 
+  it("refresh() は画像 URL の世代を進めて <img src> を変え、文書だけの再描画では変えない", () => {
+    vi.useFakeTimers();
+    try {
+      const { panel, posted, fire } = makePanel();
+      const { events, change } = makeEvents();
+      const doc = makeDoc();
+      const render = (_text: string, version: number): RenderOutcome => ({
+        deck: {
+          title: "t",
+          css: "",
+          frames: [
+            {
+              index: 1,
+              label: null,
+              titleText: "one",
+              // 画像ファイルだけを上書きしても renderer の出力はこの同じ文字列になる。
+              html: '<img class="deck-logo" src="templates/t/logo.png">',
+              stepCount: 1,
+              isRaw: false,
+              sourceSpan: { start: 0, end: 1 },
+            },
+          ],
+        },
+        version,
+        expansionMap: [],
+        expandDiagnostics: [],
+      });
+      const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+        render,
+        resolveResource: (path) => `vscode-webview://authority/${path}`,
+      });
+      const lastSrc = () =>
+        /src="([^"]*)"/.exec(
+          (posted.at(-1) as { deck: { frames: { html: string }[] } }).deck.frames[0]?.html ?? "",
+        )?.[1];
+      fire({ type: "ready" });
+      expect(lastSrc()).toBe("vscode-webview://authority/templates/t/logo.png");
+      // 画像の変更(watcher → refresh): src が変わるので Webview は <img> を作り直して再取得する。
+      controller.refresh();
+      expect(lastSrc()).toBe("vscode-webview://authority/templates/t/logo.png?v=1");
+      // 文書の編集による再描画では世代は変えない(不要な再取得を起こさない)。
+      doc.edit("changed");
+      change(doc);
+      vi.advanceTimersByTime(RENDER_DEBOUNCE_MS);
+      expect(lastSrc()).toBe("vscode-webview://authority/templates/t/logo.png?v=1");
+      controller.refresh();
+      expect(lastSrc()).toBe("vscode-webview://authority/templates/t/logo.png?v=2");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("予期しない例外では error を通知し、最後に成功した結果を保持する", () => {
     const { panel, posted, fire } = makePanel();
     const { events, change } = makeEvents();

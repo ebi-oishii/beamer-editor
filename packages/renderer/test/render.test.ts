@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseDeck } from "@beamer-editor/core";
+import { framesOf, parseDeck } from "@beamer-editor/core";
 import { describe, expect, it } from "vitest";
-import { renderDeck } from "../src/render.js";
+import { frameTitleText, renderDeck } from "../src/render.js";
 
 const fixture = (name: string) => readFileSync(join(__dirname, "../../../fixtures", name), "utf8");
 
@@ -43,6 +43,19 @@ describe("renderDeck: basic.tex", () => {
     expect(source.slice(first.sourceSpan.start, first.sourceSpan.end)).toBe(
       "\\begin{frame}\n  \\titlepage\n\\end{frame}",
     );
+  });
+});
+
+describe("frameTitleText", () => {
+  it("renderDeck と同じ数式・raw・連番フォールバックを使う", () => {
+    const frames = framesOf(
+      parseDeck(String.raw`\begin{frame}{Third$x$}\end{frame}
+\begin{frame}\end{frame}`),
+    );
+    const [third, untitled] = frames;
+    if (!third || !untitled) throw new Error("expected two frames");
+    expect(frameTitleText(third, 3)).toBe("Third$x$");
+    expect(frameTitleText(untitled, 4)).toBe("frame 4");
   });
 });
 
@@ -204,6 +217,64 @@ describe("renderDeck: kitchen-sink.tex", () => {
     const raw = deck.frames.find((f) => f.isRaw);
     expect(raw).toBeDefined();
     expect(raw?.html).toContain("解釈不能フレーム");
+  });
+});
+
+describe("renderDeck: テンプレート由来の土台スタイル", () => {
+  const baseStyle = {
+    colors: { structure: "123456" as const, background: "FAFAFA" as const },
+    fonts: { main: "Corp Sans" },
+    logo: {
+      path: "templates/corporate/assets/logo.png",
+      placement: { kind: "corner" as const, width: { unit: "paperwidth" as const, value: 0.1 } },
+    },
+    background: { path: "templates/corporate/assets/background.png" },
+    footer: "ACME <Confidential>",
+  };
+
+  it("土台の色・フォント・背景・右下ロゴ・フッターがデッキに効く", () => {
+    const deck = renderDeck(parseDeck(fixture("basic.tex")), undefined, { baseStyle });
+    expect(deck.css).toContain("--deck-structure: #123456;");
+    expect(deck.css).toContain("--deck-background: #FAFAFA;");
+    expect(deck.css).toContain('--deck-font-main: "Corp Sans",');
+    const html = deck.frames[1]?.html ?? "";
+    expect(html).toContain(
+      '<img class="deck-background" src="templates/corporate/assets/background.png">',
+    );
+    expect(html).toContain(
+      '<img class="deck-logo" src="templates/corporate/assets/logo.png" style="right:2%;bottom:3%;width:10.00%">',
+    );
+    expect(html).toContain("<span>ACME &lt;Confidential&gt;</span>");
+  });
+
+  it("デッキの %% style 領域は土台を上書きし、\\decklogo は本文領域座標で置く", () => {
+    const deck = renderDeck(parseDeck(fixture("styled.tex")), undefined, { baseStyle });
+    expect(deck.css).toContain("--deck-structure: #0F62FE;");
+    expect(deck.css).not.toContain("#123456");
+    expect(deck.css).toContain("--deck-background: #FAFAFA;");
+    const html = deck.frames[1]?.html ?? "";
+    expect(html).toMatch(/<img class="deck-logo" src="assets\/logo.png" style="left:/);
+    expect(html).not.toContain("right:2%");
+    // フッターは %% style の \\deckfooter が勝つ。
+    expect(html).toContain("ACME Corp.");
+    expect(html).not.toContain("Confidential&gt;");
+  });
+
+  it("PDF の背景は <img> にできないので出さず、pt 幅のロゴはスライド幅の % に変える", () => {
+    const deck = renderDeck(parseDeck(fixture("basic.tex")), undefined, {
+      baseStyle: {
+        colors: {},
+        fonts: {},
+        background: { path: "bg.pdf" },
+        logo: {
+          path: "logo.png",
+          placement: { kind: "corner", width: { unit: "pt", value: 45.524 } },
+        },
+      },
+    });
+    const html = deck.frames[0]?.html ?? "";
+    expect(html).not.toContain("deck-background");
+    expect(html).toContain("width:10.00%");
   });
 });
 

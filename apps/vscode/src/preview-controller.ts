@@ -143,6 +143,12 @@ export function rewriteImageSources(html: string, resolve: (path: string) => str
   });
 }
 
+/** 画像 URL に再読込世代を付ける(0 = 初期状態では付けない)。同じ HTML でも src が変わり再取得される。 */
+export function withAssetGeneration(url: string, generation: number): string {
+  if (generation === 0) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}v=${generation}`;
+}
+
 /**
  * Webview の HTML。CSP は `default-src 'none'` を基本に必要な源だけを開ける
  * (移植計画 VS-8)。script は nonce 必須、style は ui / deck.css が動的に
@@ -196,6 +202,8 @@ export class PreviewController implements vscode.Disposable {
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
   private latest: RenderOutcome | undefined;
+  /** 画像の再読込世代。refresh ごとに進め、送る <img src> の query に付ける。 */
+  private assetGeneration = 0;
   /** latest を生成した TextDocument。URI/version が偶然一致しても別 object は拒否する。 */
   private latestDocument: PreviewDocument | undefined;
   /**
@@ -276,6 +284,15 @@ export class PreviewController implements vscode.Disposable {
       version: latest.version,
     };
     void this.panel.webview.postMessage(message);
+  }
+
+  /**
+   * 文書以外の入力(テンプレートの .sty や画像)が変わったときに再描画する。画像だけが変わった場合は
+   * frame HTML が同じ文字列になり Webview は <img> を作り直さないので、世代を進めて src 自体を変える。
+   */
+  refresh(): void {
+    this.assetGeneration += 1;
+    this.sendDeck();
   }
 
   private handleMessage(raw: unknown): void {
@@ -476,12 +493,15 @@ export class PreviewController implements vscode.Disposable {
         this.editAwaitingVersion = undefined;
       }
       const resolve = this.resolveResource;
+      const generation = this.assetGeneration;
       const deck = resolve
         ? {
             ...outcome.deck,
             frames: outcome.deck.frames.map((frame) => ({
               ...frame,
-              html: rewriteImageSources(frame.html, resolve),
+              html: rewriteImageSources(frame.html, (path) =>
+                withAssetGeneration(resolve(path), generation),
+              ),
             })),
           }
         : outcome.deck;

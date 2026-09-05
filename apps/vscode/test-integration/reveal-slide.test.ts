@@ -1,5 +1,5 @@
 /**
- * #66: ソース → プレビュー(beamerEditor.revealSlide)の統合テスト。実 VS Code の Extension Host で
+ * #66: ソース → プレビュー(beamerEditor.revealSlideInPreview)の統合テスト。実 VS Code の Extension Host で
  * 動き、対象外(managed でない文書・フレーム外の位置)ではプレビューを開かないことを確認する。
  */
 
@@ -64,7 +64,7 @@ suite("#66: revealSlide の対象判定", () => {
   test("managed でない .tex では、フレーム内の位置でもプレビューを開かない", async () => {
     const document = await openDeck("plain.tex");
     await vscode.commands.executeCommand(
-      "beamerEditor.revealSlide",
+      "beamerEditor.revealSlideInPreview",
       document.uri.toString(),
       SOURCE.indexOf("body"),
     );
@@ -79,11 +79,15 @@ suite("#66: revealSlide の対象判定", () => {
     await closePreviews();
     const uri = document.uri.toString();
 
-    await vscode.commands.executeCommand("beamerEditor.revealSlide", uri, 0);
+    await vscode.commands.executeCommand("beamerEditor.revealSlideInPreview", uri, 0);
     await sleep(1_000);
     assert.equal(previewTabs().length, 0, "プリアンブルでは開かない");
 
-    await vscode.commands.executeCommand("beamerEditor.revealSlide", uri, SOURCE.indexOf("body"));
+    await vscode.commands.executeCommand(
+      "beamerEditor.revealSlideInPreview",
+      uri,
+      SOURCE.indexOf("body"),
+    );
     await waitFor(() => previewTabs().length === 1, "フレーム内なら開き直す");
     assert.equal(
       vscode.window.activeTextEditor?.document.uri.toString(),

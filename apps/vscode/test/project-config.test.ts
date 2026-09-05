@@ -106,13 +106,13 @@ describe("VS Code extension project configuration", () => {
     };
     expect(contributes.commands.map((c) => c.command)).toEqual(
       expect.arrayContaining([
-        "beamerEditor.revealSlide",
+        "beamerEditor.revealSlideInPreview",
         "beamerEditor.followCursor.enable",
         "beamerEditor.followCursor.disable",
       ]),
     );
     expect(contributes.keybindings).toContainEqual({
-      command: "beamerEditor.revealSlide",
+      command: "beamerEditor.revealSlideInPreview",
       key: "ctrl+k v",
       mac: "cmd+k v",
       when: "editorTextFocus && editorLangId == latex",

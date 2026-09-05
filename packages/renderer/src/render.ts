@@ -16,10 +16,12 @@ import type {
   DeckDocument,
   FrameNode,
   InlineNode,
+  LengthSpec,
   ListItemNode,
+  PreviewLogo,
+  PreviewStyle,
   RawFrameNode,
   SourceSpan,
-  StyleLogoNode,
 } from "@beamer-editor/core";
 import { detachableBlocksOf, framesOf } from "@beamer-editor/core";
 import katex from "katex";
@@ -84,10 +86,47 @@ const NAMED_COLORS: Record<string, string> = {
   white: "#ffffff",
 };
 
+/** renderDeck の追加入力。 */
+export interface RenderOptions {
+  /**
+   * テンプレート(.sty)や preamble-extra から抽出した土台のスタイル。デッキの `%% style` 領域が
+   * これを上書きする(theme-design.md「テンプレートの読み込み」)。
+   */
+  baseStyle?: PreviewStyle;
+}
+
 /** フレーム装飾の集約結果(同種の指定が複数あれば後の指定を使う)。 */
 interface FrameDecorations {
-  logo: StyleLogoNode | null;
+  /** `%% style` の \decklogo(本文領域の座標)か、テンプレートの \logo(右下)か。 */
+  logo: PreviewLogo | null;
+  /** 全スライドの背景画像(テンプレートの \usebackgroundtemplate 等)。 */
+  background: string | null;
   footerHtml: string | null;
+}
+
+/** 右下ロゴの幅(スライド幅に対する %)。指定が無ければ 8%。 */
+function cornerLogoWidthPct(width: LengthSpec | null, metrics: Theme["metrics"]): number {
+  if (!width) return 8;
+  switch (width.unit) {
+    case "pt":
+      return (width.value / metrics.slideWidthPt) * 100;
+    case "paperwidth":
+      return width.value * 100;
+    case "textwidth":
+      return ((width.value * metrics.bodyAreaPt.width) / metrics.slideWidthPt) * 100;
+  }
+}
+
+/** フォント family の CSS スタック(main は和文ローカルフォントへフォールバック)。 */
+function fontStack(slot: "main" | "mono", family: string): string {
+  const name = sanitizeFontFamily(family);
+  // main は和文のローカルフォントへフォールバックしてからサンス総称へ落とす
+  // (プレビューは近似でよい。theme-design.md §4)。mono は等幅のまま総称へ委ねる。
+  // 和文フォールバックは Linux(Noto Sans CJK JP / Noto Sans JP)・macOS(Hiragino Sans)・
+  // Windows(Yu Gothic)を順に並べる。先頭 family と重複しても害はない。
+  return slot === "mono"
+    ? `"${name}", monospace`
+    : `"${name}", "Noto Sans CJK JP", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif`;
 }
 
 /**
@@ -98,25 +137,22 @@ interface FrameDecorations {
 const sanitizeFontFamily = (family: string): string =>
   family.replaceAll('"', "").replaceAll("\\", "").replaceAll("\r", "").replaceAll("\n", "");
 
-/** `%% style` 領域から CSS 変数ブロックを生成する。エントリが無ければ空文字。 */
-export function styleCssOf(doc: DeckDocument): string {
-  const vars: string[] = [];
+/**
+ * 土台スタイル(テンプレート / preamble-extra 由来)と `%% style` 領域から CSS 変数ブロックを
+ * 生成する。`%% style` が土台を上書きする。エントリが無ければ空文字。
+ */
+export function styleCssOf(doc: DeckDocument, baseStyle?: PreviewStyle): string {
+  const colors = new Map<string, string>(Object.entries(baseStyle?.colors ?? {}));
+  const fonts = new Map<"main" | "mono", string>();
+  if (baseStyle?.fonts.main) fonts.set("main", baseStyle.fonts.main);
+  if (baseStyle?.fonts.mono) fonts.set("mono", baseStyle.fonts.mono);
   for (const entry of doc.style.entries) {
-    if (entry.type === "styleColor") {
-      vars.push(`--deck-${entry.role}: #${entry.hex};`);
-    } else if (entry.type === "styleFont") {
-      const family = sanitizeFontFamily(entry.family);
-      // main は和文のローカルフォントへフォールバックしてからサンス総称へ落とす
-      // (プレビューは近似でよい。theme-design.md §4)。mono は等幅のまま総称へ委ねる。
-      // 和文フォールバックは Linux(Noto Sans CJK JP / Noto Sans JP)・macOS(Hiragino Sans)・
-      // Windows(Yu Gothic)を順に並べる。先頭 family と重複しても害はない。
-      const stack =
-        entry.slot === "mono"
-          ? `"${family}", monospace`
-          : `"${family}", "Noto Sans CJK JP", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif`;
-      vars.push(`--deck-font-${entry.slot}: ${stack};`);
-    }
+    if (entry.type === "styleColor") colors.set(entry.role, entry.hex);
+    else if (entry.type === "styleFont") fonts.set(entry.slot, entry.family);
   }
+  const vars: string[] = [];
+  for (const [role, hex] of colors) vars.push(`--deck-${role}: #${hex};`);
+  for (const [slot, family] of fonts) vars.push(`--deck-font-${slot}: ${fontStack(slot, family)};`);
   return vars.length > 0 ? `.slide {\n  ${vars.join("\n  ")}\n}` : "";
 }
 
@@ -134,7 +170,11 @@ class FrameRenderer {
   /** フレーム内で観測したオーバーレイの最大ステップ。 */
   private maxStep = 1;
 
-  private readonly decorations: FrameDecorations = { logo: null, footerHtml: null };
+  private readonly decorations: FrameDecorations = {
+    logo: null,
+    background: null,
+    footerHtml: null,
+  };
   private canvasElements: RenderedCanvasElement[] = [];
   /** 描画中フレームで「自由配置にする」候補になれるブロック(core と同じ判定)。 */
   private detachable: Set<BlockNode> = new Set();
@@ -142,11 +182,19 @@ class FrameRenderer {
   constructor(
     private readonly doc: DeckDocument,
     private readonly theme: Theme,
+    baseStyle?: PreviewStyle,
   ) {
+    // 土台(テンプレート / preamble-extra)を先に置き、%% style 領域で上書きする。
+    if (baseStyle?.logo) this.decorations.logo = baseStyle.logo;
+    if (baseStyle?.background) this.decorations.background = baseStyle.background.path;
+    if (baseStyle?.footer !== undefined) this.decorations.footerHtml = escapeHtml(baseStyle.footer);
     for (const entry of doc.style.entries) {
-      if (entry.type === "styleLogo") this.decorations.logo = entry;
-      else if (entry.type === "styleFooter")
+      if (entry.type === "styleLogo") {
+        const { x, y, width } = entry.position;
+        this.decorations.logo = { path: entry.path, placement: { kind: "canvas", x, y, width } };
+      } else if (entry.type === "styleFooter") {
         this.decorations.footerHtml = this.renderInlines(entry.text);
+      }
     }
   }
 
@@ -157,13 +205,25 @@ class FrameRenderer {
   private renderDecorations(frameIndex: number, frameTotal: number): string {
     let out = "";
     const { slideWidthPt, slideHeightPt, bodyAreaPt: body } = this.theme.metrics;
+    // 背景画像は最背面。PDF は <img> で出せないので出さない(Phase 6 のコンパイル画像待ち)。
+    const background = this.decorations.background;
+    if (background && !background.toLowerCase().endsWith(".pdf")) {
+      out += `<img class="deck-background" src="${escapeHtml(background)}">`;
+    }
     const logo = this.decorations.logo;
     if (logo) {
-      const { x, y, width } = logo.position;
-      const leftPct = (((body.left + x * body.width) / slideWidthPt) * 100).toFixed(2);
-      const topPct = (((body.top + y * body.height) / slideHeightPt) * 100).toFixed(2);
-      const widthPct = (((width * body.width) / slideWidthPt) * 100).toFixed(2);
-      const pos = `left:${leftPct}%;top:${topPct}%;width:${widthPct}%`;
+      let pos: string;
+      if (logo.placement.kind === "canvas") {
+        const { x, y, width } = logo.placement;
+        const leftPct = (((body.left + x * body.width) / slideWidthPt) * 100).toFixed(2);
+        const topPct = (((body.top + y * body.height) / slideHeightPt) * 100).toFixed(2);
+        const widthPct = (((width * body.width) / slideWidthPt) * 100).toFixed(2);
+        pos = `left:${leftPct}%;top:${topPct}%;width:${widthPct}%`;
+      } else {
+        // \logo の既定配置(default テーマ)は右下。
+        const widthPct = cornerLogoWidthPct(logo.placement.width, this.theme.metrics).toFixed(2);
+        pos = `right:2%;bottom:3%;width:${widthPct}%`;
+      }
       out += logo.path.toLowerCase().endsWith(".pdf")
         ? `<div class="deck-logo image-placeholder" style="${pos}">PDF ロゴ: ${escapeHtml(logo.path)}</div>`
         : `<img class="deck-logo" src="${escapeHtml(logo.path)}" style="${pos}">`;
@@ -481,9 +541,24 @@ function inlineToPlain(nodes: InlineNode[]): string {
   return out;
 }
 
+/**
+ * フレーム一覧・プレビューで共通に使う表示用タイトル。
+ * 数式・raw inline の文字列表現も renderDeck と完全に揃える。
+ */
+export function frameTitleText(frame: FrameNode | RawFrameNode, frameNumber: number): string {
+  if (frame.type === "rawFrame") return frame.title ?? `frame ${frameNumber}`;
+  return frame.title && frame.title.length > 0
+    ? inlineToPlain(frame.title)
+    : `frame ${frameNumber}`;
+}
+
 /** デッキ全体を描画する。 */
-export function renderDeck(doc: DeckDocument, theme: Theme = DEFAULT_THEME): RenderedDeck {
-  const renderer = new FrameRenderer(doc, theme);
+export function renderDeck(
+  doc: DeckDocument,
+  theme: Theme = DEFAULT_THEME,
+  options: RenderOptions = {},
+): RenderedDeck {
+  const renderer = new FrameRenderer(doc, theme, options.baseStyle);
   const allFrames = framesOf(doc);
   const total = allFrames.length;
   const frames: RenderedFrame[] = allFrames.map((frame, i) => {
@@ -491,7 +566,7 @@ export function renderDeck(doc: DeckDocument, theme: Theme = DEFAULT_THEME): Ren
       return {
         index: i + 1,
         label: frame.label,
-        titleText: frame.title ?? `frame ${i + 1}`,
+        titleText: frameTitleText(frame, i + 1),
         html: renderer.renderRawFrame(frame, i + 1, total),
         sourceSpan: frame.span,
         stepCount: 1,
@@ -500,8 +575,7 @@ export function renderDeck(doc: DeckDocument, theme: Theme = DEFAULT_THEME): Ren
       };
     }
     const { html, stepCount, canvasElements } = renderer.renderFrame(frame, i + 1, total);
-    const titleText =
-      frame.title && frame.title.length > 0 ? inlineToPlain(frame.title) : `frame ${i + 1}`;
+    const titleText = frameTitleText(frame, i + 1);
     return {
       index: i + 1,
       label: frame.options.label,
@@ -516,6 +590,6 @@ export function renderDeck(doc: DeckDocument, theme: Theme = DEFAULT_THEME): Ren
   return {
     title: doc.metadata.title ? inlineToPlain(doc.metadata.title.value) : "(無題のデッキ)",
     frames,
-    css: styleCssOf(doc),
+    css: styleCssOf(doc, options.baseStyle),
   };
 }

@@ -24,7 +24,7 @@
         "icon": "$(open-preview)"
       },
       {
-        "command": "beamerEditor.revealSlide",
+        "command": "beamerEditor.revealSlideInPreview",
         "title": "Beamer Editor: Reveal Current Slide in Preview"
       },
       {
@@ -97,10 +97,25 @@
     },
     "keybindings": [
       {
-        "command": "beamerEditor.revealSlide",
+        "command": "beamerEditor.revealSlideInPreview",
         "key": "ctrl+k v",
         "mac": "cmd+k v",
         "when": "editorTextFocus && editorLangId == latex"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "beamerEditor.slides",
+          "name": "Beamer Slides"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "beamerEditor.slides",
+        "when": "!beamerEditor.hasSlideOutlineDocument",
+        "contents": "Open a managed Beamer slide to show its frames."
       }
     ]
   },
