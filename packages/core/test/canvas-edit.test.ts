@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { canvasPositionReplacement, updateCanvasPosition } from "../src/canvas-edit.js";
+import {
+  canvasPositionReplacement,
+  clampCanvasPlacement,
+  clampCanvasPosition,
+  MIN_CANVAS_WIDTH,
+  updateCanvasPosition,
+} from "../src/canvas-edit.js";
 
 describe("updateCanvasPosition", () => {
   it("x/y だけを丸め、w と空白を維持する", () => {
@@ -40,5 +46,35 @@ describe("updateCanvasPosition", () => {
     expect(canvasPositionReplacement("[x=123.456, y=.2,w=.4]", 0, 0.2)).toBe(
       "[x=0.000, y=0.200,w=.4]",
     );
+  });
+});
+
+describe("clampCanvasPosition / clampCanvasPlacement", () => {
+  it("移動は本文領域の端で止まる(右端は 1 - w、下端は 1)。幅は変えない", () => {
+    expect(clampCanvasPosition(-0.002, 0.121, 1)).toEqual({ x: 0, y: 0.121 });
+    expect(clampCanvasPosition(0.9, 1.25, 0.3)).toEqual({ x: 0.7, y: 1 });
+    expect(clampCanvasPosition(0.2, 0.3, 0.3)).toEqual({ x: 0.2, y: 0.3 });
+    // 幅が本文幅いっぱいなら x は 0 に固定される。
+    expect(clampCanvasPosition(0.4, 0.5, 1)).toEqual({ x: 0, y: 0.5 });
+    // 幅が不正でも例外にせず、下限幅として扱う。
+    expect(clampCanvasPosition(0.99, 0, Number.NaN).x).toBe(1 - MIN_CANVAS_WIDTH);
+  });
+
+  it("自由配置化は幅も収める(下限あり、右端が 1 を超えない)", () => {
+    expect(clampCanvasPlacement({ x: -0.1, y: -0.1, width: 0.01 })).toEqual({
+      x: 0,
+      y: 0,
+      width: MIN_CANVAS_WIDTH,
+    });
+    expect(clampCanvasPlacement({ x: 0.8, y: 0.5, width: 0.5 })).toEqual({
+      x: 0.8,
+      y: 0.5,
+      width: 0.2,
+    });
+    expect(clampCanvasPlacement({ x: 2, y: 2, width: 2 })).toEqual({
+      x: 1 - MIN_CANVAS_WIDTH,
+      y: 1,
+      width: MIN_CANVAS_WIDTH,
+    });
   });
 });

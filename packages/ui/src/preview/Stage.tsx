@@ -67,6 +67,8 @@ export function Stage({
     y: number;
     grabX: number;
     grabY: number;
+    /** 対象の幅(正規化値)。移動先を本文領域に収めるのに使う(#111)。 */
+    width: number;
     pointerId: number;
   }>();
   const [selected, setSelected] = useState<string | null>(null);
@@ -215,6 +217,7 @@ export function Stage({
       y: descriptor.position.y,
       grabX: event.clientX - bounds.left,
       grabY: event.clientY - bounds.top,
+      width: descriptor.position.width,
       pointerId: event.pointerId,
     };
     element.setPointerCapture(event.pointerId);
@@ -234,6 +237,7 @@ export function Stage({
         event.clientY,
         drag.grabX,
         drag.grabY,
+        drag.width,
       );
     if (!point) return;
     drag.element.style.left = `${point.x * 100}%`;
@@ -251,6 +255,7 @@ export function Stage({
         event.clientY,
         drag.grabX,
         drag.grabY,
+        drag.width,
       );
     drag.element.classList.remove("canvas-dragging");
     releasePointerCapture(drag.element, drag.pointerId);

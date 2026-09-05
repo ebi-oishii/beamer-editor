@@ -1,5 +1,33 @@
 import type { SourceSpan } from "./ast.js";
 
+/** キャンバスオブジェクトの幅の下限(正規化値)。極端に細い箱を作らない。自由配置化と移動で共通。 */
+export const MIN_CANVAS_WIDTH = 0.05;
+
+/**
+ * 位置を本文領域に収める(L012 と同じ条件: 0 <= x, x + w <= 1, 0 <= y <= 1)。幅は変えない。
+ * ドラッグ移動で本文領域の端をわずかに越えた座標(x=-0.002 など)を書き込まないために使う(#111)。
+ */
+export function clampCanvasPosition(x: number, y: number, width: number): { x: number; y: number } {
+  const w = Math.min(Math.max(Number.isFinite(width) ? width : MIN_CANVAS_WIDTH, 0), 1);
+  const maxX = Math.max(0, 1 - w);
+  return {
+    x: Math.min(Math.max(x, 0), maxX),
+    y: Math.min(Math.max(y, 0), 1),
+  };
+}
+
+/** 位置と幅を本文領域に収める(自由配置化)。幅は下限以上・右端が 1 を超えない範囲に丸める。 */
+export function clampCanvasPlacement(placement: { x: number; y: number; width: number }): {
+  x: number;
+  y: number;
+  width: number;
+} {
+  const x = Math.min(Math.max(placement.x, 0), 1 - MIN_CANVAS_WIDTH);
+  const y = Math.min(Math.max(placement.y, 0), 1);
+  const width = Math.min(Math.max(placement.width, MIN_CANVAS_WIDTH), 1 - x);
+  return { x, y, width };
+}
+
 /** キャンバス座標・幅の正規形(小数 3 桁、-0.000 は 0.000)。 */
 export function formatCanvasCoordinate(value: number): string {
   const formatted = value.toFixed(3);

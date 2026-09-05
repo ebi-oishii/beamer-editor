@@ -1212,7 +1212,7 @@ describe("mountPreview", () => {
     expect(cards[1]?.classList.contains("active")).toBe(true);
   });
 
-  it("canvas image は pointerup で一度だけ範囲外座標を clamp せず送る", () => {
+  it("canvas image は pointerup で一度だけ送り、本文領域の外へ出た位置は端で止める(#111)", () => {
     const { editable, moveCanvasElement, releasePointerCapture, scale, setPointerCapture } =
       mountCanvasPreview();
 
@@ -1221,13 +1221,15 @@ describe("mountPreview", () => {
     expect(editable.classList.contains("canvas-editable")).toBe(true);
     expect(setPointerCapture).toHaveBeenCalledWith(7);
 
+    // 左端・下端を越える位置へ動かしても、ドラッグ中の表示は端(x=0, y=1)で止まる。
     firePointer(scale, "pointermove", 70, 310);
     expect(moveCanvasElement).not.toHaveBeenCalled();
-    expect(editable.style.left).toBe("-10%");
-    expect(editable.style.top).toBe("125%");
+    expect(editable.style.left).toBe("0%");
+    expect(editable.style.top).toBe("100%");
 
+    // 書き込む座標も同じくクランプ済み(負の座標や 1 超えを書かない)。
     firePointer(scale, "pointerup", 70, 310);
-    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, -0.1, 1.25);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 1);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
   });
 

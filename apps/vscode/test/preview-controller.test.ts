@@ -555,6 +555,31 @@ describe("PreviewController", () => {
     });
   });
 
+  it("move の座標は要素の幅を使って本文領域に収めてから host へ渡す(#111)", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const moveCanvasElement = vi.fn(async () => "applied" as const);
+    const doc = makeDoc();
+    new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      moveCanvasElement,
+    });
+    fire({ type: "ready" });
+    fire({
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-text-0",
+      version: 7,
+      x: -0.002,
+      y: 1.3,
+    });
+    await Promise.resolve();
+    expect(moveCanvasElement).toHaveBeenCalledOnce();
+    const call = moveCanvasElement.mock.calls[0]?.[0] as { x: number; y: number };
+    expect(call.x).toBe(0);
+    expect(call.y).toBe(1);
+  });
+
   describe("revealSourceOffset(ソース → プレビュー)", () => {
     const twoFrames = (_text: string, version: number): RenderOutcome => ({
       deck: {

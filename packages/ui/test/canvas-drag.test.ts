@@ -20,3 +20,16 @@ describe("canvasPointFromPointer", () => {
     expect(normalizeCanvasCoordinate(1.2346)).toBe(1.235);
   });
 });
+
+describe("canvasPointFromPointer: width を渡すと本文領域に収める(#111)", () => {
+  const rect = { left: 0, top: 0, width: 400, height: 200 };
+  it("左上・右下にはみ出した位置は端で止まる", () => {
+    expect(canvasPointFromPointer(rect, -20, -10, 0, 0, 0.3)).toEqual({ x: 0, y: 0 });
+    expect(canvasPointFromPointer(rect, 380, 250, 0, 0, 0.3)).toEqual({ x: 0.7, y: 1 });
+    // 範囲内はそのまま。
+    expect(canvasPointFromPointer(rect, 100, 100, 0, 0, 0.3)).toEqual({ x: 0.25, y: 0.5 });
+  });
+  it("width を渡さなければ従来どおり生の座標", () => {
+    expect(canvasPointFromPointer(rect, -20, 250, 0, 0)).toEqual({ x: -0.05, y: 1.25 });
+  });
+});

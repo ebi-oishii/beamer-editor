@@ -1,10 +1,16 @@
-/** DOM rect と grab offset から canvas 論理座標を求める。zoom は rect に反映済みなので割らない。 */
+import { clampCanvasPosition } from "@beamer-editor/core";
+
+/**
+ * DOM rect と grab offset から canvas 論理座標を求める。zoom は rect に反映済みなので割らない。
+ * width(対象の幅、正規化値)を渡すと本文領域に収める(端で止まる。L012 と同じ条件。#111)。
+ */
 export function canvasPointFromPointer(
   rect: Pick<DOMRect, "left" | "top" | "width" | "height">,
   clientX: number,
   clientY: number,
   grabX: number,
   grabY: number,
+  width?: number,
 ): { x: number; y: number } | null {
   if (
     !Number.isFinite(rect.width) ||
@@ -13,10 +19,9 @@ export function canvasPointFromPointer(
     rect.height <= 0
   )
     return null;
-  return {
-    x: (clientX - rect.left - grabX) / rect.width,
-    y: (clientY - rect.top - grabY) / rect.height,
-  };
+  const x = (clientX - rect.left - grabX) / rect.width;
+  const y = (clientY - rect.top - grabY) / rect.height;
+  return width === undefined ? { x, y } : clampCanvasPosition(x, y, width);
 }
 
 /** source と同じ 3 桁表現へ正規化して no-op 判定に使う。 */

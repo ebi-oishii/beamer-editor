@@ -1,4 +1,4 @@
-import { mapExpandedRangeToSourceExact } from "@beamer-editor/core";
+import { clampCanvasPosition, mapExpandedRangeToSourceExact } from "@beamer-editor/core";
 import { DEFAULT_THEME } from "@beamer-editor/renderer";
 import type { ExtensionToWebview } from "@beamer-editor/ui";
 import { parseWebviewToExtension } from "@beamer-editor/ui";
@@ -336,8 +336,11 @@ export class PreviewController implements vscode.Disposable {
       this.sendDeck();
       return;
     }
-    if (element.position.x === move.x && element.position.y === move.y) return;
-    const { frameIndex, elementId, version, x, y } = move;
+    // 本文領域の端をわずかに越えた座標(x=-0.002 など)はここでも収める。UI 側が主だが、受け口でも
+    // 自分の lint(L012)に弾かれる値を書かない(#111)。
+    const { x, y } = clampCanvasPosition(move.x, move.y, element.position.width);
+    if (element.position.x === x && element.position.y === y) return;
+    const { frameIndex, elementId, version } = move;
     const document = this.document;
     const expectedOptions = document
       .getText()
