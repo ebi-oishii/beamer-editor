@@ -156,7 +156,7 @@ function firePointer(
   });
 }
 
-function mountCanvasPreview() {
+function mountCanvasPreview(deck: RenderedDeck = CANVAS_DECK) {
   const container = document.createElement("div");
   document.body.append(container);
   const moveCanvasElement = vi.fn();
@@ -165,7 +165,7 @@ function mountCanvasPreview() {
     mountPreview(container, host);
   });
   act(() => {
-    host.push(CANVAS_DECK);
+    host.push(deck);
   });
 
   const scale = container.querySelector<HTMLElement>(".slide-scale");
@@ -1221,14 +1221,14 @@ describe("mountPreview", () => {
     expect(editable.classList.contains("canvas-editable")).toBe(true);
     expect(setPointerCapture).toHaveBeenCalledWith(7);
 
-    // 素の論理位置は (-0.1, 1.25)。ドラッグ中も左上/下端で止まって見える。
+    // 素の論理位置は (-0.1, 1.25)。高さ 0.3 を含めて左上/下端で止まって見える。
     firePointer(scale, "pointermove", 70, 310);
     expect(moveCanvasElement).not.toHaveBeenCalled();
     expect(editable.style.left).toBe("0%");
-    expect(editable.style.top).toBe("100%");
+    expect(editable.style.top).toBe("70%");
 
     firePointer(scale, "pointerup", 70, 310);
-    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 1);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 0.7);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
   });
 
@@ -1242,6 +1242,30 @@ describe("mountPreview", () => {
 
     firePointer(scale, "pointerup", 900, 150);
     expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.7, 0.45);
+  });
+
+  it("領域外の既存位置も最初の drag で本文領域内へ補正する", () => {
+    const frame = CANVAS_DECK.frames[0];
+    if (!frame?.canvasElements) throw new Error("canvas fixture missing");
+    const deck: RenderedDeck = {
+      ...CANVAS_DECK,
+      frames: [
+        {
+          ...frame,
+          canvasElements: frame.canvasElements.map((element) =>
+            element.id === "canvas-image-0"
+              ? { ...element, position: { ...element.position, x: 0.9 } }
+              : element,
+          ),
+        },
+      ],
+    };
+    const { editable, moveCanvasElement, scale } = mountCanvasPreview(deck);
+    // x=0.9 の見た目の位置で pointerdown/up し、移動量ゼロのまま終了する。
+    vi.spyOn(editable, "getBoundingClientRect").mockReturnValue(domRect(460, 90, 120, 60));
+    firePointer(editable, "pointerdown", 470, 100);
+    firePointer(scale, "pointerup", 470, 100);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.7, 0.2);
   });
 
   it("canvas image の clickだけではmoveを送らない", () => {
@@ -1270,7 +1294,7 @@ describe("mountPreview", () => {
 
     firePointer(scale, "pointermove", 70, 310, 7);
     firePointer(scale, "pointerup", 70, 310, 7);
-    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 1);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 0.7);
     expect(releasePointerCapture).toHaveBeenCalledExactlyOnceWith(7);
   });
 

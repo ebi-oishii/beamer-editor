@@ -57,14 +57,36 @@ describe("clampCanvasPosition", () => {
     expect(clampCanvasPosition(0.9, 0.2, 0.4)).toEqual({ x: 0.6, y: 0.2 });
     expect(clampCanvasPosition(0.3, 0.2, 1)).toEqual({ x: 0, y: 0.2 });
   });
-  it("下端は y=1 で止める", () => {
+  it("height 未指定時は下端を y=1 で止める", () => {
     expect(clampCanvasPosition(0.1, 1.25, 0.4)).toEqual({ x: 0.1, y: 1 });
+  });
+  it("寸法を含めて右下端へ収める", () => {
+    expect(clampCanvasPosition(0.1, 0.9, 0.4, 0.3)).toEqual({ x: 0.1, y: 0.7 });
+    expect(clampCanvasPosition(0.1, 0.9, 0.4, 1.1)).toEqual({ x: 0.1, y: 0 });
   });
   it("範囲内の位置は変えない", () => {
     expect(clampCanvasPosition(0.05, 0.15, 0.5)).toEqual({ x: 0.05, y: 0.15 });
   });
-  it("幅が不正なら x を [0, 1] に収めるだけにする", () => {
-    expect(clampCanvasPosition(1.5, 0.2, Number.NaN)).toEqual({ x: 1, y: 0.2 });
+  it("未丸めの幅に対して安全な3桁 x 上限を返す", () => {
+    for (const [width, expected] of [
+      [0.3335, 0.666],
+      [0.0001, 0.999],
+      [0.666, 0.334],
+      [0.6660000000000001, 0.333],
+      [0.6667, 0.333],
+      [0.9995, 0],
+    ]) {
+      const point = clampCanvasPosition(2, 0, width);
+      expect(point.x).toBe(expected);
+      expect(point.x + width).toBeLessThanOrEqual(1);
+    }
+  });
+  it("不正な座標・寸法は 0 相当として扱い -0 を返さない", () => {
+    expect(clampCanvasPosition(Number.NaN, Number.NEGATIVE_INFINITY, Number.NaN, -1)).toEqual({
+      x: 0,
+      y: 0,
+    });
+    expect(Object.is(clampCanvasPosition(-0, -0, 0, 0).x, -0)).toBe(false);
   });
 });
 

@@ -37,15 +37,40 @@ export function clampCanvasPlacement(placement: CanvasPlacement): CanvasPlacemen
 
 /**
  * 幅を変えずに位置だけを本文領域内へ収める(ドラッグ移動)。
- * 右端は `x + width <= 1` を保つため `1 - width` で止める。幅が読めない
- * (0 や NaN を渡す)場合は x を [0, 1] に収めるだけにする。
+ * 右端と下端は箱の実寸を含めて本文領域内へ収める。返す x/y は小数 3 桁なので、
+ * 上限は丸める前の寸法に対して下向きに量子化する。これにより返却後も
+ * `x + width <= 1` を保つ。寸法の欠落・不正値は 0 として扱う。
  */
-export function clampCanvasPosition(x: number, y: number, width: number): { x: number; y: number } {
-  const r = roundCanvasCoordinate;
-  const safeWidth = Number.isFinite(width) ? Math.min(Math.max(width, 0), 1) : 0;
+export function clampCanvasPosition(
+  x: number,
+  y: number,
+  width: number,
+  height?: number,
+): { x: number; y: number } {
+  const size = (value: number | undefined): number =>
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+  const upperBound = (value: number): number => {
+    if (value >= 1) return 0;
+    const units = (1 - value) * 1000;
+    // `0.666` は二進表現では 333.99999999999994 になり得る。整数に十分近い
+    // 場合だけ補正し、3 桁で表現済みの幅を余分に 1/1000 縮めない。
+    const nearest = Math.round(units);
+    const safeUnits = Math.abs(units - nearest) <= Number.EPSILON * 1000 ? nearest : units;
+    const candidate = Math.floor(safeUnits) / 1000;
+    // 近傍補正で元の浮動小数値を超えてしまう場合は、返却値そのものに対して
+    // 再検証して下げる。width/height のどちらにも同じ保証を適用する。
+    return candidate + value <= 1 ? candidate : Math.max(0, candidate - 0.001);
+  };
+  const coordinate = (value: number, limit: number): number => {
+    const safeValue = Number.isFinite(value) ? value : 0;
+    const clamped = Math.min(Math.max(roundCanvasCoordinate(safeValue), 0), limit);
+    return Object.is(clamped, -0) ? 0 : clamped;
+  };
+  const safeWidth = size(width);
+  const safeHeight = size(height);
   return {
-    x: r(Math.min(Math.max(x, 0), r(1 - safeWidth))),
-    y: r(Math.min(Math.max(y, 0), 1)),
+    x: coordinate(x, upperBound(safeWidth)),
+    y: coordinate(y, upperBound(safeHeight)),
   };
 }
 
