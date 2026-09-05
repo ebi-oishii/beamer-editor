@@ -13,6 +13,7 @@ Beamer サブセットの `.tex` を編集しながら、LaTeX コンパイル�
 - Webview にフォーカスしているとき、←/→ キーでフレーム移動。step のあるフレームでは、プレビューに重なるスライダーでオーバーレイ表示を切替
 - Ctrl/Cmd+ホイール、Ctrl/Cmd+`+`/`=`・`-` で倍率を調整。Ctrl/Cmd+`0` で幅にフィット
 - ソースからスライドへ: 各 `\begin{frame}` の上の CodeLens「プレビューで表示」、または `Cmd/Ctrl+K V`(Beamer Editor: Reveal Current Slide in Preview)でカーソルのあるフレームを表示。ソースのカーソル移動にプレビューを追従させる設定(`beamerEditor.preview.followCursor`、既定 ON)はプレビュータブのボタンで切り替え
+- プレビューのエディタグループは、プレビューが初めてフォーカスされたときにロックされ、他のファイルはソース側のグループに開きます(`beamerEditor.preview.lockGroup` で無効化可)
 
 ## 開発版のインストール
 

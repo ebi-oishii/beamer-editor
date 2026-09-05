@@ -57,6 +57,12 @@
           "default": true,
           "scope": "window",
           "description": "ソースのカーソルがあるフレームをプレビューが追従して表示します。プレビュータブのボタンでも切り替えられます。"
+        },
+        "beamerEditor.preview.lockGroup": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "プレビューのエディタグループをロックし、他のファイルがプレビューと同じグループに開かないようにします。ロックはプレビューが初めてフォーカスされたときに掛かります。"
         }
       }
     },

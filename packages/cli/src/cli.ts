@@ -17,8 +17,9 @@
  */
 
 import { readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { exportPdf, type PdfExportErrorCode, type PdfExportResult } from "@beamer-editor/compiler";
 import { formatDeck, type LintDiagnostic, lintSource } from "@beamer-editor/core";
 import { createNodeFileProbes } from "./file-probes.ts";
 import {
@@ -41,11 +42,17 @@ export const EXIT_CODE = {
   operationalFailure: 3,
 } as const;
 
-type CliErrorCode = "E_USAGE" | "E_IO" | "E_INTERNAL";
+type CliErrorCode = "E_USAGE" | "E_IO" | "E_INTERNAL" | PdfExportErrorCode;
 const ERROR_EXIT_CODE: Record<CliErrorCode, number> = {
   E_USAGE: EXIT_CODE.operationalFailure,
   E_IO: EXIT_CODE.operationalFailure,
   E_INTERNAL: EXIT_CODE.operationalFailure,
+  E_INPUT: EXIT_CODE.operationalFailure,
+  E_OUTPUT_EXISTS: EXIT_CODE.operationalFailure,
+  E_TECTONIC_NOT_FOUND: EXIT_CODE.operationalFailure,
+  E_TECTONIC_VERSION: EXIT_CODE.operationalFailure,
+  E_COMPILE: EXIT_CODE.operationalFailure,
+  E_CANCELLED: EXIT_CODE.operationalFailure,
 };
 
 /** E_* は payload の種類にかかわらず、呼び出し側の操作失敗として同じ終了コードにする。 */
@@ -188,6 +195,7 @@ const USAGE = `使い方: deck <command> ...
 
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
+  deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]
   deck fonts status [--json]          フォントカタログ全 family の解決状態
   deck fonts fetch [family] [--json]  family(既定 "${DEFAULT_FAMILY}")を取得・配置
 `;
@@ -300,13 +308,151 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export interface ParsedExportArgs {
+  input: string | undefined;
+  format: string | undefined;
+  output: string | undefined;
+  overwrite: boolean;
+  tectonic: string | undefined;
+  json: boolean;
+  error: string | undefined;
+}
+
+/** export は短縮 -o と値を伴うオプションを持つため、既存の汎用パーサとは分離する。 */
+export function parseExportArgs(argv: readonly string[]): ParsedExportArgs {
+  let input: string | undefined;
+  let format: string | undefined;
+  let output: string | undefined;
+  let tectonic: string | undefined;
+  let overwrite = false;
+  let json = false;
+  let error: string | undefined;
+  const seen = new Set<string>();
+  const takeValue = (name: string, value: string | undefined): string | undefined => {
+    if (seen.has(name)) {
+      error ??= `オプションを重複して指定できません: ${name}`;
+      return undefined;
+    }
+    seen.add(name);
+    if (value === undefined || value.startsWith("-")) {
+      error ??= `オプションには値が必要です: ${name}`;
+      return undefined;
+    }
+    return value;
+  };
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg === undefined) break;
+    if (arg === "--format") {
+      const value = takeValue("--format", argv[index + 1]);
+      if (value !== undefined) {
+        format = value;
+        index++;
+      }
+    } else if (arg === "-o" || arg === "--output") {
+      const value = takeValue("--output", argv[index + 1]);
+      if (value !== undefined) {
+        output = value;
+        index++;
+      }
+    } else if (arg === "--tectonic") {
+      const value = takeValue("--tectonic", argv[index + 1]);
+      if (value !== undefined) {
+        tectonic = value;
+        index++;
+      }
+    } else if (arg === "--overwrite" || arg === "--json") {
+      const name = arg;
+      if (seen.has(name)) error ??= `オプションを重複して指定できません: ${name}`;
+      seen.add(name);
+      if (arg === "--overwrite") overwrite = true;
+      else json = true;
+    } else if (arg.startsWith("-")) {
+      error ??= `不明なオプション: ${arg}`;
+    } else if (input === undefined) {
+      input = arg;
+    } else {
+      error ??= "export には入力ファイルを 1 つ指定してください";
+    }
+  }
+  if (!error && input === undefined) error = "export には入力ファイルを指定してください";
+  if (!error && format === undefined) error = "export には --format pdf を指定してください";
+  if (!error && format !== "pdf") error = `未対応の出力形式: ${format}`;
+  return { input, format, output, overwrite, tectonic, json, error };
+}
+
+export interface CliDependencies {
+  exportPdf?: (request: {
+    inputPath: string;
+    outputPath?: string;
+    overwrite?: boolean;
+    tectonicPath?: string;
+  }) => Promise<PdfExportResult>;
+}
+
+function defaultPdfOutputForDisplay(input: string): string {
+  if (input.endsWith(".slide.tex")) return `${input.slice(0, -".slide.tex".length)}.pdf`;
+  const extension = extname(input);
+  return `${extension.length > 0 ? input.slice(0, -extension.length) : input}.pdf`;
+}
+
+async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies): Promise<number> {
+  if (parsed.error) return usageError(parsed.error, parsed.json);
+  // parseExportArgs has validated these conditions above.
+  const input = parsed.input as string;
+  try {
+    const result = await (dependencies.exportPdf ?? exportPdf)({
+      inputPath: input,
+      ...(parsed.output === undefined ? {} : { outputPath: parsed.output }),
+      ...(parsed.overwrite ? { overwrite: true } : {}),
+      ...(parsed.tectonic === undefined ? {} : { tectonicPath: parsed.tectonic }),
+    });
+    if (parsed.json) {
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            format: result.format,
+            input,
+            output: parsed.output ?? defaultPdfOutputForDisplay(input),
+            overwritten: result.overwritten,
+            engine: { name: "tectonic", version: result.engineVersion },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    } else {
+      process.stdout.write(`${input} -> ${parsed.output ?? defaultPdfOutputForDisplay(input)}\n`);
+    }
+    return EXIT_CODE.success;
+  } catch (error) {
+    const possibleCode =
+      error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      typeof error.code === "string"
+        ? error.code
+        : undefined;
+    const code: CliErrorCode =
+      possibleCode !== undefined && possibleCode in ERROR_EXIT_CODE
+        ? (possibleCode as CliErrorCode)
+        : "E_INTERNAL";
+    writeError(code, errorMessage(error), parsed.json);
+    return exitCodeForError(code);
+  }
+}
+
 function usageError(message: string, json: boolean): number {
   writeError("E_USAGE", message, json);
   return exitCodeForError("E_USAGE");
 }
 
 /** サブコマンドのディスパッチ。終了コードを返す(副作用は stdout/stderr のみ)。 */
-export async function run(argv: readonly string[]): Promise<number> {
+export async function run(
+  argv: readonly string[],
+  dependencies: CliDependencies = {},
+): Promise<number> {
+  if (argv[0] === "export") return runExport(parseExportArgs(argv.slice(1)), dependencies);
   const { command, sub, family, json, write, unknownOptions } = parseArgs(argv);
   if (unknownOptions.length > 0) return usageError(`不明なオプション: ${unknownOptions[0]}`, json);
   if (command === "lint") {
