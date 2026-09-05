@@ -12,6 +12,7 @@ Beamer サブセットの `.tex` を編集しながら、LaTeX コンパイル�
 - managed slide の lint 結果は Problems パネルとエディタの波線に表示(規則番号付き)
 - ←/→ キーでフレーム移動、スライダーでオーバーレイの step 表示
 - 縮小・拡大・フィット・100%表示で、プレビューのスライド倍率を調整
+- ソースからスライドへ: 各 `\begin{frame}` の上の CodeLens「プレビューで表示」、または `Cmd/Ctrl+K V`(Beamer Editor: Reveal Current Slide in Preview)でカーソルのあるフレームを表示。ソースのカーソル移動にプレビューを追従させる設定(`beamerEditor.preview.followCursor`、既定 ON)はプレビュータブのボタンで切り替え
 
 ## 開発版のインストール
 

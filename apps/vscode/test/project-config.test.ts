@@ -97,6 +97,45 @@ describe("VS Code extension project configuration", () => {
     });
   });
 
+  it("declares the source-to-slide command, keybinding, and follow-cursor toggle (#66)", () => {
+    const contributes = packageJson.contributes as {
+      commands: Array<{ command: string; title: string; icon?: string }>;
+      menus: { "editor/title": Array<{ command: string; when?: string; group?: string }> };
+      keybindings: Array<{ command: string; key: string; mac?: string; when?: string }>;
+      configuration: { properties: Record<string, { type: string; default: unknown }> };
+    };
+    expect(contributes.commands.map((c) => c.command)).toEqual(
+      expect.arrayContaining([
+        "beamerEditor.revealSlide",
+        "beamerEditor.followCursor.enable",
+        "beamerEditor.followCursor.disable",
+      ]),
+    );
+    expect(contributes.keybindings).toContainEqual({
+      command: "beamerEditor.revealSlide",
+      key: "ctrl+k v",
+      mac: "cmd+k v",
+      when: "editorTextFocus && editorLangId == latex",
+    });
+    // 追従トグルはプレビュータブのタイトルバーに、状態に応じて片方だけ出す。
+    expect(contributes.menus["editor/title"]).toContainEqual({
+      command: "beamerEditor.followCursor.disable",
+      when: "activeWebviewPanelId == beamerEditor.preview && beamerEditor.followCursor",
+      group: "navigation",
+    });
+    expect(contributes.menus["editor/title"]).toContainEqual({
+      command: "beamerEditor.followCursor.enable",
+      when: "activeWebviewPanelId == beamerEditor.preview && !beamerEditor.followCursor",
+      group: "navigation",
+    });
+    expect(contributes.configuration.properties["beamerEditor.preview.followCursor"]).toMatchObject(
+      {
+        type: "boolean",
+        default: true,
+      },
+    );
+  });
+
   it("keeps ordinary LaTeX auto-build enabled while ignoring only repository fixtures", () => {
     const fixtureGlob = "**/fixtures/**/*.tex";
     expect(workspaceSettings).not.toHaveProperty("latex-workshop.latex.autoBuild.run");

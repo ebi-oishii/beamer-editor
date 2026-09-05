@@ -22,6 +22,20 @@
         "command": "beamerEditor.openPreview",
         "title": "Beamer Editor: Open Preview",
         "icon": "$(open-preview)"
+      },
+      {
+        "command": "beamerEditor.revealSlide",
+        "title": "Beamer Editor: Reveal Current Slide in Preview"
+      },
+      {
+        "command": "beamerEditor.followCursor.enable",
+        "title": "Beamer Editor: Follow Cursor in Preview",
+        "icon": "$(sync-ignored)"
+      },
+      {
+        "command": "beamerEditor.followCursor.disable",
+        "title": "Beamer Editor: Stop Following Cursor in Preview",
+        "icon": "$(sync)"
       }
     ],
     "configuration": {
@@ -37,6 +51,12 @@
           ],
           "scope": "resource",
           "description": "Glob patterns for Beamer Editor managed slide files."
+        },
+        "beamerEditor.preview.followCursor": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "ソースのカーソルがあるフレームをプレビューが追従して表示します。プレビュータブのボタンでも切り替えられます。"
         }
       }
     },
@@ -46,9 +66,37 @@
           "command": "beamerEditor.openPreview",
           "when": "resourceScheme == file && resourceExtname == .tex",
           "group": "navigation"
+        },
+        {
+          "command": "beamerEditor.followCursor.disable",
+          "when": "activeWebviewPanelId == beamerEditor.preview && beamerEditor.followCursor",
+          "group": "navigation"
+        },
+        {
+          "command": "beamerEditor.followCursor.enable",
+          "when": "activeWebviewPanelId == beamerEditor.preview && !beamerEditor.followCursor",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "beamerEditor.followCursor.enable",
+          "when": "!beamerEditor.followCursor"
+        },
+        {
+          "command": "beamerEditor.followCursor.disable",
+          "when": "beamerEditor.followCursor"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "beamerEditor.revealSlide",
+        "key": "ctrl+k v",
+        "mac": "cmd+k v",
+        "when": "editorTextFocus && editorLangId == latex"
+      }
+    ]
   },
   "scripts": {
     "build": "node esbuild.mjs",

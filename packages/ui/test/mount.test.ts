@@ -695,6 +695,35 @@ describe("mountPreview", () => {
     expect(container.querySelector(".context-menu")).toBeNull();
   });
 
+  it("ホストからの表示要求は表示中 version のときだけ現在フレームを動かす(#66)", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    let reveal: ((frameIndex: number, version: number) => void) | undefined;
+    const host = {
+      ...fakeHost(),
+      onRevealFrame(listener: (frameIndex: number, version: number) => void) {
+        reveal = listener;
+        return () => {};
+      },
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK, 4);
+    });
+    const cards = container.querySelectorAll<HTMLElement>(".slide-card");
+    act(() => {
+      reveal?.(1, 4);
+    });
+    expect(cards[1]?.classList.contains("active")).toBe(true);
+    // 古い version の要求は無視する。
+    act(() => {
+      reveal?.(0, 3);
+    });
+    expect(cards[1]?.classList.contains("active")).toBe(true);
+  });
+
   it("canvas image は pointerup で一度だけ範囲外座標を clamp せず送る", () => {
     const { editable, moveCanvasElement, releasePointerCapture, scale, setPointerCapture } =
       mountCanvasPreview();

@@ -49,14 +49,28 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     host.saveNavState?.({ current: state.current, step: state.step, zoom });
   }, [host, state.current, state.step, zoom]);
 
-  // ホストからの deck 更新を購読する。
+  // ホストからの deck 更新を購読する。version は同期的に読めるよう ref にも写す。
+  const versionRef = useRef(Number.NEGATIVE_INFINITY);
   useEffect(
     () =>
       host.subscribe((next, nextVersion) => {
+        versionRef.current = nextVersion;
         setDeck(next);
         setVersion(nextVersion);
       }),
     [host],
+  );
+
+  // ソース側(CodeLens・コマンド・カーソル追従)からの表示要求。表示中の版と違えば無視する
+  // (古い版のフレーム番号で別のフレームへ動かない)。
+  useEffect(
+    () =>
+      host.onRevealFrame?.((frameIndex, requestVersion) => {
+        if (requestVersion !== versionRef.current) return;
+        dispatch({ type: "goto", index: frameIndex });
+        requestReveal(frameIndex);
+      }),
+    [host, requestReveal],
   );
 
   // deck が変わったら位置を保ったまま読み込み直す（編集中は現在フレームを維持）。

@@ -19,6 +19,7 @@ import {
   needsLatexWorkshopIgnorePrompt,
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
+import { frameLensPositions } from "./reveal-slide";
 import { resolveSourceViewColumn } from "./source-navigation";
 import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 
@@ -297,11 +298,16 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     ]);
   }
 
-  function openPreview(document: vscode.TextDocument, automatic: boolean): void {
+  /** preserveFocus はソース側の操作(#66)から開くときに使う。既定は自動オープンのときだけ保つ。 */
+  function openPreview(
+    document: vscode.TextDocument,
+    automatic: boolean,
+    preserveFocus = automatic,
+  ): void {
     const prepared = previewLifecycle.prepareOpen(document.uri, automatic);
     if (prepared.kind === "existing") {
       if (!automatic) {
-        prepared.controller.reveal();
+        if (!preserveFocus) prepared.controller.reveal();
         previewController = prepared.controller;
       }
       return;
@@ -317,7 +323,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     const panel = vscode.window.createWebviewPanel(
       "beamerEditor.preview",
       `Beamer Preview: ${document.fileName.split(/[\\/]/).pop()}`,
-      automatic
+      preserveFocus
         ? { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }
         : vscode.ViewColumn.Beside,
       {
@@ -456,6 +462,94 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
       openPreview(editor.document, false);
     }),
+  );
+
+  // ---- ソース → プレビュー(#66): CodeLens・コマンド・キーバインド・カーソル追従 ----
+  const FOLLOW_SETTING = "beamerEditor.preview.followCursor";
+  const followCursorEnabled = (): boolean =>
+    vscode.workspace.getConfiguration("beamerEditor").get<boolean>("preview.followCursor") ?? true;
+  const syncFollowContext = (): void => {
+    void vscode.commands.executeCommand(
+      "setContext",
+      "beamerEditor.followCursor",
+      followCursorEnabled(),
+    );
+  };
+  syncFollowContext();
+
+  /** offset を含むフレームをプレビューで表示する。プレビューが無ければ開く(フォーカスはソースに残す)。 */
+  function revealSlide(document: vscode.TextDocument, offset: number, onlyIfChanged = false): void {
+    if (document.uri.scheme !== "file" || !document.fileName.endsWith(".tex")) return;
+    if (!onlyIfChanged) {
+      // 明示的な操作なので、閉じられていたプレビューも開き直す。
+      previewLifecycle.dismissals.clear(document.uri);
+      openPreview(document, false, true);
+    }
+    previewLifecycle.registry
+      .get(document.uri)
+      ?.controller.revealSourceOffset(offset, { onlyIfChanged });
+  }
+
+  async function setFollowCursor(enabled: boolean): Promise<void> {
+    await vscode.workspace
+      .getConfiguration("beamerEditor")
+      .update("preview.followCursor", enabled, vscode.ConfigurationTarget.Global);
+    syncFollowContext();
+  }
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("beamerEditor.revealSlide", (uri?: string, offset?: number) => {
+      const editor = vscode.window.activeTextEditor;
+      const document = uri
+        ? vscode.workspace.textDocuments.find((candidate) => candidate.uri.toString() === uri)
+        : editor?.document;
+      if (!document) return;
+      const at =
+        typeof offset === "number"
+          ? offset
+          : editor && editor.document === document
+            ? document.offsetAt(editor.selection.active)
+            : 0;
+      revealSlide(document, at);
+    }),
+    vscode.commands.registerCommand("beamerEditor.followCursor.enable", () =>
+      setFollowCursor(true),
+    ),
+    vscode.commands.registerCommand("beamerEditor.followCursor.disable", () =>
+      setFollowCursor(false),
+    ),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration(FOLLOW_SETTING)) syncFollowContext();
+    }),
+    vscode.window.onDidChangeTextEditorSelection((event) => {
+      if (!followCursorEnabled()) return;
+      // プレビュー → ソースのジャンプなどプログラムによる選択変更には追従しない(往復を避ける)。
+      if (event.kind === undefined || event.kind === vscode.TextEditorSelectionChangeKind.Command)
+        return;
+      const document = event.textEditor.document;
+      if (!previewLifecycle.registry.get(document.uri)) return;
+      const selection = event.selections[0];
+      if (!selection) return;
+      revealSlide(document, document.offsetAt(selection.active), true);
+    }),
+    vscode.languages.registerCodeLensProvider(
+      { scheme: "file", language: "latex" },
+      {
+        provideCodeLenses(document) {
+          if (!isManaged(document)) return [];
+          return frameLensPositions(document.getText(), (offset) =>
+            document.positionAt(offset),
+          ).map(
+            ({ offset, line }) =>
+              new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
+                title: "プレビューで表示",
+                command: "beamerEditor.revealSlide",
+                arguments: [document.uri.toString(), offset],
+              }),
+          );
+        },
+      },
+    ),
   );
 
   return { _previewControllerForTest: () => previewController };
