@@ -16,9 +16,6 @@ export interface PreviewPanel {
     onDidReceiveMessage(listener: (msg: unknown) => void): vscode.Disposable;
   };
   onDidDispose(listener: () => void): vscode.Disposable;
-  onDidChangeViewState(
-    listener: (event: { webviewPanel: { active: boolean } }) => void,
-  ): vscode.Disposable;
   reveal(): void;
   dispose(): void;
 }

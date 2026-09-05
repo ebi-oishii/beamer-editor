@@ -1,6 +1,5 @@
 import { expandDeck, framesOf, mapExpandedToSource, parseDeck } from "@beamer-editor/core";
 import { frameTitleText } from "@beamer-editor/renderer";
-import { resolveSourceViewColumn, type VisibleSourceEditor } from "./source-navigation";
 
 /** TreeView が扱う TextDocument の最小面。offset は VS Code と同じ UTF-16 単位。 */
 export interface SlideOutlineDocument {
@@ -132,39 +131,4 @@ export function managedOutlineDocument<Document>(
 ): Document | undefined {
   const candidate = activeDocument ?? outlinedDocument;
   return candidate && isManaged(candidate) ? candidate : undefined;
-}
-
-/** Tree item の reveal に必要な host 面。VS Code API は extension.ts に閉じ込める。 */
-export interface SlideOutlineRevealHost<Document extends SlideOutlineDocument, Editor, ViewColumn> {
-  readonly visibleEditors: readonly VisibleSourceEditor<ViewColumn>[];
-  readonly fallbackViewColumn: ViewColumn | undefined;
-  showTextDocument(document: Document, viewColumn: ViewColumn): PromiseLike<Editor>;
-  reveal(editor: Editor, offset: number): void;
-}
-
-/**
- * source が既に見えている列を優先して Tree item を reveal する。
- * showTextDocument は await 中に文書が編集されうるため、戻った時点でも identity/version が
- * 一致する場合だけ旧 offset を使う。これにより preview を置換せず、古い span も使わない。
- */
-export async function revealSlideOutlineEntry<
-  Document extends SlideOutlineDocument,
-  Editor,
-  ViewColumn,
->(
-  entry: SlideOutlineEntry<Document>,
-  state: SlideOutlineState<Document>,
-  host: SlideOutlineRevealHost<Document, Editor, ViewColumn>,
-): Promise<boolean> {
-  if (!state.isCurrent(entry)) return false;
-  const viewColumn = resolveSourceViewColumn(
-    entry.document.uri,
-    host.visibleEditors,
-    host.fallbackViewColumn,
-  );
-  if (viewColumn === undefined) return false;
-  const editor = await host.showTextDocument(entry.document, viewColumn);
-  if (!state.isCurrent(entry)) return false;
-  host.reveal(editor, entry.start);
-  return true;
 }

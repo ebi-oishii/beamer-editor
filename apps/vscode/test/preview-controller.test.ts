@@ -15,10 +15,8 @@ function makePanel() {
   const posted: unknown[] = [];
   let receive: ((msg: unknown) => void) | undefined;
   let disposeListener: (() => void) | undefined;
-  let viewStateListener: ((event: { webviewPanel: { active: boolean } }) => void) | undefined;
   const listenerDisposable = { dispose: vi.fn() };
   const receiveDisposable = { dispose: vi.fn() };
-  const viewStateDisposable = { dispose: vi.fn() };
   const panel: PreviewPanel & { webview: { html: string } } = {
     webview: {
       html: "",
@@ -36,10 +34,6 @@ function makePanel() {
       disposeListener = listener;
       return listenerDisposable;
     },
-    onDidChangeViewState(listener: (event: { webviewPanel: { active: boolean } }) => void) {
-      viewStateListener = listener;
-      return viewStateDisposable;
-    },
     reveal: vi.fn(),
     dispose: vi.fn(),
   };
@@ -50,8 +44,6 @@ function makePanel() {
     fireDispose: () => disposeListener?.(),
     listenerDisposable,
     receiveDisposable,
-    viewStateDisposable,
-    fireViewState: (active: boolean) => viewStateListener?.({ webviewPanel: { active } }),
   };
 }
 

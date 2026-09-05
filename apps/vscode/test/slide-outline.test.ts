@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   hasSlideOutlineContentChanges,
   managedOutlineDocument,
-  revealSlideOutlineEntry,
   SlideOutlineRefreshScheduler,
   SlideOutlineState,
   slideOutlineEntries,
@@ -93,48 +92,6 @@ describe("SlideOutlineState", () => {
     expect(state.refresh(current)).toBe(true);
     expect(state.getEntries()[0]?.title).toBe("two");
     expect(current.getText).toHaveBeenCalledTimes(1);
-  });
-
-  it("reveals in an already-visible source column and rejects a version changed while opening", async () => {
-    const source = "\\begin{frame}{one}\\end{frame}";
-    const current = document(source);
-    const state = new SlideOutlineState<typeof current>();
-    state.setDocument(current);
-    const entry = state.getEntries()[0];
-    if (!entry) throw new Error("expected a frame entry");
-    const showTextDocument = async (_document: typeof current, viewColumn: number) => ({
-      viewColumn,
-    });
-    const reveal = (editor: { viewColumn: number }, offset: number) =>
-      revealed.push({ editor, offset });
-    const revealed: { editor: { viewColumn: number }; offset: number }[] = [];
-    await expect(
-      revealSlideOutlineEntry(entry, state, {
-        visibleEditors: [{ documentUri: current.uri, viewColumn: 2 }],
-        fallbackViewColumn: 1,
-        showTextDocument,
-        reveal,
-      }),
-    ).resolves.toBe(true);
-    expect(revealed).toEqual([{ editor: { viewColumn: 2 }, offset: entry.start }]);
-
-    let resume: (() => void) | undefined;
-    const delayed = new Promise<void>((resolve) => {
-      resume = resolve;
-    });
-    const opening = revealSlideOutlineEntry(entry, state, {
-      visibleEditors: [{ documentUri: current.uri, viewColumn: 2 }],
-      fallbackViewColumn: 1,
-      showTextDocument: async () => {
-        await delayed;
-        return { viewColumn: 2 };
-      },
-      reveal,
-    });
-    current.version = 2;
-    resume?.();
-    await expect(opening).resolves.toBe(false);
-    expect(revealed).toHaveLength(1);
   });
 });
 
