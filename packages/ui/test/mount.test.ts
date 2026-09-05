@@ -648,10 +648,12 @@ describe("mountPreview", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const notifyActiveFrame = vi.fn();
+    const saved: unknown[] = [];
     const host = {
       ...fakeHost(),
       loadNavState: () => ({ current: 1, step: 1, zoom: "fit" as const }),
       notifyActiveFrame,
+      saveNavState: (state: unknown) => saved.push(state),
     };
 
     act(() => {
@@ -716,6 +718,51 @@ describe("mountPreview", () => {
     expect(scrollWrites).toBe(1);
     expect(cards[1]?.classList.contains("active")).toBe(true);
     expect(notifyActiveFrame).toHaveBeenLastCalledWith(1);
+
+    // 一時的な collapse はブラウザが scrollTop を 0 へ clamp して scroll event を
+    // 発火しても、最後の有効アンカーと current / step の保存状態を壊さない。
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 0 },
+      clientHeight: { configurable: true, value: 0 },
+    });
+    Object.defineProperty(cards[1] as HTMLElement, "offsetHeight", {
+      configurable: true,
+      value: 0,
+    });
+    act(resizeScroll);
+    scrollTop = 0;
+    const savedBeforeCollapse = saved.length;
+    const activeBeforeCollapse = notifyActiveFrame.mock.calls.length;
+    act(() => scroll.dispatchEvent(new Event("scroll", { bubbles: true })));
+    expect(cards[1]?.classList.contains("active")).toBe(true);
+    expect(saved).toHaveLength(savedBeforeCollapse);
+    expect(notifyActiveFrame).toHaveBeenCalledTimes(activeBeforeCollapse);
+
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 308 },
+      clientHeight: { configurable: true, value: 250 },
+    });
+    Object.defineProperties(cards[1] as HTMLElement, {
+      offsetTop: { configurable: true, value: 700 },
+      offsetHeight: { configurable: true, value: 300 },
+    });
+    act(resizeScroll);
+    expect(scrollTop).toBe(838);
+    act(() => scroll.dispatchEvent(new Event("scroll", { bubbles: true })));
+    expect(cards[1]?.classList.contains("active")).toBe(true);
+    expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: "fit" });
+
+    // 同じ commit の明示 reveal は resize 復元より優先し、古い sentinel を残さない。
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    Object.defineProperty(scroll, "clientWidth", { configurable: true, value: 307 });
+    act(() => {
+      resizeScroll();
+      preview?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    });
+    expect(scrollTop).toBe(0);
+    act(() => scroll.dispatchEvent(new Event("scroll", { bubbles: true })));
+    expect(cards[0]?.classList.contains("active")).toBe(true);
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: "fit" });
   });
 
   it("手動 zoom 中の resize は表示位置とナビ状態を変えない", () => {
@@ -946,6 +993,10 @@ describe("mountPreview", () => {
     const scroll = container.querySelector<HTMLElement>(".slide-scroll");
     const cards = container.querySelectorAll<HTMLElement>(".slide-card");
     if (!scroll || cards.length !== 2) throw new Error("scroll fixture missing");
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 632 },
+      clientHeight: { configurable: true, value: 500 },
+    });
     // jsdom はレイアウトを持たないので offsetTop / offsetHeight / scrollTop を与える。
     cards.forEach((card, i) => {
       Object.defineProperties(card, {
