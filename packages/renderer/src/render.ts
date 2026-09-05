@@ -481,6 +481,17 @@ function inlineToPlain(nodes: InlineNode[]): string {
   return out;
 }
 
+/**
+ * フレーム一覧・プレビューで共通に使う表示用タイトル。
+ * 数式・raw inline の文字列表現も renderDeck と完全に揃える。
+ */
+export function frameTitleText(frame: FrameNode | RawFrameNode, frameNumber: number): string {
+  if (frame.type === "rawFrame") return frame.title ?? `frame ${frameNumber}`;
+  return frame.title && frame.title.length > 0
+    ? inlineToPlain(frame.title)
+    : `frame ${frameNumber}`;
+}
+
 /** デッキ全体を描画する。 */
 export function renderDeck(doc: DeckDocument, theme: Theme = DEFAULT_THEME): RenderedDeck {
   const renderer = new FrameRenderer(doc, theme);
@@ -491,7 +502,7 @@ export function renderDeck(doc: DeckDocument, theme: Theme = DEFAULT_THEME): Ren
       return {
         index: i + 1,
         label: frame.label,
-        titleText: frame.title ?? `frame ${i + 1}`,
+        titleText: frameTitleText(frame, i + 1),
         html: renderer.renderRawFrame(frame, i + 1, total),
         sourceSpan: frame.span,
         stepCount: 1,
@@ -500,8 +511,7 @@ export function renderDeck(doc: DeckDocument, theme: Theme = DEFAULT_THEME): Ren
       };
     }
     const { html, stepCount, canvasElements } = renderer.renderFrame(frame, i + 1, total);
-    const titleText =
-      frame.title && frame.title.length > 0 ? inlineToPlain(frame.title) : `frame ${i + 1}`;
+    const titleText = frameTitleText(frame, i + 1);
     return {
       index: i + 1,
       label: frame.options.label,

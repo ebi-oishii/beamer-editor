@@ -54,7 +54,22 @@
           "group": "navigation"
         }
       ]
-    }
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "beamerEditor.slides",
+          "name": "Beamer Slides"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "beamerEditor.slides",
+        "when": "!beamerEditor.hasSlideOutlineDocument",
+        "contents": "Open a managed Beamer slide to show its frames."
+      }
+    ]
   },
   "scripts": {
     "build": "node esbuild.mjs",

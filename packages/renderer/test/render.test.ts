@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseDeck } from "@beamer-editor/core";
+import { framesOf, parseDeck } from "@beamer-editor/core";
 import { describe, expect, it } from "vitest";
-import { renderDeck } from "../src/render.js";
+import { frameTitleText, renderDeck } from "../src/render.js";
 
 const fixture = (name: string) => readFileSync(join(__dirname, "../../../fixtures", name), "utf8");
 
@@ -43,6 +43,19 @@ describe("renderDeck: basic.tex", () => {
     expect(source.slice(first.sourceSpan.start, first.sourceSpan.end)).toBe(
       "\\begin{frame}\n  \\titlepage\n\\end{frame}",
     );
+  });
+});
+
+describe("frameTitleText", () => {
+  it("renderDeck と同じ数式・raw・連番フォールバックを使う", () => {
+    const frames = framesOf(
+      parseDeck(String.raw`\begin{frame}{Third$x$}\end{frame}
+\begin{frame}\end{frame}`),
+    );
+    const [third, untitled] = frames;
+    if (!third || !untitled) throw new Error("expected two frames");
+    expect(frameTitleText(third, 3)).toBe("Third$x$");
+    expect(frameTitleText(untitled, 4)).toBe("frame 4");
   });
 });
 
