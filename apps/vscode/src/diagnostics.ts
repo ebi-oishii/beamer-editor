@@ -8,7 +8,7 @@
  * 常に元ソース座標になる(プレビューのマクロ展開とは独立)。
  */
 
-import { type LintDiagnostic, lintSource } from "@beamer-editor/core";
+import { type LintDiagnostic, type LintOptions, lintSource } from "@beamer-editor/core";
 
 /** lint 対象文書の最小面(vscode.TextDocument が満たす)。 */
 export interface LintableDocument {
@@ -36,8 +36,8 @@ export interface DiagnosticsSink<TDoc extends LintableDocument> {
 export const LINT_DEBOUNCE_MS = 120;
 
 /** 全文を parse して lint する。span は元ソースの UTF-16 オフセット。 */
-export function lintDocumentText(text: string): LintDiagnostic[] {
-  return lintSource(text);
+export function lintDocumentText(text: string, options: LintOptions = {}): LintDiagnostic[] {
+  return lintSource(text, options);
 }
 
 /**
@@ -55,6 +55,8 @@ export class LintController<TDoc extends LintableDocument> {
     initialDocuments: readonly TDoc[] = [],
     private readonly isManaged: (document: TDoc) => boolean = (document) =>
       document.uri.scheme === "file" && document.fileName.endsWith(".tex"),
+    /** 文書ごとの lint オプション(テンプレート参照の解決結果など)。extension.ts が注入する。 */
+    private readonly lintOptionsFor: (document: TDoc) => LintOptions = () => ({}),
   ) {
     this.disposables = [
       events.onDidOpenTextDocument((document) => this.lintNow(document)),
@@ -83,7 +85,7 @@ export class LintController<TDoc extends LintableDocument> {
   private lintNow(document: TDoc): void {
     if (this.disposed || !this.isManaged(document)) return;
     try {
-      this.sink.set(document, lintDocumentText(document.getText()));
+      this.sink.set(document, lintDocumentText(document.getText(), this.lintOptionsFor(document)));
     } catch (err) {
       // パースは Raw 劣化で例外を出さない設計。予期しない例外時は
       // 直前の診断を保持する(消すと「直った」と誤解させるため)。

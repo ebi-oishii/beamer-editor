@@ -178,6 +178,7 @@ Electron(旧 5c)はここでは作らない(「後続」参照)。
 |---|---|---|---|
 | S1 | スタイル語彙 v1(`\deckcolor` `\deckfont` `\decklogo` `\deckfooter`): TeX 側マクロ + パーサの style 領域 + renderer の CSS 変数/ロゴ/フッター描画 + `styled.tex` fixture。**済(2026-07-14。L020 の lint 化のみ Phase 2 へ)** | M | Phase 1 |
 | S2 | Noto Sans CJK: `\deckfont` のフォント解決・`deck fonts fetch`・日本語 fixture → design.md §9 の CJK 未決事項を解消。**済(2026-07-19)**。xeCJK 統合 + `packages/cli`(fonts status/fetch)+ renderer 和文フォールバック + `fixtures/japanese.tex`。tectonic で警告 0 コンパイル確認 | S〜M | tectonic |
+| S4 | テンプレート(`.sty` + 画像)の読み込み(#70、theme-design.md §2.1)。**済(2026-09-05)**。preamble-extra の `\usetheme` / `\usepackage` を解決し、標準記法から色・フォント・ロゴ・背景をプレビューへ、L022 / L023、`.sty` 変更の監視、`fixtures/templated.tex` | M | S1 |
 | S3 | 「見本に合わせて」ワークフロー: pptx からの色・フォント抽出補助、SKILL への指示パターン追加、実物の社用テンプレで実演 | S〜M | S1, S2, 実物の PPT |
 
 幾何まで変える本格テーマ(タイトル帯高の変更等)は将来候補として theme-design.md に保持(必要になったら計測付きテーマパック方式)。

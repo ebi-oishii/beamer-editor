@@ -4,6 +4,7 @@ import type { ExtensionToWebview } from "@beamer-editor/ui";
 import { parseWebviewToExtension } from "@beamer-editor/ui";
 import type * as vscode from "vscode";
 import { type RenderOutcome, renderDocument } from "./document-controller";
+import { frameIndexAtSourceOffset } from "./reveal-slide";
 import { resolveJumpOffset } from "./source-navigation";
 
 /**
@@ -16,7 +17,7 @@ export interface PreviewPanel {
     onDidReceiveMessage(listener: (msg: unknown) => void): vscode.Disposable;
   };
   onDidDispose(listener: () => void): vscode.Disposable;
-  reveal(): void;
+  reveal(viewColumn?: vscode.ViewColumn, preserveFocus?: boolean): void;
   dispose(): void;
 }
 
@@ -142,6 +143,12 @@ export function rewriteImageSources(html: string, resolve: (path: string) => str
   });
 }
 
+/** 画像 URL に再読込世代を付ける(0 = 初期状態では付けない)。同じ HTML でも src が変わり再取得される。 */
+export function withAssetGeneration(url: string, generation: number): string {
+  if (generation === 0) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}v=${generation}`;
+}
+
 /**
  * Webview の HTML。CSP は `default-src 'none'` を基本に必要な源だけを開ける
  * (移植計画 VS-8)。script は nonce 必須、style は ui / deck.css が動的に
@@ -195,6 +202,8 @@ export class PreviewController implements vscode.Disposable {
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
   private latest: RenderOutcome | undefined;
+  /** 画像の再読込世代。refresh ごとに進め、送る <img src> の query に付ける。 */
+  private assetGeneration = 0;
   /** latest を生成した TextDocument。URI/version が偶然一致しても別 object は拒否する。 */
   private latestDocument: PreviewDocument | undefined;
   /**
@@ -203,6 +212,13 @@ export class PreviewController implements vscode.Disposable {
    */
   private editApplyPending = false;
   private editAwaitingVersion: number | undefined;
+  /**
+   * 描画前、または文書の version が最新の描画より進んでいる間(debounce 中)に届いた
+   * ソース位置の表示要求。古い ExpansionMap で解かず、次の描画後に適用する。
+   */
+  private pendingReveal: { offset: number; onlyIfChanged: boolean } | undefined;
+  /** 直近にソース側から表示させたフレーム。カーソル追従で同じフレーム内の移動を無視する。 */
+  private lastRevealedFrame: number | undefined;
 
   /**
    * プレビュー対象の文書。エディタタブを閉じると TextDocument は close され
@@ -238,6 +254,45 @@ export class PreviewController implements vscode.Disposable {
   /** 最後に成功したレンダリング結果(未成功なら undefined)。 */
   get latestOutcome(): RenderOutcome | undefined {
     return this.latest;
+  }
+
+  /**
+   * 元ソースの offset を含むフレームをプレビューで表示する(#66: CodeLens・コマンド・カーソル追従)。
+   * まだ描画していなければ描画後に適用する。onlyIfChanged は直近に表示したフレームと同じなら
+   * 何もしない(カーソル追従で同じフレーム内の移動のたびにスクロールしないため)。
+   */
+  revealSourceOffset(offset: number, options: { onlyIfChanged?: boolean } = {}): void {
+    if (this.disposed) return;
+    const latest = this.latest;
+    // move / detach と同じく、latest が今の文書の今の version を描いたものでなければ使わない。
+    // 通常の編集では TextDocument object は同じまま version だけが進むので object 比較では足りない。
+    if (
+      !latest ||
+      this.latestDocument !== this.document ||
+      latest.version !== this.document.version
+    ) {
+      this.pendingReveal = { offset, onlyIfChanged: options.onlyIfChanged ?? false };
+      return;
+    }
+    const frameIndex = frameIndexAtSourceOffset(latest, offset);
+    if (frameIndex === null) return;
+    if (options.onlyIfChanged && frameIndex === this.lastRevealedFrame) return;
+    this.lastRevealedFrame = frameIndex;
+    const message: ExtensionToWebview = {
+      type: "activeFrameChanged",
+      frameIndex,
+      version: latest.version,
+    };
+    void this.panel.webview.postMessage(message);
+  }
+
+  /**
+   * 文書以外の入力(テンプレートの .sty や画像)が変わったときに再描画する。画像だけが変わった場合は
+   * frame HTML が同じ文字列になり Webview は <img> を作り直さないので、世代を進めて src 自体を変える。
+   */
+  refresh(): void {
+    this.assetGeneration += 1;
+    this.sendDeck();
   }
 
   private handleMessage(raw: unknown): void {
@@ -438,12 +493,15 @@ export class PreviewController implements vscode.Disposable {
         this.editAwaitingVersion = undefined;
       }
       const resolve = this.resolveResource;
+      const generation = this.assetGeneration;
       const deck = resolve
         ? {
             ...outcome.deck,
             frames: outcome.deck.frames.map((frame) => ({
               ...frame,
-              html: rewriteImageSources(frame.html, resolve),
+              html: rewriteImageSources(frame.html, (path) =>
+                withAssetGeneration(resolve(path), generation),
+              ),
             })),
           }
         : outcome.deck;
@@ -459,6 +517,15 @@ export class PreviewController implements vscode.Disposable {
       message = { type: "error", message: text };
     }
     void this.panel.webview.postMessage(message);
+    if (message.type === "deckUpdated") {
+      // フレーム番号は描画ごとに変わり得るので、追従の既読は描画単位でリセットする。
+      this.lastRevealedFrame = undefined;
+      if (this.pendingReveal !== undefined) {
+        const { offset, onlyIfChanged } = this.pendingReveal;
+        this.pendingReveal = undefined;
+        this.revealSourceOffset(offset, { onlyIfChanged });
+      }
+    }
   }
 
   close(): void {
@@ -466,9 +533,12 @@ export class PreviewController implements vscode.Disposable {
     this.dispose();
   }
 
-  /** 既存パネルを前面に出す。手動 Open Preview の再実行時に使う。 */
-  reveal(): void {
-    this.panel.reveal();
+  /**
+   * 既存パネルを前面に出す(同じグループの別タブの後ろに隠れていても表示する)。
+   * preserveFocus はソース側の操作(#66)から呼ぶときに使い、フォーカスをソースに残す。
+   */
+  reveal(preserveFocus = false): void {
+    this.panel.reveal(undefined, preserveFocus);
   }
 
   dispose(): void {

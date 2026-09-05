@@ -324,6 +324,7 @@ export function Stage({
               key={`${candidate.sourceSpan.start}-${candidate.sourceSpan.end}`}
               type="button"
               role="menuitem"
+              disabled={candidate.blocked !== undefined}
               onMouseEnter={() => highlight(candidate.element)}
               onFocus={() => highlight(candidate.element)}
               onClick={() => choose(candidate)}

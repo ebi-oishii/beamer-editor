@@ -1,11 +1,21 @@
+import * as path from "node:path";
 import {
   canvasPositionReplacement,
   detachBlockToCanvas,
   type LintDiagnostic,
   type LintSeverity,
+  parseDeck,
 } from "@beamer-editor/core";
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
+import { renderDocument } from "./document-controller";
+import {
+  ExportController,
+  type ExportDocument,
+  type ExportUri,
+  normalizeTectonicPath,
+  resolveExportDocument,
+} from "./export-controller";
 import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
 import {
   appendUniqueIgnorePatterns,
@@ -19,7 +29,16 @@ import {
   needsLatexWorkshopIgnorePrompt,
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
+import { frameLensPositions, sourceHasFrameAt } from "./reveal-slide";
+import {
+  hasSlideOutlineContentChanges,
+  managedOutlineDocument,
+  type SlideOutlineEntry,
+  SlideOutlineRefreshScheduler,
+  SlideOutlineState,
+} from "./slide-outline";
 import { resolveSourceViewColumn } from "./source-navigation";
+import { baseStyleOf, nodeTemplateFileSystem, templateStatuses } from "./templates";
 import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 
 let previewController: PreviewController | undefined;
@@ -87,6 +106,7 @@ async function jumpToOffset(
   offset: number,
   lineFlash: ReturnType<typeof createLineFlash>,
   fallbackViewColumn: vscode.ViewColumn | undefined,
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   const viewColumn =
     resolveSourceViewColumn(
@@ -101,6 +121,7 @@ async function jumpToOffset(
     viewColumn,
     preserveFocus: false,
   });
+  if (!isCurrent()) return;
   const position = document.positionAt(offset);
   const range = document.lineAt(position.line).range;
   editor.selection = new vscode.Selection(range.start, range.end);
@@ -119,7 +140,78 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   const foldingRangesChanged = new vscode.EventEmitter<void>();
   const latexWorkshopSessionPrompted = new Set<string>();
   const lineFlash = createLineFlash();
-  context.subscriptions.push(lineFlash, foldingRangesChanged);
+  const previewSources = new Map<vscode.WebviewPanel, vscode.TextDocument>();
+  const exportOutput = vscode.window.createOutputChannel("Beamer Editor: PDF Export");
+  context.subscriptions.push(lineFlash, foldingRangesChanged, exportOutput);
+
+  const exportController = new ExportController({
+    get isWorkspaceTrusted() {
+      return vscode.workspace.isTrusted;
+    },
+    chooseFormat: async () =>
+      (await vscode.window.showQuickPick(["PDF"], { title: "Beamer Editor: Export" })) === "PDF"
+        ? "pdf"
+        : undefined,
+    chooseOutput: (defaultUri) =>
+      vscode.window.showSaveDialog({
+        defaultUri: defaultUri as vscode.Uri,
+        filters: { PDF: ["pdf"] },
+        title: "Export PDF",
+      }) as Thenable<ExportUri | undefined>,
+    outputExists: async (uri) => {
+      try {
+        await vscode.workspace.fs.stat(uri as vscode.Uri);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    withProgress: (task) =>
+      vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Beamer Editor: PDFを書き出し中",
+          cancellable: true,
+        },
+        (_progress, token) => task(token),
+      ),
+    showInformation: (message, ...actions) =>
+      vscode.window.showInformationMessage(message, ...actions),
+    showError: (message, ...actions) => vscode.window.showErrorMessage(message, ...actions),
+    showWarning: (message) => vscode.window.showWarningMessage(message),
+    openPdf: (uri) => vscode.env.openExternal(uri as vscode.Uri),
+    revealInFileManager: (uri) =>
+      vscode.commands.executeCommand("revealFileInOS", uri as vscode.Uri),
+    openTectonicSettings: () =>
+      vscode.commands.executeCommand("workbench.action.openSettings", "beamerEditor.tectonicPath"),
+    showExportDetails: (detail) => {
+      exportOutput.clear();
+      exportOutput.appendLine(detail);
+      exportOutput.show(true);
+    },
+    uriForFile: (path) => vscode.Uri.file(path) as ExportUri,
+    tectonicPath: (document) => {
+      const value = vscode.workspace
+        .getConfiguration("beamerEditor", document.uri as vscode.Uri)
+        .get<unknown>("tectonicPath");
+      return normalizeTectonicPath(value);
+    },
+    timeoutMs: (document) => {
+      const seconds = vscode.workspace
+        .getConfiguration("beamerEditor", document.uri as vscode.Uri)
+        .get<number>("pdfExport.timeoutSeconds", 300);
+      const normalized = Number.isFinite(seconds) ? Math.trunc(seconds) : 300;
+      return Math.max(5, Math.min(1800, normalized)) * 1000;
+    },
+  });
+  context.subscriptions.push(exportController);
+
+  const slideOutlineState = new SlideOutlineState<vscode.TextDocument>();
+  const slideOutlineChanged = new vscode.EventEmitter<void>();
+  const slideOutlineRefresh = new SlideOutlineRefreshScheduler(slideOutlineState, () =>
+    slideOutlineChanged.fire(),
+  );
+  context.subscriptions.push(slideOutlineChanged, slideOutlineRefresh);
 
   // lint → Problems パネル・波線(VS-5)。開いている .tex 文書ごとに独立管理する。
   const diagnosticCollection = vscode.languages.createDiagnosticCollection("beamer-editor");
@@ -140,6 +232,16 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     },
     vscode.workspace.textDocuments,
     (document) => isManaged(document),
+    // テンプレート(.sty)参照の解決結果を L022 / L023 へ渡す(#70)。
+    (document) =>
+      document.uri.scheme === "file"
+        ? {
+            templates: templateStatuses(
+              parseDeck(document.getText()),
+              nodeTemplateFileSystem(path.dirname(document.uri.fsPath)),
+            ),
+          }
+        : {},
   );
   context.subscriptions.push(diagnosticCollection, lintController);
 
@@ -166,6 +268,51 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
   function isManaged(document: vscode.TextDocument): boolean {
     return isManagedDocument(document, managedPatterns(document), matchesManagedGlob);
+  }
+
+  class SlideOutlineItem extends vscode.TreeItem {
+    constructor(readonly entry: SlideOutlineEntry<vscode.TextDocument>) {
+      super(`${entry.frameNumber}. ${entry.title}`, vscode.TreeItemCollapsibleState.None);
+      if (entry.label) this.description = `label: ${entry.label}`;
+      else if (entry.raw) this.description = "raw";
+      this.tooltip = entry.raw
+        ? `${entry.frameNumber}. ${entry.title} (raw frame)`
+        : `${entry.frameNumber}. ${entry.title}`;
+      this.command = {
+        command: "beamerEditor.revealSlide",
+        title: "Reveal slide source",
+        arguments: [this],
+      };
+    }
+  }
+
+  const slideOutlineProvider: vscode.TreeDataProvider<SlideOutlineItem> = {
+    onDidChangeTreeData: slideOutlineChanged.event,
+    getTreeItem: (item) => item,
+    getChildren: () => slideOutlineState.getEntries().map((entry) => new SlideOutlineItem(entry)),
+  };
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("beamerEditor.slides", slideOutlineProvider),
+    vscode.commands.registerCommand("beamerEditor.revealSlide", async (item: unknown) => {
+      if (!(item instanceof SlideOutlineItem) || !slideOutlineState.isCurrent(item.entry)) return;
+      await jumpToOffset(
+        item.entry.document,
+        item.entry.start,
+        lineFlash,
+        vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One,
+        () => slideOutlineState.isCurrent(item.entry),
+      );
+    }),
+  );
+
+  function updateSlideOutline(document: vscode.TextDocument | undefined): void {
+    slideOutlineRefresh.cancel();
+    if (slideOutlineState.setDocument(document)) slideOutlineChanged.fire();
+    void vscode.commands.executeCommand(
+      "setContext",
+      "beamerEditor.hasSlideOutlineDocument",
+      document !== undefined,
+    );
   }
 
   const yenCodeActions = new YenBackslashCodeActionProvider();
@@ -297,11 +444,17 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     ]);
   }
 
-  function openPreview(document: vscode.TextDocument, automatic: boolean): void {
+  /** preserveFocus はソース側の操作(#66)から開くときに使う。既定は自動オープンのときだけ保つ。 */
+  function openPreview(
+    document: vscode.TextDocument,
+    automatic: boolean,
+    preserveFocus = automatic,
+  ): void {
     const prepared = previewLifecycle.prepareOpen(document.uri, automatic);
     if (prepared.kind === "existing") {
       if (!automatic) {
-        prepared.controller.reveal();
+        // 同じグループの別タブの後ろに隠れていても表示する。preserveFocus ならフォーカスはソースに残す。
+        prepared.controller.reveal(preserveFocus);
         previewController = prepared.controller;
       }
       return;
@@ -317,7 +470,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     const panel = vscode.window.createWebviewPanel(
       "beamerEditor.preview",
       `Beamer Preview: ${document.fileName.split(/[\\/]/).pop()}`,
-      automatic
+      preserveFocus
         ? { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }
         : vscode.ViewColumn.Beside,
       {
@@ -325,6 +478,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media"), documentDir],
       },
     );
+    previewSources.set(panel, document);
 
     // #94: プレビューが表示されているエディタグループをロックし、他のファイルが同じグループに
     // 開かないようにする(ロック中のグループには新しいエディタが開かない)。ロックはアクティブな
@@ -344,13 +498,22 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       groupLocked = true;
       void vscode.commands.executeCommand("workbench.action.lockEditorGroup");
     };
-    const viewStateSubscription = panel.onDidChangeViewState(lockGroupIfActive);
+    const viewStateSubscription = panel.onDidChangeViewState(() => {
+      lockGroupIfActive();
+      if (panel.active) updateSlideOutline(isManaged(document) ? document : undefined);
+    });
     lockGroupIfActive();
 
     const mediaUri = (name: string) =>
       panel.webview
         .asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", name))
         .toString();
+    // テンプレート(.sty)と preamble-extra から土台スタイルを取り、%% style で上書きする(#70)。
+    const templateFs = nodeTemplateFileSystem(path.dirname(document.uri.fsPath));
+    // .sty や画像が変わったらプレビューと診断を作り直す(キャッシュは持たない)。
+    const templateWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(documentDir, "**/*.{sty,png,jpg,jpeg,pdf}"),
+    );
     const controller = new PreviewController(
       panel,
       { scriptUri: mediaUri("webview.js"), styleUri: mediaUri("webview.css") },
@@ -359,11 +522,15 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
       },
       () => {
+        previewSources.delete(panel);
+        templateWatcher.dispose();
         viewStateSubscription.dispose();
         if (!previewLifecycle.panelDisposed(document.uri, controller)) return;
         if (previewController === controller) previewController = undefined;
       },
       {
+        render: (text, version) =>
+          renderDocument(text, version, { baseStyle: (doc) => baseStyleOf(doc, templateFs) }),
         onError: (message) => {
           void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
         },
@@ -438,6 +605,14 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         },
       },
     );
+    const refreshTemplates = () => {
+      controller.refresh();
+      lintController.refresh(vscode.workspace.textDocuments);
+    };
+    templateWatcher.onDidChange(refreshTemplates);
+    templateWatcher.onDidCreate(refreshTemplates);
+    templateWatcher.onDidDelete(refreshTemplates);
+    context.subscriptions.push(templateWatcher);
     previewLifecycle.register(document.uri, controller, document, automatic);
     previewController = controller;
   }
@@ -455,17 +630,37 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   context.subscriptions.push(
     vscode.workspace.onDidCloseTextDocument((document) => {
       previewLifecycle.sourceClosed(document.uri)?.close();
+      if (slideOutlineState.hasDocument(document)) updateSlideOutline(undefined);
     }),
-    vscode.window.onDidChangeActiveTextEditor((editor) => handleManagedDocument(editor?.document)),
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (
+        hasSlideOutlineContentChanges(event.contentChanges) &&
+        slideOutlineState.hasDocument(event.document)
+      )
+        slideOutlineRefresh.schedule(event.document);
+    }),
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      // Webview focus では editor が undefined になる。対応する panel の view-state
+      // listener が source を設定するので、ここで空にして一覧をちらつかせない。
+      if (editor) updateSlideOutline(isManaged(editor.document) ? editor.document : undefined);
+      handleManagedDocument(editor?.document);
+    }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (!event.affectsConfiguration("beamerEditor.managedFiles")) return;
       managedPatternCache.clear();
       foldingRangesChanged.fire();
       lintController.refresh(vscode.workspace.textDocuments);
       for (const controller of previewLifecycle.managedFilesChanged(isManaged)) controller.close();
-      handleManagedDocument(vscode.window.activeTextEditor?.document);
+      const activeDocument = vscode.window.activeTextEditor?.document;
+      updateSlideOutline(
+        managedOutlineDocument(activeDocument, slideOutlineState.getDocument(), isManaged),
+      );
+      handleManagedDocument(activeDocument);
     }),
   );
+  const activeEditor = vscode.window.activeTextEditor;
+  if (activeEditor)
+    updateSlideOutline(isManaged(activeEditor.document) ? activeEditor.document : undefined);
   handleManagedDocument(vscode.window.activeTextEditor?.document);
 
   context.subscriptions.push(
@@ -478,6 +673,127 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
       openPreview(editor.document, false);
     }),
+    vscode.commands.registerCommand("beamerEditor.export", async (uri?: vscode.Uri) => {
+      const isTex = (candidate: vscode.Uri | undefined): candidate is vscode.Uri =>
+        candidate?.scheme === "file" && candidate.fsPath.endsWith(".tex");
+      let explicit: vscode.TextDocument | undefined;
+      if (isTex(uri)) {
+        const sourceUri = uri;
+        explicit =
+          vscode.workspace.textDocuments.find(
+            (document) => document.uri.toString() === sourceUri.toString(),
+          ) ?? (await vscode.workspace.openTextDocument(sourceUri));
+      }
+      const source = resolveExportDocument(
+        explicit,
+        [...previewSources].map(([panel, document]) => ({ active: panel.active, document })),
+        vscode.window.activeTextEditor?.document,
+      );
+      await exportController.export(source as ExportDocument | undefined);
+    }),
+  );
+
+  // ---- ソース → プレビュー(#66): CodeLens・コマンド・キーバインド・カーソル追従 ----
+  const FOLLOW_SETTING = "beamerEditor.preview.followCursor";
+  const followCursorEnabled = (): boolean =>
+    vscode.workspace.getConfiguration("beamerEditor").get<boolean>("preview.followCursor") ?? true;
+  const syncFollowContext = (): void => {
+    void vscode.commands.executeCommand(
+      "setContext",
+      "beamerEditor.followCursor",
+      followCursorEnabled(),
+    );
+  };
+  syncFollowContext();
+
+  /**
+   * offset を含むフレームをプレビューで表示する。プレビューが無ければ開く(フォーカスはソースに残す)。
+   * managed でない文書と、フレーム外(プリアンブル・フレーム間)の位置では何もしない(#66 の対象外)。
+   */
+  function revealSlide(document: vscode.TextDocument, offset: number, onlyIfChanged = false): void {
+    if (!isManaged(document)) return;
+    if (!onlyIfChanged) {
+      if (!sourceHasFrameAt(document.getText(), offset)) return;
+      // 明示的な操作なので、閉じられていたプレビューも開き直す。
+      previewLifecycle.dismissals.clear(document.uri);
+      openPreview(document, false, true);
+    }
+    previewLifecycle.registry
+      .get(document.uri)
+      ?.controller.revealSourceOffset(offset, { onlyIfChanged });
+  }
+
+  /**
+   * 追従の切り替え。effective value を決めている scope へ書く(workspace が上書きしていれば
+   * workspace、そうでなければ user)。Global だけ書くと workspace の値が勝ってボタンが効かない。
+   * 設定の scope は window なので folder 単位の値は無い。
+   */
+  async function setFollowCursor(enabled: boolean): Promise<void> {
+    const config = vscode.workspace.getConfiguration("beamerEditor");
+    const target =
+      config.inspect<boolean>("preview.followCursor")?.workspaceValue !== undefined
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global;
+    await config.update("preview.followCursor", enabled, target);
+    syncFollowContext();
+  }
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "beamerEditor.revealSlideInPreview",
+      (uri?: string, offset?: number) => {
+        const editor = vscode.window.activeTextEditor;
+        const document = uri
+          ? vscode.workspace.textDocuments.find((candidate) => candidate.uri.toString() === uri)
+          : editor?.document;
+        if (!document) return;
+        const at =
+          typeof offset === "number"
+            ? offset
+            : editor && editor.document === document
+              ? document.offsetAt(editor.selection.active)
+              : 0;
+        revealSlide(document, at);
+      },
+    ),
+    vscode.commands.registerCommand("beamerEditor.followCursor.enable", () =>
+      setFollowCursor(true),
+    ),
+    vscode.commands.registerCommand("beamerEditor.followCursor.disable", () =>
+      setFollowCursor(false),
+    ),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration(FOLLOW_SETTING)) syncFollowContext();
+    }),
+    vscode.window.onDidChangeTextEditorSelection((event) => {
+      if (!followCursorEnabled()) return;
+      // プレビュー → ソースのジャンプなどプログラムによる選択変更には追従しない(往復を避ける)。
+      if (event.kind === undefined || event.kind === vscode.TextEditorSelectionChangeKind.Command)
+        return;
+      const document = event.textEditor.document;
+      if (!previewLifecycle.registry.get(document.uri)) return;
+      const selection = event.selections[0];
+      if (!selection) return;
+      revealSlide(document, document.offsetAt(selection.active), true);
+    }),
+    vscode.languages.registerCodeLensProvider(
+      { scheme: "file", language: "latex" },
+      {
+        provideCodeLenses(document) {
+          if (!isManaged(document)) return [];
+          return frameLensPositions(document.getText(), (offset) =>
+            document.positionAt(offset),
+          ).map(
+            ({ offset, line }) =>
+              new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
+                title: "プレビューで表示",
+                command: "beamerEditor.revealSlideInPreview",
+                arguments: [document.uri.toString(), offset],
+              }),
+          );
+        },
+      },
+    ),
   );
 
   return { _previewControllerForTest: () => previewController };

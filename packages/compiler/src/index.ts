@@ -6,6 +6,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 const MAX_PROCESS_OUTPUT = 1024 * 1024;
+const DEFAULT_COMPILE_TIMEOUT_MS = 300_000;
+const VERSION_TIMEOUT_MS = 10_000;
+const TERMINATE_GRACE_MS = 1_000;
+const HARD_SETTLE_GRACE_MS = 1_000;
 
 export interface PdfExportRequest {
   inputPath: string;
@@ -13,6 +17,8 @@ export interface PdfExportRequest {
   overwrite?: boolean;
   tectonicPath?: string;
   signal?: AbortSignal;
+  /** Tectonic compile timeout. Defaults to 5 minutes. */
+  timeoutMs?: number;
 }
 
 export interface PdfExportResult {
@@ -48,13 +54,14 @@ export interface ProcessResult {
   stdout: string;
   stderr: string;
   cancelled?: boolean;
+  timedOut?: boolean;
 }
 
 export interface ProcessRunner {
   run(
     command: string,
     args: readonly string[],
-    options: { cwd: string; signal?: AbortSignal },
+    options: { cwd: string; signal?: AbortSignal; timeoutMs?: number },
   ): Promise<ProcessResult>;
 }
 
@@ -107,25 +114,82 @@ export const nodeProcessRunner: ProcessRunner = {
       }
       const stdout = boundedCollector(MAX_PROCESS_OUTPUT);
       const stderr = boundedCollector(MAX_PROCESS_OUTPUT);
-      let cancelled = options.signal?.aborted ?? false;
-      const onAbort = () => {
-        cancelled = true;
+      // The preflight above handled an already-aborted signal. Starting from
+      // false here is essential: an abort in the spawn/listener gap must still
+      // enter onAbort and terminate the child.
+      let cancelled = false;
+      let timedOut = false;
+      let settled = false;
+      let terminating = false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let forceKill: ReturnType<typeof setTimeout> | undefined;
+      let hardSettle: ReturnType<typeof setTimeout> | undefined;
+      let pipesDestroyed = false;
+      const destroyPipes = () => {
+        if (pipesDestroyed) return;
+        pipesDestroyed = true;
+        // A killed child can leave a grandchild holding these inherited pipe
+        // descriptors. Destroying them is only needed for the hard-settle
+        // fallback; on a normal close, let Node drain all remaining output.
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      };
+      const cleanup = () => {
+        if (timeout) clearTimeout(timeout);
+        if (forceKill) clearTimeout(forceKill);
+        if (hardSettle) clearTimeout(hardSettle);
+        options.signal?.removeEventListener("abort", onAbort);
+      };
+      const finish = (exitCode: number | null) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolveResult({
+          exitCode,
+          stdout: stdout.value(),
+          stderr: stderr.value(),
+          cancelled,
+          timedOut,
+        });
+      };
+      const terminate = () => {
+        if (settled || terminating) return;
+        terminating = true;
         child.kill();
+        forceKill = setTimeout(() => {
+          child.kill("SIGKILL");
+          hardSettle = setTimeout(() => {
+            destroyPipes();
+            finish(null);
+          }, HARD_SETTLE_GRACE_MS);
+        }, TERMINATE_GRACE_MS);
+      };
+      const onAbort = () => {
+        if (settled || cancelled) return;
+        cancelled = true;
+        terminate();
       };
       options.signal?.addEventListener("abort", onAbort, { once: true });
-      // Abort can happen between the preflight check and listener registration.
+      // Close the preflight-to-listener race. onAbort owns both the cancellation
+      // flag and child termination, and terminate/finish are idempotent.
       if (options.signal?.aborted) onAbort();
       child.stdout?.on("data", stdout.append);
       child.stderr?.on("data", stderr.append);
       child.on("error", (error: NodeJS.ErrnoException) => {
-        options.signal?.removeEventListener("abort", onAbort);
+        if (settled) return;
+        settled = true;
+        cleanup();
         if (error.code === "ENOENT") reject(new ProcessNotFoundError(command, error));
         else reject(error);
       });
-      child.on("close", (exitCode) => {
-        options.signal?.removeEventListener("abort", onAbort);
-        resolveResult({ exitCode, stdout: stdout.value(), stderr: stderr.value(), cancelled });
-      });
+      child.on("close", finish);
+      if (options.timeoutMs !== undefined && options.timeoutMs > 0) {
+        timeout = setTimeout(() => {
+          if (settled) return;
+          timedOut = true;
+          terminate();
+        }, options.timeoutMs);
+      }
     });
   },
 };
@@ -194,8 +258,9 @@ function errorMessage(error: unknown): string {
 function runnerOptions(
   cwd: string,
   signal: AbortSignal | undefined,
-): { cwd: string; signal?: AbortSignal } {
-  return signal === undefined ? { cwd } : { cwd, signal };
+  timeoutMs: number,
+): { cwd: string; signal?: AbortSignal; timeoutMs: number } {
+  return signal === undefined ? { cwd, timeoutMs } : { cwd, signal, timeoutMs };
 }
 
 function throwIfCancelled(signal: AbortSignal | undefined): void {
@@ -267,7 +332,7 @@ export async function exportPdf(
     versionResult = await runner.run(
       tectonic,
       ["--version"],
-      runnerOptions(dirname(inputPath), signal),
+      runnerOptions(dirname(inputPath), signal, VERSION_TIMEOUT_MS),
     );
   } catch (error) {
     if (isAbort(error, signal))
@@ -282,6 +347,11 @@ export async function exportPdf(
   }
   if (versionResult.cancelled || signal?.aborted)
     throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました");
+  if (versionResult.timedOut)
+    throw new PdfExportError(
+      "E_TECTONIC_VERSION",
+      `Tectonic のバージョン確認が ${VERSION_TIMEOUT_MS / 1000} 秒でタイムアウトしました`,
+    );
   const engineVersion =
     versionResult.exitCode === 0
       ? versionFrom(`${versionResult.stdout}\n${versionResult.stderr}`)
@@ -304,7 +374,13 @@ export async function exportPdf(
       compileResult = await runner.run(
         tectonic,
         ["-X", "compile", "--outdir", tempDirectory, inputPath],
-        runnerOptions(dirname(inputPath), signal),
+        runnerOptions(
+          dirname(inputPath),
+          signal,
+          request.timeoutMs && request.timeoutMs > 0
+            ? request.timeoutMs
+            : DEFAULT_COMPILE_TIMEOUT_MS,
+        ),
       );
     } catch (error) {
       if (isAbort(error, signal))
@@ -319,6 +395,14 @@ export async function exportPdf(
     }
     if (compileResult.cancelled || signal?.aborted)
       throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました");
+    if (compileResult.timedOut) {
+      const timeoutMs =
+        request.timeoutMs && request.timeoutMs > 0 ? request.timeoutMs : DEFAULT_COMPILE_TIMEOUT_MS;
+      throw new PdfExportError(
+        "E_COMPILE",
+        `PDF のコンパイルが ${timeoutMs / 1000} 秒でタイムアウトしました${processDetail(compileResult)}`,
+      );
+    }
     const compiledPdf = join(tempDirectory, compiledPdfName(inputPath));
     if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(compiledPdf))) {
       throw new PdfExportError(

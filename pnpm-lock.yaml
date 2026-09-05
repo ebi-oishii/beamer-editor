@@ -22,6 +22,9 @@ importers:
 
   apps/vscode:
     dependencies:
+      '@beamer-editor/compiler':
+        specifier: workspace:*
+        version: link:../../packages/compiler
       '@beamer-editor/core':
         specifier: workspace:*
         version: link:../../packages/core
