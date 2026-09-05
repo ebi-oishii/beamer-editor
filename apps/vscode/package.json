@@ -25,6 +25,20 @@
         "icon": "$(open-preview)"
       },
       {
+        "command": "beamerEditor.revealSlideInPreview",
+        "title": "Beamer Editor: Reveal Current Slide in Preview"
+      },
+      {
+        "command": "beamerEditor.followCursor.enable",
+        "title": "Beamer Editor: Follow Cursor in Preview",
+        "icon": "$(sync-ignored)"
+      },
+      {
+        "command": "beamerEditor.followCursor.disable",
+        "title": "Beamer Editor: Stop Following Cursor in Preview",
+        "icon": "$(sync)"
+      },
+      {
         "command": "beamerEditor.export",
         "title": "Beamer Editor: Export...",
         "icon": "$(export)"
@@ -44,6 +58,18 @@
           "scope": "resource",
           "description": "Glob patterns for Beamer Editor managed slide files."
         },
+        "beamerEditor.preview.followCursor": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "ソースのカーソルがあるフレームをプレビューが追従して表示します。プレビュータブのボタンでも切り替えられます。"
+        },
+        "beamerEditor.preview.lockGroup": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "プレビューのエディタグループをロックし、他のファイルがプレビューと同じグループに開かないようにします。ロックはプレビューが初めてフォーカスされたときに掛かります。"
+        },
         "beamerEditor.tectonicPath": {
           "type": "string",
           "default": "tectonic",
@@ -57,12 +83,6 @@
           "maximum": 1800,
           "scope": "resource",
           "description": "Maximum time in seconds to wait for PDF compilation."
-        },
-        "beamerEditor.preview.lockGroup": {
-          "type": "boolean",
-          "default": true,
-          "scope": "window",
-          "description": "プレビューのエディタグループをロックし、他のファイルがプレビューと同じグループに開かないようにします。ロックはプレビューが初めてフォーカスされたときに掛かります。"
         }
       }
     },
@@ -74,9 +94,33 @@
           "group": "navigation"
         },
         {
+          "command": "beamerEditor.followCursor.disable",
+          "when": "activeWebviewPanelId == beamerEditor.preview && beamerEditor.followCursor",
+          "group": "navigation"
+        },
+        {
+          "command": "beamerEditor.followCursor.enable",
+          "when": "activeWebviewPanelId == beamerEditor.preview && !beamerEditor.followCursor",
+          "group": "navigation"
+        },
+        {
           "command": "beamerEditor.export",
           "when": "resourceScheme == file && resourceExtname == .tex && isWorkspaceTrusted",
           "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "beamerEditor.followCursor.enable",
+          "when": "!beamerEditor.followCursor"
+        },
+        {
+          "command": "beamerEditor.followCursor.disable",
+          "when": "beamerEditor.followCursor"
+        },
+        {
+          "command": "beamerEditor.export",
+          "when": "isWorkspaceTrusted"
         }
       ],
       "webview/title": [
@@ -85,14 +129,16 @@
           "when": "webviewId == beamerEditor.preview && isWorkspaceTrusted",
           "group": "navigation"
         }
-      ],
-      "commandPalette": [
-        {
-          "command": "beamerEditor.export",
-          "when": "isWorkspaceTrusted"
-        }
       ]
     },
+    "keybindings": [
+      {
+        "command": "beamerEditor.revealSlideInPreview",
+        "key": "ctrl+k v",
+        "mac": "cmd+k v",
+        "when": "editorTextFocus && editorLangId == latex"
+      }
+    ],
     "views": {
       "explorer": [
         {

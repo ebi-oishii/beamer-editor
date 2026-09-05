@@ -555,6 +555,104 @@ describe("PreviewController", () => {
     });
   });
 
+  describe("revealSourceOffset(ソース → プレビュー)", () => {
+    const twoFrames = (_text: string, version: number): RenderOutcome => ({
+      deck: {
+        title: "t",
+        css: "",
+        frames: [
+          {
+            index: 1,
+            label: null,
+            titleText: "a",
+            html: "",
+            stepCount: 1,
+            isRaw: false,
+            sourceSpan: { start: 0, end: 20 },
+          },
+          {
+            index: 2,
+            label: null,
+            titleText: "b",
+            html: "",
+            stepCount: 1,
+            isRaw: false,
+            sourceSpan: { start: 20, end: 40 },
+          },
+        ],
+      },
+      version,
+      expansionMap: [
+        { expandedStart: 0, expandedEnd: 100, sourceStart: 0, sourceEnd: 100, exact: true },
+      ],
+      expandDiagnostics: [],
+    });
+
+    it("offset を含むフレームを表示中の version 付きで Webview へ送り、フレーム外は送らない", () => {
+      const { panel, posted, fire } = makePanel();
+      const { events } = makeEvents();
+      const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+        render: twoFrames,
+      });
+      fire({ type: "ready" });
+      const before = posted.length;
+      controller.revealSourceOffset(25);
+      expect(posted.slice(before)).toEqual([
+        { type: "activeFrameChanged", frameIndex: 1, version: 7 },
+      ]);
+      controller.revealSourceOffset(90);
+      expect(posted.length).toBe(before + 1);
+    });
+
+    it("描画前の要求は初回描画の後に適用し、onlyIfChanged は同じフレームを繰り返さない", () => {
+      const { panel, posted, fire } = makePanel();
+      const { events } = makeEvents();
+      const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+        render: twoFrames,
+      });
+      controller.revealSourceOffset(5);
+      expect(posted).toHaveLength(0);
+      fire({ type: "ready" });
+      expect(posted.map((m) => (m as { type: string }).type)).toEqual([
+        "deckUpdated",
+        "activeFrameChanged",
+      ]);
+      const before = posted.length;
+      controller.revealSourceOffset(10, { onlyIfChanged: true });
+      expect(posted.length).toBe(before);
+      controller.revealSourceOffset(30, { onlyIfChanged: true });
+      expect(posted.length).toBe(before + 1);
+      expect(posted.at(-1)).toEqual({ type: "activeFrameChanged", frameIndex: 1, version: 7 });
+    });
+
+    it("同じ文書の version だけが進んだ間(debounce 中)は保留し、最新の描画後にその version で送る", () => {
+      vi.useFakeTimers();
+      try {
+        const { panel, posted, fire } = makePanel();
+        const { events, change } = makeEvents();
+        const doc = makeDoc();
+        const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+          render: twoFrames,
+        });
+        fire({ type: "ready" });
+        const before = posted.length;
+        // 通常の編集: TextDocument object は同じまま version が進み、再描画は debounce 待ち。
+        doc.edit("changed");
+        change(doc);
+        controller.revealSourceOffset(25);
+        // 古い ExpansionMap で解いて旧 version の Webview を動かさない。
+        expect(posted.length).toBe(before);
+        vi.advanceTimersByTime(RENDER_DEBOUNCE_MS);
+        expect(posted.slice(before)).toEqual([
+          expect.objectContaining({ type: "deckUpdated", version: 8 }),
+          { type: "activeFrameChanged", frameIndex: 1, version: 8 },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it.each([
     "failed" as const,
     new Error("reject"),

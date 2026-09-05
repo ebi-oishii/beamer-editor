@@ -127,4 +127,20 @@ describe("createMessageShellHost", () => {
       },
     ]);
   });
+
+  it("onRevealFrame は activeFrameChanged だけを version 付きで listener へ渡す", () => {
+    let handler: ((msg: unknown) => void) | undefined;
+    const host = createMessageShellHost({
+      post: () => {},
+      subscribe: (cb) => {
+        handler = cb as (msg: unknown) => void;
+        return () => {};
+      },
+    });
+    const seen: [number, number][] = [];
+    host.onRevealFrame?.((frameIndex, version) => seen.push([frameIndex, version]));
+    handler?.({ type: "activeFrameChanged", frameIndex: 2, version: 5 });
+    handler?.({ type: "error", message: "x" });
+    expect(seen).toEqual([[2, 5]]);
+  });
 });
