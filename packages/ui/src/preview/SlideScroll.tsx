@@ -77,7 +77,7 @@ function SlideCard({
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
-    // Ctrl/Cmd+Enter はダブルクリックと等価のソースジャンプ(コントロールの「ソースへ」でも可)。
+    // Ctrl/Cmd+Enter はダブルクリックと等価のソースジャンプ。
     if (event.ctrlKey || event.metaKey) onJump(index);
     else onSelect(index);
   };
@@ -89,6 +89,7 @@ function SlideCard({
       data-index={index}
       role="button"
       tabIndex={0}
+      aria-current={active ? true : undefined}
       aria-label={`フレーム ${frame.index}: ${frame.titleText}（Enter で選択、${MODIFIER_LABEL}+Enter でソースへ移動）`}
       onClick={() => onSelect(index)}
       onDoubleClick={() => onJump(index)}

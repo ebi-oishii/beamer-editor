@@ -206,7 +206,8 @@ describe("mountPreview", () => {
   it("フェイク host と手組みデッキを例外なく描画し unmount できる", () => {
     const container = document.createElement("div");
     document.body.append(container);
-    const host = fakeHost();
+    const saved: unknown[] = [];
+    const host = { ...fakeHost(), saveNavState: (state: unknown) => saved.push(state) };
 
     let unmount: () => void = () => {};
     act(() => {
@@ -219,10 +220,67 @@ describe("mountPreview", () => {
     // PREVIEW_CSS が一度だけ注入される。
     expect(document.getElementById("beamer-preview-styles")).not.toBeNull();
     // beamer-preview のルートが描画され、フレームのスライドが入る。
-    expect(container.querySelector(".beamer-preview")).not.toBeNull();
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    if (!preview) throw new Error("preview fixture missing");
     expect(container.querySelectorAll(".slide-card")).toHaveLength(2);
 
+    // すでに消費されたキーは body / preview 配下のどちらからでもナビ状態を変えない。
+    const savedBeforePreventedKeys = saved.length;
+    document.body.addEventListener("keydown", (event) => event.preventDefault(), { once: true });
+    const preventedBodyArrow = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => document.body.dispatchEvent(preventedBodyArrow));
+    expect(preventedBodyArrow.defaultPrevented).toBe(true);
+    preview.addEventListener("keydown", (event) => event.preventDefault(), { once: true });
+    const preventedPreviewZoom = new KeyboardEvent("keydown", {
+      key: "=",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => preview.dispatchEvent(preventedPreviewZoom));
+    expect(preventedPreviewZoom.defaultPrevented).toBe(true);
+    expect(saved).toHaveLength(savedBeforePreventedKeys);
+    expect(
+      container.querySelectorAll<HTMLElement>(".slide-card")[0]?.classList.contains("active"),
+    ).toBe(true);
+    expect(container.querySelector(".slide-scale")?.getAttribute("style")).not.toContain(
+      "scale(1.1)",
+    );
+
+    // Webview 本体へ最初からフォーカスがない場合でも、body target のキーで移動できる。
+    const bodyArrow = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => document.body.dispatchEvent(bodyArrow));
+    expect(bodyArrow.defaultPrevented).toBe(true);
+    expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: "fit" });
+
+    // プレビュー外の入力欄は対象外にし、通常の編集キーとして残す。
+    const externalTextarea = document.createElement("textarea");
+    document.body.append(externalTextarea);
+    const textareaArrow = new KeyboardEvent("keydown", {
+      key: "ArrowLeft",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => externalTextarea.dispatchEvent(textareaArrow));
+    expect(textareaArrow.defaultPrevented).toBe(false);
+    expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: "fit" });
+
     expect(() => act(() => unmount())).not.toThrow();
+    const callsAfterUnmount = saved.length;
+    act(() =>
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }),
+      ),
+    );
+    expect(saved).toHaveLength(callsAfterUnmount);
   });
 
   it("loadNavState から現在フレームを復元し、ナビ操作で saveNavState が呼ばれる", () => {
@@ -249,10 +307,10 @@ describe("mountPreview", () => {
     expect(cards[1]?.classList.contains("active")).toBe(true);
     expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: "fit" });
 
-    // 前へ移動すると新しいナビ状態が保存される。
-    const prev = container.querySelector<HTMLButtonElement>('button[aria-label="前のフレーム"]');
+    // ← で前へ移動すると新しいナビ状態が保存される。
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
     act(() => {
-      prev?.click();
+      preview?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     });
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: "fit" });
   });
@@ -280,13 +338,13 @@ describe("mountPreview", () => {
     expect(saved.at(-1)).toEqual({ current: 0, step: 2, zoom: "fit" });
   });
 
-  it("ズーム操作を反映・保存し、fit と 100% 表示を切り替える", () => {
+  it("Ctrl/Cmd キー操作でズームを反映・保存し、fit に戻せる", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const saved: unknown[] = [];
     const host = {
       ...fakeHost(),
-      loadNavState: () => ({ current: 0, step: 1, zoom: "fit" as const }),
+      loadNavState: () => ({ current: 0, step: 1, zoom: 1 as const }),
       saveNavState: (state: unknown) => saved.push(state),
     };
 
@@ -297,9 +355,7 @@ describe("mountPreview", () => {
       host.push(DECK);
     });
 
-    expect(container.querySelector(".zoom-indicator")?.textContent).toMatch(/^フィット /);
-    const actual = container.querySelector<HTMLButtonElement>('button[aria-label="100%表示"]');
-    act(() => actual?.click());
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
     expect(container.querySelector(".slide-scale")?.getAttribute("style")).toContain("scale(1)");
     expect(container.querySelector<HTMLElement>(".slide-layout")?.style.width).toBe("607px");
     expect(container.querySelector<HTMLElement>(".slide-layout")?.style.height).toBe("341px");
@@ -307,8 +363,11 @@ describe("mountPreview", () => {
     expect(container.querySelector<HTMLElement>(".slide-scale")?.style.height).toBe("341px");
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1 });
 
-    const increase = container.querySelector<HTMLButtonElement>('button[aria-label="拡大"]');
-    act(() => increase?.click());
+    act(() => {
+      preview?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "=", ctrlKey: true, bubbles: true, cancelable: true }),
+      );
+    });
     expect(container.querySelector(".slide-scale")?.getAttribute("style")).toContain("scale(1.1)");
     expect(container.querySelector<HTMLElement>(".slide-layout")?.style.width).toBe("667.7px");
     expect(container.querySelector<HTMLElement>(".slide-layout")?.style.height).toBe("375.1px");
@@ -317,10 +376,204 @@ describe("mountPreview", () => {
     expect(container.querySelector<HTMLElement>(".slide-scale")?.style.height).toBe("341px");
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.1 });
 
-    const fit = container.querySelector<HTMLButtonElement>('button[aria-label="画面に合わせる"]');
-    act(() => fit?.click());
-    expect(container.querySelector(".zoom-indicator")?.textContent).toMatch(/^フィット /);
+    act(() => {
+      preview?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "0", metaKey: true, bubbles: true, cancelable: true }),
+      );
+    });
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: "fit" });
+  });
+
+  it("step range 上でも Ctrl/Cmd ズームを扱い、未修飾の左右キーは range に委ねる", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: unknown[] = [];
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: 1 as const }),
+      saveNavState: (state: unknown) => saved.push(state),
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const stepRange = container.querySelector<HTMLInputElement>(
+      'input[aria-label="オーバーレイ step（2 段階）"]',
+    );
+    if (!stepRange) throw new Error("step range fixture missing");
+
+    const zoomIn = new KeyboardEvent("keydown", {
+      key: "=",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => stepRange.dispatchEvent(zoomIn));
+    expect(zoomIn.defaultPrevented).toBe(true);
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.1 });
+
+    const arrowRight = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => stepRange.dispatchEvent(arrowRight));
+    expect(arrowRight.defaultPrevented).toBe(false);
+    expect(
+      container.querySelectorAll<HTMLElement>(".slide-card")[0]?.classList.contains("active"),
+    ).toBe(true);
+  });
+
+  it("Ctrl/Cmd+wheel だけを rAF ごとに一段階ズームし、通常 wheel は妨げない", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: unknown[] = [];
+    const callbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: 1 as const }),
+      saveNavState: (state: unknown) => saved.push(state),
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    if (!preview) throw new Error("preview fixture missing");
+
+    const normal = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -10 });
+    act(() => preview.dispatchEvent(normal));
+    expect(normal.defaultPrevented).toBe(false);
+    expect(callbacks).toHaveLength(0);
+
+    const zoomIn = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      deltaY: -1,
+    });
+    const zoomInAgain = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      deltaY: -1,
+    });
+    act(() => {
+      preview.dispatchEvent(zoomIn);
+      preview.dispatchEvent(zoomInAgain);
+    });
+    expect(zoomIn.defaultPrevented).toBe(true);
+    expect(zoomInAgain.defaultPrevented).toBe(true);
+    expect(callbacks).toHaveLength(1);
+    act(() => callbacks[0]?.(0));
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.1 });
+
+    const zoomOut = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      metaKey: true,
+      deltaY: 1,
+    });
+    act(() => preview.dispatchEvent(zoomOut));
+    expect(zoomOut.defaultPrevented).toBe(true);
+    act(() => callbacks[1]?.(16));
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1 });
+  });
+
+  it("wheel の倍率変更は現在のスクロール位置を戻さない", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const callbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const host = { ...fakeHost(), loadNavState: () => ({ current: 0, step: 1, zoom: 1 as const }) };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    const scroll = container.querySelector<HTMLElement>(".slide-scroll");
+    if (!preview || !scroll) throw new Error("preview fixture missing");
+    let scrollTop = 187;
+    Object.defineProperty(scroll, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+    act(() =>
+      preview.dispatchEvent(
+        new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -1 }),
+      ),
+    );
+    act(() => callbacks[0]?.(0));
+    expect(scrollTop).toBe(187);
+  });
+
+  it("fitScale が変わっても pending wheel rAF は unmount まで cancel しない", () => {
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    const animationCallbacks: FrameRequestCallback[] = [];
+    const cancelAnimationFrame = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      animationCallbacks.push(callback);
+      return animationCallbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: unknown[] = [];
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: "fit" as const }),
+      saveNavState: (state: unknown) => saved.push(state),
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    const scroll = container.querySelector<HTMLElement>(".slide-scroll");
+    if (!preview || !scroll) throw new Error("preview fixture missing");
+    act(() =>
+      preview.dispatchEvent(
+        new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -1 }),
+      ),
+    );
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 500 },
+      clientHeight: { configurable: true, value: 400 },
+    });
+    act(() => resizeCallbacks[0]?.([], {} as ResizeObserver));
+    expect(cancelAnimationFrame).not.toHaveBeenCalled();
+    act(() => animationCallbacks[0]?.(0));
+    // (500 - (12 + 4) * 2) / 607 = 0.771... を基準に一段階上げる。
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 0.87 });
   });
 
   it("resize 後も内側は論理サイズのまま、幅合わせの外側だけを再計算する", () => {
@@ -447,7 +700,7 @@ describe("mountPreview", () => {
     expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: "fit" });
   });
 
-  it("「ソースへ」ボタンと Ctrl+Enter でキーボードからジャンプできる", () => {
+  it("Ctrl+Enter でキーボードからソースへジャンプできる", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const jumpToSource = vi.fn();
@@ -459,14 +712,6 @@ describe("mountPreview", () => {
     act(() => {
       host.push(DECK);
     });
-
-    const jumpButton = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="このフレームのソース位置へ移動"]',
-    );
-    act(() => {
-      jumpButton?.click();
-    });
-    expect(jumpToSource).toHaveBeenLastCalledWith(0, 1);
 
     // スライド上の Ctrl+Enter はダブルクリックと等価にジャンプする。
     const card = container.querySelectorAll<HTMLElement>(".slide-card")[1];
@@ -496,18 +741,45 @@ describe("mountPreview", () => {
     expect(scales).toHaveLength(2);
     // 現在フレーム(0)は step=1 なので data-min="2" の要素は covered、他フレームは全ステップ表示。
     expect(scales[0]?.querySelector("[data-min]")?.classList.contains("covered")).toBe(true);
+    // 旧ツールバーはなく、step のある現在フレームだけにコンパクトな操作を表示する。
+    expect(container.querySelector(".controls")).toBeNull();
+    expect(container.querySelector('button[aria-label="前のフレーム"]')).toBeNull();
+    const stepRange = container.querySelector<HTMLInputElement>(
+      'input[aria-label="オーバーレイ step（2 段階）"]',
+    );
+    expect(stepRange?.value).toBe("1");
+    expect(container.querySelector(".step-indicator")?.textContent).toBe("1/2");
+    const cards = container.querySelectorAll<HTMLElement>(".slide-card");
+    expect(cards[0]?.getAttribute("aria-current")).toBe("true");
+    expect(cards[1]?.hasAttribute("aria-current")).toBe(false);
+    const status = container.querySelector<HTMLElement>(".preview-status");
+    expect(status?.getAttribute("aria-live")).toBe("polite");
+    expect(status?.getAttribute("aria-atomic")).toBe("true");
+    expect(status?.textContent).toBe("フレーム 1 / 2");
+    act(() => {
+      if (stepRange) {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+          stepRange,
+          "2",
+        );
+        stepRange.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+    expect(scales[0]?.querySelector("[data-min]")?.classList.contains("covered")).toBe(false);
+    expect(container.querySelector(".step-indicator")?.textContent).toBe("2/2");
     const captions = [...container.querySelectorAll(".slide-caption")].map((c) => c.textContent);
     expect(captions).toEqual(["1. one", "2. two（label=f2）"]);
 
-    // クリックで選択すると active が移り、frame indicator も追従する。
-    const cards = container.querySelectorAll<HTMLElement>(".slide-card");
+    // クリックで選択すると active が移る。
     act(() => {
       cards[1]?.click();
     });
     expect(cards[1]?.classList.contains("active")).toBe(true);
-    expect(container.querySelector(".frame-indicator")?.textContent).toBe("2 / 2");
-    // 総数の桁から幅を固定し、フレームが変わっても右側のボタンが動かない。
-    expect(container.querySelector<HTMLElement>(".frame-indicator")?.style.minWidth).toBe("5ch");
+    expect(cards[0]?.hasAttribute("aria-current")).toBe(false);
+    expect(cards[1]?.getAttribute("aria-current")).toBe("true");
+    expect(status?.textContent).toBe("フレーム 2 / 2");
+    // step のないフレームでは操作も余白も描画しない。
+    expect(container.querySelector(".step-control")).toBeNull();
   });
 
   it("スクロールで上端に来たフレームが現在フレームになる", () => {
@@ -549,10 +821,10 @@ describe("mountPreview", () => {
     expect(cards[1]?.classList.contains("active")).toBe(true);
     expect(notifyActiveFrame).toHaveBeenLastCalledWith(1);
 
-    // ◀ で戻ると移動先のカードが上端へ揃うようにスクロールされる。
-    const prev = container.querySelector<HTMLButtonElement>('button[aria-label="前のフレーム"]');
+    // ← で戻ると移動先のカードが上端へ揃うようにスクロールされる。
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
     act(() => {
-      prev?.click();
+      preview?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     });
     expect(cards[0]?.classList.contains("active")).toBe(true);
     expect(scrollTop).toBe(0);
