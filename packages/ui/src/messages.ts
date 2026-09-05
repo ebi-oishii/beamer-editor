@@ -26,7 +26,26 @@ export type WebviewToExtension =
       version: number;
       x: number;
       y: number;
+    }
+  /** フロー要素を deckcanvas へ移す(「自由配置にする」)。 */
+  | {
+      type: "detachToCanvas";
+      frameIndex: number;
+      /** 表示中 deck の document version。 */
+      version: number;
+      /** 展開後ソース上の対象ブロック範囲(renderer の data-source-start / end)。 */
+      sourceSpan: { start: number; end: number };
+      /** スライド全体を 1 とした左上座標と幅。ホストが本文領域座標へ変換する。 */
+      rect: { x: number; y: number; width: number };
     };
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -104,6 +123,31 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
         };
       }
       return null;
+    case "detachToCanvas": {
+      const { sourceSpan, rect } = raw;
+      if (
+        isNonNegativeInteger(raw.frameIndex) &&
+        typeof raw.version === "number" &&
+        Number.isInteger(raw.version) &&
+        isRecord(sourceSpan) &&
+        isNonNegativeInteger(sourceSpan.start) &&
+        isNonNegativeInteger(sourceSpan.end) &&
+        sourceSpan.end > sourceSpan.start &&
+        isRecord(rect) &&
+        isFiniteNumber(rect.x) &&
+        isFiniteNumber(rect.y) &&
+        isFiniteNumber(rect.width)
+      ) {
+        return {
+          type: "detachToCanvas",
+          frameIndex: raw.frameIndex,
+          version: raw.version,
+          sourceSpan: { start: sourceSpan.start, end: sourceSpan.end },
+          rect: { x: rect.x, y: rect.y, width: rect.width },
+        };
+      }
+      return null;
+    }
     default:
       return null;
   }

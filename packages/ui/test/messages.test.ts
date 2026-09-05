@@ -67,6 +67,22 @@ describe("parseWebviewToExtension", () => {
     });
   });
 
+  it("detachToCanvas は span と rect を検証して受理する", () => {
+    const valid = {
+      type: "detachToCanvas",
+      frameIndex: 2,
+      version: 5,
+      sourceSpan: { start: 10, end: 40 },
+      rect: { x: 0.1, y: 0.25, width: 0.5 },
+    };
+    expect(parseWebviewToExtension(valid)).toEqual(valid);
+    expect(parseWebviewToExtension({ ...valid, sourceSpan: { start: 40, end: 40 } })).toBeNull();
+    expect(
+      parseWebviewToExtension({ ...valid, rect: { x: Number.NaN, y: 0, width: 1 } }),
+    ).toBeNull();
+    expect(parseWebviewToExtension({ ...valid, version: undefined })).toBeNull();
+  });
+
   it("不正なものは null にする", () => {
     expect(parseWebviewToExtension(undefined)).toBeNull();
     expect(parseWebviewToExtension(42)).toBeNull();
