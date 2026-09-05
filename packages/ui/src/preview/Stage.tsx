@@ -4,9 +4,10 @@
  * トグル)とキャンバス画像のドラッグを適用する。倍率の計算は持たない。
  */
 
+import { clampCanvasPosition, roundCanvasCoordinate } from "@beamer-editor/core";
 import type { RenderedFrame } from "@beamer-editor/renderer";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { canvasPointFromPointer, normalizeCanvasCoordinate } from "./canvas-drag.js";
+import { canvasPointFromPointer } from "./canvas-drag.js";
 import {
   clampMenuPosition,
   collectDetachCandidates,
@@ -65,6 +66,10 @@ export function Stage({
     id: string;
     x: number;
     y: number;
+    /** 本文領域内へ収めるとき右端の余地になる箱の幅。移動では変わらない。 */
+    width: number;
+    /** pointerdown 時点の実測高さ。描画中の内容変化の影響を受けない。 */
+    height: number;
     grabX: number;
     grabY: number;
     pointerId: number;
@@ -208,11 +213,19 @@ export function Stage({
         ?.classList.remove("canvas-selected");
     }
     const bounds = element.getBoundingClientRect();
+    const canvasBounds = canvas.getBoundingClientRect();
     dragRef.current = {
       element,
       id,
       x: descriptor.position.x,
       y: descriptor.position.y,
+      width: descriptor.position.width,
+      height:
+        Number.isFinite(bounds.height) &&
+        Number.isFinite(canvasBounds.height) &&
+        canvasBounds.height > 0
+          ? bounds.height / canvasBounds.height
+          : 0,
       grabX: event.clientX - bounds.left,
       grabY: event.clientY - bounds.top,
       pointerId: event.pointerId,
@@ -226,7 +239,7 @@ export function Stage({
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const canvas = drag.element.closest<HTMLElement>(".canvas");
-    const point =
+    const raw =
       canvas &&
       canvasPointFromPointer(
         canvas.getBoundingClientRect(),
@@ -235,7 +248,8 @@ export function Stage({
         drag.grabX,
         drag.grabY,
       );
-    if (!point) return;
+    if (!raw) return;
+    const point = clampCanvasPosition(raw.x, raw.y, drag.width, drag.height);
     drag.element.style.left = `${point.x * 100}%`;
     drag.element.style.top = `${point.y * 100}%`;
   };
@@ -243,7 +257,7 @@ export function Stage({
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const canvas = drag.element.closest<HTMLElement>(".canvas");
-    const point =
+    const raw =
       canvas &&
       canvasPointFromPointer(
         canvas.getBoundingClientRect(),
@@ -252,15 +266,16 @@ export function Stage({
         drag.grabX,
         drag.grabY,
       );
+    const point = raw && clampCanvasPosition(raw.x, raw.y, drag.width, drag.height);
     drag.element.classList.remove("canvas-dragging");
     releasePointerCapture(drag.element, drag.pointerId);
     if (!commit || !point) {
       drag.element.style.left = `${drag.x * 100}%`;
       drag.element.style.top = `${drag.y * 100}%`;
     } else {
-      const x = normalizeCanvasCoordinate(point.x);
-      const y = normalizeCanvasCoordinate(point.y);
-      if (x !== normalizeCanvasCoordinate(drag.x) || y !== normalizeCanvasCoordinate(drag.y))
+      const x = point.x;
+      const y = point.y;
+      if (x !== roundCanvasCoordinate(drag.x) || y !== roundCanvasCoordinate(drag.y))
         onMoveCanvasElement(drag.id, x, y);
     }
     dragRef.current = undefined;

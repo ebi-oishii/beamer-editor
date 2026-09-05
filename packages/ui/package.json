@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@beamer-editor/core": "workspace:*",
     "@beamer-editor/renderer": "workspace:*",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

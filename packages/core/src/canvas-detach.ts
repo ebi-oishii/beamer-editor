@@ -16,24 +16,18 @@ import type {
   ListNode,
   SourceSpan,
 } from "./ast.js";
-import { formatCanvasCoordinate } from "./canvas-edit.js";
+import {
+  type CanvasPlacement,
+  clampCanvasPlacement,
+  formatCanvasCoordinate,
+} from "./canvas-edit.js";
 import { parseDeck } from "./parser.js";
-
-/** 本文領域に対する正規化座標(0〜1)での箱の位置と幅。高さは内容から自動。 */
-export interface CanvasPlacement {
-  x: number;
-  y: number;
-  width: number;
-}
 
 /** 元ソースの span をこのテキストで置き換える、という結果。 */
 export interface SourceReplacement {
   span: SourceSpan;
   text: string;
 }
-
-/** 箱の最小幅(正規化値)。極端に細い箱を作らない。 */
-const MIN_WIDTH = 0.05;
 
 /** decktext 内のリストは本文と同じ 3 段までネスト可(L014 と同じ条件)。項目のオーバーレイは不可。 */
 function listFitsDecktext(list: ListNode, depth: number): boolean {
@@ -238,13 +232,6 @@ export function detachableBlocksOf(frame: FrameNode): Set<BlockNode> {
   const eligible = new Set<BlockNode>();
   for (const [block, status] of detachStatusesOf(frame)) if (status.eligible) eligible.add(block);
   return eligible;
-}
-
-function clampPlacement(placement: CanvasPlacement): CanvasPlacement {
-  const x = Math.min(Math.max(placement.x, 0), 1 - MIN_WIDTH);
-  const y = Math.min(Math.max(placement.y, 0), 1);
-  const width = Math.min(Math.max(placement.width, MIN_WIDTH), 1 - x);
-  return { x, y, width };
 }
 
 function lineStart(source: string, offset: number): number {
@@ -454,7 +441,7 @@ export function detachBlockToCanvas(
       target.block,
       target,
       canvases[0] ?? null,
-      clampPlacement(placement),
+      clampCanvasPlacement(placement),
     );
   }
   return null;

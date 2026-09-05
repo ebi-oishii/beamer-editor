@@ -18,10 +18,3 @@ export function canvasPointFromPointer(
     y: (clientY - rect.top - grabY) / rect.height,
   };
 }
-
-/** source と同じ 3 桁表現へ正規化して no-op 判定に使う。 */
-export function normalizeCanvasCoordinate(value: number): number {
-  if (!Number.isFinite(value)) return value;
-  const normalized = Number((Object.is(value, -0) ? 0 : value).toFixed(3));
-  return Object.is(normalized, -0) ? 0 : normalized;
-}
