@@ -38,5 +38,9 @@
     "**/*.sty",
     "**/*.cls",
     "**/fixtures/**/*.tex"
+  ],
+  "beamerEditor.managedFiles": [
+    "**/*.slide.tex",
+    "fixtures/**/*.tex"
   ]
 }
