@@ -14,7 +14,8 @@
   "main": "./dist/extension.cjs",
   "activationEvents": [
     "onLanguage:latex",
-    "onCommand:beamerEditor.openPreview"
+    "onCommand:beamerEditor.openPreview",
+    "onCommand:beamerEditor.export"
   ],
   "contributes": {
     "commands": [
@@ -22,6 +23,11 @@
         "command": "beamerEditor.openPreview",
         "title": "Beamer Editor: Open Preview",
         "icon": "$(open-preview)"
+      },
+      {
+        "command": "beamerEditor.export",
+        "title": "Beamer Editor: Export...",
+        "icon": "$(export)"
       }
     ],
     "configuration": {
@@ -37,6 +43,12 @@
           ],
           "scope": "resource",
           "description": "Glob patterns for Beamer Editor managed slide files."
+        },
+        "beamerEditor.tectonicPath": {
+          "type": "string",
+          "default": "tectonic",
+          "scope": "resource",
+          "description": "Path to the Tectonic executable used for PDF export."
         }
       }
     },
@@ -46,6 +58,24 @@
           "command": "beamerEditor.openPreview",
           "when": "resourceScheme == file && resourceExtname == .tex",
           "group": "navigation"
+        },
+        {
+          "command": "beamerEditor.export",
+          "when": "resourceScheme == file && resourceExtname == .tex && isWorkspaceTrusted",
+          "group": "navigation"
+        }
+      ],
+      "webview/title": [
+        {
+          "command": "beamerEditor.export",
+          "when": "webviewId == beamerEditor.preview && isWorkspaceTrusted",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "beamerEditor.export",
+          "when": "isWorkspaceTrusted"
         }
       ]
     }
@@ -60,6 +90,7 @@
     "package": "pnpm build && vsce package --no-dependencies -o beamer-editor.vsix"
   },
   "dependencies": {
+    "@beamer-editor/compiler": "workspace:*",
     "@beamer-editor/core": "workspace:*",
     "@beamer-editor/renderer": "workspace:*",
     "@beamer-editor/ui": "workspace:*",
@@ -83,7 +114,10 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": true,
-      "description": "プレビュー・lint はコードを実行しません。PDF 書き出し(tectonic)導入時は Workspace Trust が無い場合に無効化します。"
+      "description": "プレビュー・lint はコードを実行しません。PDF 書き出しは Workspace Trust が無い場合に無効化します。",
+      "restrictedConfigurations": [
+        "beamerEditor.tectonicPath"
+      ]
     }
   }
 }
