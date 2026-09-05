@@ -1,0 +1,52 @@
+\documentclass[aspectratio=169]{beamer}
+%% deck-source-version: 1
+% ---- ツール管理プリアンブル(将来は deck init / deck format が生成・所有する)----
+\usetheme{default}
+\setbeamertemplate{navigation symbols}{}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\input{deck-canvas-preamble}
+\input{deck-style-preamble}
+% ---- ツール管理ここまで ----
+
+%% macros:begin
+%% macros:end
+
+%% style:begin
+%% style:end
+
+%% preamble-extra:begin
+\usepackage{templates/corporate/beamerthemecorporate}
+%% preamble-extra:end
+
+\title{Templated Golden Sample}
+\subtitle{Corporate theme loaded from templates/ (\#70)}
+\author{Beamer Editor Team}
+\date{2026-09-05}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Template colors, logo and background}
+  \begin{itemize}
+    \item The structure color comes from the template's \texttt{setbeamercolor}.
+    \item \alert{Alerts} use the template's alerted text color.
+    \item The background image and the logo are applied to every frame.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[label=templated-canvas]{Template plus canvas}
+  \begin{deckcanvas}
+    \begin{decktext}[x=0.050,y=0.150,w=0.500,size=normal]
+      Canvas geometry does not depend on the template.
+    \end{decktext}
+  \end{deckcanvas}
+\end{frame}
+
+\end{document}

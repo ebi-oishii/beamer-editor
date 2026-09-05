@@ -411,6 +411,17 @@ export const PREVIEW_CSS = `
   position: absolute;
   z-index: -1;
 }
+/* テンプレート由来の背景画像。ロゴ・フッターよりさらに背面(.slide の isolation 内)。 */
+.slide .deck-background {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -2;
+  object-fit: cover;
+  max-width: none;
+}
 .slide .deck-footer {
   position: absolute;
   z-index: -1;

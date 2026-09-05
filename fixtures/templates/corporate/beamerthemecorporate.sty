@@ -1,0 +1,13 @@
+% 会社テンプレートの見本(#70)。標準の Beamer 記法だけで書く(ツール専用の語彙は使わない)。
+% デッキの %% preamble-extra から \usepackage{templates/corporate/beamerthemecorporate} で読む。
+% 画像パスは TeX の規則どおりコンパイル時の CWD(= デッキのディレクトリ)基準で書く。
+\ProvidesPackage{beamerthemecorporate}[2026/09/05 Corporate sample theme]
+\mode<presentation>
+\definecolor{corpblue}{HTML}{0F62FE}
+\definecolor{corpred}{RGB}{218,30,40}
+\setbeamercolor{structure}{fg=corpblue}
+\setbeamercolor{alerted text}{fg=corpred}
+\setbeamertemplate{navigation symbols}{}
+\usebackgroundtemplate{\includegraphics[width=\paperwidth,height=\paperheight]{templates/corporate/assets/background.png}}
+\logo{\includegraphics[width=0.08\paperwidth]{templates/corporate/assets/logo.png}}
+\mode<all>

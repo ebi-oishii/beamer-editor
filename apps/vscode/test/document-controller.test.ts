@@ -20,6 +20,22 @@ describe("renderDocument", () => {
     expect(outcome.expansionMap.length).toBeGreaterThan(0);
   });
 
+  it("baseStyle で渡した土台スタイルが CSS と装飾に反映される", () => {
+    const outcome = renderDocument(
+      "\\begin{document}\\begin{frame}{Hi}A\\end{frame}\\end{document}",
+      3,
+      {
+        baseStyle: () => ({
+          colors: { structure: "123456" },
+          fonts: {},
+          background: { path: "templates/corp/assets/bg.png" },
+        }),
+      },
+    );
+    expect(outcome.deck.css).toContain("--deck-structure: #123456;");
+    expect(outcome.deck.frames[0]?.html).toContain('class="deck-background"');
+  });
+
   it("マクロの無いデッキでもそのまま描画できる", () => {
     const outcome = renderDocument(
       "\\begin{document}\\begin{frame}{Hi}A\\end{frame}\\end{document}",
