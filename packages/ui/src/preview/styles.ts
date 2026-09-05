@@ -10,6 +10,7 @@
 
 export const PREVIEW_CSS = `
 .beamer-preview {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -77,14 +78,17 @@ export const PREVIEW_CSS = `
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* 現在フレームの step 操作だけをスクロール領域の直下にコンパクトに置く。 */
+/* 現在フレームの step 操作はスクロール領域へ重ね、表示領域の高さを変えない。 */
 .step-control {
-  align-self: center;
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   gap: 10px;
   justify-content: center;
-  margin: 8px;
   padding: 4px 8px;
   border: 1px solid var(--vscode-panel-border, #ddd);
   border-radius: 4px;
@@ -98,6 +102,17 @@ export const PREVIEW_CSS = `
 }
 .step-indicator {
   font-variant-numeric: tabular-nums;
+}
+.preview-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 .empty {
   color: var(--vscode-descriptionForeground, #999);

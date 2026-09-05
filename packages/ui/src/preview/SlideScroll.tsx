@@ -87,6 +87,7 @@ function SlideCard({
       data-index={index}
       role="button"
       tabIndex={0}
+      aria-current={active ? true : undefined}
       aria-label={`フレーム ${frame.index}: ${frame.titleText}（Enter で選択、${MODIFIER_LABEL}+Enter でソースへ移動）`}
       onClick={() => onSelect(index)}
       onDoubleClick={() => onJump(index)}
