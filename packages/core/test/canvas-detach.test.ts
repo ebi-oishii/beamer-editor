@@ -212,6 +212,86 @@ describe("detachBlockToCanvas", () => {
     ).not.toBeNull();
   });
 
+  it("表示条件が変わる候補は対象にしない: overlay 付きの block / \\item の中", () => {
+    const source = deck(`\\begin{frame}{T}
+  \\begin{block}<2->{B}
+    delayed
+  \\end{block}
+  \\begin{itemize}
+    \\item<2-> text \\includegraphics[width=0.4\\textwidth]{late.png}
+    \\item text \\includegraphics[width=0.4\\textwidth]{now.png}
+  \\end{itemize}
+\\end{frame}`);
+    const placement = { x: 0.1, y: 0.1, width: 0.3 };
+    expect(detachBlockToCanvas(source, spanOf(source, "delayed"), placement)).toBeNull();
+    expect(
+      detachBlockToCanvas(
+        source,
+        spanOf(source, "\\includegraphics[width=0.4\\textwidth]{late.png}"),
+        placement,
+      ),
+    ).toBeNull();
+    expect(
+      detachBlockToCanvas(
+        source,
+        spanOf(source, "\\includegraphics[width=0.4\\textwidth]{now.png}"),
+        placement,
+      ),
+    ).not.toBeNull();
+  });
+
+  it("\\pause との前後関係が移動先と異なる候補は対象にしない", () => {
+    const placement = { x: 0.1, y: 0.1, width: 0.3 };
+    // canvas を新設する場合、移動先はフレーム末尾(全 pause の後)。pause 前の first は対象外。
+    const noCanvas = deck(`\\begin{frame}{T}
+  first
+  \\pause
+  second
+\\end{frame}`);
+    expect(detachBlockToCanvas(noCanvas, spanOf(noCanvas, "first"), placement)).toBeNull();
+    expect(detachBlockToCanvas(noCanvas, spanOf(noCanvas, "second"), placement)).not.toBeNull();
+    // 既存 canvas が pause の前にあるなら、pause 後の要素は対象外で、pause 前の要素は対象。
+    const withCanvas = deck(`\\begin{frame}[label=c]{T}
+  before
+  \\begin{deckcanvas}
+    \\deckimage[x=0.500,y=0.100,w=0.300]{a.png}
+  \\end{deckcanvas}
+  \\pause
+  after
+\\end{frame}`);
+    expect(detachBlockToCanvas(withCanvas, spanOf(withCanvas, "after"), placement)).toBeNull();
+    expect(detachBlockToCanvas(withCanvas, spanOf(withCanvas, "before"), placement)).not.toBeNull();
+  });
+
+  it("center の中と、\\pause しか残らないリスト項目の内容は対象にしない", () => {
+    const source = deck(`\\begin{frame}{T}
+  \\begin{center}
+    short text
+  \\end{center}
+  \\begin{itemize}
+    \\item \\pause \\includegraphics[width=0.4\\textwidth]{only.png}
+    \\item text \\pause \\includegraphics[width=0.4\\textwidth]{with-text.png}
+  \\end{itemize}
+\\end{frame}`);
+    const placement = { x: 0.1, y: 0.1, width: 0.3 };
+    expect(detachBlockToCanvas(source, spanOf(source, "short text"), placement)).toBeNull();
+    expect(
+      detachBlockToCanvas(
+        source,
+        spanOf(source, "\\includegraphics[width=0.4\\textwidth]{only.png}"),
+        placement,
+      ),
+    ).toBeNull();
+    // text が残る項目の画像は、全 pause の後にあるので移動先(フレーム末尾)と表示条件が一致する。
+    expect(
+      detachBlockToCanvas(
+        source,
+        spanOf(source, "\\includegraphics[width=0.4\\textwidth]{with-text.png}"),
+        placement,
+      ),
+    ).not.toBeNull();
+  });
+
   it("CRLF 文書では生成部分も CRLF にし、取り除いた行に CR を残さない", () => {
     const source = deck(`\\begin{frame}{T}
   lead text

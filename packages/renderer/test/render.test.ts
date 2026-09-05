@@ -135,6 +135,35 @@ describe("renderDeck: 自由配置候補の識別属性", () => {
     expect(html.match(/data-flow-block=/g)).toHaveLength(4);
   });
 
+  it("overlay の中・\\pause の前・center の中・\\pause しか残らない項目の内容には付けない", () => {
+    const src = `\\documentclass[aspectratio=169]{beamer}
+\\begin{document}
+\\begin{frame}{T}
+  first
+  \\begin{block}<2->{B}
+    delayed
+  \\end{block}
+  \\begin{center}
+    centered
+  \\end{center}
+  \\begin{itemize}
+    \\item \\pause \\includegraphics[width=0.4\\textwidth]{only.png}
+  \\end{itemize}
+  second
+\\end{frame}
+\\end{document}
+`;
+    const rendered = renderDeck(parseDeck(src)).frames[0]?.html ?? "";
+    for (const text of ["first", "delayed", "centered"]) {
+      expect(rendered).not.toContain(`data-source-start="${src.indexOf(text)}"`);
+    }
+    expect(rendered).not.toContain('data-flow-block="image"');
+    // second だけが、移動先(フレーム末尾 = 全 pause の後)と表示条件が一致する。
+    expect(rendered).toContain(
+      `<p data-flow-block="paragraph" data-source-start="${src.indexOf("second")}"`,
+    );
+  });
+
   it("リスト項目の唯一の内容(画像・入れ子リスト)には付けず、他の内容と並ぶものには付ける", () => {
     const list = `\\documentclass[aspectratio=169]{beamer}
 \\begin{document}

@@ -8,14 +8,7 @@
  * 取り出した要素の位置は呼び出し側(プレビュー上の表示位置)が決める。
  */
 
-import type {
-  BlockNode,
-  CanvasNode,
-  FrameNode,
-  ListItemNode,
-  ListNode,
-  SourceSpan,
-} from "./ast.js";
+import type { BlockNode, CanvasNode, FrameNode, ListNode, SourceSpan } from "./ast.js";
 import { formatCanvasCoordinate } from "./canvas-edit.js";
 import { parseDeck } from "./parser.js";
 
@@ -61,44 +54,110 @@ export function isDetachableBlock(block: BlockNode): boolean {
   }
 }
 
-/**
- * リスト項目の子のうち、取り出してよいもの。項目直下の段落は項目の本文そのものなので不可。
- * 画像や入れ子リストも、それが項目の唯一の内容なら不可(取り出すと空の \item と記号が残る)。
- * renderer の候補属性も同じ規則で付ける。
- */
-export function isDetachableListItemChild(item: ListItemNode, child: BlockNode): boolean {
-  return child.type !== "paragraph" && item.children.length > 1;
-}
-
-/** ブロックの子孫を深さ優先で列挙する(自身は含まない)。canvas の中身は対象外。 */
-function* walkChildren(block: BlockNode): Generator<BlockNode> {
-  switch (block.type) {
-    case "columns":
-      for (const column of block.columns) yield* walkBlocks(column.children);
-      break;
-    case "blockEnv":
-    case "center":
-      yield* walkBlocks(block.children);
-      break;
-    case "list":
-      for (const item of block.items) {
-        for (const child of item.children) {
-          if (isDetachableListItemChild(item, child)) yield child;
-          yield* walkChildren(child);
-        }
+/** \\pause の数を文書順に数える。stopAt に到達したらそこで止める(canvas の中は見ない)。 */
+function countPauses(blocks: BlockNode[], stopAt?: BlockNode): { count: number; stopped: boolean } {
+  let count = 0;
+  const visit = (list: BlockNode[]): boolean => {
+    for (const block of list) {
+      if (block === stopAt) return true;
+      switch (block.type) {
+        case "pause":
+          count++;
+          break;
+        case "columns":
+          for (const column of block.columns) if (visit(column.children)) return true;
+          break;
+        case "blockEnv":
+        case "center":
+          if (visit(block.children)) return true;
+          break;
+        case "list":
+          for (const item of block.items) if (visit(item.children)) return true;
+          break;
+        default:
+          break;
       }
-      break;
-    default:
-      break;
-  }
+    }
+    return false;
+  };
+  const stopped = visit(blocks);
+  return { count, stopped };
 }
 
-/** フレーム本文のブロックを深さ優先で列挙する。 */
-function* walkBlocks(blocks: BlockNode[]): Generator<BlockNode> {
-  for (const block of blocks) {
-    yield block;
-    yield* walkChildren(block);
-  }
+interface WalkContext {
+  /** overlay 指定を持つ block / \\item の中。 */
+  overlay: boolean;
+  /** center の中。 */
+  center: boolean;
+  /** リスト項目の直接の子。 */
+  itemChild: boolean;
+  /** その項目に、候補以外にも描画される内容(\\pause を除く)があるか。 */
+  itemHasOther: boolean;
+}
+
+/**
+ * フレーム内で「自由配置にする」候補になれるブロックの集合。renderer の候補属性と core の
+ * 適用判定はこの同じ集合を使う。次のものは候補にしない:
+ * - decktext / deckimage に収まらない種類・構造(isDetachableBlock)
+ * - リスト項目直下の段落と、項目の唯一の描画内容(\\pause は数えない)。取り出すと空の \\item が残る
+ * - center の中(中央寄せが失われ、表示位置も文字列の左端にならない)
+ * - overlay 指定を持つ block / \\item の中(canvas オブジェクトは overlay 非対応で、移すと step 1 から見える)
+ * - \\pause との前後関係が移動先(既存の deckcanvas、無ければフレーム末尾)と異なるもの(表示開始 step が変わる)
+ * deckcanvas の中身は対象外。deckcanvas が 2 つ以上あるフレームでは空。
+ */
+export function detachableBlocksOf(frame: FrameNode): Set<BlockNode> {
+  const result = new Set<BlockNode>();
+  const canvases = frame.body.filter((block): block is CanvasNode => block.type === "canvas");
+  if (canvases.length > 1) return result;
+  const canvas = canvases[0];
+  // 移動先が見え始める step の手前にある \\pause の数。候補も同じ数でなければ表示条件が変わる。
+  const targetPauses = countPauses(frame.body, canvas).count;
+  let pauses = 0;
+  const visit = (blocks: BlockNode[], ctx: WalkContext): void => {
+    for (const block of blocks) {
+      if (block.type === "pause") {
+        pauses++;
+        continue;
+      }
+      const eligible =
+        isDetachableBlock(block) &&
+        !ctx.overlay &&
+        !ctx.center &&
+        pauses === targetPauses &&
+        (!ctx.itemChild || (block.type !== "paragraph" && ctx.itemHasOther));
+      if (eligible) result.add(block);
+      switch (block.type) {
+        case "columns":
+          for (const column of block.columns) visit(column.children, { ...ctx, itemChild: false });
+          break;
+        case "blockEnv":
+          visit(block.children, {
+            ...ctx,
+            overlay: ctx.overlay || block.overlay !== null,
+            itemChild: false,
+          });
+          break;
+        case "center":
+          visit(block.children, { ...ctx, center: true, itemChild: false });
+          break;
+        case "list":
+          for (const item of block.items) {
+            const rendered = item.children.filter((child) => child.type !== "pause").length;
+            visit(item.children, {
+              overlay: ctx.overlay || item.overlay !== null,
+              center: ctx.center,
+              itemChild: true,
+              itemHasOther: rendered > 1,
+            });
+          }
+          break;
+        default:
+          break;
+      }
+    }
+  };
+  visit(frame.body, { overlay: false, center: false, itemChild: false, itemHasOther: false });
+  return result;
 }
 
 function clampPlacement(placement: CanvasPlacement): CanvasPlacement {
@@ -234,7 +293,7 @@ function rewriteFrame(
 
 /**
  * blockSpan(元ソース上の範囲)が指すフロー要素を deckcanvas へ移す。
- * 対象が見つからない・移せない種類・deckcanvas が 2 つ以上あるフレームでは null。
+ * 候補(detachableBlocksOf)に無い・deckcanvas が 2 つ以上あるフレームでは null。
  */
 export function detachBlockToCanvas(
   source: string,
@@ -247,13 +306,13 @@ export function detachBlockToCanvas(
     if (element.type !== "frame") continue;
     if (blockSpan.start < element.span.start || blockSpan.end > element.span.end) continue;
     let target: BlockNode | undefined;
-    for (const block of walkBlocks(element.body)) {
+    for (const block of detachableBlocksOf(element)) {
       if (block.span.start === blockSpan.start && block.span.end === blockSpan.end) {
         target = block;
         break;
       }
     }
-    if (!target || !isDetachableBlock(target)) return null;
+    if (!target) return null;
     const canvases = element.body.filter((block): block is CanvasNode => block.type === "canvas");
     if (canvases.length > 1) return null;
     return rewriteFrame(source, element, target, canvases[0] ?? null, clampPlacement(placement));

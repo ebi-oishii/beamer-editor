@@ -55,6 +55,26 @@ export function collectDetachCandidates(target: HTMLElement, root: HTMLElement):
   return candidates;
 }
 
+/**
+ * 右クリック位置に出すメニューが画面外へはみ出さないようにする。右・下にはみ出すなら
+ * クリック位置の左・上へ反転し、それでも収まらなければ画面内へ clamp する。
+ */
+export function clampMenuPosition(
+  x: number,
+  y: number,
+  size: { width: number; height: number },
+  viewport: { width: number; height: number },
+  margin = 4,
+): { x: number; y: number } {
+  let left = x;
+  let top = y;
+  if (left + size.width > viewport.width - margin) left = x - size.width;
+  if (top + size.height > viewport.height - margin) top = y - size.height;
+  left = Math.max(margin, Math.min(left, viewport.width - size.width - margin));
+  top = Math.max(margin, Math.min(top, viewport.height - size.height - margin));
+  return { x: left, y: top };
+}
+
 /** 要素の左上と幅を、スライド全体を 1 とした値で返す。倍率は両方の rect に掛かるので打ち消える。 */
 export function slideRelativeRect(
   element: HTMLElement,

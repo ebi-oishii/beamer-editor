@@ -5,9 +5,14 @@
  */
 
 import type { RenderedFrame } from "@beamer-editor/renderer";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { canvasPointFromPointer, normalizeCanvasCoordinate } from "./canvas-drag.js";
-import { collectDetachCandidates, type DetachCandidate, slideRelativeRect } from "./detach.js";
+import {
+  clampMenuPosition,
+  collectDetachCandidates,
+  type DetachCandidate,
+  slideRelativeRect,
+} from "./detach.js";
 import { applyOverlay } from "./overlay.js";
 
 /** 「自由配置にする」の要求。sourceSpan は展開後ソース、rect はスライド全体を 1 とした値。 */
@@ -67,6 +72,22 @@ export function Stage({
   const [selected, setSelected] = useState<string | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const highlightRef = useRef<HTMLElement | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // 描画後に実測サイズで位置を直し、スライドの右端・下端で右クリックしても項目が押せるようにする。
+  useLayoutEffect(() => {
+    const element = menuRef.current;
+    if (!element || !menu) return;
+    const rect = element.getBoundingClientRect();
+    const position = clampMenuPosition(
+      menu.x,
+      menu.y,
+      { width: rect.width, height: rect.height },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    element.style.left = `${position.x}px`;
+    element.style.top = `${position.y}px`;
+  }, [menu]);
 
   /** 候補要素の dev tools 風強調を付け替える(null で解除)。 */
   const highlight = useCallback((element: HTMLElement | null) => {
@@ -292,6 +313,7 @@ export function Stage({
       />
       {menu && onDetachToCanvas ? (
         <div
+          ref={menuRef}
           className="context-menu"
           role="menu"
           aria-label="自由配置にする候補"

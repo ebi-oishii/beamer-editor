@@ -21,7 +21,7 @@ import type {
   SourceSpan,
   StyleLogoNode,
 } from "@beamer-editor/core";
-import { framesOf, isDetachableBlock, isDetachableListItemChild } from "@beamer-editor/core";
+import { detachableBlocksOf, framesOf } from "@beamer-editor/core";
 import katex from "katex";
 import { DEFAULT_THEME, type Theme } from "./theme.js";
 
@@ -136,8 +136,8 @@ class FrameRenderer {
 
   private readonly decorations: FrameDecorations = { logo: null, footerHtml: null };
   private canvasElements: RenderedCanvasElement[] = [];
-  /** deckcanvas の中を描画している間は、フロー要素の「自由配置にする」候補にしない。 */
-  private canvasDepth = 0;
+  /** 描画中フレームで「自由配置にする」候補になれるブロック(core と同じ判定)。 */
+  private detachable: Set<BlockNode> = new Set();
 
   constructor(
     private readonly doc: DeckDocument,
@@ -239,16 +239,15 @@ class FrameRenderer {
    * \item の中身。段落を <p>(ブロック)にするとリストマーカーと本文が
    * 別の行に分かれてしまうため、段落はインラインの span として描画する。
    */
-  private renderListItemChildren(item: ListItemNode): string {
+  private renderListItemChildren(blocks: BlockNode[]): string {
     let out = "";
     let prevParagraph = false;
-    for (const block of item.children) {
+    for (const block of blocks) {
       if (block.type === "paragraph") {
         out += `${prevParagraph ? "<br>" : ""}<span${this.overlayAttrs(null)}>${this.renderInlines(block.children)}</span>`;
         prevParagraph = true;
       } else {
-        // 項目の唯一の内容は「自由配置にする」候補にしない(core の walk と同じ規則)。
-        out += this.renderBlock(block, isDetachableListItemChild(item, block));
+        out += this.renderBlock(block);
         prevParagraph = false;
       }
     }
@@ -259,23 +258,22 @@ class FrameRenderer {
    * 「自由配置にする」で deckcanvas へ移せるフロー要素に、ui が右クリック位置から候補を
    * 拾うための識別属性を付ける(span は展開後ソース。host が元ソースへ戻す)。
    */
-  private flowBlockAttrs(block: BlockNode, detachable: boolean): string {
-    if (!detachable || this.canvasDepth > 0 || !isDetachableBlock(block)) return "";
+  private flowBlockAttrs(block: BlockNode): string {
+    if (!this.detachable.has(block)) return "";
     return ` data-flow-block="${block.type}" data-source-start="${block.span.start}" data-source-end="${block.span.end}"`;
   }
 
-  /** detachable=false は、親(リスト項目)の都合で「自由配置にする」候補にしないブロック。 */
-  private renderBlock(block: BlockNode, detachable = true): string {
+  private renderBlock(block: BlockNode): string {
     switch (block.type) {
       case "paragraph":
-        return `<p${this.flowBlockAttrs(block, detachable)}${this.overlayAttrs(null)}>${this.renderInlines(block.children)}</p>`;
+        return `<p${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}>${this.renderInlines(block.children)}</p>`;
       case "list": {
         const tag = block.kind === "itemize" ? "ul" : "ol";
-        const flow = this.flowBlockAttrs(block, detachable);
+        const flow = this.flowBlockAttrs(block);
         const items = block.items
           .map(
             (item) =>
-              `<li${this.overlayAttrs(item.overlay)}>${this.renderListItemChildren(item)}</li>`,
+              `<li${this.overlayAttrs(item.overlay)}>${this.renderListItemChildren(item.children)}</li>`,
           )
           .join("");
         return `<${tag}${flow}>${items}</${tag}>`;
@@ -324,7 +322,7 @@ class FrameRenderer {
       }
       case "image": {
         const width = block.width ? `width:${(block.width.factor * 100).toFixed(1)}%` : "";
-        const flow = this.flowBlockAttrs(block, detachable);
+        const flow = this.flowBlockAttrs(block);
         if (block.path.toLowerCase().endsWith(".pdf")) {
           return `<div class="image-placeholder"${flow} style="${width}"${this.overlayAttrs(null)}>PDF 画像(部分コンパイルは Phase 6): ${escapeHtml(block.path)}</div>`;
         }
@@ -346,14 +344,8 @@ class FrameRenderer {
         return this.renderTitlePage();
       case "tableOfContents":
         return this.renderToc();
-      case "canvas": {
-        this.canvasDepth++;
-        try {
-          return this.renderCanvas(block);
-        } finally {
-          this.canvasDepth--;
-        }
-      }
+      case "canvas":
+        return this.renderCanvas(block);
       case "rawBlock":
         return (
           `<div class="raw-block"${this.overlayAttrs(null)}><div class="raw-badge">サブセット外${block.environment ? `: ${escapeHtml(block.environment)}` : ""}(プレビューは Phase 6 で部分コンパイル画像に)</div>` +
@@ -437,6 +429,7 @@ class FrameRenderer {
     this.pauseCount = 0;
     this.maxStep = 1;
     this.canvasElements = [];
+    this.detachable = detachableBlocksOf(frame);
     const body = this.renderBlocks(frame.body);
     const title =
       frame.title && frame.title.length > 0
