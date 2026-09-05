@@ -544,6 +544,21 @@ export function activate(context: vscode.ExtensionContext): TestApi {
             ) ?? document;
           void jumpToOffset(target, offset, lineFlash, sourceViewColumn);
         },
+        // Webview からの Cmd/Ctrl+Z(#103)。undo / redo はフォーカスのあるエディタに効くコマンドなので、
+        // ソースのエディタへ一度フォーカスを移して実行し、終わったら Webview へ戻す。
+        undoRedo: async (kind) => {
+          const target =
+            vscode.workspace.textDocuments.find(
+              (candidate) => candidate.uri.toString() === document.uri.toString(),
+            ) ?? document;
+          await vscode.window.showTextDocument(target, {
+            preserveFocus: false,
+            preview: false,
+            ...(sourceViewColumn !== undefined ? { viewColumn: sourceViewColumn } : {}),
+          });
+          await vscode.commands.executeCommand(kind);
+          panel.reveal(undefined, false);
+        },
         resolveResource: (path) => {
           const uri = path.startsWith("/")
             ? vscode.Uri.file(path)

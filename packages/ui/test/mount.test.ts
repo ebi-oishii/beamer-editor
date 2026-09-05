@@ -1164,6 +1164,59 @@ describe("mountPreview", () => {
     expect(detachToCanvas).not.toHaveBeenCalled();
   });
 
+  it("プレビュー内の Cmd/Ctrl+Z はホストの undoRedo へ送り、Shift や Ctrl+Y はやり直しにする", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const undoRedo = vi.fn();
+    const host = { ...fakeHost(), undoRedo };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    if (!preview) throw new Error("preview fixture missing");
+    const press = (init: KeyboardEventInit) => {
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+      act(() => {
+        preview.dispatchEvent(event);
+      });
+      return event;
+    };
+    expect(press({ key: "z", metaKey: true }).defaultPrevented).toBe(true);
+    expect(press({ key: "Z", metaKey: true, shiftKey: true }).defaultPrevented).toBe(true);
+    expect(press({ key: "y", ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(undoRedo.mock.calls).toEqual([["undo"], ["redo"], ["redo"]]);
+    // 修飾キーなしの z は奪わない。
+    expect(press({ key: "z" }).defaultPrevented).toBe(false);
+    expect(undoRedo).toHaveBeenCalledTimes(3);
+  });
+
+  it("ホストが undoRedo を持たなければ Cmd/Ctrl+Z を奪わない", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    if (!preview) throw new Error("preview fixture missing");
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "z",
+      metaKey: true,
+    });
+    act(() => {
+      preview.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("ホストが detachToCanvas を持たなければ右クリックメニューを出さない", () => {
     const container = document.createElement("div");
     document.body.append(container);

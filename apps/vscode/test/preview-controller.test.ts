@@ -555,6 +555,17 @@ describe("PreviewController", () => {
     });
   });
 
+  it("undoRedo メッセージは注入された undoRedo へ kind をそのまま渡す", () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const undoRedo = vi.fn();
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), { undoRedo });
+    fire({ type: "undoRedo", kind: "undo" });
+    fire({ type: "undoRedo", kind: "redo" });
+    fire({ type: "undoRedo", kind: "reset" });
+    expect(undoRedo.mock.calls).toEqual([["undo"], ["redo"]]);
+  });
+
   describe("revealSourceOffset(ソース → プレビュー)", () => {
     const twoFrames = (_text: string, version: number): RenderOutcome => ({
       deck: {
