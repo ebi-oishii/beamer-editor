@@ -8,8 +8,8 @@ const fixture = (name: string) => readFileSync(join(__dirname, "../../../fixture
 
 // 日本語 fixture を core でパース → renderer で描画するスモークテスト。
 // 例外を出さず、和文テキストが HTML に含まれることを確認する(体裁の検証は PDF 側)。
-describe("renderDeck: japanese.tex(和文スモーク)", () => {
-  const deck = renderDeck(parseDeck(fixture("japanese.tex")));
+describe("renderDeck: japanese.slide.tex(和文スモーク)", () => {
+  const deck = renderDeck(parseDeck(fixture("japanese.slide.tex")));
 
   it("例外なく描画され、7 フレームになる", () => {
     expect(deck.frames).toHaveLength(7);

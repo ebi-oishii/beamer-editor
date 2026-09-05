@@ -43,7 +43,7 @@ LaTeX Workshop が入っている環境で managed file を初めて開くと、
 
 会社・組織の Beamer テーマは、そのままデッキのディレクトリ配下に置いて読めます。デッキと同じディレクトリに `beamertheme<Name>.sty` と画像を置いて `%% preamble-extra` に `\usetheme{Name}` を書くか、`templates/<name>/` に一式を置いて `\usepackage{templates/<name>/beamertheme<name>}` を書きます。`.sty` 内の画像パスはデッキのディレクトリ基準です(`templates/<name>/assets/logo.png` など)。
 
-プレビューには `.sty` の `\definecolor` / `\setbeamercolor`(structure・alerted text・example text・normal text・background canvas)、`\setsansfont` / `\setmonofont`、`\logo`、`\usebackgroundtemplate` から取れる色・フォント・ロゴ・背景だけが近似で反映されます。それ以外の様式は PDF にだけ効きます。`.sty` や画像を変更するとプレビューと診断は自動で更新されます。参照先の `.sty` や画像が無い場合は Problems パネルに L022 / L023 が出ます。見本は `fixtures/templates/corporate/` と `fixtures/templated.tex` です。
+プレビューには `.sty` の `\definecolor` / `\setbeamercolor`(structure・alerted text・example text・normal text・background canvas)、`\setsansfont` / `\setmonofont`、`\logo`、`\usebackgroundtemplate` から取れる色・フォント・ロゴ・背景だけが近似で反映されます。それ以外の様式は PDF にだけ効きます。`.sty` や画像を変更するとプレビューと診断は自動で更新されます。参照先の `.sty` や画像が無い場合は Problems パネルに L022 / L023 が出ます。見本は `fixtures/templates/corporate/` と `fixtures/templated.slide.tex` です。
 
 ## PDF 書き出し
 

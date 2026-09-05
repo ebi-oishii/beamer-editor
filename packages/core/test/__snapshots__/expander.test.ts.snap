@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`expandDeck: macros.tex > 展開結果全文がスナップショットと一致する 1`] = `
+exports[`expandDeck: macros.slide.tex > 展開結果全文がスナップショットと一致する 1`] = `
 "\\documentclass[aspectratio=169]{beamer}
 %% deck-source-version: 1
 % ---- ツール管理プリアンブル(将来は deck init / deck format が生成・所有する)----

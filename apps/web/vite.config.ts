@@ -5,7 +5,7 @@ import { defineConfig } from "vite";
 const here = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  // fixtures をそのまま静的配信する(/basic.tex、/assets/logo.png)。
+  // fixtures をそのまま静的配信する(/basic.slide.tex、/assets/logo.png)。
   // renderer が出す相対パス画像(assets/...)がそのまま解決される。
   publicDir: resolve(here, "../../fixtures"),
   server: {
