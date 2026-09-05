@@ -379,8 +379,9 @@ function addLabelEdit(source: string, frame: FrameNode, label: string): Edit {
     return { start: at, end: at, text: `[label=${label}]` };
   }
   const at = options.end - 1;
-  const existing = source.slice(options.start + 1, at);
-  return { start: at, end: at, text: `${existing.trim() === "" ? "" : ","}label=${label}` };
+  const existing = source.slice(options.start + 1, at).trim();
+  const separator = existing === "" || existing.endsWith(",") ? "" : ",";
+  return { start: at, end: at, text: `${separator}label=${label}` };
 }
 
 function rewriteFrame(

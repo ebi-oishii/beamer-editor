@@ -644,6 +644,34 @@ describe("キャンバスフレームの label(L011)", () => {
     expect(detach(unlabeled)).toContain("\\begin{frame}[label=canvas-2]{B}");
   });
 
+  it("末尾がカンマの options には区切りを重ねない", () => {
+    const source = deck(`\\begin{frame}[fragile,]{T}
+  ${image}
+\\end{frame}`);
+    expect(detach(source)).toContain("\\begin{frame}[fragile,label=canvas-1]{T}");
+  });
+
+  it("生フレームの label も採番から外し、付けた後に L011 / L009 は出ない", () => {
+    const source = `${PREAMBLE}\\begin{frame}[label=canvas-1]{A}
+  text
+\\end{frame}
+
+\\begin{frame}[shrink=5,label=canvas-2]{Raw}
+  raw
+\\end{frame}
+
+\\begin{frame}{T}
+  ${image}
+\\end{frame}
+\\end{document}
+`;
+    const applied = detach(source);
+    expect(applied).toContain("\\begin{frame}[label=canvas-3]{T}");
+    const codes = lintSource(applied).map(({ code }) => code);
+    expect(codes).not.toContain("L011");
+    expect(codes).not.toContain("L009");
+  });
+
   it("自由配置化しても診断は増えない(L011 が出ない)", () => {
     const source = deck(`\\begin{frame}{T}
   ${image}
