@@ -12,6 +12,7 @@
 
 import type {
   BlockNode,
+  CanvasNode,
   DeckDocument,
   FrameNode,
   InlineNode,
@@ -20,7 +21,7 @@ import type {
   SourceSpan,
   StyleLogoNode,
 } from "@beamer-editor/core";
-import { framesOf } from "@beamer-editor/core";
+import { detachableBlocksOf, framesOf } from "@beamer-editor/core";
 import katex from "katex";
 import { DEFAULT_THEME, type Theme } from "./theme.js";
 
@@ -135,6 +136,8 @@ class FrameRenderer {
 
   private readonly decorations: FrameDecorations = { logo: null, footerHtml: null };
   private canvasElements: RenderedCanvasElement[] = [];
+  /** 描画中フレームで「自由配置にする」候補になれるブロック(core と同じ判定)。 */
+  private detachable: Set<BlockNode> = new Set();
 
   constructor(
     private readonly doc: DeckDocument,
@@ -251,19 +254,29 @@ class FrameRenderer {
     return out;
   }
 
+  /**
+   * 「自由配置にする」で deckcanvas へ移せるフロー要素に、ui が右クリック位置から候補を
+   * 拾うための識別属性を付ける(span は展開後ソース。host が元ソースへ戻す)。
+   */
+  private flowBlockAttrs(block: BlockNode): string {
+    if (!this.detachable.has(block)) return "";
+    return ` data-flow-block="${block.type}" data-source-start="${block.span.start}" data-source-end="${block.span.end}"`;
+  }
+
   private renderBlock(block: BlockNode): string {
     switch (block.type) {
       case "paragraph":
-        return `<p${this.overlayAttrs(null)}>${this.renderInlines(block.children)}</p>`;
+        return `<p${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}>${this.renderInlines(block.children)}</p>`;
       case "list": {
         const tag = block.kind === "itemize" ? "ul" : "ol";
+        const flow = this.flowBlockAttrs(block);
         const items = block.items
           .map(
             (item) =>
               `<li${this.overlayAttrs(item.overlay)}>${this.renderListItemChildren(item.children)}</li>`,
           )
           .join("");
-        return `<${tag}>${items}</${tag}>`;
+        return `<${tag}${flow}>${items}</${tag}>`;
       }
       case "columns": {
         const cols = block.columns
@@ -309,10 +322,11 @@ class FrameRenderer {
       }
       case "image": {
         const width = block.width ? `width:${(block.width.factor * 100).toFixed(1)}%` : "";
+        const flow = this.flowBlockAttrs(block);
         if (block.path.toLowerCase().endsWith(".pdf")) {
-          return `<div class="image-placeholder" style="${width}"${this.overlayAttrs(null)}>PDF 画像(部分コンパイルは Phase 6): ${escapeHtml(block.path)}</div>`;
+          return `<div class="image-placeholder"${flow} style="${width}"${this.overlayAttrs(null)}>PDF 画像(部分コンパイルは Phase 6): ${escapeHtml(block.path)}</div>`;
         }
-        return `<img src="${escapeHtml(block.path)}" style="${width}"${this.overlayAttrs(null)}>`;
+        return `<img${flow} src="${escapeHtml(block.path)}" style="${width}"${this.overlayAttrs(null)}>`;
       }
       case "displayMath": {
         // align 系は KaTeX では aligned 環境として描画する(& と \\ を解釈させる)
@@ -330,53 +344,56 @@ class FrameRenderer {
         return this.renderTitlePage();
       case "tableOfContents":
         return this.renderToc();
-      case "canvas": {
-        const { slideWidthPt, slideHeightPt, bodyAreaPt: body } = this.theme.metrics;
-        const left = (body.left / slideWidthPt) * 100;
-        const top = (body.top / slideHeightPt) * 100;
-        const width = (body.width / slideWidthPt) * 100;
-        const height = (body.height / slideHeightPt) * 100;
-        let html = `<div class="canvas" style="left:${left.toFixed(3)}%;top:${top.toFixed(3)}%;width:${width.toFixed(3)}%;height:${height.toFixed(3)}%">`;
-        // ドラッグ対象の descriptor。ID は種類ごとの連番で、frame 内で一意になる。
-        const describe = (
-          kind: RenderedCanvasElement["kind"],
-          position: { x: number; y: number; width: number; span: SourceSpan },
-        ): string => {
-          const count = this.canvasElements.filter((element) => element.kind === kind).length;
-          const id = `canvas-${kind}-${count}`;
-          this.canvasElements.push({
-            id,
-            kind,
-            position: { x: position.x, y: position.y, width: position.width },
-            sourceSpan: position.span,
-          });
-          return ` data-canvas-element-id="${id}" data-canvas-element-kind="${kind}"`;
-        };
-        for (const item of block.items) {
-          const posStyle = (x: number, y: number, w: number) =>
-            `left:${(x * 100).toFixed(2)}%;top:${(y * 100).toFixed(2)}%;width:${(w * 100).toFixed(2)}%`;
-          if (item.type === "canvasText") {
-            const attrs = describe("text", item.position);
-            html += `<div class="canvas-item canvas-text"${attrs} style="${posStyle(item.position.x, item.position.y, item.position.width)};font-size:${this.theme.fontSizesPt[item.size]}pt">${this.renderBlocks(item.children)}</div>`;
-          } else if (item.type === "canvasImage") {
-            const attrs = describe("image", item.position);
-            if (item.path.toLowerCase().endsWith(".pdf")) {
-              html += `<div class="canvas-item image-placeholder"${attrs} style="${posStyle(item.position.x, item.position.y, item.position.width)}">PDF 画像: ${escapeHtml(item.path)}</div>`;
-            } else {
-              html += `<img class="canvas-item"${attrs} src="${escapeHtml(item.path)}" style="${posStyle(item.position.x, item.position.y, item.position.width)}">`;
-            }
-          } else {
-            html += `<div class="canvas-item raw-block"><pre>${escapeHtml(item.tex)}</pre></div>`;
-          }
-        }
-        return `${html}</div>`;
-      }
+      case "canvas":
+        return this.renderCanvas(block);
       case "rawBlock":
         return (
           `<div class="raw-block"${this.overlayAttrs(null)}><div class="raw-badge">サブセット外${block.environment ? `: ${escapeHtml(block.environment)}` : ""}(プレビューは Phase 6 で部分コンパイル画像に)</div>` +
           `<pre>${escapeHtml(block.tex)}</pre></div>`
         );
     }
+  }
+
+  private renderCanvas(block: CanvasNode): string {
+    const { slideWidthPt, slideHeightPt, bodyAreaPt: body } = this.theme.metrics;
+    const left = (body.left / slideWidthPt) * 100;
+    const top = (body.top / slideHeightPt) * 100;
+    const width = (body.width / slideWidthPt) * 100;
+    const height = (body.height / slideHeightPt) * 100;
+    let html = `<div class="canvas" style="left:${left.toFixed(3)}%;top:${top.toFixed(3)}%;width:${width.toFixed(3)}%;height:${height.toFixed(3)}%">`;
+    // ドラッグ対象の descriptor。ID は種類ごとの連番で、frame 内で一意になる。
+    const describe = (
+      kind: RenderedCanvasElement["kind"],
+      position: { x: number; y: number; width: number; span: SourceSpan },
+    ): string => {
+      const count = this.canvasElements.filter((element) => element.kind === kind).length;
+      const id = `canvas-${kind}-${count}`;
+      this.canvasElements.push({
+        id,
+        kind,
+        position: { x: position.x, y: position.y, width: position.width },
+        sourceSpan: position.span,
+      });
+      return ` data-canvas-element-id="${id}" data-canvas-element-kind="${kind}"`;
+    };
+    for (const item of block.items) {
+      const posStyle = (x: number, y: number, w: number) =>
+        `left:${(x * 100).toFixed(2)}%;top:${(y * 100).toFixed(2)}%;width:${(w * 100).toFixed(2)}%`;
+      if (item.type === "canvasText") {
+        const attrs = describe("text", item.position);
+        html += `<div class="canvas-item canvas-text"${attrs} style="${posStyle(item.position.x, item.position.y, item.position.width)};font-size:${this.theme.fontSizesPt[item.size]}pt">${this.renderBlocks(item.children)}</div>`;
+      } else if (item.type === "canvasImage") {
+        const attrs = describe("image", item.position);
+        if (item.path.toLowerCase().endsWith(".pdf")) {
+          html += `<div class="canvas-item image-placeholder"${attrs} style="${posStyle(item.position.x, item.position.y, item.position.width)}">PDF 画像: ${escapeHtml(item.path)}</div>`;
+        } else {
+          html += `<img class="canvas-item"${attrs} src="${escapeHtml(item.path)}" style="${posStyle(item.position.x, item.position.y, item.position.width)}">`;
+        }
+      } else {
+        html += `<div class="canvas-item raw-block"><pre>${escapeHtml(item.tex)}</pre></div>`;
+      }
+    }
+    return `${html}</div>`;
   }
 
   private metaText(field: { value: InlineNode[] } | undefined): string {
@@ -412,6 +429,7 @@ class FrameRenderer {
     this.pauseCount = 0;
     this.maxStep = 1;
     this.canvasElements = [];
+    this.detachable = detachableBlocksOf(frame);
     const body = this.renderBlocks(frame.body);
     const title =
       frame.title && frame.title.length > 0

@@ -30,8 +30,3 @@ export function parseZoom(value: unknown): ZoomState {
 export function stepZoom(zoom: ZoomState, fitScale: number, direction: 1 | -1): number {
   return clampZoom((zoom === "fit" ? fitScale : zoom) + direction * ZOOM_STEP);
 }
-
-export function formatZoom(zoom: ZoomState, fitScale: number): string {
-  const percent = Math.round((zoom === "fit" ? fitScale : zoom) * 100);
-  return zoom === "fit" ? `フィット ${percent}%` : `${percent}%`;
-}

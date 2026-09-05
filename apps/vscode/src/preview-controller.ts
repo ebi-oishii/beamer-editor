@@ -1,3 +1,5 @@
+import { mapExpandedRangeToSourceExact } from "@beamer-editor/core";
+import { DEFAULT_THEME } from "@beamer-editor/renderer";
 import type { ExtensionToWebview } from "@beamer-editor/ui";
 import { parseWebviewToExtension } from "@beamer-editor/ui";
 import type * as vscode from "vscode";
@@ -48,8 +50,28 @@ export interface DocumentEvents {
 /** 連続入力を 1 回のレンダリングへまとめる待ち時間(移植計画 VS-3 は 100〜150ms)。 */
 export const RENDER_DEBOUNCE_MS = 120;
 
-/** 編集 host が canvas image の移動要求を処理した結果。 */
-export type CanvasImageMoveResult = "applied" | "unchanged" | "cancelled" | "failed";
+/** 編集 host が canvas の移動・自由配置化の要求を処理した結果。 */
+export type CanvasEditResult = "applied" | "unchanged" | "cancelled" | "failed";
+
+/** 本文領域に対する正規化座標での箱の位置と幅(core の CanvasPlacement と同じ)。 */
+export interface CanvasPlacement {
+  x: number;
+  y: number;
+  width: number;
+}
+
+/**
+ * スライド全体を 1 とした矩形を、本文領域(deckcanvas の座標系)の正規化値へ変換する。
+ * Webview はテーマの幾何を知らないので、変換はここで行う。
+ */
+export function toCanvasPlacement(rect: { x: number; y: number; width: number }): CanvasPlacement {
+  const { slideWidthPt, slideHeightPt, bodyAreaPt: body } = DEFAULT_THEME.metrics;
+  return {
+    x: (rect.x * slideWidthPt - body.left) / body.width,
+    y: (rect.y * slideHeightPt - body.top) / body.height,
+    width: (rect.width * slideWidthPt) / body.width,
+  };
+}
 
 export interface PreviewControllerOptions {
   /** レンダリングパイプラインの差し替え口(テスト用)。既定は renderDocument。 */
@@ -78,9 +100,17 @@ export interface PreviewControllerOptions {
     sourceSpan: { start: number; end: number };
     document: PreviewDocument;
     expectedOptions: string;
-  }) => Promise<CanvasImageMoveResult>;
+  }) => Promise<CanvasEditResult>;
   /** Preview panel が active になった通知。host 側の view state 更新に使う。 */
   onDidBecomeActive?: () => void;
+  /** フロー要素を deckcanvas へ移す(「自由配置にする」)。sourceSpan は元ソース上の範囲。 */
+  detachToCanvas?: (request: {
+    frameIndex: number;
+    version: number;
+    sourceSpan: { start: number; end: number };
+    placement: CanvasPlacement;
+    document: PreviewDocument;
+  }) => Promise<CanvasEditResult>;
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -165,6 +195,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly navigate: (offset: number) => void;
   private readonly resolveResource: ((path: string) => string) | undefined;
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
+  private readonly detachToCanvas: PreviewControllerOptions["detachToCanvas"];
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
@@ -175,8 +206,8 @@ export class PreviewController implements vscode.Disposable {
    * WorkspaceEdit の完了から文書変更による再描画まで、同じ旧 version に対する
    * 追加 move を拒否する。位置更新同士が古い sourceSpan を奪い合うのを防ぐ。
    */
-  private moveApplyPending = false;
-  private moveAwaitingVersion: number | undefined;
+  private editApplyPending = false;
+  private editAwaitingVersion: number | undefined;
 
   /**
    * プレビュー対象の文書。エディタタブを閉じると TextDocument は close され
@@ -200,6 +231,7 @@ export class PreviewController implements vscode.Disposable {
     this.navigate = options.navigate ?? (() => {});
     this.resolveResource = options.resolveResource;
     this.moveCanvasElement = options.moveCanvasElement;
+    this.detachToCanvas = options.detachToCanvas;
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
@@ -225,6 +257,8 @@ export class PreviewController implements vscode.Disposable {
       this.handleJump(msg.frameIndex, msg.version);
     } else if (msg.type === "moveCanvasElement") {
       void this.handleMove(msg);
+    } else if (msg.type === "detachToCanvas") {
+      void this.handleDetach(msg);
     }
     // activeFrameChanged はソース側カーソル追従(VS-5 以降)で使う予定(現状 no-op)。
   }
@@ -236,7 +270,7 @@ export class PreviewController implements vscode.Disposable {
     x: number;
     y: number;
   }): Promise<void> {
-    if (this.moveApplyPending || this.moveAwaitingVersion !== undefined) return;
+    if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
     const latest = this.latest;
     const frame = latest?.deck.frames[move.frameIndex];
     const element = frame?.canvasElements?.find(
@@ -261,7 +295,7 @@ export class PreviewController implements vscode.Disposable {
     const expectedOptions = document
       .getText()
       .slice(element.sourceSpan.start, element.sourceSpan.end);
-    this.moveApplyPending = true;
+    this.editApplyPending = true;
     try {
       const result = await this.moveCanvasElement?.({
         frameIndex,
@@ -273,10 +307,10 @@ export class PreviewController implements vscode.Disposable {
         document,
         expectedOptions,
       });
-      this.moveApplyPending = false;
+      this.editApplyPending = false;
       if (this.disposed) return;
       if (result === "applied") {
-        this.moveAwaitingVersion = version;
+        this.editAwaitingVersion = version;
         // applyEdit の変更イベントが Promise 解決より先に届いていた場合も、
         // 更新後の descriptor で確実にロックを解除する。
         if (this.document.version !== version) this.sendDeck();
@@ -292,11 +326,75 @@ export class PreviewController implements vscode.Disposable {
         return;
       }
     } catch {
-      this.moveApplyPending = false;
+      this.editApplyPending = false;
       if (this.disposed) return;
     }
     if (!this.disposed) {
       this.onError("failed to update canvas element position.");
+      this.sendDeck();
+    }
+  }
+
+  /**
+   * 「自由配置にする」(フロー要素 → deckcanvas)。move と同じく最新 version の文書にだけ
+   * 適用し、展開後 span を元ソースへ厳密に戻せない(マクロ本体由来の)要素は断る。
+   */
+  private async handleDetach(request: {
+    frameIndex: number;
+    version: number;
+    sourceSpan: { start: number; end: number };
+    rect: { x: number; y: number; width: number };
+  }): Promise<void> {
+    if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
+    const latest = this.latest;
+    if (
+      !latest ||
+      this.latestDocument !== this.document ||
+      request.version !== this.document.version ||
+      latest.version !== this.document.version ||
+      !latest.deck.frames[request.frameIndex]
+    ) {
+      this.sendDeck();
+      return;
+    }
+    const sourceSpan = mapExpandedRangeToSourceExact(latest.expansionMap, request.sourceSpan);
+    if (sourceSpan === null) {
+      this.onWarning("マクロ展開由来の要素は自由配置にできません。");
+      return;
+    }
+    const { frameIndex, version } = request;
+    const document = this.document;
+    this.editApplyPending = true;
+    try {
+      const result = await this.detachToCanvas?.({
+        frameIndex,
+        version,
+        sourceSpan,
+        placement: toCanvasPlacement(request.rect),
+        document,
+      });
+      this.editApplyPending = false;
+      if (this.disposed) return;
+      if (result === "applied") {
+        this.editAwaitingVersion = version;
+        if (this.document.version !== version) this.sendDeck();
+        return;
+      }
+      if (result === "unchanged") {
+        this.sendDeck();
+        return;
+      }
+      if (result === "cancelled") {
+        this.onWarning("この要素は自由配置にできませんでした。");
+        this.sendDeck();
+        return;
+      }
+    } catch {
+      this.editApplyPending = false;
+      if (this.disposed) return;
+    }
+    if (!this.disposed) {
+      this.onError("failed to move the element to the canvas.");
       this.sendDeck();
     }
   }
@@ -344,8 +442,8 @@ export class PreviewController implements vscode.Disposable {
       const outcome = this.render(renderedDocument.getText(), renderedDocument.version);
       this.latest = outcome;
       this.latestDocument = renderedDocument;
-      if (this.moveAwaitingVersion !== undefined && outcome.version !== this.moveAwaitingVersion) {
-        this.moveAwaitingVersion = undefined;
+      if (this.editAwaitingVersion !== undefined && outcome.version !== this.editAwaitingVersion) {
+        this.editAwaitingVersion = undefined;
       }
       const resolve = this.resolveResource;
       const deck = resolve

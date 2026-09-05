@@ -614,7 +614,7 @@ function balancedArgumentEnd(source: string, index: number): number | null {
   return null;
 }
 
-function lintCanvas(canvas: CanvasNode, frame: FrameNode): LintDiagnostic[] {
+function lintCanvas(canvas: CanvasNode): LintDiagnostic[] {
   const diagnostics: LintDiagnostic[] = [];
   for (const item of canvas.items) {
     if (item.type === "rawBlock") {
@@ -702,18 +702,6 @@ function lintCanvas(canvas: CanvasNode, frame: FrameNode): LintDiagnostic[] {
     };
     visitTextBlocks(item.children, 0);
   }
-  for (const block of frame.body) {
-    if (block !== canvas) {
-      diagnostics.push(
-        diagnostic(
-          "L014",
-          "warning",
-          "deckcanvas を持つ frame に通常フロー要素を混在できません",
-          block.span,
-        ),
-      );
-    }
-  }
   return diagnostics;
 }
 
@@ -721,8 +709,16 @@ function lintCanvasContent(doc: DeckDocument): LintDiagnostic[] {
   const diagnostics: LintDiagnostic[] = [];
   for (const element of doc.body) {
     if (element.type !== "frame") continue;
+    // フロー要素との共存は可。deckcanvas 自体はフレームに 1 つまで(2 つ目以降を報告)。
+    let canvases = 0;
     for (const block of element.body) {
-      if (block.type === "canvas") diagnostics.push(...lintCanvas(block, element));
+      if (block.type !== "canvas") continue;
+      if (canvases++ > 0) {
+        diagnostics.push(
+          diagnostic("L014", "warning", "deckcanvas はフレームに 1 つまでです", block.span),
+        );
+      }
+      diagnostics.push(...lintCanvas(block));
     }
   }
   return diagnostics;

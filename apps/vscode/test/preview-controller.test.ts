@@ -467,6 +467,87 @@ describe("PreviewController", () => {
     });
   });
 
+  describe("detachToCanvas", () => {
+    const detachRender = (text: string, version: number): RenderOutcome => ({
+      ...canvasRender(text, version),
+      // 展開後 = 元ソース(逐語)の対応。
+      expansionMap: [
+        { expandedStart: 0, expandedEnd: 500, sourceStart: 0, sourceEnd: 500, exact: true },
+      ],
+    });
+
+    it("最新 version の要求だけを、元ソース span と本文領域座標に変換して callback へ渡す", async () => {
+      const { panel, fire } = makePanel();
+      const { events } = makeEvents();
+      const doc = makeDoc();
+      const detachToCanvas = vi.fn(async (_request: unknown) => "applied" as const);
+      new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+        render: detachRender,
+        detachToCanvas,
+      });
+      fire({ type: "ready" });
+      fire({
+        type: "detachToCanvas",
+        frameIndex: 0,
+        version: 7,
+        sourceSpan: { start: 12, end: 30 },
+        rect: { x: 0.5, y: 0.5, width: 0.25 },
+      });
+      await Promise.resolve();
+      expect(detachToCanvas).toHaveBeenCalledOnce();
+      const request = detachToCanvas.mock.calls[0]?.[0] as {
+        frameIndex: number;
+        version: number;
+        sourceSpan: { start: number; end: number };
+        placement: { x: number; y: number; width: number };
+        document: unknown;
+      };
+      expect(request.frameIndex).toBe(0);
+      expect(request.version).toBe(7);
+      expect(request.sourceSpan).toEqual({ start: 12, end: 30 });
+      expect(request.document).toBe(doc);
+      // 本文領域: left 28.45 / top 19.06 / width 398.34 / height 236.97 (slide 455.24 × 256.07)
+      expect(request.placement.x).toBeCloseTo(0.5, 6);
+      expect(request.placement.y).toBeCloseTo((0.5 * 256.07 - 19.06) / 236.97, 6);
+      expect(request.placement.width).toBeCloseTo((0.25 * 455.24) / 398.34, 6);
+    });
+
+    it("古い version の要求は適用せず再描画し、展開由来の span は警告だけ出す", async () => {
+      const { panel, posted, fire } = makePanel();
+      const { events } = makeEvents();
+      const detachToCanvas = vi.fn(async () => "applied" as const);
+      const warning = vi.fn();
+      new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+        render: detachRender,
+        detachToCanvas,
+        onWarning: warning,
+      });
+      fire({ type: "ready" });
+      const before = posted.length;
+      fire({
+        type: "detachToCanvas",
+        frameIndex: 0,
+        version: 6,
+        sourceSpan: { start: 12, end: 30 },
+        rect: { x: 0.5, y: 0.5, width: 0.25 },
+      });
+      await Promise.resolve();
+      expect(detachToCanvas).not.toHaveBeenCalled();
+      expect(posted.length).toBe(before + 1);
+
+      fire({
+        type: "detachToCanvas",
+        frameIndex: 0,
+        version: 7,
+        sourceSpan: { start: 600, end: 650 },
+        rect: { x: 0.5, y: 0.5, width: 0.25 },
+      });
+      await Promise.resolve();
+      expect(detachToCanvas).not.toHaveBeenCalled();
+      expect(warning).toHaveBeenCalledWith("マクロ展開由来の要素は自由配置にできません。");
+    });
+  });
+
   it("moveCanvasElement: decktext も画像と同じ経路で callback へ渡す", async () => {
     const { panel, fire } = makePanel();
     const { events } = makeEvents();

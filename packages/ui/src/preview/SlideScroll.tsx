@@ -6,7 +6,7 @@
 
 import type { RenderedFrame } from "@beamer-editor/renderer";
 import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { type SlideSize, Stage } from "./Stage.js";
+import { type DetachRequest, type SlideSize, Stage } from "./Stage.js";
 import { fitWidthScale, frameAtScrollTop, trailingSpace } from "./scroll-layout.js";
 import type { ZoomState } from "./zoom.js";
 
@@ -60,6 +60,7 @@ function SlideCard({
   onSelect,
   onJump,
   onMoveCanvasElement,
+  onDetachToCanvas,
 }: {
   frame: RenderedFrame;
   index: number;
@@ -71,11 +72,12 @@ function SlideCard({
   onSelect: (index: number) => void;
   onJump: (index: number) => void;
   onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
+  onDetachToCanvas: ((frameIndex: number, request: DetachRequest) => void) | undefined;
 }): JSX.Element {
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
-    // Ctrl/Cmd+Enter はダブルクリックと等価のソースジャンプ(コントロールの「ソースへ」でも可)。
+    // Ctrl/Cmd+Enter はダブルクリックと等価のソースジャンプ。
     if (event.ctrlKey || event.metaKey) onJump(index);
     else onSelect(index);
   };
@@ -87,6 +89,7 @@ function SlideCard({
       data-index={index}
       role="button"
       tabIndex={0}
+      aria-current={active ? true : undefined}
       aria-label={`フレーム ${frame.index}: ${frame.titleText}（Enter で選択、${MODIFIER_LABEL}+Enter でソースへ移動）`}
       onClick={() => onSelect(index)}
       onDoubleClick={() => onJump(index)}
@@ -99,6 +102,9 @@ function SlideCard({
         slideSize={slideSize}
         version={version}
         onMoveCanvasElement={(elementId, x, y) => onMoveCanvasElement(index, elementId, x, y)}
+        onDetachToCanvas={
+          onDetachToCanvas ? (request) => onDetachToCanvas(index, request) : undefined
+        }
       />
       <div className="slide-caption">
         {frame.index}. {frame.titleText}
@@ -120,6 +126,7 @@ export function SlideScroll({
   onJump,
   onScrollActive,
   onMoveCanvasElement,
+  onDetachToCanvas,
   onFitScaleChange,
 }: {
   frames: RenderedFrame[];
@@ -133,6 +140,8 @@ export function SlideScroll({
   /** スクロールで表示領域の上端に来たフレームが変わった通知。 */
   onScrollActive: (index: number) => void;
   onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
+  /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
+  onDetachToCanvas?: ((frameIndex: number, request: DetachRequest) => void) | undefined;
   onFitScaleChange: (scale: number) => void;
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -217,6 +226,7 @@ export function SlideScroll({
           onSelect={onSelect}
           onJump={onJump}
           onMoveCanvasElement={onMoveCanvasElement}
+          onDetachToCanvas={onDetachToCanvas}
         />
       ))}
     </div>
