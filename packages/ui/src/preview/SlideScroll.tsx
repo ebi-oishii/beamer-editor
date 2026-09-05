@@ -146,6 +146,8 @@ export function SlideScroll({
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
   const [slideSize, setSlideSize] = useState<SlideSize>(FALLBACK_SLIDE);
   const hasViewportMeasurement = useRef(false);
   const currentRef = useRef(current);
@@ -167,29 +169,31 @@ export function SlideScroll({
       const next = { width: container.clientWidth, height: container.clientHeight };
       const wasMeasured = hasViewportMeasurement.current;
       hasViewportMeasurement.current = true;
-      setViewport((cur) => {
-        if (cur.width === next.width && cur.height === next.height) return cur;
-        // 初回計測・手動倍率では位置を保存しない。初回は既存の reveal、手動倍率は
-        // resize しても表示倍率が変わらないため、どちらも復元の対象外である。
-        if (wasMeasured && cur.width > 0 && cur.height > 0 && zoomRef.current === "fit") {
-          const index = currentRef.current;
-          const card = container.querySelectorAll<HTMLElement>(".slide-card")[index];
-          const height = card?.offsetHeight ?? 0;
-          if (card && height > 0) {
-            const top = card.offsetTop - SCROLL_PADDING;
-            const anchor = {
-              frameIndex: index,
-              ratio: (container.scrollTop - top) / height,
-            };
-            resizeAnchor.current = anchor;
-            lastResizeAnchor.current = anchor;
-          } else if (lastResizeAnchor.current) {
-            // collapse 中は壊れた比率で上書きせず、直前の有効アンカーを復元待ちにする。
-            resizeAnchor.current = lastResizeAnchor.current;
-          }
+      const previous = viewportRef.current;
+      if (previous.width === next.width && previous.height === next.height) return;
+      // 初回計測・手動倍率では位置を保存しない。初回は既存の reveal、手動倍率は
+      // resize しても表示倍率が変わらないため、どちらも復元の対象外である。
+      if (wasMeasured && previous.width > 0 && previous.height > 0 && zoomRef.current === "fit") {
+        const index = currentRef.current;
+        const card = container.querySelectorAll<HTMLElement>(".slide-card")[index];
+        const height = card?.offsetHeight ?? 0;
+        if (card && height > 0) {
+          const top = card.offsetTop - SCROLL_PADDING;
+          const anchor = {
+            frameIndex: index,
+            ratio: (container.scrollTop - top) / height,
+          };
+          resizeAnchor.current = anchor;
+          lastResizeAnchor.current = anchor;
+        } else if (lastResizeAnchor.current) {
+          // collapse 中は壊れた比率で上書きせず、直前の有効アンカーを復元待ちにする。
+          resizeAnchor.current = lastResizeAnchor.current;
         }
-        return next;
-      });
+      }
+      // Observer が render 前に連続通知しても同じ anchor を二重に計算しないよう、
+      // state updater ではなく測定側で直近値を更新する。
+      viewportRef.current = next;
+      setViewport(next);
     };
     measure();
     if (typeof ResizeObserver === "undefined") return;
@@ -252,7 +256,7 @@ export function SlideScroll({
     container.scrollTop = scrollTop;
     restoringScroll.current = false;
     restoredScrollTop.current = container.scrollTop;
-  });
+  }, [viewport]);
 
   // 要求されたフレームを上端へ揃える。倍率反映(子の inline style)は同じ commit で済んでいる。
   useEffect(() => {
