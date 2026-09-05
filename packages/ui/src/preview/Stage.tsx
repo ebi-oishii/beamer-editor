@@ -181,6 +181,9 @@ export function Stage({
   }, []);
   const onPointerDown = (event: PointerEvent) => {
     if (dragRef.current) return;
+    // 右クリック(コンテキストメニュー)や中ボタンではドラッグを始めない。始めてしまうと pointerup が
+    // メニューに吸われて dragRef が残り、以後のマウス移動に箱が追従し続ける(#108)。
+    if (event.button !== 0) return;
     const clearSelection = () => {
       if (dragRef.current || !selected) return;
       scaleRef.current
@@ -273,15 +276,27 @@ export function Stage({
     if (!scale) return;
     const pointerUp = (event: PointerEvent) => finish(event, true);
     const pointerCancel = (event: PointerEvent) => finish(event, false);
+    // ドラッグ中に右クリックされたら取り消して元の位置に戻す(#108)。メニューの有無に関わらず効かせる。
+    const cancelOnContextMenu = () => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      drag.element.style.left = `${drag.x * 100}%`;
+      drag.element.style.top = `${drag.y * 100}%`;
+      drag.element.classList.remove("canvas-dragging");
+      releasePointerCapture(drag.element, drag.pointerId);
+      dragRef.current = undefined;
+    };
     scale.addEventListener("pointerdown", onPointerDown);
     scale.addEventListener("pointermove", move);
     scale.addEventListener("pointerup", pointerUp);
     scale.addEventListener("pointercancel", pointerCancel);
+    scale.addEventListener("contextmenu", cancelOnContextMenu);
     return () => {
       scale.removeEventListener("pointerdown", onPointerDown);
       scale.removeEventListener("pointermove", move);
       scale.removeEventListener("pointerup", pointerUp);
       scale.removeEventListener("pointercancel", pointerCancel);
+      scale.removeEventListener("contextmenu", cancelOnContextMenu);
     };
   }, [frame, selected, version, onMoveCanvasElement]);
 
