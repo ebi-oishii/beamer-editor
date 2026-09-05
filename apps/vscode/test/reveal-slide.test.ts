@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { RenderOutcome } from "../src/document-controller";
-import { frameIndexAtSourceOffset, frameLensPositions } from "../src/reveal-slide";
+import {
+  frameIndexAtSourceOffset,
+  frameLensPositions,
+  sourceHasFrameAt,
+} from "../src/reveal-slide";
 
 const frame = (index: number, start: number, end: number) => ({
   index,
@@ -56,5 +60,22 @@ describe("frameLensPositions", () => {
       expect(source.startsWith("\\begin{frame}", offset)).toBe(true);
       expect(lines[line]).toContain("\\begin{frame}");
     }
+  });
+});
+
+describe("sourceHasFrameAt", () => {
+  const source = readFileSync(
+    fileURLToPath(new URL("../../../fixtures/basic.tex", import.meta.url)),
+    "utf8",
+  );
+
+  it("フレームの中だけ true で、プリアンブルとフレーム間は false", () => {
+    const begin = source.indexOf("\\begin{frame}");
+    expect(sourceHasFrameAt(source, begin)).toBe(true);
+    expect(sourceHasFrameAt(source, begin + "\\begin{frame}".length)).toBe(true);
+    expect(sourceHasFrameAt(source, 0)).toBe(false);
+    expect(sourceHasFrameAt(source, begin - 1)).toBe(false);
+    const afterFirst = source.indexOf("\\end{frame}") + "\\end{frame}".length;
+    expect(sourceHasFrameAt(source, afterFirst)).toBe(false);
   });
 });

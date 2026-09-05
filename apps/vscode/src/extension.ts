@@ -19,7 +19,7 @@ import {
   needsLatexWorkshopIgnorePrompt,
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
-import { frameLensPositions } from "./reveal-slide";
+import { frameLensPositions, sourceHasFrameAt } from "./reveal-slide";
 import { resolveSourceViewColumn } from "./source-navigation";
 import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 
@@ -307,7 +307,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     const prepared = previewLifecycle.prepareOpen(document.uri, automatic);
     if (prepared.kind === "existing") {
       if (!automatic) {
-        if (!preserveFocus) prepared.controller.reveal();
+        // 同じグループの別タブの後ろに隠れていても表示する。preserveFocus ならフォーカスはソースに残す。
+        prepared.controller.reveal(preserveFocus);
         previewController = prepared.controller;
       }
       return;
@@ -477,10 +478,14 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   };
   syncFollowContext();
 
-  /** offset を含むフレームをプレビューで表示する。プレビューが無ければ開く(フォーカスはソースに残す)。 */
+  /**
+   * offset を含むフレームをプレビューで表示する。プレビューが無ければ開く(フォーカスはソースに残す)。
+   * managed でない文書と、フレーム外(プリアンブル・フレーム間)の位置では何もしない(#66 の対象外)。
+   */
   function revealSlide(document: vscode.TextDocument, offset: number, onlyIfChanged = false): void {
-    if (document.uri.scheme !== "file" || !document.fileName.endsWith(".tex")) return;
+    if (!isManaged(document)) return;
     if (!onlyIfChanged) {
+      if (!sourceHasFrameAt(document.getText(), offset)) return;
       // 明示的な操作なので、閉じられていたプレビューも開き直す。
       previewLifecycle.dismissals.clear(document.uri);
       openPreview(document, false, true);
@@ -490,10 +495,18 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       ?.controller.revealSourceOffset(offset, { onlyIfChanged });
   }
 
+  /**
+   * 追従の切り替え。effective value を決めている scope へ書く(workspace が上書きしていれば
+   * workspace、そうでなければ user)。Global だけ書くと workspace の値が勝ってボタンが効かない。
+   * 設定の scope は window なので folder 単位の値は無い。
+   */
   async function setFollowCursor(enabled: boolean): Promise<void> {
-    await vscode.workspace
-      .getConfiguration("beamerEditor")
-      .update("preview.followCursor", enabled, vscode.ConfigurationTarget.Global);
+    const config = vscode.workspace.getConfiguration("beamerEditor");
+    const target =
+      config.inspect<boolean>("preview.followCursor")?.workspaceValue !== undefined
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global;
+    await config.update("preview.followCursor", enabled, target);
     syncFollowContext();
   }
 

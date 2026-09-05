@@ -17,7 +17,7 @@ export interface PreviewPanel {
     onDidReceiveMessage(listener: (msg: unknown) => void): vscode.Disposable;
   };
   onDidDispose(listener: () => void): vscode.Disposable;
-  reveal(): void;
+  reveal(viewColumn?: vscode.ViewColumn, preserveFocus?: boolean): void;
   dispose(): void;
 }
 
@@ -204,8 +204,11 @@ export class PreviewController implements vscode.Disposable {
    */
   private editApplyPending = false;
   private editAwaitingVersion: number | undefined;
-  /** 初回描画前に届いたソース位置の表示要求。描画後に適用する。 */
-  private pendingRevealOffset: number | undefined;
+  /**
+   * 描画前、または文書の version が最新の描画より進んでいる間(debounce 中)に届いた
+   * ソース位置の表示要求。古い ExpansionMap で解かず、次の描画後に適用する。
+   */
+  private pendingReveal: { offset: number; onlyIfChanged: boolean } | undefined;
   /** 直近にソース側から表示させたフレーム。カーソル追従で同じフレーム内の移動を無視する。 */
   private lastRevealedFrame: number | undefined;
 
@@ -253,8 +256,14 @@ export class PreviewController implements vscode.Disposable {
   revealSourceOffset(offset: number, options: { onlyIfChanged?: boolean } = {}): void {
     if (this.disposed) return;
     const latest = this.latest;
-    if (!latest || this.latestDocument !== this.document) {
-      this.pendingRevealOffset = offset;
+    // move / detach と同じく、latest が今の文書の今の version を描いたものでなければ使わない。
+    // 通常の編集では TextDocument object は同じまま version だけが進むので object 比較では足りない。
+    if (
+      !latest ||
+      this.latestDocument !== this.document ||
+      latest.version !== this.document.version
+    ) {
+      this.pendingReveal = { offset, onlyIfChanged: options.onlyIfChanged ?? false };
       return;
     }
     const frameIndex = frameIndexAtSourceOffset(latest, offset);
@@ -491,10 +500,10 @@ export class PreviewController implements vscode.Disposable {
     if (message.type === "deckUpdated") {
       // フレーム番号は描画ごとに変わり得るので、追従の既読は描画単位でリセットする。
       this.lastRevealedFrame = undefined;
-      if (this.pendingRevealOffset !== undefined) {
-        const offset = this.pendingRevealOffset;
-        this.pendingRevealOffset = undefined;
-        this.revealSourceOffset(offset);
+      if (this.pendingReveal !== undefined) {
+        const { offset, onlyIfChanged } = this.pendingReveal;
+        this.pendingReveal = undefined;
+        this.revealSourceOffset(offset, { onlyIfChanged });
       }
     }
   }
@@ -504,9 +513,12 @@ export class PreviewController implements vscode.Disposable {
     this.dispose();
   }
 
-  /** 既存パネルを前面に出す。手動 Open Preview の再実行時に使う。 */
-  reveal(): void {
-    this.panel.reveal();
+  /**
+   * 既存パネルを前面に出す(同じグループの別タブの後ろに隠れていても表示する)。
+   * preserveFocus はソース側の操作(#66)から呼ぶときに使い、フォーカスをソースに残す。
+   */
+  reveal(preserveFocus = false): void {
+    this.panel.reveal(undefined, preserveFocus);
   }
 
   dispose(): void {

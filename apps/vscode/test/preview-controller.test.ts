@@ -624,6 +624,33 @@ describe("PreviewController", () => {
       expect(posted.length).toBe(before + 1);
       expect(posted.at(-1)).toEqual({ type: "activeFrameChanged", frameIndex: 1, version: 7 });
     });
+
+    it("同じ文書の version だけが進んだ間(debounce 中)は保留し、最新の描画後にその version で送る", () => {
+      vi.useFakeTimers();
+      try {
+        const { panel, posted, fire } = makePanel();
+        const { events, change } = makeEvents();
+        const doc = makeDoc();
+        const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+          render: twoFrames,
+        });
+        fire({ type: "ready" });
+        const before = posted.length;
+        // 通常の編集: TextDocument object は同じまま version が進み、再描画は debounce 待ち。
+        doc.edit("changed");
+        change(doc);
+        controller.revealSourceOffset(25);
+        // 古い ExpansionMap で解いて旧 version の Webview を動かさない。
+        expect(posted.length).toBe(before);
+        vi.advanceTimersByTime(RENDER_DEBOUNCE_MS);
+        expect(posted.slice(before)).toEqual([
+          expect.objectContaining({ type: "deckUpdated", version: 8 }),
+          { type: "activeFrameChanged", frameIndex: 1, version: 8 },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it.each([

@@ -23,6 +23,16 @@ export function frameIndexAtSourceOffset(outcome: RenderOutcome, offset: number)
   return null;
 }
 
+/**
+ * 元ソースの offset がどれかのフレームの中にあるか。プレビューを開く前(描画結果が無い)の
+ * 判定に使うので、frameIndexAtSourceOffset と違い元ソースを直接 parse する。
+ */
+export function sourceHasFrameAt(text: string, offset: number): boolean {
+  return framesOf(parseDeck(text)).some(
+    (frame) => offset >= frame.span.start && offset < frame.span.end,
+  );
+}
+
 export interface FrameLensPosition {
   /** フレーム先頭(`\begin{frame}`)の元ソースオフセット。コマンドの引数にする。 */
   offset: number;
