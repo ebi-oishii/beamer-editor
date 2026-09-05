@@ -334,6 +334,41 @@ describe("exportPdf", () => {
     expect(Date.now() - started).toBeLessThan(4_000);
   });
 
+  it("settles after hard timeout when a grandchild keeps inherited output pipes open", async () => {
+    const dir = await directory();
+    const grandchildPidPath = join(dir, "grandchild.pid");
+    const childScript = [
+      "const { spawn } = require('node:child_process');",
+      "const fs = require('node:fs');",
+      "const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 6000)'], { stdio: 'inherit' });",
+      "fs.writeFileSync(process.argv[1], String(grandchild.pid));",
+      "process.on('SIGTERM', () => {});",
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const started = Date.now();
+    try {
+      const value = await nodeProcessRunner.run(
+        process.execPath,
+        ["-e", childScript, grandchildPidPath],
+        {
+          cwd: tmpdir(),
+          timeoutMs: 250,
+        },
+      );
+      expect(value).toMatchObject({ timedOut: true, cancelled: false, exitCode: null });
+      expect(Date.now() - started).toBeLessThan(4_000);
+    } finally {
+      const pid = Number(await readFile(grandchildPidPath, "utf8").catch(() => ""));
+      if (Number.isSafeInteger(pid) && pid > 0) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // The grandchild may already have exited on its own.
+        }
+      }
+    }
+  }, 10_000);
+
   it("uses separate version and compile timeouts and maps compile timeout without replacing output", async () => {
     const input = await source();
     const output = join(input.dir, "talk.pdf");

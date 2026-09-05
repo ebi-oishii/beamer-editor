@@ -124,6 +124,16 @@ export const nodeProcessRunner: ProcessRunner = {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let forceKill: ReturnType<typeof setTimeout> | undefined;
       let hardSettle: ReturnType<typeof setTimeout> | undefined;
+      let pipesDestroyed = false;
+      const destroyPipes = () => {
+        if (pipesDestroyed) return;
+        pipesDestroyed = true;
+        // A killed child can leave a grandchild holding these inherited pipe
+        // descriptors. Destroying them is only needed for the hard-settle
+        // fallback; on a normal close, let Node drain all remaining output.
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      };
       const cleanup = () => {
         if (timeout) clearTimeout(timeout);
         if (forceKill) clearTimeout(forceKill);
@@ -148,7 +158,10 @@ export const nodeProcessRunner: ProcessRunner = {
         child.kill();
         forceKill = setTimeout(() => {
           child.kill("SIGKILL");
-          hardSettle = setTimeout(() => finish(null), HARD_SETTLE_GRACE_MS);
+          hardSettle = setTimeout(() => {
+            destroyPipes();
+            finish(null);
+          }, HARD_SETTLE_GRACE_MS);
         }, TERMINATE_GRACE_MS);
       };
       const onAbort = () => {
