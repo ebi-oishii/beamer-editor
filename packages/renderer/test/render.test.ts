@@ -6,8 +6,8 @@ import { frameTitleText, renderDeck } from "../src/render.js";
 
 const fixture = (name: string) => readFileSync(join(__dirname, "../../../fixtures", name), "utf8");
 
-describe("renderDeck: basic.tex", () => {
-  const source = fixture("basic.tex");
+describe("renderDeck: basic.slide.tex", () => {
+  const source = fixture("basic.slide.tex");
   const deck = renderDeck(parseDeck(source));
 
   it("15 フレームが描画される", () => {
@@ -59,8 +59,8 @@ describe("frameTitleText", () => {
   });
 });
 
-describe("renderDeck: canvas.tex", () => {
-  const deck = renderDeck(parseDeck(fixture("canvas.tex")));
+describe("renderDeck: canvas.slide.tex", () => {
+  const deck = renderDeck(parseDeck(fixture("canvas.slide.tex")));
 
   it("キャンバスが絶対配置で描画される", () => {
     const results = deck.frames[1];
@@ -77,7 +77,7 @@ describe("renderDeck: canvas.tex", () => {
   });
 
   it("許可外サイズは normal の安全なフォールバックで描画される", () => {
-    const source = fixture("canvas.tex").replace("size=normal", "size=huge");
+    const source = fixture("canvas.slide.tex").replace("size=normal", "size=huge");
     const rendered = renderDeck(parseDeck(source));
 
     expect(rendered.frames[1]?.html).toContain("font-size:11pt");
@@ -222,8 +222,8 @@ describe("renderDeck: 自由配置候補の識別属性", () => {
   });
 });
 
-describe("renderDeck: kitchen-sink.tex", () => {
-  const deck = renderDeck(parseDeck(fixture("kitchen-sink.tex")));
+describe("renderDeck: kitchen-sink.slide.tex", () => {
+  const deck = renderDeck(parseDeck(fixture("kitchen-sink.slide.tex")));
 
   it("生ブロックはプレースホルダで描画される", () => {
     const tikz = deck.frames[2];
@@ -251,7 +251,7 @@ describe("renderDeck: テンプレート由来の土台スタイル", () => {
   };
 
   it("土台の色・フォント・背景・右下ロゴ・フッターがデッキに効く", () => {
-    const deck = renderDeck(parseDeck(fixture("basic.tex")), undefined, { baseStyle });
+    const deck = renderDeck(parseDeck(fixture("basic.slide.tex")), undefined, { baseStyle });
     expect(deck.css).toContain("--deck-structure: #123456;");
     expect(deck.css).toContain("--deck-background: #FAFAFA;");
     expect(deck.css).toContain('--deck-font-main: "Corp Sans",');
@@ -266,7 +266,7 @@ describe("renderDeck: テンプレート由来の土台スタイル", () => {
   });
 
   it("デッキの %% style 領域は土台を上書きし、\\decklogo は本文領域座標で置く", () => {
-    const deck = renderDeck(parseDeck(fixture("styled.tex")), undefined, { baseStyle });
+    const deck = renderDeck(parseDeck(fixture("styled.slide.tex")), undefined, { baseStyle });
     expect(deck.css).toContain("--deck-structure: #0F62FE;");
     expect(deck.css).not.toContain("#123456");
     expect(deck.css).toContain("--deck-background: #FAFAFA;");
@@ -279,7 +279,7 @@ describe("renderDeck: テンプレート由来の土台スタイル", () => {
   });
 
   it("PDF の背景は <img> にできないので出さず、pt 幅のロゴはスライド幅の % に変える", () => {
-    const deck = renderDeck(parseDeck(fixture("basic.tex")), undefined, {
+    const deck = renderDeck(parseDeck(fixture("basic.slide.tex")), undefined, {
       baseStyle: {
         colors: {},
         fonts: {},
@@ -296,8 +296,8 @@ describe("renderDeck: テンプレート由来の土台スタイル", () => {
   });
 });
 
-describe("renderDeck: styled.tex(スタイル語彙)", () => {
-  const deck = renderDeck(parseDeck(fixture("styled.tex")));
+describe("renderDeck: styled.slide.tex(スタイル語彙)", () => {
+  const deck = renderDeck(parseDeck(fixture("styled.slide.tex")));
 
   it("CSS 変数が生成される", () => {
     expect(deck.css).toContain("--deck-structure: #0F62FE;");
@@ -308,7 +308,7 @@ describe("renderDeck: styled.tex(スタイル語彙)", () => {
   });
 
   it("main フォントは和文ローカルフォントへフォールバックする(CJK 近似・Linux 名も含む)", () => {
-    const deck2 = renderDeck(parseDeck(fixture("japanese.tex")));
+    const deck2 = renderDeck(parseDeck(fixture("japanese.slide.tex")));
     // \deckfont{main}{Noto Sans CJK JP} → 指定名 → 和文ローカル → サンス総称。
     // Linux でインストール名として現れうる Noto 名(Noto Sans CJK JP / Noto Sans JP)を含める。
     expect(deck2.css).toContain(
@@ -330,7 +330,7 @@ describe("renderDeck: styled.tex(スタイル語彙)", () => {
   });
 
   it("style 領域が無いデッキでは CSS も装飾も出ない", () => {
-    const plain = renderDeck(parseDeck(fixture("basic.tex")));
+    const plain = renderDeck(parseDeck(fixture("basic.slide.tex")));
     expect(plain.css).toBe("");
     expect(plain.frames[0]?.html).not.toContain("deck-footer");
   });
