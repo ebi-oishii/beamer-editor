@@ -63,7 +63,7 @@
 - **プレビュー**: `.sty` と preamble-extra から `\definecolor` / `\colorlet`、`\setbeamercolor` の structure・alerted text・example text・normal text・background canvas、`\setsansfont` / `\setmainfont` / `\setmonofont`、`\logo{\includegraphics...}`(`\pgfdeclareimage` + `\pgfuseimage` 含む)、`\usebackgroundtemplate` / `\setbeamertemplate{background canvas}` を抽出して近似する。`%% style` 領域はこれを上書きする。footline や表紙の様式など、それ以外は PDF 専用(近似の限界は Phase 6 のコンパイル画像で埋める)。PDF 形式の背景・ロゴはプレビューに出ない
 - **診断**: 参照先 `.sty` が無い(L022)、`.sty` が参照する画像が無い(L023)をデッキ側の参照行に出す。`\usetheme{X}` の不在は info(TeX 配布に含まれるテーマならコンパイルは通る)、パスで指した `\usepackage` の不在は warning
 - **更新**: `.sty` や画像を変えるとプレビューと診断を作り直す(キャッシュは持たない)
-- 見本: `fixtures/templates/corporate/` と `fixtures/templated.tex`
+- 見本: `fixtures/templates/corporate/` と `fixtures/templated.slide.tex`
 
 ## 3. 「この見本に合わせて」— AI によるその場対応
 
@@ -108,10 +108,10 @@ Phase 5(VS Code シェル)と並行可。
 
 | # | 内容 | 規模 | 依存 |
 |---|---|---|---|
-| S1 | スタイル語彙 v1: TeX 側 deck* スタイルマクロ + パーサの style 領域 + renderer の CSS 変数/ロゴ/フッター + `styled.tex` fixture。**実装済み(2026-07-14)**。L020 の lint 化は Phase 2(パーサは語彙外を unknown-style の生ブロックとして保持済み)。TeX 側はフォント不在・不正値を DECKSTYLE 行としてログに出す | M | Phase 1 |
-| S2 | Noto Sans CJK: `\deckfont` のフォント解決・`deck fonts fetch`・日本語 fixture。**実装済(2026-07-19)**。`deck-style-preamble.tex` に xeCJK 統合、`packages/cli` が Noto Sans CJK JP を取得・キャッシュ・配置、renderer は和文ローカルフォントへフォールバック。`fixtures/japanese.tex` を tectonic で警告 0 コンパイル確認 | S〜M | tectonic |
+| S1 | スタイル語彙 v1: TeX 側 deck* スタイルマクロ + パーサの style 領域 + renderer の CSS 変数/ロゴ/フッター + `styled.slide.tex` fixture。**実装済み(2026-07-14)**。L020 の lint 化は Phase 2(パーサは語彙外を unknown-style の生ブロックとして保持済み)。TeX 側はフォント不在・不正値を DECKSTYLE 行としてログに出す | M | Phase 1 |
+| S2 | Noto Sans CJK: `\deckfont` のフォント解決・`deck fonts fetch`・日本語 fixture。**実装済(2026-07-19)**。`deck-style-preamble.tex` に xeCJK 統合、`packages/cli` が Noto Sans CJK JP を取得・キャッシュ・配置、renderer は和文ローカルフォントへフォールバック。`fixtures/japanese.slide.tex` を tectonic で警告 0 コンパイル確認 | S〜M | tectonic |
 | S3 | 「見本に合わせて」ワークフロー: pptx からの色・フォント抽出補助、指示パターンの SKILL 追加、実物の社用テンプレで実演 | S〜M | S1, S2, 実物の PPT |
-| S4 | テンプレート(`.sty` + 画像)の読み込み(§2.1、#70): preamble-extra の `\usetheme` / `\usepackage` を解決し、標準記法から色・フォント・ロゴ・背景を抽出してプレビューへ、L022 / L023、`.sty` 変更の監視、`templated.tex` fixture。**実装済(2026-09-05)**。コンパイル画像フォールバックと PDF 書き出しの一時ディレクトリへのテンプレート同梱は Phase 6 / #73 側 | M | S1 |
+| S4 | テンプレート(`.sty` + 画像)の読み込み(§2.1、#70): preamble-extra の `\usetheme` / `\usepackage` を解決し、標準記法から色・フォント・ロゴ・背景を抽出してプレビューへ、L022 / L023、`.sty` 変更の監視、`templated.slide.tex` fixture。**実装済(2026-09-05)**。コンパイル画像フォールバックと PDF 書き出しの一時ディレクトリへのテンプレート同梱は Phase 6 / #73 側 | M | S1 |
 
 将来候補(必要になったら): 幾何まで変える本格テーマ(タイトル帯高の変更等)。その場合はテーマごとの実測 metrics(`deck theme measure`)が必要になる——本書初版のテーマパック案はこの時の設計として保持する。
 
