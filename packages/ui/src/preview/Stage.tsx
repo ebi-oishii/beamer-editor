@@ -4,13 +4,10 @@
  * トグル)とキャンバス画像のドラッグを適用する。倍率の計算は持たない。
  */
 
+import { clampCanvasPosition } from "@beamer-editor/core";
 import type { RenderedFrame } from "@beamer-editor/renderer";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import {
-  canvasPointFromPointer,
-  clampCanvasPoint,
-  normalizeCanvasCoordinate,
-} from "./canvas-drag.js";
+import { canvasPointFromPointer, normalizeCanvasCoordinate } from "./canvas-drag.js";
 import {
   clampMenuPosition,
   collectDetachCandidates,
@@ -243,7 +240,7 @@ export function Stage({
         drag.grabY,
       );
     if (!raw) return;
-    const point = clampCanvasPoint(raw, drag.width);
+    const point = clampCanvasPosition(raw.x, raw.y, drag.width);
     drag.element.style.left = `${point.x * 100}%`;
     drag.element.style.top = `${point.y * 100}%`;
   };
@@ -260,7 +257,7 @@ export function Stage({
         drag.grabX,
         drag.grabY,
       );
-    const point = raw && clampCanvasPoint(raw, drag.width);
+    const point = raw && clampCanvasPosition(raw.x, raw.y, drag.width);
     drag.element.classList.remove("canvas-dragging");
     releasePointerCapture(drag.element, drag.pointerId);
     if (!commit || !point) {
