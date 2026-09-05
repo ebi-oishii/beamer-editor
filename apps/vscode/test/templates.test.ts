@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   baseStyleOf,
   imageExists,
+  resolveImagePath,
   resolveTemplate,
   type TemplateFileSystem,
   templateStatuses,
@@ -76,6 +77,13 @@ describe("resolveTemplate / templateStatuses", () => {
     });
     expect(imageExists("templates/corporate/assets/background", fs)).toBe(true);
     expect(imageExists("templates/corporate/assets/missing", fs)).toBe(false);
+    expect(resolveImagePath("templates/corporate/assets/background", fs)).toBe(
+      "templates/corporate/assets/background.png",
+    );
+    expect(resolveImagePath("templates/corporate/assets/logo.png", fs)).toBe(
+      "templates/corporate/assets/logo.png",
+    );
+    expect(resolveImagePath("templates/corporate/assets/missing", fs)).toBeNull();
     const doc = parseDeck(deckWithExtra("\\usetheme{corporate}"));
     expect(templateStatuses(doc, fs)[0]?.missingImages).toEqual([]);
     const without = fakeFs({ "templates/corporate/beamerthemecorporate.sty": CORPORATE_STY });
@@ -99,6 +107,27 @@ describe("baseStyleOf", () => {
     expect(style.background).toEqual({ path: "templates/corporate/assets/background" });
     // %% style(alert)はここには含まれない。
     expect(style.colors.alert).toBeUndefined();
+  });
+
+  it("拡張子省略の画像は見つかった実ファイルのパスにし、見つからなければ元の参照を残す", () => {
+    const doc = parseDeck(deckWithExtra("\\usetheme{corporate}"));
+    const style = baseStyleOf(
+      doc,
+      fakeFs({
+        "templates/corporate/beamertheme corporate.sty": "",
+        "templates/corporate/beamerthemecorporate.sty": CORPORATE_STY,
+        "templates/corporate/assets/logo.png": "",
+        "templates/corporate/assets/background.png": "",
+      }),
+    );
+    // Webview は拡張子付きの実パスでしか読めない(TeX の拡張子探索は Webview には無い)。
+    expect(style.background).toEqual({ path: "templates/corporate/assets/background.png" });
+    expect(style.logo?.path).toBe("templates/corporate/assets/logo.png");
+    const missing = baseStyleOf(
+      doc,
+      fakeFs({ "templates/corporate/beamerthemecorporate.sty": CORPORATE_STY }),
+    );
+    expect(missing.background).toEqual({ path: "templates/corporate/assets/background" });
   });
 
   it("テンプレートが無くても preamble-extra の標準記法だけで土台を作る", () => {

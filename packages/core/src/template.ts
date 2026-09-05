@@ -106,7 +106,10 @@ function* commandArguments(
   }
 }
 
-/** preamble-extra に書かれた `\usetheme{X}` / `\usepackage{path}` をテンプレート参照として抽出する。 */
+/**
+ * preamble-extra に書かれた `\usetheme{X}` / `\usepackage{path}` をテンプレート参照として抽出する。
+ * 返す順はソース順(TeX では後の指定が勝つので、\usetheme と \usepackage が混在しても記述順で重ねる)。
+ */
 export function templateReferencesOf(doc: DeckDocument): TemplateReference[] {
   const region = doc.preambleExtra;
   const text = blankComments(region.tex);
@@ -133,7 +136,7 @@ export function templateReferencesOf(doc: DeckDocument): TemplateReference[] {
       });
     }
   }
-  return references;
+  return references.sort((a, b) => a.span.start - b.span.start);
 }
 
 /**

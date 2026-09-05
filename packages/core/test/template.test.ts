@@ -36,6 +36,13 @@ describe("templateReferencesOf", () => {
     expect(source.slice(first?.span.start, first?.span.end)).toBe("\\usetheme{corporate}");
   });
 
+  it("\\usetheme と \\usepackage が混在してもソース順で返す(後の指定が勝つ TeX の合成順に合わせる)", () => {
+    const refs = templateReferencesOf(
+      parseDeck(deckWithExtra("\\usepackage{templates/a/beamerthemea}\n\\usetheme{b}")),
+    );
+    expect(refs.map((ref) => ref.name)).toEqual(["templates/a/beamerthemea", "b"]);
+  });
+
   it("preamble-extra が無ければ空", () => {
     const source = "\\documentclass{beamer}\n\\begin{document}\\end{document}\n";
     expect(templateReferencesOf(parseDeck(source))).toEqual([]);

@@ -59,10 +59,18 @@ export function resolveTemplate(
   return null;
 }
 
-/** 拡張子なしの参照は TeX と同じ順で拡張子を試す。 */
+/**
+ * 画像参照を実ファイルのパスに解決する。拡張子なしの参照は TeX と同じ順で拡張子を試し、
+ * 見つかった拡張子付きのパスを返す(Webview はそのパスでしか読めない)。無ければ null。
+ */
+export function resolveImagePath(imagePath: string, fs: TemplateFileSystem): string | null {
+  if (/\.[A-Za-z0-9]+$/.test(imagePath)) return fs.isFile(imagePath) ? imagePath : null;
+  const extension = IMAGE_EXTENSIONS.find((candidate) => fs.isFile(`${imagePath}${candidate}`));
+  return extension === undefined ? null : `${imagePath}${extension}`;
+}
+
 export function imageExists(imagePath: string, fs: TemplateFileSystem): boolean {
-  if (/\.[A-Za-z0-9]+$/.test(imagePath)) return fs.isFile(imagePath);
-  return IMAGE_EXTENSIONS.some((extension) => fs.isFile(`${imagePath}${extension}`));
+  return resolveImagePath(imagePath, fs) !== null;
 }
 
 /** 文書のテンプレート参照を全て解決する(見つからないものは null のまま並ぶ)。 */
@@ -96,7 +104,21 @@ export function baseStyleOf(doc: DeckDocument, fs: TemplateFileSystem): PreviewS
     .map(({ resolved }) => resolved)
     .filter((resolved): resolved is ResolvedTemplate => resolved !== null)
     .map((resolved) => extractPreviewStyle(resolved.text));
-  return mergePreviewStyles(...templates, extractPreviewStyle(doc.preambleExtra.tex));
+  const merged = mergePreviewStyles(...templates, extractPreviewStyle(doc.preambleExtra.tex));
+  // 拡張子省略の参照(TeX では有効)は見つかった実ファイルのパスにして Webview が読めるようにする。
+  // 見つからないものは L023 が報告するので、そのまま残す。
+  if (merged.logo) {
+    merged.logo = {
+      ...merged.logo,
+      path: resolveImagePath(merged.logo.path, fs) ?? merged.logo.path,
+    };
+  }
+  if (merged.background) {
+    merged.background = {
+      path: resolveImagePath(merged.background.path, fs) ?? merged.background.path,
+    };
+  }
+  return merged;
 }
 
 /** 実ファイルシステム。デッキのディレクトリ配下以外は見えない(`..` や絶対パスは拒否)。 */
