@@ -23,7 +23,7 @@ import type {
   RawFrameNode,
   SourceSpan,
 } from "@beamer-editor/core";
-import { detachableBlocksOf, framesOf } from "@beamer-editor/core";
+import { type DetachStatus, detachStatusesOf, framesOf } from "@beamer-editor/core";
 import katex from "katex";
 import { DEFAULT_THEME, type Theme } from "./theme.js";
 
@@ -176,8 +176,8 @@ class FrameRenderer {
     footerHtml: null,
   };
   private canvasElements: RenderedCanvasElement[] = [];
-  /** 描画中フレームで「自由配置にする」候補になれるブロック(core と同じ判定)。 */
-  private detachable: Set<BlockNode> = new Set();
+  /** 描画中フレームの各フロー要素が「自由配置にする」候補になれるか(core と同じ判定)。 */
+  private detachStatuses: Map<BlockNode, DetachStatus> = new Map();
 
   constructor(
     private readonly doc: DeckDocument,
@@ -319,8 +319,11 @@ class FrameRenderer {
    * 拾うための識別属性を付ける(span は展開後ソース。host が元ソースへ戻す)。
    */
   private flowBlockAttrs(block: BlockNode): string {
-    if (!this.detachable.has(block)) return "";
-    return ` data-flow-block="${block.type}" data-source-start="${block.span.start}" data-source-end="${block.span.end}"`;
+    const status = this.detachStatuses.get(block);
+    if (!status) return "";
+    const attrs = ` data-flow-block="${block.type}" data-source-start="${block.span.start}" data-source-end="${block.span.end}"`;
+    // 候補にできない要素にも理由を付け、ui が「できない理由」をメニューに出せるようにする。
+    return status.eligible ? attrs : `${attrs} data-detach-blocked="${status.reason}"`;
   }
 
   private renderBlock(block: BlockNode): string {
@@ -345,7 +348,7 @@ class FrameRenderer {
               `<div class="col" style="width:${(c.width.factor * 100).toFixed(1)}%">${this.renderBlocks(c.children)}</div>`,
           )
           .join("");
-        return `<div class="columns${block.topAligned ? " top" : ""}">${cols}</div>`;
+        return `<div class="columns${block.topAligned ? " top" : ""}"${this.flowBlockAttrs(block)}>${cols}</div>`;
       }
       case "blockEnv": {
         const kindClass =
@@ -355,16 +358,16 @@ class FrameRenderer {
               ? "beamer-block example"
               : "beamer-block";
         return (
-          `<div class="${kindClass}"${this.overlayAttrs(block.overlay)}>` +
+          `<div class="${kindClass}"${this.flowBlockAttrs(block)}${this.overlayAttrs(block.overlay)}>` +
           `<div class="block-title">${this.renderInlines(block.title)}</div>` +
           `<div class="block-body">${this.renderBlocks(block.children)}</div></div>`
         );
       }
       case "center":
-        return `<div class="center">${this.renderBlocks(block.children)}</div>`;
+        return `<div class="center"${this.flowBlockAttrs(block)}>${this.renderBlocks(block.children)}</div>`;
       case "table": {
         const rules = block.rows.filter((r) => r.type === "tableRule").length;
-        let html = `<table class="tabular${rules > 0 ? " booktabs" : ""}">`;
+        let html = `<table class="tabular${rules > 0 ? " booktabs" : ""}"${this.flowBlockAttrs(block)}>`;
         for (const row of block.rows) {
           if (row.type === "tableRule") {
             html += `<tr class="rule ${row.rule}"><td colspan="${block.columns.length}"></td></tr>`;
@@ -394,7 +397,7 @@ class FrameRenderer {
           block.kind === "align" || block.kind === "align*"
             ? `\\begin{aligned}${block.tex}\\end{aligned}`
             : block.tex;
-        return `<div class="display-math"${this.overlayAttrs(null)}>${math(tex, true)}</div>`;
+        return `<div class="display-math"${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}>${math(tex, true)}</div>`;
       }
       case "pause":
         this.pauseCount++;
@@ -408,7 +411,7 @@ class FrameRenderer {
         return this.renderCanvas(block);
       case "rawBlock":
         return (
-          `<div class="raw-block"${this.overlayAttrs(null)}><div class="raw-badge">サブセット外${block.environment ? `: ${escapeHtml(block.environment)}` : ""}(プレビューは Phase 6 で部分コンパイル画像に)</div>` +
+          `<div class="raw-block"${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}><div class="raw-badge">サブセット外${block.environment ? `: ${escapeHtml(block.environment)}` : ""}(プレビューは Phase 6 で部分コンパイル画像に)</div>` +
           `<pre>${escapeHtml(block.tex)}</pre></div>`
         );
     }
@@ -489,7 +492,7 @@ class FrameRenderer {
     this.pauseCount = 0;
     this.maxStep = 1;
     this.canvasElements = [];
-    this.detachable = detachableBlocksOf(frame);
+    this.detachStatuses = detachStatusesOf(frame);
     const body = this.renderBlocks(frame.body);
     const title =
       frame.title && frame.title.length > 0
