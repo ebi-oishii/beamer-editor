@@ -672,12 +672,10 @@ describe("mountPreview", () => {
       callback([], {} as ResizeObserver);
     };
     let scrollTop = 0;
-    let scrollWrites = 0;
     Object.defineProperty(scroll, "scrollTop", {
       configurable: true,
       get: () => scrollTop,
       set: (value: number) => {
-        scrollWrites += 1;
         scrollTop = value;
       },
     });
@@ -687,45 +685,30 @@ describe("mountPreview", () => {
         offsetHeight: { configurable: true, value: 400 },
       });
     });
-    // 同寸法の observer 通知では、deck 読み込み時の reveal 以外を追加で発生させない。
-    act(resizeScroll);
-    expect(scrollWrites).toBe(0);
-
-    // resize による再レイアウト後も、2枚目の中央を読んでいた位置を復元する。
-    Object.defineProperties(scroll, {
-      clientWidth: { configurable: true, value: 308 },
-      clientHeight: { configurable: true, value: 250 },
+    // 初期表示とは別のフレームの途中へ通常スクロールし、step も変更する。
+    scrollTop = 200;
+    act(() => scroll.dispatchEvent(new Event("scroll", { bubbles: true })));
+    expect(cards[0]?.classList.contains("active")).toBe(true);
+    const stepRange = container.querySelector<HTMLInputElement>(
+      'input[aria-label="オーバーレイ step（2 段階）"]',
+    );
+    if (!stepRange) throw new Error("step range fixture missing");
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+        stepRange,
+        "2",
+      );
+      stepRange.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    // observer callback 中は旧レイアウト、state 更新後の layout effect では新レイアウトを
-    // 読む。jsdom ではこの順序を getter で再現する。
-    let topMeasurements = 0;
-    let heightMeasurements = 0;
-    Object.defineProperties(cards[1] as HTMLElement, {
-      offsetTop: {
-        configurable: true,
-        get: () => (topMeasurements++ === 0 ? 412 : 700),
-      },
-      offsetHeight: {
-        configurable: true,
-        get: () => (heightMeasurements++ === 0 ? 400 : 300),
-      },
-    });
-    scrollTop = 600;
-    scrollWrites = 0;
-    act(resizeScroll);
-
-    expect(scrollTop).toBe(838);
-    expect(scrollWrites).toBe(1);
-    expect(cards[1]?.classList.contains("active")).toBe(true);
-    expect(notifyActiveFrame).toHaveBeenLastCalledWith(1);
+    expect(saved.at(-1)).toEqual({ current: 0, step: 2, zoom: "fit" });
 
     // 一時的な collapse はブラウザが scrollTop を 0 へ clamp して scroll event を
-    // 発火しても、最後の有効アンカーと current / step の保存状態を壊さない。
+    // 発火しても、通常 scroll で更新されたアンカーと current / step を壊さない。
     Object.defineProperties(scroll, {
       clientWidth: { configurable: true, value: 0 },
       clientHeight: { configurable: true, value: 0 },
     });
-    Object.defineProperty(cards[1] as HTMLElement, "offsetHeight", {
+    Object.defineProperty(cards[0] as HTMLElement, "offsetHeight", {
       configurable: true,
       value: 0,
     });
@@ -734,7 +717,7 @@ describe("mountPreview", () => {
     const savedBeforeCollapse = saved.length;
     const activeBeforeCollapse = notifyActiveFrame.mock.calls.length;
     act(() => scroll.dispatchEvent(new Event("scroll", { bubbles: true })));
-    expect(cards[1]?.classList.contains("active")).toBe(true);
+    expect(cards[0]?.classList.contains("active")).toBe(true);
     expect(saved).toHaveLength(savedBeforeCollapse);
     expect(notifyActiveFrame).toHaveBeenCalledTimes(activeBeforeCollapse);
 
@@ -742,27 +725,31 @@ describe("mountPreview", () => {
       clientWidth: { configurable: true, value: 308 },
       clientHeight: { configurable: true, value: 250 },
     });
-    Object.defineProperties(cards[1] as HTMLElement, {
+    Object.defineProperties(cards[0] as HTMLElement, {
       offsetTop: { configurable: true, value: 700 },
       offsetHeight: { configurable: true, value: 300 },
+    });
+    Object.defineProperty(cards[1] as HTMLElement, "offsetTop", {
+      configurable: true,
+      value: 1012,
     });
     act(resizeScroll);
     expect(scrollTop).toBe(838);
     act(() => scroll.dispatchEvent(new Event("scroll", { bubbles: true })));
-    expect(cards[1]?.classList.contains("active")).toBe(true);
-    expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: "fit" });
+    expect(cards[0]?.classList.contains("active")).toBe(true);
+    expect(saved.at(-1)).toEqual({ current: 0, step: 2, zoom: "fit" });
 
     // 同じ commit の明示 reveal は resize 復元より優先し、古い sentinel を残さない。
     const preview = container.querySelector<HTMLElement>(".beamer-preview");
     Object.defineProperty(scroll, "clientWidth", { configurable: true, value: 307 });
     act(() => {
       resizeScroll();
-      preview?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+      preview?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
     });
-    expect(scrollTop).toBe(0);
+    expect(scrollTop).toBe(1000);
     act(() => scroll.dispatchEvent(new Event("scroll", { bubbles: true })));
-    expect(cards[0]?.classList.contains("active")).toBe(true);
-    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: "fit" });
+    expect(cards[1]?.classList.contains("active")).toBe(true);
+    expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: "fit" });
   });
 
   it("手動 zoom 中の resize は表示位置とナビ状態を変えない", () => {

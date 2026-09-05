@@ -217,6 +217,19 @@ export function SlideScroll({
     onFitScaleChange(fitScale);
   }, [fitScale, onFitScaleChange]);
 
+  // クリック等で current だけが変わる場合も、直近の有効なカード内位置を次の
+  // collapse 復元に使えるよう記録する。
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container || container.clientWidth <= 0 || container.clientHeight <= 0) return;
+    const card = container.querySelectorAll<HTMLElement>(".slide-card")[current];
+    if (!card || card.offsetHeight <= 0) return;
+    lastResizeAnchor.current = {
+      frameIndex: current,
+      ratio: (container.scrollTop - (card.offsetTop - SCROLL_PADDING)) / card.offsetHeight,
+    };
+  }, [current]);
+
   // ResizeObserver で記録したアンカーを、倍率反映後のカード寸法で復元する。
   // レイアウト effect なので、復元値で発生する scroll は current を変更しない。
   useLayoutEffect(() => {
@@ -264,7 +277,8 @@ export function SlideScroll({
       restoredScrollTop.current = undefined;
       if (restored === container.scrollTop) return;
     }
-    const cards = [...container.querySelectorAll<HTMLElement>(".slide-card")].map((card) => ({
+    const cardElements = [...container.querySelectorAll<HTMLElement>(".slide-card")];
+    const cards = cardElements.map((card) => ({
       top: card.offsetTop,
       height: card.offsetHeight,
     }));
@@ -277,6 +291,13 @@ export function SlideScroll({
     )
       return;
     const index = frameAtScrollTop(container.scrollTop, cards);
+    const card = cardElements[index];
+    if (card) {
+      lastResizeAnchor.current = {
+        frameIndex: index,
+        ratio: (container.scrollTop - (card.offsetTop - SCROLL_PADDING)) / card.offsetHeight,
+      };
+    }
     if (index !== current) onScrollActive(index);
   };
 
