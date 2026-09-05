@@ -283,10 +283,11 @@ function commentsOutsideBlock(
   blockSpan: SourceSpan,
 ): string[] {
   const kept: string[] = [];
-  for (const [from, to] of [
+  const segments: [number, number][] = [
     [removeSpan.start, blockSpan.start],
     [blockSpan.end, removeSpan.end],
-  ]) {
+  ];
+  for (const [from, to] of segments) {
     let pos = from;
     while (pos < to) {
       const end = Math.min(lineEnd(source, pos), to);
