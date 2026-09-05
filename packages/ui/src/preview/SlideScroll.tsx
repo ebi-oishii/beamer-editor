@@ -222,7 +222,7 @@ export function SlideScroll({
       card.offsetTop - SCROLL_PADDING + anchor.ratio * Math.max(card.offsetHeight, 1);
     restoredScrollTop.current = scrollTop;
     container.scrollTop = scrollTop;
-  }, [viewport, scale]);
+  });
 
   // 要求されたフレームを上端へ揃える。倍率反映(子の inline style)は同じ commit で済んでいる。
   useEffect(() => {
