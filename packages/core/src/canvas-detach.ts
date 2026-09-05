@@ -13,6 +13,7 @@ import {
   type CanvasNode,
   type DeckDocument,
   type FrameNode,
+  frameLabel,
   framesOf,
   type ListItemNode,
   type ListNode,
@@ -36,6 +37,7 @@ export interface SourceReplacement {
 
 /** 箱の最小幅(正規化値)。極端に細い箱を作らない。 */
 const MIN_WIDTH = 0.05;
+const BEGIN_FRAME = "\\begin{frame}";
 
 /** decktext 内のリストは本文と同じ 3 段までネスト可(L014 と同じ条件)。項目のオーバーレイは不可。 */
 function listFitsDecktext(list: ListNode, depth: number): boolean {
@@ -351,17 +353,12 @@ interface Edit {
 /** キャンバスフレームへ自動で付ける label の接頭辞(L011 の「一意な label」)。 */
 const CANVAS_LABEL_PREFIX = "canvas";
 
-function labelOf(frame: ReturnType<typeof framesOf>[number]): string | null {
-  const label = frame.type === "frame" ? frame.options.label : frame.label;
-  return label?.trim() || null;
-}
-
 /**
  * 文書内で未使用の `canvas-N` を返す。ラベルは永続アドレス(ai-protocol §3)なので
  * フレーム位置ではなく空き番号で決め、あとから並べ替えても意味が変わらないようにする。
  */
 function nextCanvasLabel(doc: DeckDocument): string {
-  const used = new Set(framesOf(doc).map(labelOf));
+  const used = new Set(framesOf(doc).map(frameLabel));
   for (let n = 1; ; n++) {
     const candidate = `${CANVAS_LABEL_PREFIX}-${n}`;
     if (!used.has(candidate)) return candidate;
@@ -370,35 +367,48 @@ function nextCanvasLabel(doc: DeckDocument): string {
 
 /**
  * frame へ `label=` を足す編集。options が無ければ `[label=...]` を新設し、
- * あれば閉じ括弧の直前へ追記する(`[fragile]` → `[fragile,label=...]`)。
+ * あれば既知 option を既定順に組み直す。空の label は置換し、空 option や末尾カンマも正規化する。
  */
-function addLabelEdit(source: string, frame: FrameNode, label: string): Edit {
+function addLabelEdit(frame: FrameNode, label: string): Edit {
   const options = frame.options.span;
   if (options === null) {
-    const at = frame.span.start + "\\begin{frame}".length;
+    const at = frame.span.start + BEGIN_FRAME.length;
     return { start: at, end: at, text: `[label=${label}]` };
   }
-  const at = options.end - 1;
-  const existing = source.slice(options.start + 1, at).trim();
-  const separator = existing === "" || existing.endsWith(",") ? "" : ",";
-  return { start: at, end: at, text: `${separator}label=${label}` };
+  const normalized = [
+    frame.options.fragile ? "fragile" : null,
+    frame.options.plain ? "plain" : null,
+    frame.options.allowframebreaks ? "allowframebreaks" : null,
+    `label=${label}`,
+  ].filter((option): option is string => option !== null);
+  return { start: options.start, end: options.end, text: `[${normalized.join(",")}]` };
 }
 
-function rewriteFrame(
-  source: string,
-  frame: FrameNode,
-  block: BlockNode,
-  target: { removeSpan: SourceSpan; center: boolean },
-  canvas: CanvasNode | null,
-  placement: CanvasPlacement,
-  addLabel: string | null,
-): SourceReplacement {
+interface RewriteFrameRequest {
+  source: string;
+  frame: FrameNode;
+  block: BlockNode;
+  target: { removeSpan: SourceSpan; center: boolean };
+  canvas: CanvasNode | null;
+  placement: CanvasPlacement;
+  addLabel: string | null;
+}
+
+function rewriteFrame({
+  source,
+  frame,
+  block,
+  target,
+  canvas,
+  placement,
+  addLabel,
+}: RewriteFrameRequest): SourceReplacement {
   const edits: Edit[] = [];
   const eol = detectEol(source);
 
   // 0. キャンバスフレームには一意な label が要る(L011)。GUI 操作の結果が
   //    そのまま lint を通るよう、label の無いフレームにはここで付ける。
-  if (addLabel !== null) edits.push(addLabelEdit(source, frame, addLabel));
+  if (addLabel !== null) edits.push(addLabelEdit(frame, addLabel));
 
   // 1. 対象の原文(唯一の内容なら \\item やリストごと)を取り除く。行を占有していれば改行ごと消す。
   //    広げた範囲にあったコメントは、行を占有して消せるときは同じ位置に行として残す(§2.4)。
@@ -491,15 +501,15 @@ export function detachBlockToCanvas(
     if (!target) return null;
     const canvases = element.body.filter((block): block is CanvasNode => block.type === "canvas");
     if (canvases.length > 1) return null;
-    return rewriteFrame(
+    return rewriteFrame({
       source,
-      element,
-      target.block,
+      frame: element,
+      block: target.block,
       target,
-      canvases[0] ?? null,
-      clampPlacement(placement),
-      labelOf(element) === null ? nextCanvasLabel(doc) : null,
-    );
+      canvas: canvases[0] ?? null,
+      placement: clampPlacement(placement),
+      addLabel: frameLabel(element) === null ? nextCanvasLabel(doc) : null,
+    });
   }
   return null;
 }

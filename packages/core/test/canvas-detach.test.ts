@@ -606,11 +606,21 @@ describe("キャンバスフレームの label(L011)", () => {
     expect(detach(source)).toContain("\\begin{frame}[fragile,label=canvas-1]{T}");
   });
 
-  it("空の options には区切りを付けずに足す", () => {
-    const source = deck(`\\begin{frame}[]{T}
+  it.each([
+    ["空の options", "[]", "[label=canvas-1]"],
+    ["空白だけの options", "[ ]", "[label=canvas-1]"],
+    ["空の label", "[label=]", "[label=canvas-1]"],
+    ["空白だけの label", "[label=   ]", "[label=canvas-1]"],
+    ["他 option と空の label", "[fragile,label= ]", "[fragile,label=canvas-1]"],
+    ["末尾カンマ", "[fragile,]", "[fragile,label=canvas-1]"],
+    ["末尾カンマ後の空白", "[fragile, ]", "[fragile,label=canvas-1]"],
+  ])("%s を label 追加時に正規化する", (_name, options, expected) => {
+    const source = deck(`\\begin{frame}${options}{T}
   ${image}
 \\end{frame}`);
-    expect(detach(source)).toContain("\\begin{frame}[label=canvas-1]{T}");
+    const result = detach(source);
+    expect(result).toContain(`\\begin{frame}${expected}{T}`);
+    expect(result.match(/label=/g)).toHaveLength(1);
   });
 
   it("タイトルの無いフレームにも付けられる", () => {
@@ -621,16 +631,6 @@ describe("キャンバスフレームの label(L011)", () => {
   });
 
   it("使われている番号は飛ばして一意にする", () => {
-    const source = `${PREAMBLE}\\begin{frame}[label=canvas-1]{A}
-  text
-\\end{frame}
-
-\\begin{frame}[label=canvas-2]{B}
-  ${image}
-\\end{frame}
-\\end{document}
-`;
-    // B は label を持つので付けない。label の無いフレームで試す。
     const unlabeled = `${PREAMBLE}\\begin{frame}[label=canvas-1]{A}
   text
 \\end{frame}
@@ -640,7 +640,6 @@ describe("キャンバスフレームの label(L011)", () => {
 \\end{frame}
 \\end{document}
 `;
-    expect(detach(source)).toContain("\\begin{frame}[label=canvas-2]{B}");
     expect(detach(unlabeled)).toContain("\\begin{frame}[label=canvas-2]{B}");
   });
 
@@ -668,6 +667,27 @@ describe("キャンバスフレームの label(L011)", () => {
     const applied = detach(source);
     expect(applied).toContain("\\begin{frame}[label=canvas-3]{T}");
     const codes = lintSource(applied).map(({ code }) => code);
+    expect(codes).not.toContain("L011");
+    expect(codes).not.toContain("L009");
+  });
+
+  it("二度自由配置化しても label は 1 個のまま、canvas は 2 個の要素を持つ", () => {
+    const source = deck(`\\begin{frame}{T}
+  first
+
+  second
+\\end{frame}`);
+    const first = apply(
+      source,
+      must(detachBlockToCanvas(source, spanOf(source, "first"), placement)),
+    );
+    const second = apply(
+      first,
+      must(detachBlockToCanvas(first, spanOf(first, "second"), placement)),
+    );
+    expect(second.match(/label=/g)).toHaveLength(1);
+    expect(second.match(/\\begin\{decktext\}/g)).toHaveLength(2);
+    const codes = lintSource(second).map(({ code }) => code);
     expect(codes).not.toContain("L011");
     expect(codes).not.toContain("L009");
   });
