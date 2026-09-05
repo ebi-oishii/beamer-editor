@@ -57,7 +57,7 @@
 | `\documentclass` オプション | `aspectratio=169` / `aspectratio=43` のみ |
 | `%% macros:begin` 〜 `%% macros:end` | マクロ定義(§4 の規則に従う) |
 | `%% style:begin` 〜 `%% style:end` | スタイル語彙(`\deckcolor` `\deckfont` `\decklogo` `\deckfooter`。[theme-design.md](theme-design.md) §2)。語彙外は L020 |
-| `%% preamble-extra:begin` 〜 `%% preamble-extra:end` | 生の自由領域。ツールは素通しし、解釈しない(生スタイルの置き場でもある) |
+| `%% preamble-extra:begin` 〜 `%% preamble-extra:end` | 生の自由領域。ツールは素通しする(生スタイルの置き場でもある)。テンプレート(`.sty` + 画像)は Beamer 標準の `\usetheme{Name}` / `\usepackage{templates/<name>/beamertheme<name>}` でここから読む。配置はデッキのディレクトリ直下または `templates/<name>/`([theme-design.md](theme-design.md) §2.1)。プレビューは色・フォント・ロゴ・背景だけを標準記法から近似する |
 
 テーマ選択とパッケージはツール管理領域に入る。v1 のテーマは `default` の 1 種類から開始する(2 テーマ目は HTML/PDF の座標差を fixture で評価してから追加。`metropolis` は将来候補)。共通パッケージ(`graphicx`, `amsmath`, `amssymb`, `booktabs`, `hyperref` 等)と、キャンバス用の `deckcanvas` / `decktext` / `deckimage`(§2.8)の定義はツールが自動注入する。
 
@@ -149,7 +149,7 @@ GUI で扱う自由配置は `deckcanvas` の層に集める。フレーム本�
 
 - 通常フレーム: 既存の `columns`、`itemize`、`block` などで構成する
 - キャンバスフレーム: `deckcanvas` の直下に位置指定オブジェクトだけを並べる(許容外の要素は L014)。フロー要素はそのまま残せる
-- 通常フレームの段落・箸条書き・画像は、GUI の「自由配置にする」で `deckcanvas` の `decktext` / `deckimage` へ移せる(位置は移動時の表示位置から取り、残ったフロー要素は詰まる)。表示条件が変わるもの(overlay 付きの block / `\item` の中、`\pause` との前後関係が移動先と異なるもの)、`center` の中、リスト項目の唯一の内容は対象にしない
+- 通常フレームの段落・箸条書き・画像は、GUI の「自由配置にする」で `deckcanvas` の `decktext` / `deckimage` へ移せる(位置は移動時の表示位置から取り、残ったフロー要素は詰まる)。表示条件が変わるもの(overlay 付きの block / `\item` の中、`\pause` との前後関係が移動先と異なるもの、`\pause` を含むリスト)は対象にしない。項目の唯一の内容を移すときは空になる `\item`(項目が 1 つならリスト)も取り除く(その範囲にあったコメントは同じ位置に残す)。`center` の中の要素は箱の中で `\centering` を保つ。候補にできない要素を右クリックしたときは理由を表示する
 - フレームタイトルは固定領域であり、GUI で移動しない
 - キャンバスフレームには一意な `label` を付ける(L011。AI 依頼・競合検査の永続アドレスに使う)
 
@@ -177,8 +177,8 @@ TikZ・複雑な表・生 LaTeX ブロック・動画・SVG はキャンバス G
 
 #### `decktext` 内部の許容語彙
 
-- 可: インライン要素(§2.5)、数式(§2.6)、改行 `\\`、`itemize` / `enumerate`(ネスト 1 段まで)
-- 不可: block 系環境、`columns`、`center`、`tabular`、`\includegraphics`(画像は `deckimage` を使う)、ネスト 2 段以上のリスト → L014
+- 可: インライン要素(§2.5)、数式(§2.6)、改行 `\\`、`itemize` / `enumerate`(本文と同じくネスト 3 段まで)
+- 不可: block 系環境、`columns`、`center`、`tabular`、`\includegraphics`(画像は `deckimage` を使う)、ネスト 4 段以上のリスト → L014
 
 #### 座標系と正規形
 
@@ -288,6 +288,8 @@ DECKGEOM frame=<番号> kind=<text|image> x=<pt> y=<pt> w=<pt> h=<pt>
 | L019 | キャンバスフレームのタイトルが 2 行以上(固定タイトル帯を超えて本文領域に重なる) | warning |
 | L020 | `%% style` 領域に語彙外の記述(不明なコマンド・役割名・色値・キー) | error |
 | L021 | TeX command の開始に使われた円記号(`¥` / `￥`) | warning。バックスラッシュへ置換する Quick Fix を提供 |
+| L022 | preamble-extra が参照するテンプレート `.sty` がデッキのディレクトリ配下に無い | `\usetheme` は info(TeX 配布のテーマなら通る)、パス指定の `\usepackage` は warning |
+| L023 | テンプレート `.sty` が参照する画像が無い(デッキのディレクトリ基準) | warning |
 
 オブジェクト同士の重なりは意図的な場合があるため lint 対象にしない(`deck check` の実測レポートで info 表示のみ。§2.8)。
 

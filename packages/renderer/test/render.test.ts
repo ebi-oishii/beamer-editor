@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseDeck } from "@beamer-editor/core";
+import { framesOf, parseDeck } from "@beamer-editor/core";
 import { describe, expect, it } from "vitest";
-import { renderDeck } from "../src/render.js";
+import { frameTitleText, renderDeck } from "../src/render.js";
 
 const fixture = (name: string) => readFileSync(join(__dirname, "../../../fixtures", name), "utf8");
 
@@ -43,6 +43,19 @@ describe("renderDeck: basic.tex", () => {
     expect(source.slice(first.sourceSpan.start, first.sourceSpan.end)).toBe(
       "\\begin{frame}\n  \\titlepage\n\\end{frame}",
     );
+  });
+});
+
+describe("frameTitleText", () => {
+  it("renderDeck と同じ数式・raw・連番フォールバックを使う", () => {
+    const frames = framesOf(
+      parseDeck(String.raw`\begin{frame}{Third$x$}\end{frame}
+\begin{frame}\end{frame}`),
+    );
+    const [third, untitled] = frames;
+    if (!third || !untitled) throw new Error("expected two frames");
+    expect(frameTitleText(third, 3)).toBe("Third$x$");
+    expect(frameTitleText(untitled, 4)).toBe("frame 4");
   });
 });
 
@@ -128,14 +141,23 @@ describe("renderDeck: 自由配置候補の識別属性", () => {
     );
   });
 
+  it("候補にできない要素にも属性を付け、理由を data-detach-blocked に載せる", () => {
+    expect(html).toMatch(
+      new RegExp(
+        `data-flow-block="blockEnv" data-source-start="${source.indexOf("\\begin{block}")}" data-source-end="\\d+" data-detach-blocked="unsupported-kind"`,
+      ),
+    );
+    expect(html.match(/data-detach-blocked=/g)).toHaveLength(1);
+  });
+
   it("リスト項目直下の段落と deckcanvas の中身には付けない", () => {
     expect(html).toContain("<span>item text");
     expect(html).not.toContain(`data-source-start="${source.indexOf("item text")}"`);
     expect(html).not.toContain(`data-source-start="${source.indexOf("canvas paragraph")}"`);
-    expect(html.match(/data-flow-block=/g)).toHaveLength(4);
+    expect(html.match(/data-flow-block=/g)).toHaveLength(5);
   });
 
-  it("overlay の中・\\pause の前・center の中・\\pause しか残らない項目の内容には付けない", () => {
+  it("表示条件が変わる要素は overlay を理由に候補外にし、center の中は候補にする", () => {
     const src = `\\documentclass[aspectratio=169]{beamer}
 \\begin{document}
 \\begin{frame}{T}
@@ -154,40 +176,49 @@ describe("renderDeck: 自由配置候補の識別属性", () => {
 \\end{document}
 `;
     const rendered = renderDeck(parseDeck(src)).frames[0]?.html ?? "";
-    for (const text of ["first", "delayed", "centered"]) {
-      expect(rendered).not.toContain(`data-source-start="${src.indexOf(text)}"`);
-    }
-    expect(rendered).not.toContain('data-flow-block="image"');
-    // second だけが、移動先(フレーム末尾 = 全 pause の後)と表示条件が一致する。
-    expect(rendered).toContain(
-      `<p data-flow-block="paragraph" data-source-start="${src.indexOf("second")}"`,
+    const attrs = (text: string, blocked?: string) =>
+      new RegExp(
+        `data-flow-block="[a-zA-Z]+" data-source-start="${src.indexOf(text)}" data-source-end="\\d+"${
+          blocked ? ` data-detach-blocked="${blocked}"` : ">"
+        }`,
+      );
+    expect(rendered).toMatch(attrs("first", "overlay"));
+    expect(rendered).toMatch(attrs("delayed", "overlay"));
+    expect(rendered).toMatch(attrs("\\includegraphics[width=0.4\\textwidth]{only.png}", "overlay"));
+    // center の中も \pause の前なので overlay を理由に候補外。pause が無ければ候補になる。
+    expect(rendered).toMatch(attrs("centered", "overlay"));
+    const centerOnly = renderDeck(
+      parseDeck(src.replace("\\item \\pause \\includegraphics", "\\item \\includegraphics")),
+    ).frames[0]?.html;
+    expect(centerOnly).toMatch(
+      /<p data-flow-block="paragraph" data-source-start="\d+" data-source-end="\d+">centered /,
+    );
+    // second は移動先(フレーム末尾 = 全 pause の後)と表示条件が一致する。
+    expect(rendered).toMatch(
+      new RegExp(
+        `<p data-flow-block="paragraph" data-source-start="${src.indexOf("second")}" data-source-end="\\d+" data-min="2">`,
+      ),
     );
   });
 
-  it("リスト項目の唯一の内容(画像・入れ子リスト)には付けず、他の内容と並ぶものには付ける", () => {
+  it("項目の唯一の内容の画像も候補にし、画像を含むリストは種類として候補外にする", () => {
     const list = `\\documentclass[aspectratio=169]{beamer}
 \\begin{document}
 \\begin{frame}{T}
   \\begin{itemize}
     \\item \\includegraphics[width=0.4\\textwidth]{only.png}
     \\item text \\includegraphics[width=0.4\\textwidth]{with-text.png}
-    \\item
-    \\begin{itemize}
-      \\item deeper \\includegraphics[width=0.2\\textwidth]{deep.png}
-    \\end{itemize}
   \\end{itemize}
 \\end{frame}
 \\end{document}
 `;
     const rendered = renderDeck(parseDeck(list)).frames[0]?.html ?? "";
-    expect(rendered).toContain('<img src="only.png"');
-    expect(rendered).toContain('<img data-flow-block="image"');
-    expect(rendered).toContain('src="with-text.png"');
-    expect(rendered).toContain('src="deep.png"');
-    expect(rendered).not.toContain('<ul data-flow-block="list"');
-    // with-text.png / deep.png の 2 つだけが候補になる(外側のリストは唯一の入れ子を持つ項目を含むが、
-    // リスト自体はフレーム直下なので候補になる)。
-    expect(rendered.match(/data-flow-block="image"/g)).toHaveLength(2);
+    expect(rendered.match(/<img data-flow-block="image"/g)).toHaveLength(2);
+    expect(rendered).not.toMatch(/<img data-flow-block="image"[^>]*data-detach-blocked/);
+    // 画像を含む itemize は decktext に置けないので候補外(理由付き)。
+    expect(rendered).toMatch(
+      /<ul data-flow-block="list"[^>]*data-detach-blocked="unsupported-kind"/,
+    );
   });
 });
 
@@ -204,6 +235,64 @@ describe("renderDeck: kitchen-sink.tex", () => {
     const raw = deck.frames.find((f) => f.isRaw);
     expect(raw).toBeDefined();
     expect(raw?.html).toContain("解釈不能フレーム");
+  });
+});
+
+describe("renderDeck: テンプレート由来の土台スタイル", () => {
+  const baseStyle = {
+    colors: { structure: "123456" as const, background: "FAFAFA" as const },
+    fonts: { main: "Corp Sans" },
+    logo: {
+      path: "templates/corporate/assets/logo.png",
+      placement: { kind: "corner" as const, width: { unit: "paperwidth" as const, value: 0.1 } },
+    },
+    background: { path: "templates/corporate/assets/background.png" },
+    footer: "ACME <Confidential>",
+  };
+
+  it("土台の色・フォント・背景・右下ロゴ・フッターがデッキに効く", () => {
+    const deck = renderDeck(parseDeck(fixture("basic.tex")), undefined, { baseStyle });
+    expect(deck.css).toContain("--deck-structure: #123456;");
+    expect(deck.css).toContain("--deck-background: #FAFAFA;");
+    expect(deck.css).toContain('--deck-font-main: "Corp Sans",');
+    const html = deck.frames[1]?.html ?? "";
+    expect(html).toContain(
+      '<img class="deck-background" src="templates/corporate/assets/background.png">',
+    );
+    expect(html).toContain(
+      '<img class="deck-logo" src="templates/corporate/assets/logo.png" style="right:2%;bottom:3%;width:10.00%">',
+    );
+    expect(html).toContain("<span>ACME &lt;Confidential&gt;</span>");
+  });
+
+  it("デッキの %% style 領域は土台を上書きし、\\decklogo は本文領域座標で置く", () => {
+    const deck = renderDeck(parseDeck(fixture("styled.tex")), undefined, { baseStyle });
+    expect(deck.css).toContain("--deck-structure: #0F62FE;");
+    expect(deck.css).not.toContain("#123456");
+    expect(deck.css).toContain("--deck-background: #FAFAFA;");
+    const html = deck.frames[1]?.html ?? "";
+    expect(html).toMatch(/<img class="deck-logo" src="assets\/logo.png" style="left:/);
+    expect(html).not.toContain("right:2%");
+    // フッターは %% style の \\deckfooter が勝つ。
+    expect(html).toContain("ACME Corp.");
+    expect(html).not.toContain("Confidential&gt;");
+  });
+
+  it("PDF の背景は <img> にできないので出さず、pt 幅のロゴはスライド幅の % に変える", () => {
+    const deck = renderDeck(parseDeck(fixture("basic.tex")), undefined, {
+      baseStyle: {
+        colors: {},
+        fonts: {},
+        background: { path: "bg.pdf" },
+        logo: {
+          path: "logo.png",
+          placement: { kind: "corner", width: { unit: "pt", value: 45.524 } },
+        },
+      },
+    });
+    const html = deck.frames[0]?.html ?? "";
+    expect(html).not.toContain("deck-background");
+    expect(html).toContain("width:10.00%");
   });
 });
 
