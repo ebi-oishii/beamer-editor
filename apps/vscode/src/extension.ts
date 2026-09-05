@@ -182,6 +182,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       return value?.trim() || undefined;
     },
   });
+  context.subscriptions.push(exportController);
 
   // lint → Problems パネル・波線(VS-5)。開いている .tex 文書ごとに独立管理する。
   const diagnosticCollection = vscode.languages.createDiagnosticCollection("beamer-editor");

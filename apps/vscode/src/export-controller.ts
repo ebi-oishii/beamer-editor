@@ -7,6 +7,7 @@ import {
 } from "@beamer-editor/compiler";
 
 export interface ExportUri {
+  readonly scheme: string;
   readonly fsPath: string;
   toString(): string;
 }
@@ -72,7 +73,9 @@ const ERROR_MESSAGES: Record<Exclude<PdfExportErrorCode, "E_CANCELLED">, string>
 /** Extension Host のみで PDF export の UI と compiler 呼び出しを調停する。 */
 export class ExportController {
   private readonly activeUris = new Set<string>();
+  private readonly activeAbortControllers = new Set<AbortController>();
   private readonly compile: NonNullable<ExportControllerDependencies["exportPdf"]>;
+  private disposed = false;
 
   constructor(
     private readonly host: ExportHost,
@@ -82,11 +85,12 @@ export class ExportController {
   }
 
   async export(document: ExportDocument | undefined): Promise<void> {
+    if (this.disposed) return;
     if (!this.host.isWorkspaceTrusted) {
       await this.host.showWarning("PDF 書き出しは、信頼されたワークスペースでのみ実行できます。");
       return;
     }
-    if (!document?.uri.fsPath.endsWith(".tex")) {
+    if (document?.uri.scheme !== "file" || !document.uri.fsPath.endsWith(".tex")) {
       await this.host.showError("PDF を書き出す .tex ファイルを開いてください。");
       return;
     }
@@ -105,22 +109,26 @@ export class ExportController {
 
   private async run(document: ExportDocument): Promise<void> {
     // The picker deliberately exposes only formats that have an implementation.
-    if ((await this.host.chooseFormat()) !== "pdf") return;
+    if ((await this.host.chooseFormat()) !== "pdf" || this.disposed) return;
     const output = await this.host.chooseOutput(
       this.host.uriForFile(defaultPdfOutputPath(document.uri.fsPath)),
     );
-    if (!output) return;
+    if (!output || this.disposed) return;
     const overwrite = await this.host.outputExists(output);
+    if (this.disposed) return;
     if (overwrite && !(await this.host.confirmOverwrite(output))) return;
-    if (document.isDirty && !(await document.save())) return;
+    if (this.disposed || (document.isDirty && !(await document.save()))) return;
+    if (this.disposed) return;
 
     try {
       const result = await this.host.withProgress(async (token) => {
         const abort = new AbortController();
+        this.activeAbortControllers.add(abort);
         const subscription = token.onCancellationRequested(() => abort.abort());
         if (token.isCancellationRequested) abort.abort();
         const tectonicPath = this.host.tectonicPath(document);
         try {
+          if (this.disposed || abort.signal.aborted) return undefined;
           const request = {
             inputPath: document.uri.fsPath,
             outputPath: output.fsPath,
@@ -131,15 +139,21 @@ export class ExportController {
           return await this.compile(request);
         } finally {
           subscription.dispose();
+          this.activeAbortControllers.delete(abort);
         }
       });
+      if (!result || this.disposed) return;
       const action = await this.host.showInformation(
         `PDF を書き出しました: ${result.outputPath}`,
         "PDFを開く",
         "Finderで表示",
       );
-      if (action === "PDFを開く") await this.host.openPdf(output);
-      else if (action === "Finderで表示") await this.host.revealInFileManager(output);
+      try {
+        if (action === "PDFを開く") await this.host.openPdf(output);
+        else if (action === "Finderで表示") await this.host.revealInFileManager(output);
+      } catch {
+        await this.host.showWarning("PDF は書き出されましたが、表示操作に失敗しました。");
+      }
     } catch (error) {
       await this.reportError(error);
     }
@@ -158,5 +172,11 @@ export class ExportController {
       return;
     }
     await this.host.showError(message);
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const controller of this.activeAbortControllers) controller.abort();
   }
 }

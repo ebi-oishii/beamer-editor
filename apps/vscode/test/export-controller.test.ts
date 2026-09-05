@@ -8,10 +8,15 @@ import {
 } from "../src/export-controller";
 
 const input: ExportUri = {
+  scheme: "file",
   fsPath: "/deck/talk.slide.tex",
   toString: () => "file:///deck/talk.slide.tex",
 };
-const output: ExportUri = { fsPath: "/deck/talk.pdf", toString: () => "file:///deck/talk.pdf" };
+const output: ExportUri = {
+  scheme: "file",
+  fsPath: "/deck/talk.pdf",
+  toString: () => "file:///deck/talk.pdf",
+};
 
 function createHost(overrides: Partial<ExportHost> = {}): ExportHost {
   return {
@@ -104,6 +109,16 @@ describe("ExportController", () => {
     }
   });
 
+  it("does not compile virtual documents selected from the active editor fallback", async () => {
+    const host = createHost();
+    const compile = vi.fn();
+    await new ExportController(host, { exportPdf: compile }).export({
+      ...createDocument(),
+      uri: { scheme: "git", fsPath: "/deck/talk.tex", toString: () => "git:/deck/talk.tex" },
+    });
+    expect(compile).not.toHaveBeenCalled();
+  });
+
   it("passes cancellation through AbortSignal and treats cancellation silently", async () => {
     let cancel: (() => void) | undefined;
     const host = createHost({
@@ -122,6 +137,45 @@ describe("ExportController", () => {
     });
     await new ExportController(host, { exportPdf: compile }).export(createDocument());
     expect(compile.mock.calls[0]?.[0].signal.aborted).toBe(true);
+    expect(host.showError).not.toHaveBeenCalled();
+  });
+
+  it("does not start a pre-cancelled progress task and disposes cancellation listeners", async () => {
+    const subscription = { dispose: vi.fn() };
+    const host = createHost({
+      withProgress: async (task) =>
+        task({
+          isCancellationRequested: true,
+          onCancellationRequested: () => subscription,
+        }),
+    });
+    const compile = vi.fn();
+    await new ExportController(host, { exportPdf: compile }).export(createDocument());
+    expect(compile).not.toHaveBeenCalled();
+    expect(subscription.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("aborts an in-flight compiler when disposed and never reports a false export failure", async () => {
+    let signal: AbortSignal | undefined;
+    let resolveCompile: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      resolveCompile = resolve;
+    });
+    const host = createHost();
+    const compile = vi.fn(async (request) => {
+      signal = request.signal;
+      await pending;
+      throw new PdfExportError("E_CANCELLED", "cancelled");
+    });
+    const controller = new ExportController(host, { exportPdf: compile });
+    const running = controller.export(createDocument());
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledOnce());
+    controller.dispose();
+    expect(signal?.aborted).toBe(true);
+    resolveCompile?.();
+    await running;
+    await controller.export(createDocument());
+    expect(compile).toHaveBeenCalledOnce();
     expect(host.showError).not.toHaveBeenCalled();
   });
 
@@ -182,5 +236,27 @@ describe("ExportController", () => {
     await new ExportController(host, { exportPdf: compile }).export(createDocument());
     expect(compile).not.toHaveBeenCalled();
     expect(host.showWarning).toHaveBeenCalledOnce();
+  });
+
+  it("reports display failures separately after a successful export", async () => {
+    const host = createHost({
+      showInformation: vi.fn(async () => "Finderで表示"),
+      revealInFileManager: vi.fn(async () => {
+        throw new Error("unavailable");
+      }),
+    });
+    await new ExportController(host, {
+      exportPdf: async () => ({
+        format: "pdf",
+        inputPath: input.fsPath,
+        outputPath: output.fsPath,
+        overwritten: false,
+        engineVersion: "0.15.0",
+      }),
+    }).export(createDocument());
+    expect(host.showError).not.toHaveBeenCalled();
+    expect(host.showWarning).toHaveBeenCalledWith(
+      "PDF は書き出されましたが、表示操作に失敗しました。",
+    );
   });
 });
