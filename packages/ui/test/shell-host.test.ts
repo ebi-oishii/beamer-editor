@@ -109,4 +109,22 @@ describe("createMessageShellHost", () => {
       { type: "activeFrameChanged", frameIndex: 1 },
     ]);
   });
+
+  it("detachToCanvas を transport へ post する", () => {
+    const posted: unknown[] = [];
+    const host = createMessageShellHost({
+      post: (msg) => posted.push(msg),
+      subscribe: () => () => {},
+    });
+    host.detachToCanvas?.(1, 3, { start: 4, end: 9 }, { x: 0.1, y: 0.2, width: 0.5 });
+    expect(posted).toEqual([
+      {
+        type: "detachToCanvas",
+        frameIndex: 1,
+        version: 3,
+        sourceSpan: { start: 4, end: 9 },
+        rect: { x: 0.1, y: 0.2, width: 0.5 },
+      },
+    ]);
+  });
 });

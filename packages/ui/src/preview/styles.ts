@@ -123,6 +123,42 @@ export const PREVIEW_CSS = `
   padding: 40px;
 }
 
+/* 「自由配置にする」の候補をブラウザの dev tools 風に示す強調。
+   メニュー項目のホバー / フォーカスに合わせて移る。 */
+.slide .flow-target {
+  outline: 2px solid var(--vscode-focusBorder, #3344b3);
+  outline-offset: 1pt;
+  background: rgba(51, 68, 179, 0.12);
+}
+.context-menu {
+  position: fixed;
+  z-index: 10;
+  min-width: 220px;
+  padding: 4px 0;
+  background: var(--vscode-menu-background, #fff);
+  color: var(--vscode-menu-foreground, #333);
+  border: 1px solid var(--vscode-menu-border, #ccc);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+}
+.context-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 12px;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.context-menu button:hover,
+.context-menu button:focus {
+  background: var(--vscode-menu-selectionBackground, #e8eaf9);
+  color: var(--vscode-menu-selectionForeground, inherit);
+}
+
 /* オーバーレイ: 非表示ステップは場所を保ったまま隠す（beamer の covered 相当） */
 .covered {
   visibility: hidden;

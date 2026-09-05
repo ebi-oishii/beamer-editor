@@ -46,7 +46,11 @@ const DECK: RenderedDeck = {
       index: 1,
       label: null,
       titleText: "one",
-      html: '<div class="slide"><div class="slide-body"><p data-min="2">hi</p></div></div>',
+      html:
+        '<div class="slide"><div class="slide-body"><p data-min="2">hi</p>' +
+        '<ul data-flow-block="list" data-source-start="30" data-source-end="80"><li><span>outer</span>' +
+        '<ul data-flow-block="list" data-source-start="45" data-source-end="70"><li><span>inner</span></li></ul>' +
+        "</li></ul></div></div>",
       stepCount: 2,
       isRaw: false,
       sourceSpan: { start: 0, end: 40 },
@@ -609,6 +613,86 @@ describe("mountPreview", () => {
     firePointer(scale, "pointerup", 250, 150);
     // grab offset (10, 10) を引いた左上 (240, 140) を canvas rect (100, 50, 400x200) で正規化。
     expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-text-0", 1, 0.35, 0.45);
+  });
+
+  it("右クリックで候補メニューを出し、ホバーで強調を移し、選んだ候補の span と rect を送る", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const detachToCanvas = vi.fn();
+    const host = { ...fakeHost(), detachToCanvas };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const slide = container.querySelector<HTMLElement>(".slide-scale .slide");
+    const lists = container.querySelectorAll<HTMLElement>(".slide-scale ul");
+    const innerText = lists[1]?.querySelector<HTMLElement>("span");
+    if (!slide || lists.length !== 2 || !innerText) throw new Error("flow fixture missing");
+    vi.spyOn(slide, "getBoundingClientRect").mockReturnValue(domRect(0, 0, 600, 300));
+    vi.spyOn(lists[0] as HTMLElement, "getBoundingClientRect").mockReturnValue(
+      domRect(30, 90, 540, 90),
+    );
+    vi.spyOn(lists[1] as HTMLElement, "getBoundingClientRect").mockReturnValue(
+      domRect(60, 120, 300, 30),
+    );
+
+    const event = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 100,
+      clientY: 130,
+    });
+    act(() => {
+      innerText.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(true);
+    const items = [...container.querySelectorAll<HTMLButtonElement>(".context-menu button")];
+    // 内側の候補が先。ラベルは単位と抜粋。
+    expect(items.map((item) => item.textContent)).toEqual([
+      "箸条書き「inner」を自由配置にする",
+      "箸条書き「outer inner」を自由配置にする",
+    ]);
+    expect(lists[1]?.classList.contains("flow-target")).toBe(true);
+
+    act(() => {
+      items[1]?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    });
+    expect(lists[0]?.classList.contains("flow-target")).toBe(true);
+    expect(lists[1]?.classList.contains("flow-target")).toBe(false);
+
+    act(() => {
+      items[1]?.click();
+    });
+    // 1 枚目のカード(frameIndex 0)から、表示中 version 1 で送る。
+    expect(detachToCanvas).toHaveBeenCalledExactlyOnceWith(
+      0,
+      1,
+      { start: 30, end: 80 },
+      { x: 0.05, y: 0.3, width: 0.9 },
+    );
+    expect(container.querySelector(".context-menu")).toBeNull();
+    expect(container.querySelector(".flow-target")).toBeNull();
+  });
+
+  it("ホストが detachToCanvas を持たなければ右クリックメニューを出さない", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const inner = container.querySelector<HTMLElement>(".slide-scale ul ul span");
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    act(() => {
+      inner?.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(false);
+    expect(container.querySelector(".context-menu")).toBeNull();
   });
 
   it("canvas image は pointerup で一度だけ範囲外座標を clamp せず送る", () => {

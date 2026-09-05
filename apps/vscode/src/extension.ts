@@ -1,5 +1,6 @@
 import {
   canvasPositionReplacement,
+  detachBlockToCanvas,
   type LintDiagnostic,
   type LintSeverity,
 } from "@beamer-editor/core";
@@ -383,6 +384,33 @@ export function activate(context: vscode.ExtensionContext): TestApi {
               target.positionAt(move.sourceSpan.end),
             ),
             replacement,
+          );
+          return (await vscode.workspace.applyEdit(edit)) ? "applied" : "failed";
+        },
+        detachToCanvas: async (request) => {
+          const target = vscode.workspace.textDocuments.find(
+            (candidate) => candidate === request.document,
+          );
+          if (
+            !target ||
+            target.uri.toString() !== request.document.uri.toString() ||
+            target.version !== request.version
+          )
+            return "cancelled";
+          const result = detachBlockToCanvas(
+            target.getText(),
+            request.sourceSpan,
+            request.placement,
+          );
+          if (result === null) return "cancelled";
+          const edit = new vscode.WorkspaceEdit();
+          edit.replace(
+            target.uri,
+            new vscode.Range(
+              target.positionAt(result.span.start),
+              target.positionAt(result.span.end),
+            ),
+            result.text,
           );
           return (await vscode.workspace.applyEdit(edit)) ? "applied" : "failed";
         },

@@ -44,6 +44,17 @@ export interface ShellHost {
     x: number,
     y: number,
   ): void;
+  /**
+   * ui → ホスト: フロー要素(段落・リスト・画像)を同じフレームの deckcanvas へ移す要求
+   * (「自由配置にする」)。sourceSpan は展開後ソース、rect はスライド全体を 1 とした
+   * 左上座標と幅。実装しないホストではメニューを出さない。
+   */
+  detachToCanvas?(
+    frameIndex: number,
+    version: number,
+    sourceSpan: { start: number; end: number },
+    rect: { x: number; y: number; width: number },
+  ): void;
 }
 
 /**
@@ -96,6 +107,9 @@ export function createMessageShellHost(
     },
     moveCanvasElement(frameIndex, elementId, version, x, y) {
       transport.post({ type: "moveCanvasElement", frameIndex, elementId, version, x, y });
+    },
+    detachToCanvas(frameIndex, version, sourceSpan, rect) {
+      transport.post({ type: "detachToCanvas", frameIndex, version, sourceSpan, rect });
     },
     loadNavState() {
       return parseNavState(state?.getState());
