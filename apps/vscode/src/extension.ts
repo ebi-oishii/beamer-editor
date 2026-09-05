@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import {
   canvasPositionReplacement,
+  detachBlockToCanvas,
   type LintDiagnostic,
   type LintSeverity,
   parseDeck,
@@ -339,6 +340,27 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       },
     );
 
+    // #94: プレビューが表示されているエディタグループをロックし、他のファイルが同じグループに
+    // 開かないようにする(ロック中のグループには新しいエディタが開かない)。ロックはアクティブな
+    // グループにしか掛けられないので、パネルが初めてフォーカスされたとき(手動オープン直後か、利用者
+    // がプレビューをクリックしたとき)に 1 回だけ行い、自動オープンでフォーカスを奪わない。
+    // 問題が起きるのは「プレビューがアクティブなときに別ファイルを開く」場面だけなのでこれで足りる。
+    // lockEditorGroup は「その時点でアクティブなグループ」に掛かる。パネル作成直後は workbench 側の
+    // 切り替えが終わっておらずソース側がまだアクティブなことがあるため、アクティブなタブがこの
+    // パネルであることを確かめてから実行する(違うグループをロックしない)。
+    let groupLocked = false;
+    const lockGroupIfActive = (): void => {
+      if (groupLocked || !panel.active) return;
+      if (vscode.window.tabGroups.activeTabGroup.activeTab?.label !== panel.title) return;
+      const enabled =
+        vscode.workspace.getConfiguration("beamerEditor").get<boolean>("preview.lockGroup") ?? true;
+      if (!enabled) return;
+      groupLocked = true;
+      void vscode.commands.executeCommand("workbench.action.lockEditorGroup");
+    };
+    const viewStateSubscription = panel.onDidChangeViewState(lockGroupIfActive);
+    lockGroupIfActive();
+
     const mediaUri = (name: string) =>
       panel.webview
         .asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", name))
@@ -358,6 +380,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       },
       () => {
         templateWatcher.dispose();
+        viewStateSubscription.dispose();
         if (!previewLifecycle.panelDisposed(document.uri, controller)) return;
         if (previewController === controller) previewController = undefined;
       },
@@ -406,6 +429,33 @@ export function activate(context: vscode.ExtensionContext): TestApi {
               target.positionAt(move.sourceSpan.end),
             ),
             replacement,
+          );
+          return (await vscode.workspace.applyEdit(edit)) ? "applied" : "failed";
+        },
+        detachToCanvas: async (request) => {
+          const target = vscode.workspace.textDocuments.find(
+            (candidate) => candidate === request.document,
+          );
+          if (
+            !target ||
+            target.uri.toString() !== request.document.uri.toString() ||
+            target.version !== request.version
+          )
+            return "cancelled";
+          const result = detachBlockToCanvas(
+            target.getText(),
+            request.sourceSpan,
+            request.placement,
+          );
+          if (result === null) return "cancelled";
+          const edit = new vscode.WorkspaceEdit();
+          edit.replace(
+            target.uri,
+            new vscode.Range(
+              target.positionAt(result.span.start),
+              target.positionAt(result.span.end),
+            ),
+            result.text,
           );
           return (await vscode.workspace.applyEdit(edit)) ? "applied" : "failed";
         },

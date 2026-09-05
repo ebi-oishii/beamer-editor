@@ -37,6 +37,12 @@
           ],
           "scope": "resource",
           "description": "Glob patterns for Beamer Editor managed slide files."
+        },
+        "beamerEditor.preview.lockGroup": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "プレビューのエディタグループをロックし、他のファイルがプレビューと同じグループに開かないようにします。ロックはプレビューが初めてフォーカスされたときに掛かります。"
         }
       }
     },

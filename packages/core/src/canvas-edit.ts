@@ -1,13 +1,16 @@
 import type { SourceSpan } from "./ast.js";
 
+/** キャンバス座標・幅の正規形(小数 3 桁、-0.000 は 0.000)。 */
+export function formatCanvasCoordinate(value: number): string {
+  const formatted = value.toFixed(3);
+  return formatted === "-0.000" ? "0.000" : formatted;
+}
+
 /** canvas オブジェクト(deckimage / decktext)の options 原文内の x/y だけを小数 3 桁で置換する。 */
 export function canvasPositionReplacement(options: string, x: number, y: number): string | null {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   if (!options.startsWith("[") || !options.endsWith("]")) return null;
-  const value = (n: number) => {
-    const formatted = n.toFixed(3);
-    return formatted === "-0.000" ? "0.000" : formatted;
-  };
+  const value = formatCanvasCoordinate;
   const replace = (key: "x" | "y", next: string, text: string): string | null => {
     const matches = [
       ...text.matchAll(

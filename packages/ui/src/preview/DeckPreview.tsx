@@ -1,13 +1,13 @@
 /**
  * プレビュー全体を束ねるトップレベルコンポーネント。
  * ShellHost から deck 更新を購読し、previewReducer でナビ状態を管理して
- * SlideScroll(全フレームの縦一列表示)/ Controls を合成する。deck.css は <style> として注入する。
+ * SlideScroll(全フレームの縦一列表示)と現在フレームの step 操作を合成する。
+ * deck.css は <style> として注入する。
  */
 
 import type { RenderedDeck } from "@beamer-editor/renderer";
-import { type KeyboardEvent, useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ShellHost } from "../shell-host.js";
-import { Controls } from "./Controls.js";
 import { type RevealRequest, SlideScroll } from "./SlideScroll.js";
 import { type PreviewAction, type PreviewState, previewReducer } from "./state.js";
 import { stepZoom, type ZoomState } from "./zoom.js";
@@ -22,6 +22,11 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const [restoredNav] = useState(() => host.loadNavState?.());
   const [zoom, setZoom] = useState<ZoomState>(() => restoredNav?.zoom ?? "fit");
   const [fitScale, setFitScale] = useState(1);
+  const fitScaleRef = useRef(fitScale);
+  fitScaleRef.current = fitScale;
+  const previewRef = useRef<HTMLElement>(null);
+  const pendingWheelDirection = useRef<1 | -1 | undefined>();
+  const wheelAnimationFrame = useRef<number | undefined>();
 
   // frameCount を reducer へ渡すため ref に写す（reducer の同一性を保つ）。
   const frameCountRef = useRef(0);
@@ -35,7 +40,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const currentRef = useRef(state.current);
   currentRef.current = state.current;
 
-  // 指定フレームを表示領域の上端へスクロールさせる要求(◀▶・矢印キー・復元・ズーム変更)。
+  // 指定フレームを表示領域の上端へスクロールさせる要求(◀▶・矢印キー・復元)。
   // クリックやスクロール追従による選択では出さない(見ている場所を動かさない)。
   const [reveal, setReveal] = useState<RevealRequest | undefined>();
   const revealToken = useRef(0);
@@ -69,14 +74,6 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
       requestReveal(Math.min(currentRef.current, deck.frames.length - 1));
     }
   }, [deck, requestReveal]);
-
-  // ズームを変えても読んでいたフレームが上端に残るようにする(初回マウント時は対象なし)。
-  const lastZoom = useRef(zoom);
-  useEffect(() => {
-    if (lastZoom.current === zoom) return;
-    lastZoom.current = zoom;
-    requestReveal(currentRef.current);
-  }, [zoom, requestReveal]);
 
   // deck.css（%% style 由来の CSS 変数）を <style> として注入・更新する。
   const styleRef = useRef<HTMLStyleElement | null>(null);
@@ -113,34 +110,95 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     }
   }, [frame, state.step]);
 
+  // wheel は React の passive 設定に依存せず native listener で扱う。高精度ホイールの
+  // 多数のイベントは一描画フレームにつき一段階へ畳み、通常スクロールは一切妨げない。
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      if (event.deltaY === 0) return;
+      event.preventDefault();
+      pendingWheelDirection.current = event.deltaY > 0 ? -1 : 1;
+      if (wheelAnimationFrame.current !== undefined) return;
+      wheelAnimationFrame.current = requestAnimationFrame(() => {
+        wheelAnimationFrame.current = undefined;
+        const direction = pendingWheelDirection.current;
+        pendingWheelDirection.current = undefined;
+        if (direction) setZoom((current) => stepZoom(current, fitScaleRef.current, direction));
+      });
+    };
+    preview.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      preview.removeEventListener("wheel", onWheel);
+      if (wheelAnimationFrame.current !== undefined) {
+        cancelAnimationFrame(wheelAnimationFrame.current);
+        wheelAnimationFrame.current = undefined;
+      }
+    };
+  }, []);
+
   /** フレーム移動(◀▶・矢印キー)。移動先を表示領域の上端へスクロールする。 */
   const move = (action: PreviewAction) => {
     const next = previewReducer(state, action, deck.frames.length);
     dispatch(action);
     if (next.current !== state.current) requestReveal(next.current);
   };
+  const moveRef = useRef(move);
+  moveRef.current = move;
 
-  // フレーム移動のキーボード操作(スライダー等の入力要素の矢印キーは奪わない)。
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const target = event.target as HTMLElement;
-    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
-    if (event.key === "ArrowLeft") {
-      event.preventDefault();
-      move({ type: "prev" });
-    } else if (event.key === "ArrowRight") {
-      event.preventDefault();
-      move({ type: "next" });
-    }
-  };
+  // Webview が開かれた直後にも動くよう、フォーカスを強制せず ownerDocument で扱う。
+  // プレビュー内か document 自身に発生したキーだけを受け、他の UI の入力を奪わない。
+  useEffect(() => {
+    const preview = previewRef.current;
+    const ownerDocument = preview?.ownerDocument;
+    if (!preview || !ownerDocument) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target;
+      if (
+        !(target instanceof Node) ||
+        (!preview.contains(target) &&
+          target !== ownerDocument.body &&
+          target !== ownerDocument.documentElement)
+      ) {
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+        if (event.key === "+" || event.key === "=") {
+          event.preventDefault();
+          setZoom((current) => stepZoom(current, fitScaleRef.current, 1));
+        } else if (event.key === "-") {
+          event.preventDefault();
+          setZoom((current) => stepZoom(current, fitScaleRef.current, -1));
+        } else if (event.key === "0") {
+          event.preventDefault();
+          setZoom("fit");
+        }
+        return;
+      }
+      // range の未修飾左右キーは値変更へ委ね、フレーム移動に使わない。
+      if (
+        (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
+        target instanceof HTMLInputElement &&
+        target.type === "range"
+      ) {
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        moveRef.current({ type: "prev" });
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        moveRef.current({ type: "next" });
+      }
+    };
+    ownerDocument.addEventListener("keydown", handleKeyDown);
+    return () => ownerDocument.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   return (
-    // biome-ignore lint/a11y/useSemanticElements: 矢印キーのフレーム移動を束ねるコンテナ。
-    <div
-      className="beamer-preview"
-      role="group"
-      aria-label="Beamer スライドプレビュー"
-      onKeyDown={handleKeyDown}
-    >
+    <section className="beamer-preview" ref={previewRef} aria-label="Beamer スライドプレビュー">
       <SlideScroll
         frames={deck.frames}
         current={state.current}
@@ -154,23 +212,36 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         onMoveCanvasElement={(frameIndex, elementId, x, y) =>
           host.moveCanvasElement?.(frameIndex, elementId, version, x, y)
         }
+        onDetachToCanvas={
+          host.detachToCanvas
+            ? (frameIndex, request) => {
+                host.detachToCanvas?.(frameIndex, version, request.sourceSpan, request.rect);
+              }
+            : undefined
+        }
         onFitScaleChange={handleFitScaleChange}
       />
-      <Controls
-        frame={frame}
-        total={deck.frames.length}
-        step={state.step}
-        onPrev={() => move({ type: "prev" })}
-        onNext={() => move({ type: "next" })}
-        onStep={(s) => dispatch({ type: "setStep", step: s })}
-        onJump={() => host.jumpToSource(state.current, version)}
-        zoom={zoom}
-        fitScale={fitScale}
-        onZoomOut={() => setZoom((current) => stepZoom(current, fitScale, -1))}
-        onZoomIn={() => setZoom((current) => stepZoom(current, fitScale, 1))}
-        onZoomFit={() => setZoom("fit")}
-        onZoomActual={() => setZoom(1)}
-      />
-    </div>
+      <div className="preview-status" aria-live="polite" aria-atomic="true">
+        フレーム {deck.frames.length === 0 ? 0 : state.current + 1} / {deck.frames.length}
+      </div>
+      {frame && frame.stepCount > 1 ? (
+        <div className="step-control">
+          <label>
+            step{" "}
+            <input
+              type="range"
+              min={1}
+              max={frame.stepCount}
+              value={state.step}
+              aria-label={`オーバーレイ step（${frame.stepCount} 段階）`}
+              onChange={(event) => dispatch({ type: "setStep", step: Number(event.target.value) })}
+            />
+          </label>
+          <span className="step-indicator">
+            {state.step}/{frame.stepCount}
+          </span>
+        </div>
+      ) : null}
+    </section>
   );
 }

@@ -40,3 +40,15 @@ pnpm typecheck   # 全パッケージの tsc --noEmit
 pnpm --dir apps/web dev       # renderer 動作確認用の dev ビューア
 pnpm --dir apps/vscode build  # VS Code 拡張のバンドル(開発は F5)
 ```
+
+### PDF 書き出し
+
+ローカルに [Tectonic](https://tectonic-typesetting.github.io/) を用意すると、入力ソースを変更せずに PDF を書き出せる。
+
+```bash
+pnpm --dir packages/cli deck export talk.slide.tex --format pdf
+# talk.slide.tex -> talk.pdf
+```
+
+`-o output.pdf` で出力先を指定できる。既存ファイルを置き換える場合は明示的に
+`--overwrite` を指定する。`--tectonic /path/to/tectonic` と `--json` も利用できる。

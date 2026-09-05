@@ -3,8 +3,8 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { relative, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { EXIT_CODE, exitCodeForError } from "../src/cli.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { EXIT_CODE, exitCodeForError, parseExportArgs, run } from "../src/cli.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const require = createRequire(import.meta.url);
@@ -243,6 +243,7 @@ describe("deck lint", () => {
         "使い方: deck <command> ...\n\n" +
         "  deck lint <file> [--json]           デッキを検査\n" +
         "  deck format <file> [--write] [--json]  デッキを正規化\n" +
+        "  deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]\n" +
         "  deck fonts status [--json]          フォントカタログ全 family の解決状態\n" +
         '  deck fonts fetch [family] [--json]  family(既定 "Noto Sans CJK JP")を取得・配置\n',
     );
@@ -285,5 +286,109 @@ describe("deck format", () => {
       written: true,
       formatted: null,
     });
+  });
+});
+
+describe("deck export", () => {
+  it("parses the required PDF format, output aliases, and usage failures without changing other command parsing", () => {
+    expect(
+      parseExportArgs(["talk.slide.tex", "--format", "pdf", "-o", "out.pdf", "--overwrite"]),
+    ).toMatchObject({
+      input: "talk.slide.tex",
+      format: "pdf",
+      output: "out.pdf",
+      overwrite: true,
+      error: undefined,
+    });
+    for (const argv of [
+      ["talk.tex"],
+      ["--format", "pdf"],
+      ["talk.tex", "--format", "html"],
+      ["talk.tex", "--format", "pdf", "--format", "pdf"],
+      ["talk.tex", "--format", "pdf", "--output"],
+      ["talk.tex", "--format", "pdf", "--unknown"],
+    ]) {
+      expect(parseExportArgs(argv).error).toBeDefined();
+    }
+    expect(parseExportArgs(["talk.tex", "--format", "--json"])).toMatchObject({
+      json: true,
+      error: "オプションには値が必要です: --format",
+    });
+  });
+
+  it("writes the documented human and JSON success shapes", async () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const compiler = async () => ({
+      format: "pdf" as const,
+      inputPath: "/tmp/talk.slide.tex",
+      outputPath: "/tmp/talk.pdf",
+      overwritten: false,
+      engineVersion: "0.16.0",
+    });
+    try {
+      expect(
+        await run(["export", "talk.slide.tex", "--format", "pdf"], { exportPdf: compiler }),
+      ).toBe(0);
+      expect(stdout).toHaveBeenLastCalledWith("talk.slide.tex -> talk.pdf\n");
+      stdout.mockClear();
+      expect(
+        await run(["export", "talk.slide.tex", "--format", "pdf", "--json"], {
+          exportPdf: compiler,
+        }),
+      ).toBe(0);
+      expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toEqual({
+        format: "pdf",
+        input: "talk.slide.tex",
+        output: "talk.pdf",
+        overwritten: false,
+        engine: { name: "tectonic", version: "0.16.0" },
+      });
+      expect(stderr).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it("keeps export failures on stderr with exit code 3", async () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const compiler = async () => {
+        const error = Object.assign(new Error("already exists"), { code: "E_OUTPUT_EXISTS" });
+        throw error;
+      };
+      expect(
+        await run(["export", "talk.tex", "--format", "pdf", "--json"], { exportPdf: compiler }),
+      ).toBe(3);
+      expect(stdout).not.toHaveBeenCalled();
+      expect(JSON.parse(String(stderr.mock.calls[0]?.[0]))).toEqual({
+        error: { code: "E_OUTPUT_EXISTS", message: "already exists" },
+      });
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it("preserves E_IO rather than reporting an output preflight failure as internal", async () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const compiler = async () => {
+        throw Object.assign(new Error("output cannot be inspected"), { code: "E_IO" });
+      };
+      expect(
+        await run(["export", "talk.tex", "--format", "pdf", "--json"], { exportPdf: compiler }),
+      ).toBe(EXIT_CODE.operationalFailure);
+      expect(stdout).not.toHaveBeenCalled();
+      expect(JSON.parse(String(stderr.mock.calls[0]?.[0]))).toEqual({
+        error: { code: "E_IO", message: "output cannot be inspected" },
+      });
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
   });
 });

@@ -93,6 +93,104 @@ describe("renderDeck: canvas.tex", () => {
   });
 });
 
+describe("renderDeck: 自由配置候補の識別属性", () => {
+  const source = `\\documentclass[aspectratio=169]{beamer}
+\\begin{document}
+\\begin{frame}{T}
+  top paragraph
+  \\begin{block}{B}
+    inside block
+  \\end{block}
+  \\begin{itemize}
+    \\item item text
+  \\end{itemize}
+  \\includegraphics[width=0.4\\textwidth]{a.png}
+  \\begin{deckcanvas}
+    \\begin{decktext}[x=0,y=0,w=1]canvas paragraph\\end{decktext}
+  \\end{deckcanvas}
+\\end{frame}
+\\end{document}
+`;
+  const html = renderDeck(parseDeck(source)).frames[0]?.html ?? "";
+
+  it("段落・リスト・画像に span 付きの data-flow-block を付け、入れ子でも付く", () => {
+    expect(html).toContain(
+      `<p data-flow-block="paragraph" data-source-start="${source.indexOf("top paragraph")}"`,
+    );
+    expect(html).toContain(
+      `<p data-flow-block="paragraph" data-source-start="${source.indexOf("inside block")}"`,
+    );
+    expect(html).toContain(
+      `<ul data-flow-block="list" data-source-start="${source.indexOf("\\begin{itemize}")}"`,
+    );
+    expect(html).toContain(
+      `<img data-flow-block="image" data-source-start="${source.indexOf("\\includegraphics")}"`,
+    );
+  });
+
+  it("リスト項目直下の段落と deckcanvas の中身には付けない", () => {
+    expect(html).toContain("<span>item text");
+    expect(html).not.toContain(`data-source-start="${source.indexOf("item text")}"`);
+    expect(html).not.toContain(`data-source-start="${source.indexOf("canvas paragraph")}"`);
+    expect(html.match(/data-flow-block=/g)).toHaveLength(4);
+  });
+
+  it("overlay の中・\\pause の前・center の中・\\pause しか残らない項目の内容には付けない", () => {
+    const src = `\\documentclass[aspectratio=169]{beamer}
+\\begin{document}
+\\begin{frame}{T}
+  first
+  \\begin{block}<2->{B}
+    delayed
+  \\end{block}
+  \\begin{center}
+    centered
+  \\end{center}
+  \\begin{itemize}
+    \\item \\pause \\includegraphics[width=0.4\\textwidth]{only.png}
+  \\end{itemize}
+  second
+\\end{frame}
+\\end{document}
+`;
+    const rendered = renderDeck(parseDeck(src)).frames[0]?.html ?? "";
+    for (const text of ["first", "delayed", "centered"]) {
+      expect(rendered).not.toContain(`data-source-start="${src.indexOf(text)}"`);
+    }
+    expect(rendered).not.toContain('data-flow-block="image"');
+    // second だけが、移動先(フレーム末尾 = 全 pause の後)と表示条件が一致する。
+    expect(rendered).toContain(
+      `<p data-flow-block="paragraph" data-source-start="${src.indexOf("second")}"`,
+    );
+  });
+
+  it("リスト項目の唯一の内容(画像・入れ子リスト)には付けず、他の内容と並ぶものには付ける", () => {
+    const list = `\\documentclass[aspectratio=169]{beamer}
+\\begin{document}
+\\begin{frame}{T}
+  \\begin{itemize}
+    \\item \\includegraphics[width=0.4\\textwidth]{only.png}
+    \\item text \\includegraphics[width=0.4\\textwidth]{with-text.png}
+    \\item
+    \\begin{itemize}
+      \\item deeper \\includegraphics[width=0.2\\textwidth]{deep.png}
+    \\end{itemize}
+  \\end{itemize}
+\\end{frame}
+\\end{document}
+`;
+    const rendered = renderDeck(parseDeck(list)).frames[0]?.html ?? "";
+    expect(rendered).toContain('<img src="only.png"');
+    expect(rendered).toContain('<img data-flow-block="image"');
+    expect(rendered).toContain('src="with-text.png"');
+    expect(rendered).toContain('src="deep.png"');
+    expect(rendered).not.toContain('<ul data-flow-block="list"');
+    // with-text.png / deep.png の 2 つだけが候補になる(外側のリストは唯一の入れ子を持つ項目を含むが、
+    // リスト自体はフレーム直下なので候補になる)。
+    expect(rendered.match(/data-flow-block="image"/g)).toHaveLength(2);
+  });
+});
+
 describe("renderDeck: kitchen-sink.tex", () => {
   const deck = renderDeck(parseDeck(fixture("kitchen-sink.tex")));
 
