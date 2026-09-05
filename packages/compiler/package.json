@@ -1,0 +1,16 @@
+{
+  "name": "@beamer-editor/compiler",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  }
+}
