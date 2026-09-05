@@ -143,6 +143,7 @@ function firePointer(
   clientX: number,
   clientY: number,
   pointerId = 7,
+  init: PointerEventInit = {},
 ): void {
   const event = new TestPointerEvent(type, {
     bubbles: true,
@@ -150,6 +151,7 @@ function firePointer(
     clientX,
     clientY,
     pointerId,
+    ...init,
   });
   act(() => {
     target.dispatchEvent(event);
@@ -1229,6 +1231,46 @@ describe("mountPreview", () => {
     firePointer(scale, "pointerup", 70, 310);
     expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, -0.1, 1.25);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
+  });
+
+  it("右クリックはドラッグを始めず、その後のマウス移動で箱が追従しない(#108)", () => {
+    const { editable, moveCanvasElement, scale, setPointerCapture } = mountCanvasPreview();
+    const left = editable.style.left;
+    const top = editable.style.top;
+
+    firePointer(editable, "pointerdown", 150, 100, 7, { button: 2 });
+    expect(editable.classList.contains("canvas-dragging")).toBe(false);
+    expect(setPointerCapture).not.toHaveBeenCalled();
+    act(() => {
+      editable.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    });
+    // メニュー操作の後にマウスを動かしても、箱は動かず move も送らない。
+    firePointer(scale, "pointermove", 300, 250);
+    firePointer(scale, "pointermove", 320, 260);
+    expect(editable.style.left).toBe(left);
+    expect(editable.style.top).toBe(top);
+    firePointer(scale, "pointerup", 320, 260);
+    expect(moveCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("ドラッグ中に右クリックされたらドラッグを取り消して元の位置に戻す(#108)", () => {
+    const { editable, moveCanvasElement, releasePointerCapture, scale } = mountCanvasPreview();
+    const left = editable.style.left;
+    const top = editable.style.top;
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(scale, "pointermove", 200, 150);
+    expect(editable.style.left).not.toBe(left);
+    act(() => {
+      editable.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    });
+    expect(editable.classList.contains("canvas-dragging")).toBe(false);
+    expect(editable.style.left).toBe(left);
+    expect(editable.style.top).toBe(top);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    firePointer(scale, "pointermove", 260, 200);
+    expect(editable.style.left).toBe(left);
+    firePointer(scale, "pointerup", 260, 200);
+    expect(moveCanvasElement).not.toHaveBeenCalled();
   });
 
   it("canvas image の clickだけではmoveを送らない", () => {
