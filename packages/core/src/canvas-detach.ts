@@ -11,6 +11,7 @@
 import type {
   BlockNode,
   CanvasNode,
+  DeckDocument,
   FrameNode,
   ListItemNode,
   ListNode,
@@ -343,9 +344,25 @@ function rewriteFrame(
   target: { removeSpan: SourceSpan; center: boolean },
   canvas: CanvasNode | null,
   placement: CanvasPlacement,
+  label: string | null,
 ): SourceReplacement {
   const edits: Edit[] = [];
   const eol = detectEol(source);
+
+  // 0. label の無いフレームには label を付ける(キャンバスフレームは L011 で label 必須)。
+  //    options があれば末尾に追記し、無ければ \begin{frame} の直後に新設する。
+  if (label !== null) {
+    const optionsSpan = frame.options.span;
+    if (optionsSpan) {
+      const inner = source.slice(optionsSpan.start + 1, optionsSpan.end - 1).trim();
+      const separator = inner === "" || inner.endsWith(",") ? "" : ",";
+      const at = optionsSpan.end - 1;
+      edits.push({ start: at, end: at, text: `${separator}label=${label}` });
+    } else {
+      const at = frame.span.start + "\\begin{frame}".length;
+      edits.push({ start: at, end: at, text: `[label=${label}]` });
+    }
+  }
 
   // 1. 対象の原文(唯一の内容なら \\item やリストごと)を取り除く。行を占有していれば改行ごと消す。
   //    広げた範囲にあったコメントは、行を占有して消せるときは同じ位置に行として残す(§2.4)。
@@ -413,8 +430,27 @@ function rewriteFrame(
   return { span: frame.span, text };
 }
 
+/** 文書内のどのフレーム(生フレーム含む)にも使われていない `canvas-N` を返す(N は 1 から)。 */
+function nextCanvasLabel(doc: DeckDocument): string {
+  const used = new Set<string>();
+  for (const element of doc.body) {
+    const label =
+      element.type === "frame"
+        ? element.options.label
+        : element.type === "rawFrame"
+          ? element.label
+          : null;
+    if (label?.trim()) used.add(label.trim());
+  }
+  for (let n = 1; ; n++) {
+    const candidate = `canvas-${n}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
 /**
  * blockSpan(元ソース上の範囲)が指すフロー要素を deckcanvas へ移す。
+ * フレームに label が無ければ、文書内で一意な `canvas-N` を付ける(L011)。
  * 候補(detachableBlocksOf)に無い・deckcanvas が 2 つ以上あるフレームでは null。
  */
 export function detachBlockToCanvas(
@@ -445,6 +481,7 @@ export function detachBlockToCanvas(
       target,
       canvases[0] ?? null,
       clampCanvasPlacement(placement),
+      element.options.label?.trim() ? null : nextCanvasLabel(doc),
     );
   }
   return null;
