@@ -377,14 +377,51 @@ export const PREVIEW_CSS = `
   font-size: 0.85em;
   padding: 0 2pt;
 }
-.slide .image-placeholder {
+/* コンパイルしないと描けないもの(生ブロック・PDF 画像)の箱(#93)。中身は描かず、ラベルだけを中央に出す。 */
+.slide .placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  margin: 3pt 0;
+  padding: 0;
+  max-width: 100%;
   border: 1.2pt dashed #7f8c8d;
   background: #eceff1;
   color: #546e7a;
-  font-size: 7.5pt;
-  padding: 8pt 6pt;
-  text-align: center;
   border-radius: 3pt;
+  overflow: hidden;
+}
+.slide .placeholder-label {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 7.5pt;
+  line-height: 1.3;
+  text-align: center;
+  padding: 2pt 4pt;
+  word-break: break-all;
+}
+.slide .canvas-item.placeholder {
+  margin: 0;
+}
+/* 部分コンパイル(#81)が済んだ箱: 枠と背景を消して画像だけを見せる。失敗した箱は赤い枠で残す。 */
+.slide .placeholder.compiled {
+  border-color: transparent;
+  background: transparent;
+}
+.slide .placeholder .raw-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.slide .placeholder.failed {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+.slide .placeholder.failed .placeholder-label::after {
+  content: "(コンパイル失敗)";
+  display: block;
+  font-size: 6.5pt;
 }
 
 /* ---- キャンバス（subset-spec §2.8）---- */

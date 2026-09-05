@@ -1,7 +1,17 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { copyFile, link, lstat, mkdtemp, rename, rm, stat } from "node:fs/promises";
+import {
+  copyFile,
+  link,
+  lstat,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
@@ -283,6 +293,50 @@ function processDetail(result: ProcessResult): string {
   return detail ? `: ${detail}` : "";
 }
 
+/** `tectonic --version` で実行できることを確かめ、バージョン文字列を返す(exportPdf / compileFragment 共通)。 */
+async function ensureTectonic(
+  runner: ProcessRunner,
+  tectonic: string,
+  cwd: string,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  let versionResult: ProcessResult;
+  try {
+    versionResult = await runner.run(
+      tectonic,
+      ["--version"],
+      runnerOptions(cwd, signal, VERSION_TIMEOUT_MS),
+    );
+  } catch (error) {
+    if (isAbort(error, signal))
+      throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました", error);
+    if (error instanceof ProcessNotFoundError || isNotFound(error))
+      throw new PdfExportError("E_TECTONIC_NOT_FOUND", errorMessage(error), error);
+    throw new PdfExportError(
+      "E_TECTONIC_VERSION",
+      `Tectonic のバージョンを取得できません: ${String(error)}`,
+      error,
+    );
+  }
+  if (versionResult.cancelled || signal?.aborted)
+    throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました");
+  if (versionResult.timedOut)
+    throw new PdfExportError(
+      "E_TECTONIC_VERSION",
+      `Tectonic のバージョン確認が ${VERSION_TIMEOUT_MS / 1000} 秒でタイムアウトしました`,
+    );
+  const engineVersion =
+    versionResult.exitCode === 0
+      ? versionFrom(`${versionResult.stdout}\n${versionResult.stderr}`)
+      : undefined;
+  if (!engineVersion)
+    throw new PdfExportError(
+      "E_TECTONIC_VERSION",
+      `Tectonic のバージョンを確認できません${processDetail(versionResult)}`,
+    );
+  return engineVersion;
+}
+
 /**
  * Compile the untouched input source through Tectonic, staging all compiler
  * output under the OS temp directory. The destination is replaced only after a
@@ -327,40 +381,7 @@ export async function exportPdf(
   }
   throwIfCancelled(signal);
 
-  let versionResult: ProcessResult;
-  try {
-    versionResult = await runner.run(
-      tectonic,
-      ["--version"],
-      runnerOptions(dirname(inputPath), signal, VERSION_TIMEOUT_MS),
-    );
-  } catch (error) {
-    if (isAbort(error, signal))
-      throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました", error);
-    if (error instanceof ProcessNotFoundError || isNotFound(error))
-      throw new PdfExportError("E_TECTONIC_NOT_FOUND", errorMessage(error), error);
-    throw new PdfExportError(
-      "E_TECTONIC_VERSION",
-      `Tectonic のバージョンを取得できません: ${String(error)}`,
-      error,
-    );
-  }
-  if (versionResult.cancelled || signal?.aborted)
-    throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました");
-  if (versionResult.timedOut)
-    throw new PdfExportError(
-      "E_TECTONIC_VERSION",
-      `Tectonic のバージョン確認が ${VERSION_TIMEOUT_MS / 1000} 秒でタイムアウトしました`,
-    );
-  const engineVersion =
-    versionResult.exitCode === 0
-      ? versionFrom(`${versionResult.stdout}\n${versionResult.stderr}`)
-      : undefined;
-  if (!engineVersion)
-    throw new PdfExportError(
-      "E_TECTONIC_VERSION",
-      `Tectonic のバージョンを確認できません${processDetail(versionResult)}`,
-    );
+  const engineVersion = await ensureTectonic(runner, tectonic, dirname(inputPath), signal);
 
   const makeTemp =
     dependencies.temporaryDirectory ?? ((prefix: string) => mkdtemp(join(tmpdir(), prefix)));
@@ -459,3 +480,91 @@ export function defaultPdfOutputPath(inputPath: string): string {
   const absoluteInput = isAbsolute(inputPath) ? inputPath : resolve(inputPath);
   return defaultOutputPath(absoluteInput);
 }
+
+export interface FragmentCompileRequest {
+  /** buildFragmentDocument で組み立てた standalone 文書の全文。 */
+  document: string;
+  tectonicPath?: string;
+  /** \\includegraphics などの相対パスを解く作業ディレクトリ(デッキのディレクトリ)。無ければ一時ディレクトリ。 */
+  cwd?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+export interface FragmentCompileResult {
+  pdf: Uint8Array;
+  engineVersion: string;
+}
+
+/**
+ * 生ブロックの standalone 文書を一時ディレクトリでコンパイルし、PDF のバイト列を返す(#81)。
+ * ファイルは残さない(キャッシュは呼び出し側が持つ)。失敗は exportPdf と同じ PdfExportError。
+ */
+export async function compileFragment(
+  request: FragmentCompileRequest,
+  dependencies: PdfExportDependencies = {},
+): Promise<FragmentCompileResult> {
+  const runner = dependencies.runner ?? nodeProcessRunner;
+  const tectonic = request.tectonicPath ?? "tectonic";
+  const signal = request.signal;
+  const timeoutMs =
+    request.timeoutMs && request.timeoutMs > 0 ? request.timeoutMs : DEFAULT_COMPILE_TIMEOUT_MS;
+  throwIfCancelled(signal);
+  const makeTemp =
+    dependencies.temporaryDirectory ?? ((prefix: string) => mkdtemp(join(tmpdir(), prefix)));
+  let tempDirectory: string | undefined;
+  try {
+    tempDirectory = await makeTemp("beamer-editor-fragment-");
+    const engineVersion = await ensureTectonic(runner, tectonic, tempDirectory, signal);
+    const inputPath = join(tempDirectory, "fragment.tex");
+    await writeFile(inputPath, request.document, "utf8");
+    throwIfCancelled(signal);
+    let compileResult: ProcessResult;
+    try {
+      compileResult = await runner.run(
+        tectonic,
+        ["-X", "compile", "--outdir", tempDirectory, inputPath],
+        runnerOptions(request.cwd ?? tempDirectory, signal, timeoutMs),
+      );
+    } catch (error) {
+      if (isAbort(error, signal))
+        throw new PdfExportError("E_CANCELLED", "部分コンパイルはキャンセルされました", error);
+      if (error instanceof ProcessNotFoundError || isNotFound(error))
+        throw new PdfExportError("E_TECTONIC_NOT_FOUND", errorMessage(error), error);
+      throw new PdfExportError(
+        "E_COMPILE",
+        `Tectonic の実行に失敗しました: ${String(error)}`,
+        error,
+      );
+    }
+    if (compileResult.cancelled || signal?.aborted)
+      throw new PdfExportError("E_CANCELLED", "部分コンパイルはキャンセルされました");
+    if (compileResult.timedOut)
+      throw new PdfExportError(
+        "E_COMPILE",
+        `部分コンパイルが ${timeoutMs / 1000} 秒でタイムアウトしました${processDetail(compileResult)}`,
+      );
+    const compiledPdf = join(tempDirectory, "fragment.pdf");
+    if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(compiledPdf)))
+      throw new PdfExportError(
+        "E_COMPILE",
+        `部分コンパイルに失敗しました${processDetail(compileResult)}`,
+      );
+    const pdf = new Uint8Array(await readFile(compiledPdf));
+    return { pdf, engineVersion };
+  } catch (error) {
+    if (error instanceof PdfExportError) throw error;
+    if (isAbort(error, signal))
+      throw new PdfExportError("E_CANCELLED", "部分コンパイルはキャンセルされました", error);
+    throw new PdfExportError(
+      "E_IO",
+      `部分コンパイルの入出力に失敗しました: ${String(error)}`,
+      error,
+    );
+  } finally {
+    if (tempDirectory)
+      await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+export { buildFragmentDocument } from "./fragment.js";
