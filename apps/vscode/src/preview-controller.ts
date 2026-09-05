@@ -1,4 +1,4 @@
-import { mapExpandedRangeToSourceExact } from "@beamer-editor/core";
+import { clampCanvasPosition, mapExpandedRangeToSourceExact } from "@beamer-editor/core";
 import { DEFAULT_THEME } from "@beamer-editor/renderer";
 import type { ExtensionToWebview } from "@beamer-editor/ui";
 import { parseWebviewToExtension } from "@beamer-editor/ui";
@@ -336,8 +336,11 @@ export class PreviewController implements vscode.Disposable {
       this.sendDeck();
       return;
     }
-    if (element.position.x === move.x && element.position.y === move.y) return;
-    const { frameIndex, elementId, version, x, y } = move;
+    // 書き込む座標は必ず本文領域内に収める(lint L012)。webview 側でも同じ位置で
+    // 止めているが、拡張が自分で lint を通らないソースを書かないための最終防御。
+    const { x, y } = clampCanvasPosition(move.x, move.y, element.position.width);
+    if (element.position.x === x && element.position.y === y) return;
+    const { frameIndex, elementId, version } = move;
     const document = this.document;
     const expectedOptions = document
       .getText()

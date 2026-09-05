@@ -6,7 +6,11 @@
 
 import type { RenderedFrame } from "@beamer-editor/renderer";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { canvasPointFromPointer, normalizeCanvasCoordinate } from "./canvas-drag.js";
+import {
+  canvasPointFromPointer,
+  clampCanvasPoint,
+  normalizeCanvasCoordinate,
+} from "./canvas-drag.js";
 import {
   clampMenuPosition,
   collectDetachCandidates,
@@ -65,6 +69,8 @@ export function Stage({
     id: string;
     x: number;
     y: number;
+    /** 本文領域内へ収めるとき右端の余地になる箱の幅。移動では変わらない。 */
+    width: number;
     grabX: number;
     grabY: number;
     pointerId: number;
@@ -213,6 +219,7 @@ export function Stage({
       id,
       x: descriptor.position.x,
       y: descriptor.position.y,
+      width: descriptor.position.width,
       grabX: event.clientX - bounds.left,
       grabY: event.clientY - bounds.top,
       pointerId: event.pointerId,
@@ -226,7 +233,7 @@ export function Stage({
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const canvas = drag.element.closest<HTMLElement>(".canvas");
-    const point =
+    const raw =
       canvas &&
       canvasPointFromPointer(
         canvas.getBoundingClientRect(),
@@ -235,7 +242,8 @@ export function Stage({
         drag.grabX,
         drag.grabY,
       );
-    if (!point) return;
+    if (!raw) return;
+    const point = clampCanvasPoint(raw, drag.width);
     drag.element.style.left = `${point.x * 100}%`;
     drag.element.style.top = `${point.y * 100}%`;
   };
@@ -243,7 +251,7 @@ export function Stage({
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const canvas = drag.element.closest<HTMLElement>(".canvas");
-    const point =
+    const raw =
       canvas &&
       canvasPointFromPointer(
         canvas.getBoundingClientRect(),
@@ -252,6 +260,7 @@ export function Stage({
         drag.grabX,
         drag.grabY,
       );
+    const point = raw && clampCanvasPoint(raw, drag.width);
     drag.element.classList.remove("canvas-dragging");
     releasePointerCapture(drag.element, drag.pointerId);
     if (!commit || !point) {

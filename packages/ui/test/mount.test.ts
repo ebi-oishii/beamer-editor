@@ -1212,7 +1212,7 @@ describe("mountPreview", () => {
     expect(cards[1]?.classList.contains("active")).toBe(true);
   });
 
-  it("canvas image は pointerup で一度だけ範囲外座標を clamp せず送る", () => {
+  it("canvas image は pointerup で一度だけ、本文領域内へ収めた座標を送る", () => {
     const { editable, moveCanvasElement, releasePointerCapture, scale, setPointerCapture } =
       mountCanvasPreview();
 
@@ -1221,14 +1221,27 @@ describe("mountPreview", () => {
     expect(editable.classList.contains("canvas-editable")).toBe(true);
     expect(setPointerCapture).toHaveBeenCalledWith(7);
 
+    // 素の論理位置は (-0.1, 1.25)。ドラッグ中も左上/下端で止まって見える。
     firePointer(scale, "pointermove", 70, 310);
     expect(moveCanvasElement).not.toHaveBeenCalled();
-    expect(editable.style.left).toBe("-10%");
-    expect(editable.style.top).toBe("125%");
+    expect(editable.style.left).toBe("0%");
+    expect(editable.style.top).toBe("100%");
 
     firePointer(scale, "pointerup", 70, 310);
-    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, -0.1, 1.25);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 1);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
+  });
+
+  it("canvas image は右端でも x + width が 1 を超えない位置で止まる", () => {
+    const { editable, moveCanvasElement, scale } = mountCanvasPreview();
+
+    firePointer(editable, "pointerdown", 150, 100);
+    // 幅 0.3 の箱を右へ振り切ると x は 0.7 で止まる。
+    firePointer(scale, "pointermove", 900, 150);
+    expect(editable.style.left).toBe("70%");
+
+    firePointer(scale, "pointerup", 900, 150);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.7, 0.45);
   });
 
   it("canvas image の clickだけではmoveを送らない", () => {
@@ -1257,7 +1270,7 @@ describe("mountPreview", () => {
 
     firePointer(scale, "pointermove", 70, 310, 7);
     firePointer(scale, "pointerup", 70, 310, 7);
-    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, -0.1, 1.25);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 1);
     expect(releasePointerCapture).toHaveBeenCalledExactlyOnceWith(7);
   });
 
