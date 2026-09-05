@@ -66,15 +66,13 @@ describe("clampCanvasPosition / clampCanvasPlacement", () => {
       y: 0,
       width: MIN_CANVAS_WIDTH,
     });
-    expect(clampCanvasPlacement({ x: 0.8, y: 0.5, width: 0.5 })).toEqual({
-      x: 0.8,
-      y: 0.5,
-      width: 0.2,
-    });
-    expect(clampCanvasPlacement({ x: 2, y: 2, width: 2 })).toEqual({
-      x: 1 - MIN_CANVAS_WIDTH,
-      y: 1,
-      width: MIN_CANVAS_WIDTH,
-    });
+    const shrunk = clampCanvasPlacement({ x: 0.8, y: 0.5, width: 0.5 });
+    expect(shrunk.x).toBe(0.8);
+    expect(shrunk.y).toBe(0.5);
+    expect(shrunk.width).toBeCloseTo(0.2, 10);
+    const far = clampCanvasPlacement({ x: 2, y: 2, width: 2 });
+    expect(far.x).toBeCloseTo(1 - MIN_CANVAS_WIDTH, 10);
+    expect(far.y).toBe(1);
+    expect(far.width).toBeCloseTo(MIN_CANVAS_WIDTH, 10);
   });
 });

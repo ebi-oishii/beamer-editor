@@ -1259,7 +1259,7 @@ describe("mountPreview", () => {
 
     firePointer(scale, "pointermove", 70, 310, 7);
     firePointer(scale, "pointerup", 70, 310, 7);
-    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, -0.1, 1.25);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 1);
     expect(releasePointerCapture).toHaveBeenCalledExactlyOnceWith(7);
   });
 

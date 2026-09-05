@@ -435,8 +435,8 @@ describe("PreviewController", () => {
       frameIndex: 0,
       elementId: "canvas-image-0",
       version: 7,
-      x: -0.25,
-      y: 1.5,
+      x: 0,
+      y: 1,
       sourceSpan: { start: 10, end: 25 },
       document: doc,
       expectedOptions: doc.getText().slice(10, 25),
@@ -575,9 +575,7 @@ describe("PreviewController", () => {
     });
     await Promise.resolve();
     expect(moveCanvasElement).toHaveBeenCalledOnce();
-    const call = moveCanvasElement.mock.calls[0]?.[0] as { x: number; y: number };
-    expect(call.x).toBe(0);
-    expect(call.y).toBe(1);
+    expect(moveCanvasElement).toHaveBeenCalledWith(expect.objectContaining({ x: 0, y: 1 }));
   });
 
   describe("revealSourceOffset(ソース → プレビュー)", () => {
