@@ -341,7 +341,7 @@ describe("detachBlockToCanvas", () => {
     ).not.toBeNull();
   });
 
-  it("広げた削除範囲にコメントがあるときは \\item を残してコメントを失わない", () => {
+  it("広げた削除範囲にあるコメントは同じ位置に残し、\\item とリストは取り除く", () => {
     const placement = { x: 0.1, y: 0.1, width: 0.3 };
     const image = "\\includegraphics[width=0.4\\textwidth]{solo.png}";
     const cases: [string, string][] = [
@@ -351,25 +351,40 @@ describe("detachBlockToCanvas", () => {
     ];
     for (const [label, items] of cases) {
       const source = deck(
-        `\\begin{frame}{T}\n  \\begin{itemize}\n${items}\n  \\end{itemize}\n\\end{frame}`,
+        `\\begin{frame}{T}\n  intro\n  \\begin{itemize}\n${items}\n  \\end{itemize}\n\\end{frame}`,
       );
       const result = apply(
         source,
         must(detachBlockToCanvas(source, spanOf(source, image), placement)),
       );
-      expect(result, label).toContain("% keep me");
-      expect(result, label).toContain("\\begin{itemize}");
-      expect(result, label).toContain("\\item");
-      expect(result, label).not.toContain(image);
-      expect(result, label).toContain("\\deckimage[x=0.100,y=0.100,w=0.300]{solo.png}");
+      // 空の \\item は箇条書き記号が表示されるので、リストごと消し、コメントだけをその位置に残す。
+      expect(result, label).toBe(
+        deck(`\\begin{frame}{T}
+  intro
+  % keep me
+  \\begin{deckcanvas}
+    \\deckimage[x=0.100,y=0.100,w=0.300]{solo.png}
+  \\end{deckcanvas}
+\\end{frame}`),
+      );
     }
-    const plain = deck(`\\begin{frame}{T}
+    // 複数のコメントも順に残す。
+    const many = deck(`\\begin{frame}{T}
   \\begin{itemize}
-    \\item ${image}
+    % first
+    \\item ${image} % second
+    % third
   \\end{itemize}
 \\end{frame}`);
-    expect(detachBlockToCanvas(plain, spanOf(plain, image), placement)?.text).not.toContain(
-      "itemize",
+    expect(apply(many, must(detachBlockToCanvas(many, spanOf(many, image), placement)))).toBe(
+      deck(`\\begin{frame}{T}
+  % first
+  % second
+  % third
+  \\begin{deckcanvas}
+    \\deckimage[x=0.100,y=0.100,w=0.300]{solo.png}
+  \\end{deckcanvas}
+\\end{frame}`),
     );
   });
 

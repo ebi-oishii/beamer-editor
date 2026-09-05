@@ -267,24 +267,36 @@ function detectEol(source: string): string {
   return index > 0 && source[index - 1] === "\r" ? "\r\n" : "\n";
 }
 
-/** `%` コメント(エスケープ `\\%` を除く)を含むか。 */
-function hasComment(text: string): boolean {
-  return /(^|[^\\])(\\\\)*%/.test(text);
+/** 行内で `%` コメント(エスケープ `\\%` を除く)が始まる位置。無ければ -1。 */
+function commentIndex(line: string): number {
+  const match = /(^|[^\\])(\\\\)*(%)/.exec(line);
+  return match ? match.index + match[0].length - 1 : -1;
 }
 
 /**
- * 広げた削除範囲(\\item やリストごと)のうちブロック以外の部分にコメントがあれば、ブロックだけを
- * 取り除く範囲に戻す。移動先へ書くのはブロックだけなので、広げたまま消すとコメントが失われる(§2.4)。
- * 空の \\item は残るが、コメントの消失よりは軽い。
+ * 広げた削除範囲(\\item やリストごと)のうち、ブロック以外の部分にあるコメントを行ごとに集める。
+ * 移動先へ書くのはブロックだけなので、これらは削除位置にそのまま残す(§2.4 のコメント保持)。
  */
-function removeSpanKeepingComments(
+function commentsOutsideBlock(
   source: string,
-  block: BlockNode,
   removeSpan: SourceSpan,
-): SourceSpan {
-  const outside =
-    source.slice(removeSpan.start, block.span.start) + source.slice(block.span.end, removeSpan.end);
-  return hasComment(outside) ? block.span : removeSpan;
+  blockSpan: SourceSpan,
+): string[] {
+  const kept: string[] = [];
+  for (const [from, to] of [
+    [removeSpan.start, blockSpan.start],
+    [blockSpan.end, removeSpan.end],
+  ]) {
+    let pos = from;
+    while (pos < to) {
+      const end = Math.min(lineEnd(source, pos), to);
+      const text = source.slice(pos, end);
+      const index = commentIndex(text);
+      if (index !== -1) kept.push(text.slice(index).trimEnd());
+      pos = lineEnd(source, pos) + 1;
+    }
+  }
+  return kept;
 }
 
 /** 段落の span は次の環境の直前まで(改行・字下げ込み)伸びることがあるので、末尾の空白を落とす。 */
@@ -345,7 +357,21 @@ function rewriteFrame(
   const eol = detectEol(source);
 
   // 1. 対象の原文(唯一の内容なら \\item やリストごと)を取り除く。行を占有していれば改行ごと消す。
-  const span = trimmedSpan(source, target.removeSpan);
+  //    広げた範囲にあったコメントは、行を占有して消せるときは同じ位置に行として残す(§2.4)。
+  //    行を占有していない(インラインの)削除でコメントを残せないときは、ブロックだけを取り除く。
+  let removeSpan = target.removeSpan;
+  let kept = commentsOutsideBlock(source, removeSpan, block.span);
+  {
+    const wide = trimmedSpan(source, removeSpan);
+    const wholeLines =
+      isBlank(source.slice(lineStart(source, wide.start), wide.start)) &&
+      isBlank(source.slice(wide.end, lineEnd(source, wide.end)));
+    if (kept.length > 0 && !wholeLines) {
+      removeSpan = block.span;
+      kept = [];
+    }
+  }
+  const span = trimmedSpan(source, removeSpan);
   const blockLineStart = lineStart(source, span.start);
   const blockLineEnd = lineEnd(source, span.end);
   const ownsLineStart = isBlank(source.slice(blockLineStart, span.start));
@@ -356,10 +382,11 @@ function rewriteFrame(
     while (removeStart > blockLineStart && /[ \t]/.test(source[removeStart - 1] as string))
       removeStart--;
   }
+  const indent = ownsLineStart ? source.slice(blockLineStart, span.start) : "";
   edits.push({
     start: removeStart,
     end: ownsLineStart && ownsLineEnd ? Math.min(blockLineEnd + 1, source.length) : span.end,
-    text: "",
+    text: kept.length > 0 ? `${kept.map((line) => `${indent}${line}`).join(eol)}${eol}` : "",
   });
 
   // 2. deckcanvas へ入れる。既存があれば \end{deckcanvas} の直前、無ければ \end{frame} の直前に新設。
@@ -413,11 +440,7 @@ export function detachBlockToCanvas(
     for (const [block, status] of detachStatusesOf(element)) {
       if (!status.eligible) continue;
       if (block.span.start === blockSpan.start && block.span.end === blockSpan.end) {
-        target = {
-          block,
-          removeSpan: removeSpanKeepingComments(source, block, status.removeSpan),
-          center: status.center,
-        };
+        target = { block, removeSpan: status.removeSpan, center: status.center };
         break;
       }
     }
