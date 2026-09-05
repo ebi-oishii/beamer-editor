@@ -1,7 +1,7 @@
 /**
  * プレビュー描画に必要な CSS を文字列で保持する。
  *
- * apps/web/style.css からスライド・縦一列表示・コントロール・オーバーレイの
+ * apps/web/style.css からスライド・縦一列表示・step 操作・オーバーレイの
  * 描画に必要な部分だけを抜き出し、id セレクタを ui のクラス名へ置き換えたもの。
  * header / textarea / 左右ペインなど apps/web 固有の chrome は含めない。
  * vite / esbuild の css-loader 差を避けるため CSS は文字列で持ち、mountPreview が注入する。
@@ -10,6 +10,7 @@
 
 export const PREVIEW_CSS = `
 .beamer-preview {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -77,46 +78,41 @@ export const PREVIEW_CSS = `
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* 左詰めにして step スライダーだけ右端へ寄せる。center だと step の有無で他のボタンが動く。 */
-.controls {
-  display: flex;
-  flex-wrap: wrap;
+/* 現在フレームの step 操作はスクロール領域へ重ね、表示領域の高さを変えない。 */
+.step-control {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  display: inline-flex;
   align-items: center;
   gap: 10px;
-  justify-content: flex-start;
-  padding: 8px;
-  border-top: 1px solid var(--vscode-panel-border, #ddd);
+  justify-content: center;
+  padding: 4px 8px;
+  border: 1px solid var(--vscode-panel-border, #ddd);
+  border-radius: 4px;
   background: var(--vscode-editorWidget-background, #fafafa);
   font-size: 13px;
 }
-.zoom-box,
-.step-box {
+.step-control label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
-.step-box {
-  margin-left: auto;
-}
-.frame-indicator {
-  display: inline-block;
-  text-align: center;
+.step-indicator {
   font-variant-numeric: tabular-nums;
 }
-.zoom-indicator {
-  min-width: 72px;
-  text-align: center;
-}
-.controls button {
-  border: 1px solid var(--vscode-button-border, #bbb);
-  background: var(--vscode-button-secondaryBackground, #fff);
-  color: var(--vscode-button-secondaryForeground, inherit);
-  border-radius: 4px;
-  padding: 2px 12px;
-  cursor: pointer;
-}
-.controls button:hover {
-  background: var(--vscode-button-secondaryHoverBackground, #eef);
+.preview-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 .empty {
   color: var(--vscode-descriptionForeground, #999);
