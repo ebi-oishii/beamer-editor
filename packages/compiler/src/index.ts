@@ -114,7 +114,10 @@ export const nodeProcessRunner: ProcessRunner = {
       }
       const stdout = boundedCollector(MAX_PROCESS_OUTPUT);
       const stderr = boundedCollector(MAX_PROCESS_OUTPUT);
-      let cancelled = options.signal?.aborted ?? false;
+      // The preflight above handled an already-aborted signal. Starting from
+      // false here is essential: an abort in the spawn/listener gap must still
+      // enter onAbort and terminate the child.
+      let cancelled = false;
       let timedOut = false;
       let settled = false;
       let terminating = false;
@@ -140,7 +143,7 @@ export const nodeProcessRunner: ProcessRunner = {
         });
       };
       const terminate = () => {
-        if (terminating) return;
+        if (settled || terminating) return;
         terminating = true;
         child.kill();
         forceKill = setTimeout(() => {
@@ -154,7 +157,8 @@ export const nodeProcessRunner: ProcessRunner = {
         terminate();
       };
       options.signal?.addEventListener("abort", onAbort, { once: true });
-      // Abort can happen between the preflight check and listener registration.
+      // Close the preflight-to-listener race. onAbort owns both the cancellation
+      // flag and child termination, and terminate/finish are idempotent.
       if (options.signal?.aborted) onAbort();
       child.stdout?.on("data", stdout.append);
       child.stderr?.on("data", stderr.append);

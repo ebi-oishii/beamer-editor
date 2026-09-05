@@ -304,6 +304,25 @@ describe("exportPdf", () => {
     await expect(running).resolves.toMatchObject({ cancelled: true });
   });
 
+  it("terminates when cancellation races between preflight and abort listener registration", async () => {
+    let aborted = false;
+    const raceSignal = {
+      get aborted() {
+        return aborted;
+      },
+      addEventListener() {
+        aborted = true;
+      },
+      removeEventListener() {},
+    } as unknown as AbortSignal;
+    await expect(
+      nodeProcessRunner.run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        cwd: tmpdir(),
+        signal: raceSignal,
+      }),
+    ).resolves.toMatchObject({ cancelled: true });
+  });
+
   it("times out a process that ignores SIGTERM and escalates until the promise settles", async () => {
     const started = Date.now();
     const value = await nodeProcessRunner.run(

@@ -63,6 +63,11 @@ export function resolveExportDocument<T>(
   return activeEditor;
 }
 
+/** VS Code configuration は外部入力なので、compiler に渡す前に文字列へ限定する。 */
+export function normalizeTectonicPath(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 const ERROR_MESSAGES: Record<Exclude<PdfExportErrorCode, "E_CANCELLED">, string> = {
   E_INPUT: "入力 TeX を読み込めませんでした。",
   E_OUTPUT_EXISTS: "出力先の PDF は既に存在します。",
@@ -172,15 +177,16 @@ export class ExportController {
         const abort = new AbortController();
         this.activeAbortControllers.add(abort);
         const subscription = token.onCancellationRequested(() => abort.abort());
-        if (token.isCancellationRequested) abort.abort();
-        const tectonicPath = this.host.tectonicPath(document);
         try {
+          if (token.isCancellationRequested) abort.abort();
           if (this.disposed || abort.signal.aborted) return undefined;
+          const tectonicPath = this.host.tectonicPath(document);
+          const timeoutMs = this.host.timeoutMs(document);
           const request = {
             inputPath: document.uri.fsPath,
             outputPath: output.fsPath,
             overwrite,
-            timeoutMs: this.host.timeoutMs(document),
+            timeoutMs,
             signal: abort.signal,
             ...(tectonicPath === undefined ? {} : { tectonicPath }),
           };

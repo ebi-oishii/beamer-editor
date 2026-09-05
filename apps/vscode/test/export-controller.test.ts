@@ -5,6 +5,7 @@ import {
   type ExportHost,
   type ExportUri,
   exportErrorDetail,
+  normalizeTectonicPath,
   resolveExportDocument,
 } from "../src/export-controller";
 
@@ -47,6 +48,12 @@ function createDocument(overrides: Partial<{ isDirty: boolean; save(): Promise<b
 }
 
 describe("ExportController", () => {
+  it("normalizes only non-empty string compiler settings", () => {
+    expect(normalizeTectonicPath(" /custom/tectonic ")).toBe("/custom/tectonic");
+    for (const value of [undefined, null, 42, {}, "   "]) {
+      expect(normalizeTectonicPath(value)).toBeUndefined();
+    }
+  });
   it("resolves an explicit source before the active preview and editor", () => {
     expect(
       resolveExportDocument(
@@ -168,6 +175,22 @@ describe("ExportController", () => {
     await new ExportController(host, { exportPdf: compile }).export(createDocument());
     expect(compile).not.toHaveBeenCalled();
     expect(subscription.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("cleans cancellation state when compiler configuration access throws", async () => {
+    const subscription = { dispose: vi.fn() };
+    const host = createHost({
+      withProgress: async (task) =>
+        task({ isCancellationRequested: false, onCancellationRequested: () => subscription }),
+      tectonicPath: () => {
+        throw new Error("invalid configuration");
+      },
+    });
+    const compile = vi.fn();
+    await new ExportController(host, { exportPdf: compile }).export(createDocument());
+    expect(compile).not.toHaveBeenCalled();
+    expect(subscription.dispose).toHaveBeenCalledOnce();
+    expect(host.showError).toHaveBeenCalledOnce();
   });
 
   it("aborts an in-flight compiler when disposed and never reports a false export failure", async () => {

@@ -10,6 +10,7 @@ import {
   ExportController,
   type ExportDocument,
   type ExportUri,
+  normalizeTectonicPath,
   resolveExportDocument,
 } from "./export-controller";
 import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
@@ -178,8 +179,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     tectonicPath: (document) => {
       const value = vscode.workspace
         .getConfiguration("beamerEditor", document.uri as vscode.Uri)
-        .get<string>("tectonicPath");
-      return value?.trim() || undefined;
+        .get<unknown>("tectonicPath");
+      return normalizeTectonicPath(value);
     },
     timeoutMs: (document) => {
       const seconds = vscode.workspace
