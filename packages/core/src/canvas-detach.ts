@@ -8,13 +8,15 @@
  * 取り出した要素の位置は呼び出し側(プレビュー上の表示位置)が決める。
  */
 
-import type {
-  BlockNode,
-  CanvasNode,
-  FrameNode,
-  ListItemNode,
-  ListNode,
-  SourceSpan,
+import {
+  type BlockNode,
+  type CanvasNode,
+  type DeckDocument,
+  type FrameNode,
+  framesOf,
+  type ListItemNode,
+  type ListNode,
+  type SourceSpan,
 } from "./ast.js";
 import { formatCanvasCoordinate } from "./canvas-edit.js";
 import { parseDeck } from "./parser.js";
@@ -346,6 +348,41 @@ interface Edit {
   text: string;
 }
 
+/** キャンバスフレームへ自動で付ける label の接頭辞(L011 の「一意な label」)。 */
+const CANVAS_LABEL_PREFIX = "canvas";
+
+function labelOf(frame: ReturnType<typeof framesOf>[number]): string | null {
+  const label = frame.type === "frame" ? frame.options.label : frame.label;
+  return label?.trim() || null;
+}
+
+/**
+ * 文書内で未使用の `canvas-N` を返す。ラベルは永続アドレス(ai-protocol §3)なので
+ * フレーム位置ではなく空き番号で決め、あとから並べ替えても意味が変わらないようにする。
+ */
+function nextCanvasLabel(doc: DeckDocument): string {
+  const used = new Set(framesOf(doc).map(labelOf));
+  for (let n = 1; ; n++) {
+    const candidate = `${CANVAS_LABEL_PREFIX}-${n}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
+/**
+ * frame へ `label=` を足す編集。options が無ければ `[label=...]` を新設し、
+ * あれば閉じ括弧の直前へ追記する(`[fragile]` → `[fragile,label=...]`)。
+ */
+function addLabelEdit(source: string, frame: FrameNode, label: string): Edit {
+  const options = frame.options.span;
+  if (options === null) {
+    const at = frame.span.start + "\\begin{frame}".length;
+    return { start: at, end: at, text: `[label=${label}]` };
+  }
+  const at = options.end - 1;
+  const existing = source.slice(options.start + 1, at);
+  return { start: at, end: at, text: `${existing.trim() === "" ? "" : ","}label=${label}` };
+}
+
 function rewriteFrame(
   source: string,
   frame: FrameNode,
@@ -353,9 +390,14 @@ function rewriteFrame(
   target: { removeSpan: SourceSpan; center: boolean },
   canvas: CanvasNode | null,
   placement: CanvasPlacement,
+  addLabel: string | null,
 ): SourceReplacement {
   const edits: Edit[] = [];
   const eol = detectEol(source);
+
+  // 0. キャンバスフレームには一意な label が要る(L011)。GUI 操作の結果が
+  //    そのまま lint を通るよう、label の無いフレームにはここで付ける。
+  if (addLabel !== null) edits.push(addLabelEdit(source, frame, addLabel));
 
   // 1. 対象の原文(唯一の内容なら \\item やリストごと)を取り除く。行を占有していれば改行ごと消す。
   //    広げた範囲にあったコメントは、行を占有して消せるときは同じ位置に行として残す(§2.4)。
@@ -455,6 +497,7 @@ export function detachBlockToCanvas(
       target,
       canvases[0] ?? null,
       clampPlacement(placement),
+      labelOf(element) === null ? nextCanvasLabel(doc) : null,
     );
   }
   return null;

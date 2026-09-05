@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BlockNode, SourceSpan } from "../src/ast.js";
 import { detachBlockToCanvas, detachStatusesOf, isDetachableBlock } from "../src/canvas-detach.js";
+import { lintSource } from "../src/linter.js";
 import { parseDeck } from "../src/parser.js";
 
 const PREAMBLE = "\\documentclass[aspectratio=169]{beamer}\n\\begin{document}\n";
@@ -69,7 +70,7 @@ describe("detachBlockToCanvas", () => {
     );
     expect(result).not.toBeNull();
     expect(apply(source, must(result))).toBe(
-      deck(`\\begin{frame}{T}
+      deck(`\\begin{frame}[label=canvas-1]{T}
 
   \\begin{itemize}
     \\item A
@@ -99,7 +100,7 @@ describe("detachBlockToCanvas", () => {
     const end = source.indexOf("\\begin{itemize}");
     const result = detachBlockToCanvas(source, { start, end }, { x: 0, y: 0, width: 1 });
     expect(apply(source, must(result))).toBe(
-      deck(`\\begin{frame}{T}
+      deck(`\\begin{frame}[label=canvas-1]{T}
   \\begin{itemize}
     \\item A
   \\end{itemize}
@@ -183,7 +184,7 @@ describe("detachBlockToCanvas", () => {
       placement,
     );
     expect(apply(source, must(only))).toBe(
-      deck(`\\begin{frame}{T}
+      deck(`\\begin{frame}[label=canvas-1]{T}
   \\begin{itemize}
     \\item text \\includegraphics[width=0.4\\textwidth]{with-text.png}
   \\end{itemize}
@@ -217,7 +218,7 @@ describe("detachBlockToCanvas", () => {
       { x: 0.5, y: 0.5, width: 0.4 },
     );
     expect(apply(nestedOnly, must(inner))).toBe(
-      deck(`\\begin{frame}{T}
+      deck(`\\begin{frame}[label=canvas-1]{T}
   \\begin{itemize}
     \\item first
   \\end{itemize}
@@ -244,7 +245,7 @@ describe("detachBlockToCanvas", () => {
     );
     // 空の itemize は LaTeX エラーになるので、リストごと消える。
     expect(apply(soloList, must(solo))).toBe(
-      deck(`\\begin{frame}{T}
+      deck(`\\begin{frame}[label=canvas-1]{T}
   intro
   \\begin{deckcanvas}
     \\deckimage[x=0.100,y=0.100,w=0.300]{solo.png}
@@ -359,7 +360,7 @@ describe("detachBlockToCanvas", () => {
       );
       // 空の \\item は箇条書き記号が表示されるので、リストごと消し、コメントだけをその位置に残す。
       expect(result, label).toBe(
-        deck(`\\begin{frame}{T}
+        deck(`\\begin{frame}[label=canvas-1]{T}
   intro
   % keep me
   \\begin{deckcanvas}
@@ -377,7 +378,7 @@ describe("detachBlockToCanvas", () => {
   \\end{itemize}
 \\end{frame}`);
     expect(apply(many, must(detachBlockToCanvas(many, spanOf(many, image), placement)))).toBe(
-      deck(`\\begin{frame}{T}
+      deck(`\\begin{frame}[label=canvas-1]{T}
   % first
   % second
   % third
@@ -484,7 +485,7 @@ describe("detachBlockToCanvas", () => {
     const result = detachBlockToCanvas(source, { start, end }, { x: 0, y: 0, width: 1 });
     const applied = apply(source, must(result));
     expect(applied).toBe(
-      deck(`\\begin{frame}{T}
+      deck(`\\begin{frame}[label=canvas-1]{T}
   \\begin{itemize}
     \\item A
   \\end{itemize}
@@ -573,5 +574,84 @@ describe("detachBlockToCanvas", () => {
       ["list", true],
       ["center", false],
     ]);
+  });
+});
+
+describe("キャンバスフレームの label(L011)", () => {
+  const placement = { x: 0.1, y: 0.1, width: 0.3 };
+  const image = "\\includegraphics[width=0.4\\textwidth]{solo.png}";
+  const detach = (source: string) =>
+    apply(source, must(detachBlockToCanvas(source, spanOf(source, image), placement)));
+
+  it("label の無いフレームには canvas-1 を付ける", () => {
+    const source = deck(`\\begin{frame}{T}
+  ${image}
+\\end{frame}`);
+    expect(detach(source)).toContain("\\begin{frame}[label=canvas-1]{T}");
+  });
+
+  it("既存の label は書き換えない", () => {
+    const source = deck(`\\begin{frame}[label=mine]{T}
+  ${image}
+\\end{frame}`);
+    const result = detach(source);
+    expect(result).toContain("\\begin{frame}[label=mine]{T}");
+    expect(result).not.toContain("canvas-1");
+  });
+
+  it("既存オプションがあれば閉じ括弧の直前へ足す", () => {
+    const source = deck(`\\begin{frame}[fragile]{T}
+  ${image}
+\\end{frame}`);
+    expect(detach(source)).toContain("\\begin{frame}[fragile,label=canvas-1]{T}");
+  });
+
+  it("空の options には区切りを付けずに足す", () => {
+    const source = deck(`\\begin{frame}[]{T}
+  ${image}
+\\end{frame}`);
+    expect(detach(source)).toContain("\\begin{frame}[label=canvas-1]{T}");
+  });
+
+  it("タイトルの無いフレームにも付けられる", () => {
+    const source = deck(`\\begin{frame}
+  ${image}
+\\end{frame}`);
+    expect(detach(source)).toContain("\\begin{frame}[label=canvas-1]\n");
+  });
+
+  it("使われている番号は飛ばして一意にする", () => {
+    const source = `${PREAMBLE}\\begin{frame}[label=canvas-1]{A}
+  text
+\\end{frame}
+
+\\begin{frame}[label=canvas-2]{B}
+  ${image}
+\\end{frame}
+\\end{document}
+`;
+    // B は label を持つので付けない。label の無いフレームで試す。
+    const unlabeled = `${PREAMBLE}\\begin{frame}[label=canvas-1]{A}
+  text
+\\end{frame}
+
+\\begin{frame}{B}
+  ${image}
+\\end{frame}
+\\end{document}
+`;
+    expect(detach(source)).toContain("\\begin{frame}[label=canvas-2]{B}");
+    expect(detach(unlabeled)).toContain("\\begin{frame}[label=canvas-2]{B}");
+  });
+
+  it("自由配置化しても診断は増えない(L011 が出ない)", () => {
+    const source = deck(`\\begin{frame}{T}
+  ${image}
+\\end{frame}`);
+    const before = lintSource(source).map(({ code }) => code);
+    const after = lintSource(detach(source)).map(({ code }) => code);
+    // 素の deck は %% deck-source-version が無いので L017 だけが出る。
+    expect(before).toEqual(["L017"]);
+    expect(after).toEqual(before);
   });
 });
