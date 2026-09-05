@@ -206,7 +206,8 @@ describe("mountPreview", () => {
   it("フェイク host と手組みデッキを例外なく描画し unmount できる", () => {
     const container = document.createElement("div");
     document.body.append(container);
-    const host = fakeHost();
+    const saved: unknown[] = [];
+    const host = { ...fakeHost(), saveNavState: (state: unknown) => saved.push(state) };
 
     let unmount: () => void = () => {};
     act(() => {
@@ -219,10 +220,67 @@ describe("mountPreview", () => {
     // PREVIEW_CSS が一度だけ注入される。
     expect(document.getElementById("beamer-preview-styles")).not.toBeNull();
     // beamer-preview のルートが描画され、フレームのスライドが入る。
-    expect(container.querySelector(".beamer-preview")).not.toBeNull();
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    if (!preview) throw new Error("preview fixture missing");
     expect(container.querySelectorAll(".slide-card")).toHaveLength(2);
 
+    // すでに消費されたキーは body / preview 配下のどちらからでもナビ状態を変えない。
+    const savedBeforePreventedKeys = saved.length;
+    document.body.addEventListener("keydown", (event) => event.preventDefault(), { once: true });
+    const preventedBodyArrow = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => document.body.dispatchEvent(preventedBodyArrow));
+    expect(preventedBodyArrow.defaultPrevented).toBe(true);
+    preview.addEventListener("keydown", (event) => event.preventDefault(), { once: true });
+    const preventedPreviewZoom = new KeyboardEvent("keydown", {
+      key: "=",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => preview.dispatchEvent(preventedPreviewZoom));
+    expect(preventedPreviewZoom.defaultPrevented).toBe(true);
+    expect(saved).toHaveLength(savedBeforePreventedKeys);
+    expect(
+      container.querySelectorAll<HTMLElement>(".slide-card")[0]?.classList.contains("active"),
+    ).toBe(true);
+    expect(container.querySelector(".slide-scale")?.getAttribute("style")).not.toContain(
+      "scale(1.1)",
+    );
+
+    // Webview 本体へ最初からフォーカスがない場合でも、body target のキーで移動できる。
+    const bodyArrow = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => document.body.dispatchEvent(bodyArrow));
+    expect(bodyArrow.defaultPrevented).toBe(true);
+    expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: "fit" });
+
+    // プレビュー外の入力欄は対象外にし、通常の編集キーとして残す。
+    const externalTextarea = document.createElement("textarea");
+    document.body.append(externalTextarea);
+    const textareaArrow = new KeyboardEvent("keydown", {
+      key: "ArrowLeft",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => externalTextarea.dispatchEvent(textareaArrow));
+    expect(textareaArrow.defaultPrevented).toBe(false);
+    expect(saved.at(-1)).toEqual({ current: 1, step: 1, zoom: "fit" });
+
     expect(() => act(() => unmount())).not.toThrow();
+    const callsAfterUnmount = saved.length;
+    act(() =>
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }),
+      ),
+    );
+    expect(saved).toHaveLength(callsAfterUnmount);
   });
 
   it("loadNavState から現在フレームを復元し、ナビ操作で saveNavState が呼ばれる", () => {
@@ -431,6 +489,93 @@ describe("mountPreview", () => {
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1 });
   });
 
+  it("wheel の倍率変更は現在のスクロール位置を戻さない", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const callbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const host = { ...fakeHost(), loadNavState: () => ({ current: 0, step: 1, zoom: 1 as const }) };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    const scroll = container.querySelector<HTMLElement>(".slide-scroll");
+    if (!preview || !scroll) throw new Error("preview fixture missing");
+    let scrollTop = 187;
+    Object.defineProperty(scroll, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+    act(() =>
+      preview.dispatchEvent(
+        new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -1 }),
+      ),
+    );
+    act(() => callbacks[0]?.(0));
+    expect(scrollTop).toBe(187);
+  });
+
+  it("fitScale が変わっても pending wheel rAF は unmount まで cancel しない", () => {
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    const animationCallbacks: FrameRequestCallback[] = [];
+    const cancelAnimationFrame = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      animationCallbacks.push(callback);
+      return animationCallbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: unknown[] = [];
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: "fit" as const }),
+      saveNavState: (state: unknown) => saved.push(state),
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    const scroll = container.querySelector<HTMLElement>(".slide-scroll");
+    if (!preview || !scroll) throw new Error("preview fixture missing");
+    act(() =>
+      preview.dispatchEvent(
+        new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -1 }),
+      ),
+    );
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 500 },
+      clientHeight: { configurable: true, value: 400 },
+    });
+    act(() => resizeCallbacks[0]?.([], {} as ResizeObserver));
+    expect(cancelAnimationFrame).not.toHaveBeenCalled();
+    act(() => animationCallbacks[0]?.(0));
+    // (500 - (12 + 4) * 2) / 607 = 0.771... を基準に一段階上げる。
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 0.87 });
+  });
+
   it("resize 後も内側は論理サイズのまま、幅合わせの外側だけを再計算する", () => {
     const callbacks: ResizeObserverCallback[] = [];
     class ResizeObserverMock {
@@ -460,7 +605,7 @@ describe("mountPreview", () => {
       clientWidth: { configurable: true, value: 1_004 },
       clientHeight: { configurable: true, value: 700 },
     });
-    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+    act(() => callbacks[0]?.([], {} as ResizeObserver));
     // (1004 - 32) / 607 は上限 1.6 でクランプされる(32 = scroll padding 24 + card padding 8)。
     expect(layout.style.width).toBe("971.2px");
     expect(layout.style.height).toBe("545.6px");
@@ -469,20 +614,23 @@ describe("mountPreview", () => {
       clientWidth: { configurable: true, value: 308 },
       clientHeight: { configurable: true, value: 250 },
     });
-    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+    act(() => callbacks[0]?.([], {} as ResizeObserver));
     expect(Number.parseFloat(layout.style.width)).toBeCloseTo(276, 6);
     expect(Number.parseFloat(layout.style.height)).toBeCloseTo(155.05, 2);
     expect(scale.style.width).toBe("607px");
     expect(scale.style.height).toBe("341px");
   });
 
-  it("fit 中の resize は表示中フレームを新しい上端へ揃え直す", () => {
-    const callbacks: ResizeObserverCallback[] = [];
+  it("fit 中の resize は読んでいたカード内の位置を保ち、current を変えない", () => {
+    const observed: Array<{ callback: ResizeObserverCallback; element: Element }> = [];
     class ResizeObserverMock {
+      private readonly callback: ResizeObserverCallback;
       constructor(callback: ResizeObserverCallback) {
-        callbacks.push(callback);
+        this.callback = callback;
       }
-      observe() {}
+      observe(element: Element) {
+        observed.push({ callback: this.callback, element });
+      }
       disconnect() {}
       unobserve() {}
     }
@@ -516,6 +664,11 @@ describe("mountPreview", () => {
     const scroll = container.querySelector<HTMLElement>(".slide-scroll");
     const cards = container.querySelectorAll<HTMLElement>(".slide-card");
     if (!scroll || cards.length !== 2) throw new Error("scroll fixture missing");
+    const resizeScroll = () => {
+      const callback = observed.find(({ element }) => element === scroll)?.callback;
+      if (!callback) throw new Error("scroll ResizeObserver fixture missing");
+      callback([], {} as ResizeObserver);
+    };
     let scrollTop = 0;
     let scrollWrites = 0;
     Object.defineProperty(scroll, "scrollTop", {
@@ -527,23 +680,39 @@ describe("mountPreview", () => {
       },
     });
     cards.forEach((card, i) => {
-      Object.defineProperty(card, "offsetTop", { configurable: true, value: 12 + i * 400 });
+      Object.defineProperties(card, {
+        offsetTop: { configurable: true, value: 12 + i * 400 },
+        offsetHeight: { configurable: true, value: 400 },
+      });
     });
     // 同寸法の observer 通知では、deck 読み込み時の reveal 以外を追加で発生させない。
-    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+    act(resizeScroll);
     expect(scrollWrites).toBe(0);
 
-    // resize による再レイアウト後の2枚目の位置。現在フレームをここへ揃え直す。
+    // resize による再レイアウト後も、2枚目の中央を読んでいた位置を復元する。
     Object.defineProperties(scroll, {
       clientWidth: { configurable: true, value: 308 },
       clientHeight: { configurable: true, value: 250 },
     });
-    Object.defineProperty(cards[1] as HTMLElement, "offsetTop", { configurable: true, value: 700 });
-    scrollTop = 123;
+    // observer callback 中は旧レイアウト、state 更新後の layout effect では新レイアウトを
+    // 読む。jsdom ではこの順序を getter で再現する。
+    let topMeasurements = 0;
+    let heightMeasurements = 0;
+    Object.defineProperties(cards[1] as HTMLElement, {
+      offsetTop: {
+        configurable: true,
+        get: () => (topMeasurements++ === 0 ? 412 : 700),
+      },
+      offsetHeight: {
+        configurable: true,
+        get: () => (heightMeasurements++ === 0 ? 400 : 300),
+      },
+    });
+    scrollTop = 600;
     scrollWrites = 0;
-    act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+    act(resizeScroll);
 
-    expect(scrollTop).toBe(688);
+    expect(scrollTop).toBe(838);
     expect(scrollWrites).toBe(1);
     expect(cards[1]?.classList.contains("active")).toBe(true);
     expect(notifyActiveFrame).toHaveBeenLastCalledWith(1);
@@ -728,6 +897,13 @@ describe("mountPreview", () => {
     );
     expect(stepRange?.value).toBe("1");
     expect(container.querySelector(".step-indicator")?.textContent).toBe("1/2");
+    const cards = container.querySelectorAll<HTMLElement>(".slide-card");
+    expect(cards[0]?.getAttribute("aria-current")).toBe("true");
+    expect(cards[1]?.hasAttribute("aria-current")).toBe(false);
+    const status = container.querySelector<HTMLElement>(".preview-status");
+    expect(status?.getAttribute("aria-live")).toBe("polite");
+    expect(status?.getAttribute("aria-atomic")).toBe("true");
+    expect(status?.textContent).toBe("フレーム 1 / 2");
     act(() => {
       if (stepRange) {
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
@@ -743,11 +919,13 @@ describe("mountPreview", () => {
     expect(captions).toEqual(["1. one", "2. two（label=f2）"]);
 
     // クリックで選択すると active が移る。
-    const cards = container.querySelectorAll<HTMLElement>(".slide-card");
     act(() => {
       cards[1]?.click();
     });
     expect(cards[1]?.classList.contains("active")).toBe(true);
+    expect(cards[0]?.hasAttribute("aria-current")).toBe(false);
+    expect(cards[1]?.getAttribute("aria-current")).toBe("true");
+    expect(status?.textContent).toBe("フレーム 2 / 2");
     // step のないフレームでは操作も余白も描画しない。
     expect(container.querySelector(".step-control")).toBeNull();
   });

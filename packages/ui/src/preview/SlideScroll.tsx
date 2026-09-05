@@ -89,6 +89,7 @@ function SlideCard({
       data-index={index}
       role="button"
       tabIndex={0}
+      aria-current={active ? true : undefined}
       aria-label={`フレーム ${frame.index}: ${frame.titleText}（Enter で選択、${MODIFIER_LABEL}+Enter でソースへ移動）`}
       onClick={() => onSelect(index)}
       onDoubleClick={() => onJump(index)}
@@ -146,6 +147,15 @@ export function SlideScroll({
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [slideSize, setSlideSize] = useState<SlideSize>(FALLBACK_SLIDE);
+  const hasViewportMeasurement = useRef(false);
+  const currentRef = useRef(current);
+  currentRef.current = current;
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  // fit の resize 前に、読んでいるカード内での位置を記録する。親で reveal を
+  // 発行すると常にカード先頭へ戻ってしまうため、このコンポーネントで復元する。
+  const resizeAnchor = useRef<{ frameIndex: number; ratio: number }>();
+  const restoredScrollTop = useRef<number | undefined>();
 
   // 表示領域のサイズ。初回は描画前に同期計測して、極小倍率で一瞬描かれるのを避ける。
   useLayoutEffect(() => {
@@ -153,7 +163,25 @@ export function SlideScroll({
     if (!container) return;
     const measure = () => {
       const next = { width: container.clientWidth, height: container.clientHeight };
-      setViewport((cur) => (cur.width === next.width && cur.height === next.height ? cur : next));
+      const wasMeasured = hasViewportMeasurement.current;
+      hasViewportMeasurement.current = true;
+      setViewport((cur) => {
+        if (cur.width === next.width && cur.height === next.height) return cur;
+        // 初回計測・手動倍率では位置を保存しない。初回は既存の reveal、手動倍率は
+        // resize しても表示倍率が変わらないため、どちらも復元の対象外である。
+        if (wasMeasured && zoomRef.current === "fit") {
+          const index = currentRef.current;
+          const card = container.querySelectorAll<HTMLElement>(".slide-card")[index];
+          if (card) {
+            const top = card.offsetTop - SCROLL_PADDING;
+            resizeAnchor.current = {
+              frameIndex: index,
+              ratio: (container.scrollTop - top) / Math.max(card.offsetHeight, 1),
+            };
+          }
+        }
+        return next;
+      });
     };
     measure();
     if (typeof ResizeObserver === "undefined") return;
@@ -181,6 +209,21 @@ export function SlideScroll({
     onFitScaleChange(fitScale);
   }, [fitScale, onFitScaleChange]);
 
+  // ResizeObserver で記録したアンカーを、倍率反映後のカード寸法で復元する。
+  // レイアウト effect なので、復元値で発生する scroll は current を変更しない。
+  useLayoutEffect(() => {
+    const anchor = resizeAnchor.current;
+    if (!anchor) return;
+    resizeAnchor.current = undefined;
+    const container = containerRef.current;
+    const card = container?.querySelectorAll<HTMLElement>(".slide-card")[anchor.frameIndex];
+    if (!container || !card) return;
+    const scrollTop =
+      card.offsetTop - SCROLL_PADDING + anchor.ratio * Math.max(card.offsetHeight, 1);
+    restoredScrollTop.current = scrollTop;
+    container.scrollTop = scrollTop;
+  }, [viewport, scale]);
+
   // 要求されたフレームを上端へ揃える。倍率反映(子の inline style)は同じ commit で済んでいる。
   useEffect(() => {
     if (!reveal) return;
@@ -193,6 +236,11 @@ export function SlideScroll({
   const handleScroll = () => {
     const container = containerRef.current;
     if (!container) return;
+    // resize 復元が発生させた scroll は現在フレームの追従判定に使わない。
+    if (restoredScrollTop.current === container.scrollTop) {
+      restoredScrollTop.current = undefined;
+      return;
+    }
     const cards = [...container.querySelectorAll<HTMLElement>(".slide-card")].map((card) => ({
       top: card.offsetTop,
       height: card.offsetHeight,

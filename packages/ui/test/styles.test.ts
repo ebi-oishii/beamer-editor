@@ -33,6 +33,18 @@ function declarationsFor(sheet: CSSStyleSheet, selector: string): CSSStyleDeclar
 }
 
 describe("PREVIEW_CSS: キャンバス幾何の契約", () => {
+  it("step 操作はプレビュー下部の overlay で、スクロール領域の高さを変えない", () => {
+    const sheet = injectPreviewCss();
+    const preview = declarationsFor(sheet, ".beamer-preview")[0];
+    const stepControl = declarationsFor(sheet, ".step-control")[0];
+    expect(preview?.getPropertyValue("position")).toBe("relative");
+    expect(stepControl?.getPropertyValue("position")).toBe("absolute");
+    expect(stepControl?.getPropertyValue("bottom")).toBe("8px");
+    expect(stepControl?.getPropertyValue("left")).toBe("50%");
+    expect(stepControl?.getPropertyValue("transform")).toBe("translateX(-50%)");
+    expect(stepControl?.getPropertyValue("margin")).toBe("");
+  });
+
   it(".frametitle / .slide-body は positioned element にしない(.canvas の包含ブロックを .slide に保つ)", () => {
     const sheet = injectPreviewCss();
     for (const selector of [".frametitle", ".slide-body"]) {
