@@ -12,6 +12,9 @@ import type { RenderedDeck } from "@beamer-editor/renderer";
 export type ExtensionToWebview =
   | { type: "deckUpdated"; deck: RenderedDeck; version: number; activeFrame: number }
   | { type: "activeFrameChanged"; frameIndex: number; version: number }
+  /** 生ブロックの部分コンパイル結果(#81)。key はプレースホルダの data-raw-key。pdfBase64 は standalone の PDF。 */
+  | { type: "rawBlockReady"; key: string; pdfBase64: string }
+  | { type: "rawBlockFailed"; key: string; message: string }
   | { type: "error"; message: string };
 
 export type WebviewToExtension =
@@ -72,6 +75,16 @@ export function parseExtensionToWebview(raw: unknown): ExtensionToWebview | null
     case "activeFrameChanged":
       if (typeof raw.frameIndex === "number" && typeof raw.version === "number") {
         return { type: "activeFrameChanged", frameIndex: raw.frameIndex, version: raw.version };
+      }
+      return null;
+    case "rawBlockReady":
+      if (typeof raw.key === "string" && typeof raw.pdfBase64 === "string") {
+        return { type: "rawBlockReady", key: raw.key, pdfBase64: raw.pdfBase64 };
+      }
+      return null;
+    case "rawBlockFailed":
+      if (typeof raw.key === "string" && typeof raw.message === "string") {
+        return { type: "rawBlockFailed", key: raw.key, message: raw.message };
       }
       return null;
     case "error":

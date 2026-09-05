@@ -83,6 +83,12 @@
           "maximum": 1800,
           "scope": "resource",
           "description": "Maximum time in seconds to wait for PDF compilation."
+        },
+        "beamerEditor.preview.compileRawBlocks": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "TikZ などサブセット外のブロックを Tectonic で部分コンパイルし、プレビューのプレースホルダに画像として差し込みます(Workspace Trust が必要)。"
         }
       }
     },
@@ -170,6 +176,7 @@
     "@beamer-editor/renderer": "workspace:*",
     "@beamer-editor/ui": "workspace:*",
     "katex": "^0.16.47",
+    "pdfjs-dist": "6.3.289",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

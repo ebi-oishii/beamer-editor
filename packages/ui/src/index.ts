@@ -12,6 +12,7 @@ export {
 export { DeckPreview } from "./preview/DeckPreview.js";
 export { mountPreview } from "./preview/mount.js";
 export { applyOverlay, isVisibleAtStep } from "./preview/overlay.js";
+export { applyRawImages, decodeBase64, RawImageStore } from "./preview/raw-images.js";
 export {
   type PreviewAction,
   type PreviewState,
@@ -21,5 +22,7 @@ export { PREVIEW_CSS } from "./preview/styles.js";
 export {
   createMessageShellHost,
   type MessageTransport,
+  type RasterImage,
+  type RawBlockImageResult,
   type ShellHost,
 } from "./shell-host.js";

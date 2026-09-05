@@ -8,6 +8,7 @@
 import type { RenderedDeck } from "@beamer-editor/renderer";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ShellHost } from "../shell-host.js";
+import { applyRawImages, RawImageStore } from "./raw-images.js";
 import { type RevealRequest, SlideScroll } from "./SlideScroll.js";
 import { type PreviewAction, type PreviewState, previewReducer } from "./state.js";
 import { stepZoom, type ZoomState } from "./zoom.js";
@@ -20,6 +21,9 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   // 表示中 deck の document version。jumpToSource に添えて古い版からのジャンプを検出させる。
   const [version, setVersion] = useState(Number.NEGATIVE_INFINITY);
   const [restoredNav] = useState(() => host.loadNavState?.());
+  // 生ブロックの部分コンパイル画像(#81)。ホストから届いた PDF を画像にして箱にはめ込む。
+  const [rawImages] = useState(() => new RawImageStore(host.rasterizePdf?.bind(host)));
+  const [rawImagesVersion, setRawImagesVersion] = useState(0);
   const [zoom, setZoom] = useState<ZoomState>(() => restoredNav?.zoom ?? "fit");
   const [fitScale, setFitScale] = useState(1);
   const fitScaleRef = useRef(fitScale);
@@ -160,6 +164,21 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   };
   const moveRef = useRef(move);
   moveRef.current = move;
+
+  useEffect(
+    () => host.onRawBlockImage?.((key, result) => rawImages.receive(key, result)),
+    [host, rawImages],
+  );
+  useEffect(
+    () => rawImages.subscribe(() => setRawImagesVersion((current) => current + 1)),
+    [rawImages],
+  );
+  // renderer の HTML が差し替わるたび(deck 更新)と、画像が増えるたびにはめ込み直す。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deck の更新で DOM が作り直されるので deck を依存に含める
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (preview) applyRawImages(preview, rawImages);
+  }, [deck, rawImages, rawImagesVersion]);
 
   // Webview が開かれた直後にも動くよう、フォーカスを強制せず ownerDocument で扱う。
   // プレビュー内か document 自身に発生したキーだけを受け、他の UI の入力を奪わない。

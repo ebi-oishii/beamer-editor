@@ -36,6 +36,25 @@ describe("parseExtensionToWebview", () => {
   });
 });
 
+describe("parseExtensionToWebview: rawBlock*", () => {
+  it("rawBlockReady / rawBlockFailed は key と本文が揃っているときだけ受ける", () => {
+    expect(parseExtensionToWebview({ type: "rawBlockReady", key: "k", pdfBase64: "AA==" })).toEqual(
+      {
+        type: "rawBlockReady",
+        key: "k",
+        pdfBase64: "AA==",
+      },
+    );
+    expect(parseExtensionToWebview({ type: "rawBlockReady", key: "k" })).toBeNull();
+    expect(parseExtensionToWebview({ type: "rawBlockFailed", key: "k", message: "boom" })).toEqual({
+      type: "rawBlockFailed",
+      key: "k",
+      message: "boom",
+    });
+    expect(parseExtensionToWebview({ type: "rawBlockFailed", key: 1, message: "boom" })).toBeNull();
+  });
+});
+
 describe("parseWebviewToExtension", () => {
   it("正当なものを受理する", () => {
     expect(parseWebviewToExtension({ type: "ready" })).toEqual({ type: "ready" });

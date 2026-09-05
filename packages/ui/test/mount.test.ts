@@ -1164,6 +1164,60 @@ describe("mountPreview", () => {
     expect(detachToCanvas).not.toHaveBeenCalled();
   });
 
+  it("部分コンパイル画像が届くと、その key の箱の中身が画像になる(#81)", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    let deliver:
+      | ((key: string, result: { pdfBase64: string } | { error: string }) => void)
+      | undefined;
+    const host = {
+      ...fakeHost(),
+      onRawBlockImage(listener: typeof deliver) {
+        deliver = listener;
+        return () => {};
+      },
+      rasterizePdf: async () => ({
+        dataUrl: "data:image/png;base64,BBBB",
+        width: 200,
+        height: 100,
+      }),
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    const deck: RenderedDeck = {
+      ...DECK,
+      frames: [
+        {
+          ...(DECK.frames[0] as RenderedDeck["frames"][number]),
+          html: '<div class="slide"><div class="slide-body"><div class="raw-block placeholder" data-raw-key="abc" style="width:60.0%;aspect-ratio:4 / 3" title="src"><span class="placeholder-label">tikzpicture</span></div></div></div>',
+        },
+      ],
+    };
+    act(() => {
+      host.push(deck);
+    });
+    expect(container.querySelector("[data-raw-key] img")).toBeNull();
+    act(() => {
+      deliver?.("abc", { pdfBase64: btoa("%PDF") });
+    });
+    await vi.waitFor(() => {
+      expect(container.querySelector("[data-raw-key] img")?.getAttribute("src")).toBe(
+        "data:image/png;base64,BBBB",
+      );
+    });
+    expect(container.querySelector<HTMLElement>("[data-raw-key]")?.style.aspectRatio).toBe(
+      "200 / 100",
+    );
+    // deck が更新されて HTML が作り直されても、同じ key の箱は再びはめ込まれる。
+    act(() => {
+      host.push({ ...deck, title: "again" }, 2);
+    });
+    await vi.waitFor(() => {
+      expect(container.querySelector("[data-raw-key] img")).not.toBeNull();
+    });
+  });
+
   it("ホストが detachToCanvas を持たなければ右クリックメニューを出さない", () => {
     const container = document.createElement("div");
     document.body.append(container);

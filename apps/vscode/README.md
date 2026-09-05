@@ -45,6 +45,10 @@ LaTeX Workshop が入っている環境で managed file を初めて開くと、
 
 プレビューには `.sty` の `\definecolor` / `\setbeamercolor`(structure・alerted text・example text・normal text・background canvas)、`\setsansfont` / `\setmonofont`、`\logo`、`\usebackgroundtemplate` から取れる色・フォント・ロゴ・背景だけが近似で反映されます。それ以外の様式は PDF にだけ効きます。`.sty` や画像を変更するとプレビューと診断は自動で更新されます。参照先の `.sty` や画像が無い場合は Problems パネルに L022 / L023 が出ます。見本は `fixtures/templates/corporate/` と `fixtures/templated.tex` です。
 
+## 生ブロックの部分コンパイル
+
+TikZ などサブセット外のブロックは、プレビューではまず環境名だけの箱(プレースホルダ)で場所を確保し、裏で Tectonic により standalone 文書としてコンパイルして、できた画像を箱に差し込みます。結果は内容とプリアンブル(preamble-extra とマクロ定義)のハッシュでキャッシュされるので、変えていないブロックは再コンパイルされません。失敗したブロックは赤い枠の箱として残り、ホバーで Tectonic のエラーを確認できます。Tectonic の場所は `beamerEditor.tectonicPath`、無効にするには `beamerEditor.preview.compileRawBlocks` を false にします。Restricted Mode では動きません。
+
 ## PDF 書き出し
 
 コマンドパレット、`.tex` エディター、または対応するプレビューのタイトルから **Beamer Editor: Export...** を実行すると、保存先を選んで PDF を書き出せます。実行には [Tectonic](https://tectonic-typesetting.github.io/) が必要です。PATH にない場合は `beamerEditor.tectonicPath` で実行ファイルを指定してください。

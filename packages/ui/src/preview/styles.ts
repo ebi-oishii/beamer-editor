@@ -403,6 +403,26 @@ export const PREVIEW_CSS = `
 .slide .canvas-item.placeholder {
   margin: 0;
 }
+/* 部分コンパイル(#81)が済んだ箱: 枠と背景を消して画像だけを見せる。失敗した箱は赤い枠で残す。 */
+.slide .placeholder.compiled {
+  border-color: transparent;
+  background: transparent;
+}
+.slide .placeholder .raw-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.slide .placeholder.failed {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+.slide .placeholder.failed .placeholder-label::after {
+  content: "(コンパイル失敗)";
+  display: block;
+  font-size: 6.5pt;
+}
 
 /* ---- キャンバス（subset-spec §2.8）---- */
 .slide .canvas {

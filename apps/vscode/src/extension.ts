@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { buildFragmentDocument, compileFragment } from "@beamer-editor/compiler";
 import {
   canvasPositionReplacement,
   detachBlockToCanvas,
@@ -29,6 +30,7 @@ import {
   needsLatexWorkshopIgnorePrompt,
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
+import { RawBlockCompiler } from "./raw-block-compiler";
 import { frameLensPositions, sourceHasFrameAt } from "./reveal-slide";
 import {
   hasSlideOutlineContentChanges,
@@ -514,15 +516,62 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     const templateWatcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(documentDir, "**/*.{sty,png,jpg,jpeg,pdf}"),
     );
+    // 生ブロックの部分コンパイル(#81)。Workspace Trust が無いときと設定で切ったときは起動しない。
+    // PDF は globalStorage にキーで置き、Webview へは base64 で渡す(リソース許可を広げない)。
+    const rawCacheDir = vscode.Uri.joinPath(context.globalStorageUri, "raw-blocks");
+    const rawBlockCompiler = new RawBlockCompiler({
+      cacheDir: rawCacheDir.fsPath,
+      fs: {
+        readFile: async (target) => vscode.workspace.fs.readFile(vscode.Uri.file(target)),
+        writeFile: async (target, data) =>
+          vscode.workspace.fs.writeFile(vscode.Uri.file(target), data),
+        mkdir: async (target) => vscode.workspace.fs.createDirectory(vscode.Uri.file(target)),
+        exists: async (target) => {
+          try {
+            await vscode.workspace.fs.stat(vscode.Uri.file(target));
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      },
+      buildDocument: buildFragmentDocument,
+      compile: async (fragment, signal) => {
+        const config = vscode.workspace.getConfiguration("beamerEditor", document.uri);
+        const seconds = config.get<number>("pdfExport.timeoutSeconds", 300);
+        const normalized = Number.isFinite(seconds) ? Math.trunc(seconds) : 300;
+        const tectonicPath = normalizeTectonicPath(config.get<unknown>("tectonicPath"));
+        const result = await compileFragment({
+          document: fragment,
+          cwd: documentDir.fsPath,
+          signal,
+          timeoutMs: Math.max(5, Math.min(1800, normalized)) * 1000,
+          ...(tectonicPath ? { tectonicPath } : {}),
+        });
+        return result.pdf;
+      },
+      onReady: (key, pdf) => controller.postRawBlockReady(key, pdf),
+      onFailed: (key, message) => controller.postRawBlockFailed(key, message),
+    });
+    const rawBlocksEnabled = () =>
+      vscode.workspace.isTrusted &&
+      vscode.workspace
+        .getConfiguration("beamerEditor", document.uri)
+        .get<boolean>("preview.compileRawBlocks", true);
     const controller = new PreviewController(
       panel,
-      { scriptUri: mediaUri("webview.js"), styleUri: mediaUri("webview.css") },
+      {
+        scriptUri: mediaUri("webview.js"),
+        styleUri: mediaUri("webview.css"),
+        pdfWorkerUri: mediaUri("pdf.worker.mjs"),
+      },
       document,
       {
         onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
       },
       () => {
         previewSources.delete(panel);
+        rawBlockCompiler.dispose();
         templateWatcher.dispose();
         viewStateSubscription.dispose();
         if (!previewLifecycle.panelDisposed(document.uri, controller)) return;
@@ -531,6 +580,13 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       {
         render: (text, version) =>
           renderDocument(text, version, { baseStyle: (doc) => baseStyleOf(doc, templateFs) }),
+        onRendered: (outcome) => {
+          if (!rawBlocksEnabled()) return;
+          rawBlockCompiler.request(
+            outcome.deck.rawBlocks ?? [],
+            outcome.deck.fragmentPreamble ?? "",
+          );
+        },
         onError: (message) => {
           void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
         },

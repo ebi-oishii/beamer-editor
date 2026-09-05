@@ -25,6 +25,8 @@ export interface PreviewPanel {
 export interface WebviewAssets {
   scriptUri: string;
   styleUri: string;
+  /** pdf.js の worker(部分コンパイル画像のラスタライズ。#81)。無ければ Webview は箱のまま表示する。 */
+  pdfWorkerUri?: string;
 }
 
 /** プレビューが入力とする文書の最小面（vscode.TextDocument が満たす）。 */
@@ -83,6 +85,8 @@ export interface PreviewControllerOptions {
    * エディタ操作は vscode API が要るため extension.ts が注入する。既定は何もしない。
    */
   navigate?: (offset: number) => void;
+  /** 描画が成功するたびに呼ぶ(生ブロックの部分コンパイルの起点。#81)。 */
+  onRendered?: (outcome: RenderOutcome) => void;
   /**
    * 画像などローカルリソースのパスを Webview で読める URI へ変換する
    * (asWebviewUri。extension.ts が注入)。未指定なら書き換えない。
@@ -161,8 +165,11 @@ export function emptyPreviewHtml(assets: WebviewAssets, cspSource: string, nonce
     `style-src ${cspSource} 'unsafe-inline'`,
     // KaTeX の CSS は版によって data: URL のフォントを含むため許可する
     `font-src ${cspSource} data:`,
-    `script-src 'nonce-${nonce}'`,
+    // pdf.js の worker は拡張の media から読む。Webview とは別オリジンなので blob: 経由で起動される。
+    `script-src 'nonce-${nonce}' ${cspSource}`,
+    `worker-src blob: ${cspSource}`,
   ].join("; ");
+  const pdfWorker = assets.pdfWorkerUri ? ` data-pdf-worker="${assets.pdfWorkerUri}"` : "";
   return `<!DOCTYPE html>
 <html lang="ja">
   <head>
@@ -177,7 +184,7 @@ export function emptyPreviewHtml(assets: WebviewAssets, cspSource: string, nonce
     </style>
   </head>
   <body>
-    <main id="app" aria-label="Beamer preview"></main>
+    <main id="app" aria-label="Beamer preview"${pdfWorker}></main>
     <script nonce="${nonce}" src="${assets.scriptUri}"></script>
   </body>
 </html>`;
@@ -196,6 +203,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly onWarning: (message: string) => void;
   private readonly navigate: (offset: number) => void;
   private readonly resolveResource: ((path: string) => string) | undefined;
+  private readonly onRendered: (outcome: RenderOutcome) => void;
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
   private readonly detachToCanvas: PreviewControllerOptions["detachToCanvas"];
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -241,6 +249,7 @@ export class PreviewController implements vscode.Disposable {
     this.onWarning = options.onWarning ?? (() => {});
     this.navigate = options.navigate ?? (() => {});
     this.resolveResource = options.resolveResource;
+    this.onRendered = options.onRendered ?? (() => {});
     this.moveCanvasElement = options.moveCanvasElement;
     this.detachToCanvas = options.detachToCanvas;
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
@@ -489,6 +498,7 @@ export class PreviewController implements vscode.Disposable {
       const outcome = this.render(renderedDocument.getText(), renderedDocument.version);
       this.latest = outcome;
       this.latestDocument = renderedDocument;
+      this.onRendered(outcome);
       if (this.editAwaitingVersion !== undefined && outcome.version !== this.editAwaitingVersion) {
         this.editAwaitingVersion = undefined;
       }
@@ -531,6 +541,23 @@ export class PreviewController implements vscode.Disposable {
   close(): void {
     this.panel.dispose();
     this.dispose();
+  }
+
+  /** 生ブロックの部分コンパイル結果を Webview へ送る(#81)。 */
+  postRawBlockReady(key: string, pdf: Uint8Array): void {
+    if (this.disposed) return;
+    const message: ExtensionToWebview = {
+      type: "rawBlockReady",
+      key,
+      pdfBase64: Buffer.from(pdf).toString("base64"),
+    };
+    void this.panel.webview.postMessage(message);
+  }
+
+  postRawBlockFailed(key: string, message: string): void {
+    if (this.disposed) return;
+    const msg: ExtensionToWebview = { type: "rawBlockFailed", key, message };
+    void this.panel.webview.postMessage(msg);
   }
 
   /**
