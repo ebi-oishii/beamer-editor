@@ -10,15 +10,40 @@ export interface DetachCandidate {
   sourceSpan: { start: number; end: number };
   /** メニューに出す文言(単位と冒頭の抜粋)。 */
   label: string;
+  /** 候補にできない理由(renderer の data-detach-blocked)。あれば項目は無効表示。 */
+  blocked?: string;
 }
+
+const BLOCKED_REASONS: Record<string, string> = {
+  "unsupported-kind": "この種類は canvas に置けません",
+  overlay: "表示条件(\\pause / overlay)が変わります",
+};
 
 const EXCERPT_LENGTH = 16;
 
 function kindLabel(element: HTMLElement, kind: string): string {
-  if (kind === "paragraph") return "段落";
-  if (kind === "image") return "画像";
-  if (kind === "list") return element.tagName === "OL" ? "番号付きリスト" : "箸条書き";
-  return "要素";
+  switch (kind) {
+    case "paragraph":
+      return "段落";
+    case "image":
+      return "画像";
+    case "list":
+      return element.tagName === "OL" ? "番号付きリスト" : "箸条書き";
+    case "columns":
+      return "段組";
+    case "blockEnv":
+      return "ブロック";
+    case "center":
+      return "中央寄せ";
+    case "table":
+      return "表";
+    case "displayMath":
+      return "数式";
+    case "rawBlock":
+      return "生ブロック";
+    default:
+      return "要素";
+  }
 }
 
 /** テキストノードを空白でつないだ本文(textContent だと隣接する li が詰まる)。 */
@@ -27,12 +52,16 @@ function textOf(node: Node): string {
   return [...node.childNodes].map(textOf).join(" ");
 }
 
-/** 「段落「冒頭…」を自由配置にする」の形。画像は抜粋なし。 */
-export function candidateLabel(element: HTMLElement, kind: string): string {
+/** 「段落「冒頭…」を自由配置にする」の形。画像は抜粋なし。候補外なら理由を添えた無効項目の文言。 */
+export function candidateLabel(element: HTMLElement, kind: string, blocked?: string): string {
   const base = kindLabel(element, kind);
   const text = kind === "image" ? "" : textOf(element).replace(/\s+/g, " ").trim();
   const excerpt = text.length > EXCERPT_LENGTH ? `${text.slice(0, EXCERPT_LENGTH)}…` : text;
-  return excerpt ? `${base}「${excerpt}」を自由配置にする` : `${base}を自由配置にする`;
+  const subject = excerpt ? `${base}「${excerpt}」` : base;
+  if (blocked !== undefined) {
+    return `${subject}は自由配置にできません(${BLOCKED_REASONS[blocked] ?? blocked})`;
+  }
+  return `${subject}を自由配置にする`;
 }
 
 export function collectDetachCandidates(target: HTMLElement, root: HTMLElement): DetachCandidate[] {
@@ -43,11 +72,13 @@ export function collectDetachCandidates(target: HTMLElement, root: HTMLElement):
     const start = Number(element.dataset.sourceStart);
     const end = Number(element.dataset.sourceEnd);
     if (Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start) {
+      const blocked = element.dataset.detachBlocked;
       candidates.push({
         element,
         kind,
         sourceSpan: { start, end },
-        label: candidateLabel(element, kind),
+        label: candidateLabel(element, kind, blocked),
+        ...(blocked !== undefined ? { blocked } : {}),
       });
     }
     element = element.parentElement?.closest<HTMLElement>("[data-flow-block]") ?? null;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BlockNode, SourceSpan } from "../src/ast.js";
-import { detachBlockToCanvas, isDetachableBlock } from "../src/canvas-detach.js";
+import { detachBlockToCanvas, detachStatusesOf, isDetachableBlock } from "../src/canvas-detach.js";
 import { parseDeck } from "../src/parser.js";
 
 const PREAMBLE = "\\documentclass[aspectratio=169]{beamer}\n\\begin{document}\n";
@@ -169,27 +169,29 @@ describe("detachBlockToCanvas", () => {
     ).toBeNull();
   });
 
-  it("リスト項目の唯一の内容(画像・入れ子リスト)は候補にせず、他の内容があれば取り出せる", () => {
+  it("項目の唯一の内容を取り出すときは空になる \\item も取り除き、他の内容があれば項目は残す", () => {
     const source = deck(`\\begin{frame}{T}
   \\begin{itemize}
     \\item \\includegraphics[width=0.4\\textwidth]{only.png}
     \\item text \\includegraphics[width=0.4\\textwidth]{with-text.png}
-    \\item
-    \\begin{itemize}
-      \\item deeper \\includegraphics[width=0.2\\textwidth]{deep.png}
-    \\end{itemize}
   \\end{itemize}
 \\end{frame}`);
     const placement = { x: 0.1, y: 0.1, width: 0.3 };
-    // 唯一の子の画像 → 空の \item が残るので不可
-    expect(
-      detachBlockToCanvas(
-        source,
-        spanOf(source, "\\includegraphics[width=0.4\\textwidth]{only.png}"),
-        placement,
-      ),
-    ).toBeNull();
-    // 段落と並ぶ画像 → 可
+    const only = detachBlockToCanvas(
+      source,
+      spanOf(source, "\\includegraphics[width=0.4\\textwidth]{only.png}"),
+      placement,
+    );
+    expect(apply(source, must(only))).toBe(
+      deck(`\\begin{frame}{T}
+  \\begin{itemize}
+    \\item text \\includegraphics[width=0.4\\textwidth]{with-text.png}
+  \\end{itemize}
+  \\begin{deckcanvas}
+    \\deckimage[x=0.100,y=0.100,w=0.300]{only.png}
+  \\end{deckcanvas}
+\\end{frame}`),
+    );
     const withText = detachBlockToCanvas(
       source,
       spanOf(source, "\\includegraphics[width=0.4\\textwidth]{with-text.png}"),
@@ -197,19 +199,58 @@ describe("detachBlockToCanvas", () => {
     );
     expect(withText?.text).toContain("\\item text\n");
     expect(withText?.text).toContain("\\deckimage[x=0.100,y=0.100,w=0.300]{with-text.png}");
-    // 唯一の子の入れ子リスト → 不可。その中の、段落と並ぶ画像 → 可
-    const nested = spanOf(
-      source,
-      "\\begin{itemize}\n      \\item deeper \\includegraphics[width=0.2\\textwidth]{deep.png}\n    \\end{itemize}",
+  });
+
+  it("入れ子リストだけの項目や、項目が 1 つだけのリストは、それごと取り除く", () => {
+    const nestedOnly = deck(`\\begin{frame}{T}
+  \\begin{itemize}
+    \\item first
+    \\item
+    \\begin{itemize}
+      \\item inner
+    \\end{itemize}
+  \\end{itemize}
+\\end{frame}`);
+    const inner = detachBlockToCanvas(
+      nestedOnly,
+      spanOf(nestedOnly, "\\begin{itemize}\n      \\item inner\n    \\end{itemize}"),
+      { x: 0.5, y: 0.5, width: 0.4 },
     );
-    expect(detachBlockToCanvas(source, nested, placement)).toBeNull();
-    expect(
-      detachBlockToCanvas(
-        source,
-        spanOf(source, "\\includegraphics[width=0.2\\textwidth]{deep.png}"),
-        placement,
-      ),
-    ).not.toBeNull();
+    expect(apply(nestedOnly, must(inner))).toBe(
+      deck(`\\begin{frame}{T}
+  \\begin{itemize}
+    \\item first
+  \\end{itemize}
+  \\begin{deckcanvas}
+    \\begin{decktext}[x=0.500,y=0.500,w=0.400,size=normal]
+      \\begin{itemize}
+        \\item inner
+      \\end{itemize}
+    \\end{decktext}
+  \\end{deckcanvas}
+\\end{frame}`),
+    );
+
+    const soloList = deck(`\\begin{frame}{T}
+  intro
+  \\begin{itemize}
+    \\item \\includegraphics[width=0.4\\textwidth]{solo.png}
+  \\end{itemize}
+\\end{frame}`);
+    const solo = detachBlockToCanvas(
+      soloList,
+      spanOf(soloList, "\\includegraphics[width=0.4\\textwidth]{solo.png}"),
+      { x: 0.1, y: 0.1, width: 0.3 },
+    );
+    // 空の itemize は LaTeX エラーになるので、リストごと消える。
+    expect(apply(soloList, must(solo))).toBe(
+      deck(`\\begin{frame}{T}
+  intro
+  \\begin{deckcanvas}
+    \\deckimage[x=0.100,y=0.100,w=0.300]{solo.png}
+  \\end{deckcanvas}
+\\end{frame}`),
+    );
   });
 
   it("表示条件が変わる候補は対象にしない: overlay 付きの block / \\item の中", () => {
@@ -263,33 +304,92 @@ describe("detachBlockToCanvas", () => {
     expect(detachBlockToCanvas(withCanvas, spanOf(withCanvas, "before"), placement)).not.toBeNull();
   });
 
-  it("center の中と、\\pause しか残らないリスト項目の内容は対象にしない", () => {
-    const source = deck(`\\begin{frame}{T}
+  it("center の中は \\centering を保って取り出し、\\pause しか残らない項目の内容は対象にしない", () => {
+    const placement = { x: 0.1, y: 0.1, width: 0.3 };
+    const centered = deck(`\\begin{frame}{T}
   \\begin{center}
     short text
   \\end{center}
+\\end{frame}`);
+    expect(
+      detachBlockToCanvas(centered, spanOf(centered, "short text"), placement)?.text,
+    ).toContain(
+      "    \\begin{decktext}[x=0.100,y=0.100,w=0.300,size=normal]\n      \\centering\n      short text\n    \\end{decktext}",
+    );
+
+    const paused = deck(`\\begin{frame}{T}
   \\begin{itemize}
     \\item \\pause \\includegraphics[width=0.4\\textwidth]{only.png}
     \\item text \\pause \\includegraphics[width=0.4\\textwidth]{with-text.png}
   \\end{itemize}
 \\end{frame}`);
-    const placement = { x: 0.1, y: 0.1, width: 0.3 };
-    expect(detachBlockToCanvas(source, spanOf(source, "short text"), placement)).toBeNull();
+    // 項目ごと消すと \\pause も消えて後続の step が変わるので対象外。
     expect(
       detachBlockToCanvas(
-        source,
-        spanOf(source, "\\includegraphics[width=0.4\\textwidth]{only.png}"),
+        paused,
+        spanOf(paused, "\\includegraphics[width=0.4\\textwidth]{only.png}"),
         placement,
       ),
     ).toBeNull();
     // text が残る項目の画像は、全 pause の後にあるので移動先(フレーム末尾)と表示条件が一致する。
     expect(
       detachBlockToCanvas(
-        source,
-        spanOf(source, "\\includegraphics[width=0.4\\textwidth]{with-text.png}"),
+        paused,
+        spanOf(paused, "\\includegraphics[width=0.4\\textwidth]{with-text.png}"),
         placement,
       ),
     ).not.toBeNull();
+  });
+
+  it("decktext と同じく 3 段までのリストは取り出せ、候補外の理由は detachStatusesOf が返す", () => {
+    const statusesOf = (source: string) => {
+      const frame = parseDeck(source).body.find((element) => element.type === "frame");
+      if (frame?.type !== "frame") throw new Error("frame missing");
+      const statuses = detachStatusesOf(frame);
+      return (text: string) =>
+        [...statuses.entries()].find(
+          ([block]) => source.slice(block.span.start, block.span.end).trimEnd() === text,
+        )?.[1];
+    };
+
+    const nested = deck(`\\begin{frame}{T}
+  \\begin{itemize}
+    \\item a
+    \\begin{itemize}
+      \\item b
+      \\begin{itemize}
+        \\item c
+      \\end{itemize}
+    \\end{itemize}
+  \\end{itemize}
+  \\begin{block}{B}
+    inside
+  \\end{block}
+\\end{frame}`);
+    const outer = nested.slice(
+      nested.indexOf("\\begin{itemize}"),
+      nested.lastIndexOf("\\end{itemize}") + "\\end{itemize}".length,
+    );
+    expect(
+      detachBlockToCanvas(nested, spanOf(nested, outer), { x: 0, y: 0, width: 1 }),
+    ).not.toBeNull();
+    const nestedStatus = statusesOf(nested);
+    expect(nestedStatus(outer)?.eligible).toBe(true);
+    expect(nestedStatus("\\begin{block}{B}\n    inside\n  \\end{block}")).toEqual({
+      eligible: false,
+      reason: "unsupported-kind",
+    });
+    expect(nestedStatus("inside")?.eligible).toBe(true);
+
+    const paused = deck(`\\begin{frame}{T}
+  before
+  \\pause
+  after
+\\end{frame}`);
+    const pausedStatus = statusesOf(paused);
+    // before は全 pause の前にあるので、移動先(フレーム末尾)と表示条件が合わない。
+    expect(pausedStatus("before")).toEqual({ eligible: false, reason: "overlay" });
+    expect(pausedStatus("after")?.eligible).toBe(true);
   });
 
   it("CRLF 文書では生成部分も CRLF にし、取り除いた行に CR を残さない", () => {
@@ -390,7 +490,7 @@ describe("detachBlockToCanvas", () => {
     if (frame?.type !== "frame") throw new Error("frame missing");
     expect(frame.body.map((block) => [block.type, isDetachableBlock(block)])).toEqual([
       ["list", false],
-      ["list", false],
+      ["list", true],
       ["center", false],
     ]);
   });

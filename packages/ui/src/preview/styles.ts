@@ -149,6 +149,13 @@ export const PREVIEW_CSS = `
   cursor: pointer;
   white-space: nowrap;
 }
+.context-menu button:disabled {
+  color: var(--vscode-disabledForeground, #999);
+  cursor: default;
+}
+.context-menu button:disabled:hover {
+  background: none;
+}
 .context-menu button:hover,
 .context-menu button:focus {
   background: var(--vscode-menu-selectionBackground, #e8eaf9);

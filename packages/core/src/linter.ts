@@ -665,12 +665,12 @@ function lintCanvas(canvas: CanvasNode): LintDiagnostic[] {
             ),
           );
         } else if (block.type === "list") {
-          if (listDepth > 1) {
+          if (listDepth > 2) {
             diagnostics.push(
               diagnostic(
                 "L014",
                 "warning",
-                "decktext 内のリストは 1 段までしかネストできません",
+                "decktext 内のリストは 3 段までしかネストできません",
                 block.span,
               ),
             );

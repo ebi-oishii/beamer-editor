@@ -50,7 +50,10 @@ const DECK: RenderedDeck = {
         '<div class="slide"><div class="slide-body"><p data-min="2">hi</p>' +
         '<ul data-flow-block="list" data-source-start="30" data-source-end="80"><li><span>outer</span>' +
         '<ul data-flow-block="list" data-source-start="45" data-source-end="70"><li><span>inner</span></li></ul>' +
-        "</li></ul></div></div>",
+        "</li></ul>" +
+        '<div class="beamer-block" data-flow-block="blockEnv" data-source-start="90" data-source-end="130" data-detach-blocked="unsupported-kind">' +
+        '<div class="block-body"><p data-flow-block="paragraph" data-source-start="100" data-source-end="110">inner p</p></div></div>' +
+        "</div></div>",
       stepCount: 2,
       isRaw: false,
       sourceSpan: { start: 0, end: 40 },
@@ -946,6 +949,33 @@ describe("mountPreview", () => {
     );
     expect(container.querySelector(".context-menu")).toBeNull();
     expect(container.querySelector(".flow-target")).toBeNull();
+  });
+
+  it("候補にできない要素は理由付きの無効項目として並び、押しても送らない", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const detachToCanvas = vi.fn();
+    const host = { ...fakeHost(), detachToCanvas };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const innerP = container.querySelector<HTMLElement>(".slide-scale .beamer-block p");
+    if (!innerP) throw new Error("fixture missing");
+    act(() => {
+      innerP.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    });
+    const items = [...container.querySelectorAll<HTMLButtonElement>(".context-menu button")];
+    expect(items.map((item) => [item.textContent, item.disabled])).toEqual([
+      ["段落「inner p」を自由配置にする", false],
+      ["ブロック「inner p」は自由配置にできません(この種類は canvas に置けません)", true],
+    ]);
+    act(() => {
+      items[1]?.click();
+    });
+    expect(detachToCanvas).not.toHaveBeenCalled();
   });
 
   it("ホストが detachToCanvas を持たなければ右クリックメニューを出さない", () => {

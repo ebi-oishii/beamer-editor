@@ -8,7 +8,14 @@
  * 取り出した要素の位置は呼び出し側(プレビュー上の表示位置)が決める。
  */
 
-import type { BlockNode, CanvasNode, FrameNode, ListNode, SourceSpan } from "./ast.js";
+import type {
+  BlockNode,
+  CanvasNode,
+  FrameNode,
+  ListItemNode,
+  ListNode,
+  SourceSpan,
+} from "./ast.js";
 import { formatCanvasCoordinate } from "./canvas-edit.js";
 import { parseDeck } from "./parser.js";
 
@@ -28,20 +35,20 @@ export interface SourceReplacement {
 /** 箱の最小幅(正規化値)。極端に細い箱を作らない。 */
 const MIN_WIDTH = 0.05;
 
-/** decktext 内のリストは 1 段までネスト可、項目のオーバーレイは不可(L014 と同じ条件)。 */
+/** decktext 内のリストは本文と同じ 3 段までネスト可(L014 と同じ条件)。項目のオーバーレイは不可。 */
 function listFitsDecktext(list: ListNode, depth: number): boolean {
   return list.items.every(
     (item) =>
       item.overlay === null &&
       item.children.every((child) => {
-        if (child.type === "paragraph") return true;
-        if (child.type === "list") return depth < 1 && listFitsDecktext(child, depth + 1);
+        if (child.type === "paragraph" || child.type === "pause") return true;
+        if (child.type === "list") return depth < 2 && listFitsDecktext(child, depth + 1);
         return false;
       }),
   );
 }
 
-/** 自由配置へ移せるブロックか(decktext / deckimage に収まる種類・構造か)。 */
+/** 自由配置へ移せる種類・構造か(decktext / deckimage に収まるか)。 */
 export function isDetachableBlock(block: BlockNode): boolean {
   switch (block.type) {
     case "paragraph":
@@ -84,71 +91,125 @@ function countPauses(blocks: BlockNode[], stopAt?: BlockNode): { count: number; 
   return { count, stopped };
 }
 
-interface WalkContext {
-  /** overlay 指定を持つ block / \\item の中。 */
-  overlay: boolean;
-  /** center の中。 */
-  center: boolean;
-  /** リスト項目の直接の子。 */
-  itemChild: boolean;
-  /** その項目に、候補以外にも描画される内容(\\pause を除く)があるか。 */
-  itemHasOther: boolean;
+/** 候補にできない理由。ui がメニューに表示する。 */
+export type DetachBlockedReason = "unsupported-kind" | "overlay";
+
+export type DetachStatus =
+  | {
+      eligible: true;
+      /** ソースから取り除く範囲。唯一の内容なら空になる \\item(項目が 1 つならリスト)まで広げる。 */
+      removeSpan: SourceSpan;
+      /** center の中にあった要素。decktext 内で \\centering を掛けて見た目を保つ。 */
+      center: boolean;
+    }
+  | { eligible: false; reason: DetachBlockedReason };
+
+type Ancestor = { kind: "item"; item: ListItemNode } | { kind: "list"; list: ListNode };
+
+/**
+ * 取り除く範囲を決める。ブロックが項目の唯一の描画内容なら項目ごと、その項目がリストの唯一の
+ * 項目ならリストごと取り除く(空の \\item は箱条書き記号が残り、空の itemize は LaTeX エラー)。
+ * 項目に \\pause が含まれる場合は項目を消すと後続の step が変わるので広げない。
+ */
+function removalSpan(block: BlockNode, ancestors: readonly Ancestor[]): SourceSpan {
+  let node: BlockNode | ListItemNode | ListNode = block;
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    const ancestor = ancestors[i] as Ancestor;
+    if (ancestor.kind === "item") {
+      const rendered = ancestor.item.children.filter((child) => child.type !== "pause");
+      const hasPause = rendered.length !== ancestor.item.children.length;
+      if (rendered.length !== 1 || rendered[0] !== node || hasPause) break;
+      node = ancestor.item;
+    } else {
+      if (ancestor.list.items.length !== 1 || ancestor.list.items[0] !== node) break;
+      node = ancestor.list;
+    }
+  }
+  return node.span;
 }
 
 /**
- * フレーム内で「自由配置にする」候補になれるブロックの集合。renderer の候補属性と core の
- * 適用判定はこの同じ集合を使う。次のものは候補にしない:
- * - decktext / deckimage に収まらない種類・構造(isDetachableBlock)
- * - リスト項目直下の段落と、項目の唯一の描画内容(\\pause は数えない)。取り出すと空の \\item が残る
- * - center の中(中央寄せが失われ、表示位置も文字列の左端にならない)
- * - overlay 指定を持つ block / \\item の中(canvas オブジェクトは overlay 非対応で、移すと step 1 から見える)
- * - \\pause との前後関係が移動先(既存の deckcanvas、無ければフレーム末尾)と異なるもの(表示開始 step が変わる)
- * deckcanvas の中身は対象外。deckcanvas が 2 つ以上あるフレームでは空。
+ * フレーム内のフロー要素それぞれについて「自由配置にする」候補になれるか(なれなければ理由)を
+ * 決める。renderer の候補属性と core の適用判定はこの同じ結果を使う。
+ * - 種類・構造が decktext / deckimage に収まらない → unsupported-kind
+ * - overlay 付きの block / \\item の中、または \\pause との前後関係が移動先(既存の deckcanvas、
+ *   無ければフレーム末尾)と異なる → overlay(移すと表示開始 step が変わる)
+ * - 項目の唯一の内容で、その項目に \\pause がある → overlay(項目ごと消すと後続の step が変わる)
+ * リスト項目直下の段落(項目の本文そのもの)と deckcanvas の中身は対象外。deckcanvas が 2 つ以上あるフレームは空。
  */
-export function detachableBlocksOf(frame: FrameNode): Set<BlockNode> {
-  const result = new Set<BlockNode>();
+export function detachStatusesOf(frame: FrameNode): Map<BlockNode, DetachStatus> {
+  const result = new Map<BlockNode, DetachStatus>();
   const canvases = frame.body.filter((block): block is CanvasNode => block.type === "canvas");
   if (canvases.length > 1) return result;
   const canvas = canvases[0];
-  // 移動先が見え始める step の手前にある \\pause の数。候補も同じ数でなければ表示条件が変わる。
   const targetPauses = countPauses(frame.body, canvas).count;
   let pauses = 0;
-  const visit = (blocks: BlockNode[], ctx: WalkContext): void => {
+  const visit = (
+    blocks: BlockNode[],
+    ctx: { overlay: boolean; center: boolean; itemChild: boolean },
+    ancestors: readonly Ancestor[],
+  ): void => {
     for (const block of blocks) {
       if (block.type === "pause") {
         pauses++;
         continue;
       }
-      const eligible =
-        isDetachableBlock(block) &&
-        !ctx.overlay &&
-        !ctx.center &&
-        pauses === targetPauses &&
-        (!ctx.itemChild || (block.type !== "paragraph" && ctx.itemHasOther));
-      if (eligible) result.add(block);
+      if (
+        block.type === "canvas" ||
+        block.type === "titlePage" ||
+        block.type === "tableOfContents"
+      ) {
+        continue;
+      }
+      // 項目直下の段落は項目の本文そのもの(renderer も <span> で描く)。候補にも理由にもしない。
+      if (!(ctx.itemChild && block.type === "paragraph")) {
+        if (!isDetachableBlock(block)) {
+          result.set(block, { eligible: false, reason: "unsupported-kind" });
+        } else if (ctx.overlay || pauses !== targetPauses) {
+          result.set(block, { eligible: false, reason: "overlay" });
+        } else {
+          const soleOfPausedItem =
+            ancestors.at(-1)?.kind === "item" &&
+            (() => {
+              const item = (ancestors.at(-1) as { kind: "item"; item: ListItemNode }).item;
+              const rendered = item.children.filter((child) => child.type !== "pause");
+              return rendered.length === 1 && rendered.length !== item.children.length;
+            })();
+          if (soleOfPausedItem) result.set(block, { eligible: false, reason: "overlay" });
+          else
+            result.set(block, {
+              eligible: true,
+              removeSpan: removalSpan(block, ancestors),
+              center: ctx.center,
+            });
+        }
+      }
       switch (block.type) {
         case "columns":
-          for (const column of block.columns) visit(column.children, { ...ctx, itemChild: false });
+          for (const column of block.columns)
+            visit(column.children, { ...ctx, itemChild: false }, []);
           break;
         case "blockEnv":
-          visit(block.children, {
-            ...ctx,
-            overlay: ctx.overlay || block.overlay !== null,
-            itemChild: false,
-          });
+          visit(
+            block.children,
+            { ...ctx, overlay: ctx.overlay || block.overlay !== null, itemChild: false },
+            [],
+          );
           break;
         case "center":
-          visit(block.children, { ...ctx, center: true, itemChild: false });
+          visit(block.children, { ...ctx, center: true, itemChild: false }, []);
           break;
         case "list":
           for (const item of block.items) {
-            const rendered = item.children.filter((child) => child.type !== "pause").length;
-            visit(item.children, {
-              overlay: ctx.overlay || item.overlay !== null,
-              center: ctx.center,
-              itemChild: true,
-              itemHasOther: rendered > 1,
-            });
+            visit(
+              item.children,
+              {
+                overlay: ctx.overlay || item.overlay !== null,
+                center: ctx.center,
+                itemChild: true,
+              },
+              [...ancestors, { kind: "list", list: block }, { kind: "item", item }],
+            );
           }
           break;
         default:
@@ -156,8 +217,15 @@ export function detachableBlocksOf(frame: FrameNode): Set<BlockNode> {
       }
     }
   };
-  visit(frame.body, { overlay: false, center: false, itemChild: false, itemHasOther: false });
+  visit(frame.body, { overlay: false, center: false, itemChild: false }, []);
   return result;
+}
+
+/** 候補になれるブロックだけの集合(detachStatusesOf の eligible なもの)。 */
+export function detachableBlocksOf(frame: FrameNode): Set<BlockNode> {
+  const eligible = new Set<BlockNode>();
+  for (const [block, status] of detachStatusesOf(frame)) if (status.eligible) eligible.add(block);
+  return eligible;
 }
 
 function clampPlacement(placement: CanvasPlacement): CanvasPlacement {
@@ -215,13 +283,16 @@ function buildObject(
   placement: CanvasPlacement,
   indent: string,
   eol: string,
+  center: boolean,
 ): string {
   const f = formatCanvasCoordinate;
   const position = `x=${f(placement.x)},y=${f(placement.y)},w=${f(placement.width)}`;
   if (block.type === "image") return `${indent}\\deckimage[${position}]{${block.path}}`;
   const span = trimmedSpan(source, block.span);
   const content = reindent(source.slice(span.start, span.end), `${indent}  `, eol);
-  return `${indent}\\begin{decktext}[${position},size=normal]${eol}${content}${eol}${indent}\\end{decktext}`;
+  // center の中にあった要素は箱の中で中央寄せを保つ。
+  const centering = center ? `${indent}  \\centering${eol}` : "";
+  return `${indent}\\begin{decktext}[${position},size=normal]${eol}${centering}${content}${eol}${indent}\\end{decktext}`;
 }
 
 interface Edit {
@@ -234,14 +305,15 @@ function rewriteFrame(
   source: string,
   frame: FrameNode,
   block: BlockNode,
+  target: { removeSpan: SourceSpan; center: boolean },
   canvas: CanvasNode | null,
   placement: CanvasPlacement,
 ): SourceReplacement {
   const edits: Edit[] = [];
   const eol = detectEol(source);
 
-  // 1. 対象ブロックの原文を取り除く。行を占有していれば改行ごと消す。
-  const span = trimmedSpan(source, block.span);
+  // 1. 対象の原文(唯一の内容なら \\item やリストごと)を取り除く。行を占有していれば改行ごと消す。
+  const span = trimmedSpan(source, target.removeSpan);
   const blockLineStart = lineStart(source, span.start);
   const blockLineEnd = lineEnd(source, span.end);
   const ownsLineStart = isBlank(source.slice(blockLineStart, span.start));
@@ -264,10 +336,10 @@ function rewriteFrame(
     const endLineStart = lineStart(source, endIndex);
     if (isBlank(source.slice(endLineStart, endIndex))) {
       const canvasIndent = source.slice(endLineStart, endIndex);
-      const object = buildObject(source, block, placement, `${canvasIndent}  `, eol);
+      const object = buildObject(source, block, placement, `${canvasIndent}  `, eol, target.center);
       edits.push({ start: endLineStart, end: endLineStart, text: `${object}${eol}` });
     } else {
-      const object = buildObject(source, block, placement, "    ", eol);
+      const object = buildObject(source, block, placement, "    ", eol, target.center);
       edits.push({ start: endIndex, end: endIndex, text: `${eol}${object}${eol}  ` });
     }
   } else {
@@ -276,7 +348,7 @@ function rewriteFrame(
     const ownsLine = isBlank(source.slice(endLineStart, endIndex));
     const frameIndent = ownsLine ? source.slice(endLineStart, endIndex) : "";
     const bodyIndent = `${frameIndent}  `;
-    const object = buildObject(source, block, placement, `${bodyIndent}  `, eol);
+    const object = buildObject(source, block, placement, `${bodyIndent}  `, eol, target.center);
     const text = `${bodyIndent}\\begin{deckcanvas}${eol}${object}${eol}${bodyIndent}\\end{deckcanvas}${eol}`;
     if (ownsLine) edits.push({ start: endLineStart, end: endLineStart, text });
     else edits.push({ start: endIndex, end: endIndex, text: `${eol}${text}` });
@@ -305,17 +377,25 @@ export function detachBlockToCanvas(
   for (const element of doc.body) {
     if (element.type !== "frame") continue;
     if (blockSpan.start < element.span.start || blockSpan.end > element.span.end) continue;
-    let target: BlockNode | undefined;
-    for (const block of detachableBlocksOf(element)) {
+    let target: { block: BlockNode; removeSpan: SourceSpan; center: boolean } | undefined;
+    for (const [block, status] of detachStatusesOf(element)) {
+      if (!status.eligible) continue;
       if (block.span.start === blockSpan.start && block.span.end === blockSpan.end) {
-        target = block;
+        target = { block, removeSpan: status.removeSpan, center: status.center };
         break;
       }
     }
     if (!target) return null;
     const canvases = element.body.filter((block): block is CanvasNode => block.type === "canvas");
     if (canvases.length > 1) return null;
-    return rewriteFrame(source, element, target, canvases[0] ?? null, clampPlacement(placement));
+    return rewriteFrame(
+      source,
+      element,
+      target.block,
+      target,
+      canvases[0] ?? null,
+      clampPlacement(placement),
+    );
   }
   return null;
 }
