@@ -4,6 +4,7 @@ import {
   ExportController,
   type ExportHost,
   type ExportUri,
+  exportErrorDetail,
   resolveExportDocument,
 } from "../src/export-controller";
 
@@ -24,7 +25,6 @@ function createHost(overrides: Partial<ExportHost> = {}): ExportHost {
     chooseFormat: vi.fn<() => Promise<"pdf" | undefined>>(async () => "pdf"),
     chooseOutput: vi.fn(async () => output),
     outputExists: vi.fn(async () => false),
-    confirmOverwrite: vi.fn(async () => true),
     withProgress: vi.fn(async (task) =>
       task({ isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) }),
     ),
@@ -34,8 +34,10 @@ function createHost(overrides: Partial<ExportHost> = {}): ExportHost {
     openPdf: vi.fn(async () => undefined),
     revealInFileManager: vi.fn(async () => undefined),
     openTectonicSettings: vi.fn(async () => undefined),
+    showExportDetails: vi.fn(),
     uriForFile: vi.fn(() => output),
     tectonicPath: vi.fn(() => "/custom/tectonic"),
+    timeoutMs: vi.fn(() => 300_000),
     ...overrides,
   };
 }
@@ -86,13 +88,14 @@ describe("ExportController", () => {
         outputPath: output.fsPath,
         overwrite: false,
         tectonicPath: "/custom/tectonic",
+        timeoutMs: 300_000,
         signal: expect.any(AbortSignal),
       }),
     );
     expect(host.openPdf).toHaveBeenCalledWith(output);
   });
 
-  it("does not compile after picker/save cancellation or failed dirty save", async () => {
+  it("does not compile after picker or output cancellation", async () => {
     for (const [host, document] of [
       [
         createHost({
@@ -101,12 +104,24 @@ describe("ExportController", () => {
         createDocument(),
       ],
       [createHost({ chooseOutput: vi.fn(async () => undefined) }), createDocument()],
-      [createHost(), createDocument({ isDirty: true, save: async () => false })],
     ] as const) {
       const compile = vi.fn();
       await new ExportController(host, { exportPdf: compile }).export(document);
       expect(compile).not.toHaveBeenCalled();
+      expect(host.showWarning).not.toHaveBeenCalled();
     }
+  });
+
+  it("reports a failed dirty save and does not compile", async () => {
+    const host = createHost();
+    const compile = vi.fn();
+    await new ExportController(host, { exportPdf: compile }).export(
+      createDocument({ isDirty: true, save: async () => false }),
+    );
+    expect(compile).not.toHaveBeenCalled();
+    expect(host.showWarning).toHaveBeenCalledWith(
+      "編集中のファイルを保存できなかったため、PDFを書き出しませんでした。",
+    );
   });
 
   it("does not compile virtual documents selected from the active editor fallback", async () => {
@@ -179,7 +194,7 @@ describe("ExportController", () => {
     expect(host.showError).not.toHaveBeenCalled();
   });
 
-  it("confirms overwrite and serializes the same source URI", async () => {
+  it("passes the Save Dialog overwrite result through and serializes the same source URI", async () => {
     let release: () => void = () => {};
     const pending = new Promise<void>((resolve) => {
       release = resolve;
@@ -205,7 +220,7 @@ describe("ExportController", () => {
     expect(compile).toHaveBeenCalledWith(expect.objectContaining({ overwrite: true }));
   });
 
-  it("maps every typed compiler error and offers settings for missing Tectonic", async () => {
+  it("maps typed compiler errors and makes compiler details available on demand", async () => {
     for (const code of [
       "E_INPUT",
       "E_OUTPUT_EXISTS",
@@ -213,13 +228,14 @@ describe("ExportController", () => {
       "E_COMPILE",
       "E_IO",
     ] as const) {
-      const host = createHost();
+      const host = createHost({ showError: vi.fn(async () => "詳細を表示") });
       await new ExportController(host, {
         exportPdf: async () => {
           throw new PdfExportError(code, code);
         },
       }).export(createDocument());
       expect(host.showError).toHaveBeenCalledTimes(1);
+      expect(host.showExportDetails).toHaveBeenCalledWith(`[${code}] ${code}`);
     }
     const host = createHost({ showError: vi.fn(async () => "設定を開く") });
     await new ExportController(host, {
@@ -227,7 +243,28 @@ describe("ExportController", () => {
         throw new PdfExportError("E_TECTONIC_NOT_FOUND", "missing");
       },
     }).export(createDocument());
+    expect(host.showError).toHaveBeenCalledWith(
+      "Tectonic が見つかりません。",
+      "詳細を表示",
+      "設定を開く",
+    );
     expect(host.openTectonicSettings).toHaveBeenCalledOnce();
+  });
+
+  it("sanitizes and bounds compiler details without exposing the cause", () => {
+    const cause = new Error("secret cause");
+    const detail = exportErrorDetail(
+      new PdfExportError(
+        "E_COMPILE",
+        `\u001b[31m! Undefined control sequence.\u001b[0m\r\nl.42 \\badmacro\u0000${"x".repeat(70_000)}`,
+        cause,
+      ),
+    );
+    expect(detail).toContain("! Undefined control sequence.\nl.42 \\badmacro");
+    expect(detail).not.toContain("\u001b");
+    expect(detail).not.toContain("secret cause");
+    expect(detail).toContain("詳細を切り詰めました");
+    expect(detail.length).toBeLessThan(65_700);
   });
 
   it("does not run compilers in untrusted workspaces", async () => {
@@ -240,7 +277,7 @@ describe("ExportController", () => {
 
   it("reports display failures separately after a successful export", async () => {
     const host = createHost({
-      showInformation: vi.fn(async () => "Finderで表示"),
+      showInformation: vi.fn(async () => "フォルダーで表示"),
       revealInFileManager: vi.fn(async () => {
         throw new Error("unavailable");
       }),

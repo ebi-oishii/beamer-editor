@@ -49,6 +49,20 @@
           "default": "tectonic",
           "scope": "resource",
           "description": "Path to the Tectonic executable used for PDF export."
+        },
+        "beamerEditor.pdfExport.timeoutSeconds": {
+          "type": "integer",
+          "default": 300,
+          "minimum": 5,
+          "maximum": 1800,
+          "scope": "resource",
+          "description": "Maximum time in seconds to wait for PDF compilation."
+        },
+        "beamerEditor.preview.lockGroup": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "プレビューのエディタグループをロックし、他のファイルがプレビューと同じグループに開かないようにします。ロックはプレビューが初めてフォーカスされたときに掛かります。"
         }
       }
     },

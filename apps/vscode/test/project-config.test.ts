@@ -107,6 +107,16 @@ describe("VS Code extension project configuration", () => {
     });
   });
 
+  it("declares the preview group lock setting (#94)", () => {
+    const contributes = packageJson.contributes as {
+      configuration: { properties: Record<string, { type: string; default: unknown }> };
+    };
+    expect(contributes.configuration.properties["beamerEditor.preview.lockGroup"]).toMatchObject({
+      type: "boolean",
+      default: true,
+    });
+  });
+
   it("keeps ordinary LaTeX auto-build enabled while ignoring only repository fixtures", () => {
     const fixtureGlob = "**/fixtures/**/*.tex";
     expect(workspaceSettings).not.toHaveProperty("latex-workshop.latex.autoBuild.run");
@@ -132,6 +142,9 @@ describe("VS Code extension project configuration", () => {
       default: "tectonic",
       scope: "resource",
     });
+    expect(
+      contributes.configuration.properties["beamerEditor.pdfExport.timeoutSeconds"],
+    ).toMatchObject({ default: 300, minimum: 5, maximum: 1800, scope: "resource" });
   });
 
   it("keeps export trusted, reachable from previews, and out of the webview bundle contract", () => {

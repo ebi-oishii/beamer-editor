@@ -304,6 +304,42 @@ describe("exportPdf", () => {
     await expect(running).resolves.toMatchObject({ cancelled: true });
   });
 
+  it("times out a process that ignores SIGTERM and escalates until the promise settles", async () => {
+    const started = Date.now();
+    const value = await nodeProcessRunner.run(
+      process.execPath,
+      ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+      { cwd: tmpdir(), timeoutMs: 250 },
+    );
+    expect(value).toMatchObject({ timedOut: true, cancelled: false });
+    expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
+  it("uses separate version and compile timeouts and maps compile timeout without replacing output", async () => {
+    const input = await source();
+    const output = join(input.dir, "talk.pdf");
+    await writeFile(output, "old PDF");
+    const timeoutValues: Array<number | undefined> = [];
+    let call = 0;
+    const runner: ProcessRunner = {
+      async run(_command, _args, options) {
+        timeoutValues.push(options.timeoutMs);
+        return call++ === 0 ? result() : result({ timedOut: true, stderr: "stuck" });
+      },
+    };
+    await expect(
+      exportPdf(
+        { inputPath: input.path, outputPath: output, overwrite: true, timeoutMs: 12_345 },
+        { runner },
+      ),
+    ).rejects.toMatchObject({
+      code: "E_COMPILE",
+      message: expect.stringContaining("12.345 秒でタイムアウト"),
+    });
+    expect(timeoutValues).toEqual([10_000, 12_345]);
+    expect(await readFile(output, "utf8")).toBe("old PDF");
+  });
+
   it("rejects missing input and an unusable Tectonic version", async () => {
     const missing = join(await directory(), "missing.tex");
     await expect(

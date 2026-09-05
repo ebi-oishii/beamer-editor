@@ -126,7 +126,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   const latexWorkshopSessionPrompted = new Set<string>();
   const lineFlash = createLineFlash();
   const previewSources = new Map<vscode.WebviewPanel, vscode.TextDocument>();
-  context.subscriptions.push(lineFlash, foldingRangesChanged);
+  const exportOutput = vscode.window.createOutputChannel("Beamer Editor: PDF Export");
+  context.subscriptions.push(lineFlash, foldingRangesChanged, exportOutput);
 
   const exportController = new ExportController({
     get isWorkspaceTrusted() {
@@ -150,12 +151,6 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         return false;
       }
     },
-    confirmOverwrite: async (uri) =>
-      (await vscode.window.showWarningMessage(
-        `${(uri as vscode.Uri).fsPath} は既に存在します。上書きしますか？`,
-        { modal: true },
-        "上書き",
-      )) === "上書き",
     withProgress: (task) =>
       vscode.window.withProgress(
         {
@@ -174,12 +169,24 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       vscode.commands.executeCommand("revealFileInOS", uri as vscode.Uri),
     openTectonicSettings: () =>
       vscode.commands.executeCommand("workbench.action.openSettings", "beamerEditor.tectonicPath"),
+    showExportDetails: (detail) => {
+      exportOutput.clear();
+      exportOutput.appendLine(detail);
+      exportOutput.show(true);
+    },
     uriForFile: (path) => vscode.Uri.file(path) as ExportUri,
     tectonicPath: (document) => {
       const value = vscode.workspace
         .getConfiguration("beamerEditor", document.uri as vscode.Uri)
         .get<string>("tectonicPath");
       return value?.trim() || undefined;
+    },
+    timeoutMs: (document) => {
+      const seconds = vscode.workspace
+        .getConfiguration("beamerEditor", document.uri as vscode.Uri)
+        .get<number>("pdfExport.timeoutSeconds", 300);
+      const normalized = Number.isFinite(seconds) ? Math.trunc(seconds) : 300;
+      return Math.max(5, Math.min(1800, normalized)) * 1000;
     },
   });
   context.subscriptions.push(exportController);
@@ -390,6 +397,27 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     );
     previewSources.set(panel, document);
 
+    // #94: プレビューが表示されているエディタグループをロックし、他のファイルが同じグループに
+    // 開かないようにする(ロック中のグループには新しいエディタが開かない)。ロックはアクティブな
+    // グループにしか掛けられないので、パネルが初めてフォーカスされたとき(手動オープン直後か、利用者
+    // がプレビューをクリックしたとき)に 1 回だけ行い、自動オープンでフォーカスを奪わない。
+    // 問題が起きるのは「プレビューがアクティブなときに別ファイルを開く」場面だけなのでこれで足りる。
+    // lockEditorGroup は「その時点でアクティブなグループ」に掛かる。パネル作成直後は workbench 側の
+    // 切り替えが終わっておらずソース側がまだアクティブなことがあるため、アクティブなタブがこの
+    // パネルであることを確かめてから実行する(違うグループをロックしない)。
+    let groupLocked = false;
+    const lockGroupIfActive = (): void => {
+      if (groupLocked || !panel.active) return;
+      if (vscode.window.tabGroups.activeTabGroup.activeTab?.label !== panel.title) return;
+      const enabled =
+        vscode.workspace.getConfiguration("beamerEditor").get<boolean>("preview.lockGroup") ?? true;
+      if (!enabled) return;
+      groupLocked = true;
+      void vscode.commands.executeCommand("workbench.action.lockEditorGroup");
+    };
+    const viewStateSubscription = panel.onDidChangeViewState(lockGroupIfActive);
+    lockGroupIfActive();
+
     const mediaUri = (name: string) =>
       panel.webview
         .asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", name))
@@ -403,6 +431,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       },
       () => {
         previewSources.delete(panel);
+        viewStateSubscription.dispose();
         if (!previewLifecycle.panelDisposed(document.uri, controller)) return;
         if (previewController === controller) previewController = undefined;
       },

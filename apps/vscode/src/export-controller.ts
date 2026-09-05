@@ -28,7 +28,6 @@ export interface ExportHost {
   chooseFormat(): Thenable<"pdf" | undefined>;
   chooseOutput(defaultUri: ExportUri): Thenable<ExportUri | undefined>;
   outputExists(uri: ExportUri): Thenable<boolean>;
-  confirmOverwrite(uri: ExportUri): Thenable<boolean>;
   withProgress<T>(task: (token: ExportCancellationToken) => Thenable<T>): Thenable<T>;
   showInformation(message: string, ...actions: string[]): Thenable<string | undefined>;
   showError(message: string, ...actions: string[]): Thenable<string | undefined>;
@@ -36,8 +35,10 @@ export interface ExportHost {
   openPdf(uri: ExportUri): Thenable<unknown>;
   revealInFileManager(uri: ExportUri): Thenable<unknown>;
   openTectonicSettings(): Thenable<unknown>;
+  showExportDetails(detail: string): void;
   uriForFile(path: string): ExportUri;
   tectonicPath(document: ExportDocument): string | undefined;
+  timeoutMs(document: ExportDocument): number;
 }
 
 export interface ExportControllerDependencies {
@@ -46,6 +47,7 @@ export interface ExportControllerDependencies {
     outputPath: string;
     overwrite: boolean;
     tectonicPath?: string;
+    timeoutMs?: number;
     signal: AbortSignal;
   }) => Promise<PdfExportResult>;
 }
@@ -69,6 +71,47 @@ const ERROR_MESSAGES: Record<Exclude<PdfExportErrorCode, "E_CANCELLED">, string>
   E_COMPILE: "PDF のコンパイルに失敗しました。",
   E_IO: "PDF の書き出し中に入出力エラーが発生しました。",
 };
+
+const DETAIL_LIMIT = 64 * 1024;
+
+function stripAnsi(value: string): string {
+  let result = "";
+  for (let index = 0; index < value.length; index++) {
+    if (value.charCodeAt(index) !== 27) {
+      result += value[index];
+      continue;
+    }
+    if (value[index + 1] !== "[") {
+      index++;
+      continue;
+    }
+    index += 2;
+    while (index < value.length) {
+      const code = value.charCodeAt(index);
+      if (code >= 64 && code <= 126) break;
+      index++;
+    }
+  }
+  return result;
+}
+
+function stripControlCharacters(value: string): string {
+  return [...value]
+    .filter((character) => {
+      const code = character.charCodeAt(0);
+      return code === 10 || (code >= 32 && code !== 127);
+    })
+    .join("");
+}
+
+/** Output Channel に載せる compiler 詳細だけを安全な長さと文字種へ整える。 */
+export function exportErrorDetail(error: PdfExportError): string {
+  const detail = stripControlCharacters(
+    stripAnsi(`[${error.code}] ${error.message}`).replace(/\r\n?/g, "\n"),
+  );
+  if (detail.length <= DETAIL_LIMIT) return detail;
+  return `${detail.slice(0, DETAIL_LIMIT)}\n…（詳細を切り詰めました）`;
+}
 
 /** Extension Host のみで PDF export の UI と compiler 呼び出しを調停する。 */
 export class ExportController {
@@ -116,8 +159,12 @@ export class ExportController {
     if (!output || this.disposed) return;
     const overwrite = await this.host.outputExists(output);
     if (this.disposed) return;
-    if (overwrite && !(await this.host.confirmOverwrite(output))) return;
-    if (this.disposed || (document.isDirty && !(await document.save()))) return;
+    if (document.isDirty && !(await document.save())) {
+      await this.host.showWarning(
+        "編集中のファイルを保存できなかったため、PDFを書き出しませんでした。",
+      );
+      return;
+    }
     if (this.disposed) return;
 
     try {
@@ -133,6 +180,7 @@ export class ExportController {
             inputPath: document.uri.fsPath,
             outputPath: output.fsPath,
             overwrite,
+            timeoutMs: this.host.timeoutMs(document),
             signal: abort.signal,
             ...(tectonicPath === undefined ? {} : { tectonicPath }),
           };
@@ -146,11 +194,11 @@ export class ExportController {
       const action = await this.host.showInformation(
         `PDF を書き出しました: ${result.outputPath}`,
         "PDFを開く",
-        "Finderで表示",
+        "フォルダーで表示",
       );
       try {
         if (action === "PDFを開く") await this.host.openPdf(output);
-        else if (action === "Finderで表示") await this.host.revealInFileManager(output);
+        else if (action === "フォルダーで表示") await this.host.revealInFileManager(output);
       } catch {
         await this.host.showWarning("PDF は書き出されましたが、表示操作に失敗しました。");
       }
@@ -166,12 +214,15 @@ export class ExportController {
     }
     if (error.code === "E_CANCELLED") return;
     const message = ERROR_MESSAGES[error.code];
+    const actions =
+      error.code === "E_TECTONIC_NOT_FOUND"
+        ? (["詳細を表示", "設定を開く"] as const)
+        : (["詳細を表示"] as const);
+    const action = await this.host.showError(message, ...actions);
+    if (action === "詳細を表示") this.host.showExportDetails(exportErrorDetail(error));
     if (error.code === "E_TECTONIC_NOT_FOUND") {
-      const action = await this.host.showError(message, "設定を開く");
       if (action === "設定を開く") await this.host.openTectonicSettings();
-      return;
     }
-    await this.host.showError(message);
   }
 
   dispose(): void {
