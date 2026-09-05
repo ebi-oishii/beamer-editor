@@ -95,6 +95,16 @@ describe("VS Code extension project configuration", () => {
       when: "resourceScheme == file && resourceExtname == .tex",
       group: "navigation",
     });
+    expect(contributes.commands).toContainEqual({
+      command: "beamerEditor.export",
+      title: "Beamer Editor: Export...",
+      icon: "$(export)",
+    });
+    expect(contributes.menus["editor/title"]).toContainEqual({
+      command: "beamerEditor.export",
+      when: "resourceScheme == file && resourceExtname == .tex && isWorkspaceTrusted",
+      group: "navigation",
+    });
   });
 
   it("declares the source-to-slide command, keybinding, and follow-cursor toggle (#66)", () => {
@@ -167,5 +177,28 @@ describe("VS Code extension project configuration", () => {
       default: DEFAULT_MANAGED_FILE_PATTERNS,
       scope: "resource",
     });
+    expect(contributes.configuration.properties["beamerEditor.tectonicPath"]).toMatchObject({
+      default: "tectonic",
+      scope: "resource",
+    });
+    expect(
+      contributes.configuration.properties["beamerEditor.pdfExport.timeoutSeconds"],
+    ).toMatchObject({ default: 300, minimum: 5, maximum: 1800, scope: "resource" });
+  });
+
+  it("keeps export trusted, reachable from previews, and out of the webview bundle contract", () => {
+    const contributes = packageJson.contributes as {
+      menus: { "webview/title": Array<{ command: string; when?: string; group?: string }> };
+    };
+    expect(contributes.menus["webview/title"]).toContainEqual({
+      command: "beamerEditor.export",
+      when: "webviewId == beamerEditor.preview && isWorkspaceTrusted",
+      group: "navigation",
+    });
+    expect(packageJson.activationEvents as string[]).toContain("onCommand:beamerEditor.export");
+    expect(
+      (packageJson.capabilities as { untrustedWorkspaces: { restrictedConfigurations: string[] } })
+        .untrustedWorkspaces.restrictedConfigurations,
+    ).toContain("beamerEditor.tectonicPath");
   });
 });

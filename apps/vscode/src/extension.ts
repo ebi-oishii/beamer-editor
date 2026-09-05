@@ -9,6 +9,13 @@ import {
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
 import { renderDocument } from "./document-controller";
+import {
+  ExportController,
+  type ExportDocument,
+  type ExportUri,
+  normalizeTectonicPath,
+  resolveExportDocument,
+} from "./export-controller";
 import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
 import {
   appendUniqueIgnorePatterns,
@@ -133,17 +140,78 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   const foldingRangesChanged = new vscode.EventEmitter<void>();
   const latexWorkshopSessionPrompted = new Set<string>();
   const lineFlash = createLineFlash();
+  const previewSources = new Map<vscode.WebviewPanel, vscode.TextDocument>();
+  const exportOutput = vscode.window.createOutputChannel("Beamer Editor: PDF Export");
+  context.subscriptions.push(lineFlash, foldingRangesChanged, exportOutput);
+
+  const exportController = new ExportController({
+    get isWorkspaceTrusted() {
+      return vscode.workspace.isTrusted;
+    },
+    chooseFormat: async () =>
+      (await vscode.window.showQuickPick(["PDF"], { title: "Beamer Editor: Export" })) === "PDF"
+        ? "pdf"
+        : undefined,
+    chooseOutput: (defaultUri) =>
+      vscode.window.showSaveDialog({
+        defaultUri: defaultUri as vscode.Uri,
+        filters: { PDF: ["pdf"] },
+        title: "Export PDF",
+      }) as Thenable<ExportUri | undefined>,
+    outputExists: async (uri) => {
+      try {
+        await vscode.workspace.fs.stat(uri as vscode.Uri);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    withProgress: (task) =>
+      vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Beamer Editor: PDFを書き出し中",
+          cancellable: true,
+        },
+        (_progress, token) => task(token),
+      ),
+    showInformation: (message, ...actions) =>
+      vscode.window.showInformationMessage(message, ...actions),
+    showError: (message, ...actions) => vscode.window.showErrorMessage(message, ...actions),
+    showWarning: (message) => vscode.window.showWarningMessage(message),
+    openPdf: (uri) => vscode.env.openExternal(uri as vscode.Uri),
+    revealInFileManager: (uri) =>
+      vscode.commands.executeCommand("revealFileInOS", uri as vscode.Uri),
+    openTectonicSettings: () =>
+      vscode.commands.executeCommand("workbench.action.openSettings", "beamerEditor.tectonicPath"),
+    showExportDetails: (detail) => {
+      exportOutput.clear();
+      exportOutput.appendLine(detail);
+      exportOutput.show(true);
+    },
+    uriForFile: (path) => vscode.Uri.file(path) as ExportUri,
+    tectonicPath: (document) => {
+      const value = vscode.workspace
+        .getConfiguration("beamerEditor", document.uri as vscode.Uri)
+        .get<unknown>("tectonicPath");
+      return normalizeTectonicPath(value);
+    },
+    timeoutMs: (document) => {
+      const seconds = vscode.workspace
+        .getConfiguration("beamerEditor", document.uri as vscode.Uri)
+        .get<number>("pdfExport.timeoutSeconds", 300);
+      const normalized = Number.isFinite(seconds) ? Math.trunc(seconds) : 300;
+      return Math.max(5, Math.min(1800, normalized)) * 1000;
+    },
+  });
+  context.subscriptions.push(exportController);
+
   const slideOutlineState = new SlideOutlineState<vscode.TextDocument>();
   const slideOutlineChanged = new vscode.EventEmitter<void>();
   const slideOutlineRefresh = new SlideOutlineRefreshScheduler(slideOutlineState, () =>
     slideOutlineChanged.fire(),
   );
-  context.subscriptions.push(
-    lineFlash,
-    foldingRangesChanged,
-    slideOutlineChanged,
-    slideOutlineRefresh,
-  );
+  context.subscriptions.push(slideOutlineChanged, slideOutlineRefresh);
 
   // lint → Problems パネル・波線(VS-5)。開いている .tex 文書ごとに独立管理する。
   const diagnosticCollection = vscode.languages.createDiagnosticCollection("beamer-editor");
@@ -410,6 +478,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media"), documentDir],
       },
     );
+    previewSources.set(panel, document);
 
     // #94: プレビューが表示されているエディタグループをロックし、他のファイルが同じグループに
     // 開かないようにする(ロック中のグループには新しいエディタが開かない)。ロックはアクティブな
@@ -453,6 +522,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
       },
       () => {
+        previewSources.delete(panel);
         templateWatcher.dispose();
         viewStateSubscription.dispose();
         if (!previewLifecycle.panelDisposed(document.uri, controller)) return;
@@ -602,6 +672,24 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       }
 
       openPreview(editor.document, false);
+    }),
+    vscode.commands.registerCommand("beamerEditor.export", async (uri?: vscode.Uri) => {
+      const isTex = (candidate: vscode.Uri | undefined): candidate is vscode.Uri =>
+        candidate?.scheme === "file" && candidate.fsPath.endsWith(".tex");
+      let explicit: vscode.TextDocument | undefined;
+      if (isTex(uri)) {
+        const sourceUri = uri;
+        explicit =
+          vscode.workspace.textDocuments.find(
+            (document) => document.uri.toString() === sourceUri.toString(),
+          ) ?? (await vscode.workspace.openTextDocument(sourceUri));
+      }
+      const source = resolveExportDocument(
+        explicit,
+        [...previewSources].map(([panel, document]) => ({ active: panel.active, document })),
+        vscode.window.activeTextEditor?.document,
+      );
+      await exportController.export(source as ExportDocument | undefined);
     }),
   );
 

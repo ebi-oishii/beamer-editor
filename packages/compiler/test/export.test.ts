@@ -18,6 +18,17 @@ async function directory(): Promise<string> {
   return value;
 }
 
+/** Poll a file the child processes write, since their only other channel is the pipe under test. */
+async function fileContent(path: string, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = (await readFile(path, "utf8").catch(() => "")).trim();
+    if (value.length > 0) return value;
+    if (Date.now() >= deadline) return value;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 async function source(name = "talk.slide.tex") {
   const dir = await directory();
   const path = join(dir, name);
@@ -302,6 +313,127 @@ describe("exportPdf", () => {
     });
     controller.abort();
     await expect(running).resolves.toMatchObject({ cancelled: true });
+  });
+
+  it("terminates when cancellation races between preflight and abort listener registration", async () => {
+    let aborted = false;
+    const raceSignal = {
+      get aborted() {
+        return aborted;
+      },
+      addEventListener() {
+        aborted = true;
+      },
+      removeEventListener() {},
+    } as unknown as AbortSignal;
+    await expect(
+      nodeProcessRunner.run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        cwd: tmpdir(),
+        signal: raceSignal,
+      }),
+    ).resolves.toMatchObject({ cancelled: true });
+  });
+
+  it("times out a process that ignores SIGTERM and escalates until the promise settles", async () => {
+    const started = Date.now();
+    const value = await nodeProcessRunner.run(
+      process.execPath,
+      ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+      { cwd: tmpdir(), timeoutMs: 250 },
+    );
+    expect(value).toMatchObject({ timedOut: true, cancelled: false });
+    expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
+  it("releases inherited output pipes after the hard timeout so a surviving grandchild sees EPIPE", async () => {
+    const dir = await directory();
+    const markerPath = join(dir, "epipe.marker");
+    const pidPath = join(dir, "grandchild.pid");
+    const grandchildScript = join(dir, "grandchild.cjs");
+    const childScript = join(dir, "child.cjs");
+    // Writing straight to fd 1 keeps the observation synchronous: while the
+    // runner still holds the read end the write succeeds, and the moment the
+    // read end is destroyed it throws EPIPE. The marker file is the only
+    // channel left, because this pipe is exactly what the test is breaking.
+    await writeFile(
+      grandchildScript,
+      [
+        "const fs = require('node:fs');",
+        "const marker = process.argv[2];",
+        "const timer = setInterval(() => {",
+        "  try {",
+        "    fs.writeSync(1, '.');",
+        "  } catch (error) {",
+        "    clearInterval(timer);",
+        "    clearTimeout(bail);",
+        "    fs.writeFileSync(marker, String(error.code ?? error.message));",
+        "  }",
+        "}, 25);",
+        "const bail = setTimeout(() => clearInterval(timer), 8_000);",
+      ].join("\n"),
+    );
+    // The child ignores SIGTERM so the runner has to escalate, and hands the
+    // inherited pipes to a grandchild that outlives the SIGKILL. That is the
+    // shape that used to keep the descriptors open forever.
+    await writeFile(
+      childScript,
+      [
+        "const { spawn } = require('node:child_process');",
+        "const fs = require('node:fs');",
+        "const [, , script, marker, pidPath] = process.argv;",
+        "const grandchild = spawn(process.execPath, [script, marker], { stdio: 'inherit' });",
+        "fs.writeFileSync(pidPath, String(grandchild.pid));",
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    );
+    const started = Date.now();
+    try {
+      const value = await nodeProcessRunner.run(
+        process.execPath,
+        [childScript, grandchildScript, markerPath, pidPath],
+        { cwd: tmpdir(), timeoutMs: 250 },
+      );
+      expect(value).toMatchObject({ timedOut: true, cancelled: false, exitCode: null });
+      expect(Date.now() - started).toBeLessThan(4_000);
+      // Asserted before the cleanup below kills anything: the grandchild can
+      // only reach EPIPE because the runner released the read end itself.
+      await expect(fileContent(markerPath, 2_000)).resolves.toBe("EPIPE");
+    } finally {
+      const pid = Number(await fileContent(pidPath, 0));
+      if (Number.isSafeInteger(pid) && pid > 0) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // The grandchild may already have exited on its own.
+        }
+      }
+    }
+  }, 10_000);
+
+  it("uses separate version and compile timeouts and maps compile timeout without replacing output", async () => {
+    const input = await source();
+    const output = join(input.dir, "talk.pdf");
+    await writeFile(output, "old PDF");
+    const timeoutValues: Array<number | undefined> = [];
+    let call = 0;
+    const runner: ProcessRunner = {
+      async run(_command, _args, options) {
+        timeoutValues.push(options.timeoutMs);
+        return call++ === 0 ? result() : result({ timedOut: true, stderr: "stuck" });
+      },
+    };
+    await expect(
+      exportPdf(
+        { inputPath: input.path, outputPath: output, overwrite: true, timeoutMs: 12_345 },
+        { runner },
+      ),
+    ).rejects.toMatchObject({
+      code: "E_COMPILE",
+      message: expect.stringContaining("12.345 秒でタイムアウト"),
+    });
+    expect(timeoutValues).toEqual([10_000, 12_345]);
+    expect(await readFile(output, "utf8")).toBe("old PDF");
   });
 
   it("rejects missing input and an unusable Tectonic version", async () => {
