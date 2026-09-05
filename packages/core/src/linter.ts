@@ -11,6 +11,7 @@ import {
 } from "./ast.js";
 import type { FileExistsProbe, ImageFormat, ImageProbe } from "./image.js";
 import { parseDeck } from "./parser.js";
+import type { TemplateStatus } from "./template.js";
 
 export type LintCode =
   | "L001"
@@ -29,7 +30,9 @@ export type LintCode =
   | "L018"
   | "L019"
   | "L020"
-  | "L021";
+  | "L021"
+  | "L022"
+  | "L023";
 
 export type LintSeverity = "info" | "warning" | "error";
 
@@ -47,6 +50,11 @@ export interface LintOptions {
   fileExists?: FileExistsProbe;
   /** Optional external dependency used for deckcanvas image validation. */
   probeImage?: ImageProbe;
+  /**
+   * preamble-extra のテンプレート参照(\usetheme / \usepackage)をホストが解決した結果。
+   * 未指定ならテンプレートの lint(L022 / L023)は行わない。
+   */
+  templates?: readonly TemplateStatus[];
 }
 
 export const CURRENT_DECK_SOURCE_VERSION = 1;
@@ -868,6 +876,53 @@ function lintCanvasImages(doc: DeckDocument, probeImage: ImageProbe | undefined)
 }
 
 /**
+ * テンプレート参照の解決結果を診断にする。
+ * - `\usepackage{templates/...}` のようにパスで指す参照が見つからない → L022 warning
+ * - `\usetheme{X}` が見つからない → L022 info(TeX 配布に含まれるテーマならコンパイルは通る)
+ * - パス無しの `\usepackage{name}` が見つからない → 通常のパッケージとみなして報告しない
+ * - 見つかった `.sty` が参照する画像が無い → L023 warning
+ */
+function lintTemplates(statuses: readonly TemplateStatus[] | undefined): LintDiagnostic[] {
+  if (statuses === undefined) return [];
+  const diagnostics: LintDiagnostic[] = [];
+  for (const { reference, resolvedPath, missingImages } of statuses) {
+    if (resolvedPath === null) {
+      if (reference.kind === "theme") {
+        diagnostics.push(
+          diagnostic(
+            "L022",
+            "info",
+            `テンプレート ${reference.file} がデッキのディレクトリ配下(直下または templates/*/)に見つかりません。TeX 配布に含まれるテーマならコンパイルは通ります`,
+            reference.span,
+          ),
+        );
+      } else if (reference.name.includes("/")) {
+        diagnostics.push(
+          diagnostic(
+            "L022",
+            "warning",
+            `テンプレート ${reference.file} が見つかりません(デッキのディレクトリ基準)`,
+            reference.span,
+          ),
+        );
+      }
+      continue;
+    }
+    for (const image of missingImages) {
+      diagnostics.push(
+        diagnostic(
+          "L023",
+          "warning",
+          `テンプレート ${resolvedPath} が参照する画像 ${image} が見つかりません(デッキのディレクトリ基準)`,
+          reference.span,
+        ),
+      );
+    }
+  }
+  return diagnostics;
+}
+
+/**
  * AST と、必要に応じて注入された外部プローブで lint 規則を実行する。
  */
 export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiagnostic[] {
@@ -885,6 +940,7 @@ export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiag
     ...lintStyle(doc),
     ...lintImageReferences(doc, options.fileExists),
     ...lintCanvasImages(doc, options.probeImage),
+    ...lintTemplates(options.templates),
   ];
 
   return diagnostics.sort((a, b) => a.span.start - b.span.start || a.code.localeCompare(b.code));

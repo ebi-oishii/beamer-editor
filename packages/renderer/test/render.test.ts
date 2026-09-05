@@ -109,6 +109,64 @@ describe("renderDeck: kitchen-sink.tex", () => {
   });
 });
 
+describe("renderDeck: テンプレート由来の土台スタイル", () => {
+  const baseStyle = {
+    colors: { structure: "123456" as const, background: "FAFAFA" as const },
+    fonts: { main: "Corp Sans" },
+    logo: {
+      path: "templates/corporate/assets/logo.png",
+      placement: { kind: "corner" as const, width: { unit: "paperwidth" as const, value: 0.1 } },
+    },
+    background: { path: "templates/corporate/assets/background.png" },
+    footer: "ACME <Confidential>",
+  };
+
+  it("土台の色・フォント・背景・右下ロゴ・フッターがデッキに効く", () => {
+    const deck = renderDeck(parseDeck(fixture("basic.tex")), undefined, { baseStyle });
+    expect(deck.css).toContain("--deck-structure: #123456;");
+    expect(deck.css).toContain("--deck-background: #FAFAFA;");
+    expect(deck.css).toContain('--deck-font-main: "Corp Sans",');
+    const html = deck.frames[1]?.html ?? "";
+    expect(html).toContain(
+      '<img class="deck-background" src="templates/corporate/assets/background.png">',
+    );
+    expect(html).toContain(
+      '<img class="deck-logo" src="templates/corporate/assets/logo.png" style="right:2%;bottom:3%;width:10.00%">',
+    );
+    expect(html).toContain("<span>ACME &lt;Confidential&gt;</span>");
+  });
+
+  it("デッキの %% style 領域は土台を上書きし、\\decklogo は本文領域座標で置く", () => {
+    const deck = renderDeck(parseDeck(fixture("styled.tex")), undefined, { baseStyle });
+    expect(deck.css).toContain("--deck-structure: #0F62FE;");
+    expect(deck.css).not.toContain("#123456");
+    expect(deck.css).toContain("--deck-background: #FAFAFA;");
+    const html = deck.frames[1]?.html ?? "";
+    expect(html).toMatch(/<img class="deck-logo" src="assets\/logo.png" style="left:/);
+    expect(html).not.toContain("right:2%");
+    // フッターは %% style の \\deckfooter が勝つ。
+    expect(html).toContain("ACME Corp.");
+    expect(html).not.toContain("Confidential&gt;");
+  });
+
+  it("PDF の背景は <img> にできないので出さず、pt 幅のロゴはスライド幅の % に変える", () => {
+    const deck = renderDeck(parseDeck(fixture("basic.tex")), undefined, {
+      baseStyle: {
+        colors: {},
+        fonts: {},
+        background: { path: "bg.pdf" },
+        logo: {
+          path: "logo.png",
+          placement: { kind: "corner", width: { unit: "pt", value: 45.524 } },
+        },
+      },
+    });
+    const html = deck.frames[0]?.html ?? "";
+    expect(html).not.toContain("deck-background");
+    expect(html).toContain("width:10.00%");
+  });
+});
+
 describe("renderDeck: styled.tex(スタイル語彙)", () => {
   const deck = renderDeck(parseDeck(fixture("styled.tex")));
 

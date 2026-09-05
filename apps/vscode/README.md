@@ -36,6 +36,12 @@ managed 文書をアクティブなエディタで開くと、自動プレビュ
 
 LaTeX Workshop が入っている環境で managed file を初めて開くと、Beamer Editor は自動監視と保存時自動ビルドの ignore リストへ managed patterns を追加するか確認します。書込先は managedFiles と各 Workshop 設定のうち、より具体的な scope (Workspace Folder / Workspace / Global) です。明示的に確認した場合だけ追加され、通常の `.tex` の既定自動ビルド設定は変わりません。「今後表示しない」は同じ workspace scope と managed pattern の組合せに対して永続化されます。managed `.slide.tex` でも language id は `latex` のままなので、LaTeX Workshop の手動 **Build LaTeX project** による PDF build は引き続き利用できます。
 
+## テンプレート(.sty と画像)
+
+会社・組織の Beamer テーマは、そのままデッキのディレクトリ配下に置いて読めます。デッキと同じディレクトリに `beamertheme<Name>.sty` と画像を置いて `%% preamble-extra` に `\usetheme{Name}` を書くか、`templates/<name>/` に一式を置いて `\usepackage{templates/<name>/beamertheme<name>}` を書きます。`.sty` 内の画像パスはデッキのディレクトリ基準です(`templates/<name>/assets/logo.png` など)。
+
+プレビューには `.sty` の `\definecolor` / `\setbeamercolor`(structure・alerted text・example text・normal text・background canvas)、`\setsansfont` / `\setmonofont`、`\logo`、`\usebackgroundtemplate` から取れる色・フォント・ロゴ・背景だけが近似で反映されます。それ以外の様式は PDF にだけ効きます。`.sty` や画像を変更するとプレビューと診断は自動で更新されます。参照先の `.sty` や画像が無い場合は Problems パネルに L022 / L023 が出ます。見本は `fixtures/templates/corporate/` と `fixtures/templated.tex` です。
+
 PDF 書き出し(tectonic)は Phase 6 で追加予定です。
 
 このリポジトリで LaTeX Workshop を併用する場合の、混在 workspace と専用 workspace の設定方針は[エディタセットアップ](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/editor-setup.md)を参照してください。

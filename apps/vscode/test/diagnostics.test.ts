@@ -260,3 +260,38 @@ describe("LintController", () => {
     }
   });
 });
+
+describe("LintController: lintOptionsFor", () => {
+  it("文書ごとの lint オプション(テンプレート解決結果)が診断へ反映される", () => {
+    const { sink, byUri } = makeSink();
+    const doc = makeDoc();
+    doc.text = deckSource("\\begin{frame}{One}\nfirst\n\\end{frame}").replace(
+      "\\begin{document}",
+      "%% preamble-extra:begin\n\\usepackage{templates/acme/beamerthemeacme}\n%% preamble-extra:end\n\\begin{document}",
+    );
+    const start = doc.text.indexOf("\\usepackage");
+    const controller = new LintController<FakeDoc>(
+      makeEvents().events,
+      sink,
+      [doc],
+      undefined,
+      () => ({
+        templates: [
+          {
+            reference: {
+              kind: "package",
+              name: "templates/acme/beamerthemeacme",
+              file: "templates/acme/beamerthemeacme.sty",
+              span: { start, end: start + "\\usepackage{templates/acme/beamerthemeacme}".length },
+            },
+            resolvedPath: null,
+            missingImages: [],
+          },
+        ],
+      }),
+    );
+    const codes = (byUri.get(doc.uri.toString()) ?? []).map((d) => d.code);
+    expect(codes).toContain("L022");
+    controller.dispose();
+  });
+});

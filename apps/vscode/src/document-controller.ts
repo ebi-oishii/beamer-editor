@@ -4,10 +4,12 @@
  */
 
 import {
+  type DeckDocument,
   type ExpandDiagnostic,
   type ExpansionMap,
   expandDeck,
   mapExpandedRangeToSourceExact,
+  type PreviewStyle,
 } from "@beamer-editor/core";
 import { type RenderedDeck, renderDeck } from "@beamer-editor/renderer";
 
@@ -24,10 +26,23 @@ export interface RenderOutcome {
   expandDiagnostics: ExpandDiagnostic[];
 }
 
+export interface RenderDocumentOptions {
+  /**
+   * テンプレート(.sty)や preamble-extra から抽出する土台スタイル(#70)。ファイル解決は
+   * ホストの仕事なので関数で受け取る。未指定なら `%% style` 領域だけで描く。
+   */
+  baseStyle?: (doc: DeckDocument) => PreviewStyle | undefined;
+}
+
 /** 全文をマクロ展開し、展開後 AST を HTML デッキへレンダリングする。 */
-export function renderDocument(text: string, version: number): RenderOutcome {
+export function renderDocument(
+  text: string,
+  version: number,
+  options: RenderDocumentOptions = {},
+): RenderOutcome {
   const expanded = expandDeck(text);
-  const rendered = renderDeck(expanded.doc);
+  const baseStyle = options.baseStyle?.(expanded.doc);
+  const rendered = renderDeck(expanded.doc, undefined, baseStyle ? { baseStyle } : {});
   return {
     deck: {
       ...rendered,

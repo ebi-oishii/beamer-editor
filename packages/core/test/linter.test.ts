@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { lintDeck, lintSource, parseDeck } from "../src/index.js";
+import { templateReferencesOf } from "../src/template.js";
 
 function deck(body: string, preamble = ""): string {
   return `%% deck-source-version: 1
@@ -1007,3 +1008,54 @@ function sourceText(
   if (!diagnostic) throw new Error("expected diagnostic");
   return source.slice(diagnostic.span.start, diagnostic.span.end);
 }
+
+describe("L022 / L023: テンプレート参照", () => {
+  const source = deck(`
+\\begin{frame}{T}x\\end{frame}`).replace(
+    "\\begin{document}",
+    `%% preamble-extra:begin
+\\usetheme{corporate}
+\\usepackage{templates/acme/beamerthemeacme}
+\\usepackage{tikz}
+%% preamble-extra:end
+\\begin{document}`,
+  );
+  const doc = parseDeck(source);
+  const [theme, packagePath, plain] = templateReferencesOf(doc);
+  if (!theme || !packagePath || !plain) throw new Error("fixture refs missing");
+
+  it("解決結果が無ければ何も報告しない", () => {
+    expect(lintDeck(doc).filter((d) => d.code === "L022" || d.code === "L023")).toEqual([]);
+  });
+
+  it("見つからないテンプレートは種類で深刻度を分け、素の \\usepackage は報告しない", () => {
+    const diagnostics = lintDeck(doc, {
+      templates: [
+        { reference: theme, resolvedPath: null, missingImages: [] },
+        { reference: packagePath, resolvedPath: null, missingImages: [] },
+        { reference: plain, resolvedPath: null, missingImages: [] },
+      ],
+    }).filter((d) => d.code === "L022");
+    expect(diagnostics.map((d) => [d.severity, sourceText(source, d)])).toEqual([
+      ["info", "\\usetheme{corporate}"],
+      ["warning", "\\usepackage{templates/acme/beamerthemeacme}"],
+    ]);
+    expect(diagnostics[1]?.message).toContain("templates/acme/beamerthemeacme.sty");
+  });
+
+  it("見つかった .sty が参照する画像の欠損は L023 で参照行に報告する", () => {
+    const diagnostics = lintDeck(doc, {
+      templates: [
+        {
+          reference: theme,
+          resolvedPath: "beamerthemecorporate.sty",
+          missingImages: ["assets/logo.png"],
+        },
+      ],
+    }).filter((d) => d.code === "L023");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("beamerthemecorporate.sty");
+    expect(diagnostics[0]?.message).toContain("assets/logo.png");
+    expect(sourceText(source, diagnostics[0])).toBe("\\usetheme{corporate}");
+  });
+});

@@ -1,10 +1,13 @@
+import * as path from "node:path";
 import {
   canvasPositionReplacement,
   type LintDiagnostic,
   type LintSeverity,
+  parseDeck,
 } from "@beamer-editor/core";
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
+import { renderDocument } from "./document-controller";
 import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
 import {
   appendUniqueIgnorePatterns,
@@ -19,6 +22,7 @@ import {
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
 import { resolveSourceViewColumn } from "./source-navigation";
+import { baseStyleOf, nodeTemplateFileSystem, templateStatuses } from "./templates";
 import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 
 let previewController: PreviewController | undefined;
@@ -139,6 +143,16 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     },
     vscode.workspace.textDocuments,
     (document) => isManaged(document),
+    // テンプレート(.sty)参照の解決結果を L022 / L023 へ渡す(#70)。
+    (document) =>
+      document.uri.scheme === "file"
+        ? {
+            templates: templateStatuses(
+              parseDeck(document.getText()),
+              nodeTemplateFileSystem(path.dirname(document.uri.fsPath)),
+            ),
+          }
+        : {},
   );
   context.subscriptions.push(diagnosticCollection, lintController);
 
@@ -329,6 +343,12 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       panel.webview
         .asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", name))
         .toString();
+    // テンプレート(.sty)と preamble-extra から土台スタイルを取り、%% style で上書きする(#70)。
+    const templateFs = nodeTemplateFileSystem(path.dirname(document.uri.fsPath));
+    // .sty や画像が変わったらプレビューと診断を作り直す(キャッシュは持たない)。
+    const templateWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(documentDir, "**/*.{sty,png,jpg,jpeg,pdf}"),
+    );
     const controller = new PreviewController(
       panel,
       { scriptUri: mediaUri("webview.js"), styleUri: mediaUri("webview.css") },
@@ -337,10 +357,13 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
       },
       () => {
+        templateWatcher.dispose();
         if (!previewLifecycle.panelDisposed(document.uri, controller)) return;
         if (previewController === controller) previewController = undefined;
       },
       {
+        render: (text, version) =>
+          renderDocument(text, version, { baseStyle: (doc) => baseStyleOf(doc, templateFs) }),
         onError: (message) => {
           void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
         },
@@ -388,6 +411,14 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         },
       },
     );
+    const refreshTemplates = () => {
+      controller.refresh();
+      lintController.refresh(vscode.workspace.textDocuments);
+    };
+    templateWatcher.onDidChange(refreshTemplates);
+    templateWatcher.onDidCreate(refreshTemplates);
+    templateWatcher.onDidDelete(refreshTemplates);
+    context.subscriptions.push(templateWatcher);
     previewLifecycle.register(document.uri, controller, document, automatic);
     previewController = controller;
   }

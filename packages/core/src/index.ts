@@ -5,3 +5,4 @@ export * from "./formatter.js";
 export * from "./image.js";
 export * from "./linter.js";
 export * from "./parser.js";
+export * from "./template.js";

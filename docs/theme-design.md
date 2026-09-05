@@ -8,7 +8,8 @@
 
 - 実物の社用テンプレ(PowerPoint)があり、早めに使いたい
 - 日本語フォントは Noto Sans CJK を標準とする
-- **事前にテーマパックを整備・配布する方式は採らない。** スタイルはデッキごとに、その場で合わせる(本書の初版が提案したテーマパック案は「幾何まで変える本格テーマが必要になったら」の将来候補へ降格)
+- **ツール専用のテーマパック形式は作らない。** スタイルはデッキごとに、その場で合わせる(本書の初版が提案したテーマパック案は「幾何まで変える本格テーマが必要になったら」の将来候補へ降格)
+- **既存の Beamer テーマ(`.sty` + 画像)はそのまま読む(2026-09-05、#70)。** 会社・大学のテーマは `beamertheme<Name>.sty` と画像のフォルダとして配布され、プロジェクトへコピーして `\usetheme` / `\usepackage` で読むのが実態なので、その書き方をそのまま受け入れる(§2.1)
 
 ## 1. 原則: スタイルにも「サブセット + 生」の二層を適用する
 
@@ -17,7 +18,7 @@
 | 層 | 置き場 | ツールの理解 | プレビュー | PDF |
 |---|---|---|---|---|
 | **スタイル語彙**(§2) | `%% style` 領域 | 完全理解 | **即座に追従**(色・フォント・ロゴ・フッター) | 反映 |
-| **生スタイル** | `%% preamble-extra` 領域 | 素通し | 反映されない(近似のまま) | **完全に反映** |
+| **生スタイル** | `%% preamble-extra` 領域とテンプレート `.sty` | 素通し(色・フォント・ロゴ・背景だけ標準記法から抽出) | 色・フォント・ロゴ・背景を近似で反映。それ以外は反映されない | **完全に反映** |
 
 - スタイルは**デッキのソースに書く**。外部ファイル・レジストリ・インストールは不要。AI がその場で書け、diff で見え、git で一緒に運ばれる
 - 本文の編集語彙(itemize・block・deckcanvas 等)はスタイルによって一切変わらない。AI・パーサ・SKILL.md の本文知識はスタイル非依存のまま
@@ -51,6 +52,18 @@
 
 - **L020**: `%% style` 領域に語彙外の記述(不明なコマンド・不正な役割名・不正な色値・許容外のキー)。**error**(未定義マクロはコンパイルエラーになるため事前に検出する)
 - ロゴ画像の存在は L004、`deck*` の再定義禁止は L016 をそのまま適用
+
+### 2.1 テンプレート(`.sty` + 画像)の読み込み
+
+会社・組織の Beamer テーマを、Beamer 標準の書き方のまま読む。専用の語彙・メタデータ・設定は無い。
+
+- **配置**: デッキのディレクトリ配下に置く。デッキと同じディレクトリに `beamertheme<Name>.sty` と画像を置くか、`templates/<name>/` に一式(`.sty` と `assets/`)を置く。配下に限るのは、Webview のリソース許可とコンパイル時の CWD がデッキのディレクトリだから
+- **指定**: `%% preamble-extra` に `\usetheme{Name}`(同じディレクトリ)または `\usepackage{templates/<name>/beamertheme<name>}`(サブフォルダ)を書く。テーマの README に書いてある行をそのまま貼れる
+- **画像パス**: `.sty` 内の `\includegraphics` は TeX の規則どおりコンパイル時の CWD(= デッキのディレクトリ)基準。`templates/<name>/assets/...` のように書く
+- **プレビュー**: `.sty` と preamble-extra から `\definecolor` / `\colorlet`、`\setbeamercolor` の structure・alerted text・example text・normal text・background canvas、`\setsansfont` / `\setmainfont` / `\setmonofont`、`\logo{\includegraphics...}`(`\pgfdeclareimage` + `\pgfuseimage` 含む)、`\usebackgroundtemplate` / `\setbeamertemplate{background canvas}` を抽出して近似する。`%% style` 領域はこれを上書きする。footline や表紙の様式など、それ以外は PDF 専用(近似の限界は Phase 6 のコンパイル画像で埋める)。PDF 形式の背景・ロゴはプレビューに出ない
+- **診断**: 参照先 `.sty` が無い(L022)、`.sty` が参照する画像が無い(L023)をデッキ側の参照行に出す。`\usetheme{X}` の不在は info(TeX 配布に含まれるテーマならコンパイルは通る)、パスで指した `\usepackage` の不在は warning
+- **更新**: `.sty` や画像を変えるとプレビューと診断を作り直す(キャッシュは持たない)
+- 見本: `fixtures/templates/corporate/` と `fixtures/templated.tex`
 
 ## 3. 「この見本に合わせて」— AI によるその場対応
 
@@ -98,6 +111,7 @@ Phase 5(VS Code シェル)と並行可。
 | S1 | スタイル語彙 v1: TeX 側 deck* スタイルマクロ + パーサの style 領域 + renderer の CSS 変数/ロゴ/フッター + `styled.tex` fixture。**実装済み(2026-07-14)**。L020 の lint 化は Phase 2(パーサは語彙外を unknown-style の生ブロックとして保持済み)。TeX 側はフォント不在・不正値を DECKSTYLE 行としてログに出す | M | Phase 1 |
 | S2 | Noto Sans CJK: `\deckfont` のフォント解決・`deck fonts fetch`・日本語 fixture。**実装済(2026-07-19)**。`deck-style-preamble.tex` に xeCJK 統合、`packages/cli` が Noto Sans CJK JP を取得・キャッシュ・配置、renderer は和文ローカルフォントへフォールバック。`fixtures/japanese.tex` を tectonic で警告 0 コンパイル確認 | S〜M | tectonic |
 | S3 | 「見本に合わせて」ワークフロー: pptx からの色・フォント抽出補助、指示パターンの SKILL 追加、実物の社用テンプレで実演 | S〜M | S1, S2, 実物の PPT |
+| S4 | テンプレート(`.sty` + 画像)の読み込み(§2.1、#70): preamble-extra の `\usetheme` / `\usepackage` を解決し、標準記法から色・フォント・ロゴ・背景を抽出してプレビューへ、L022 / L023、`.sty` 変更の監視、`templated.tex` fixture。**実装済(2026-09-05)**。コンパイル画像フォールバックと PDF 書き出しの一時ディレクトリへのテンプレート同梱は Phase 6 / #73 側 | M | S1 |
 
 将来候補(必要になったら): 幾何まで変える本格テーマ(タイトル帯高の変更等)。その場合はテーマごとの実測 metrics(`deck theme measure`)が必要になる——本書初版のテーマパック案はこの時の設計として保持する。
 

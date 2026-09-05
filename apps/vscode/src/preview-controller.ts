@@ -208,6 +208,11 @@ export class PreviewController implements vscode.Disposable {
     return this.latest;
   }
 
+  /** 文書以外の入力(テンプレートの .sty や画像)が変わったときに再描画する。 */
+  refresh(): void {
+    this.sendDeck();
+  }
+
   private handleMessage(raw: unknown): void {
     const msg = parseWebviewToExtension(raw);
     if (!msg) return;
