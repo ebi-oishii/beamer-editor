@@ -6,8 +6,8 @@ import { parseDeck } from "../src/parser.js";
 
 const fixture = (name: string) => readFileSync(join(__dirname, "../../../fixtures", name), "utf8");
 
-describe("parseDeck: basic.tex", () => {
-  const doc = parseDeck(fixture("basic.tex"));
+describe("parseDeck: basic.slide.tex", () => {
+  const doc = parseDeck(fixture("basic.slide.tex"));
 
   it("メタデータと文書属性を読む", () => {
     expect(doc.aspectRatio).toBe("169");
@@ -133,8 +133,8 @@ describe("parseDeck: canvas top-level items", () => {
   });
 });
 
-describe("parseDeck: kitchen-sink.tex", () => {
-  const doc = parseDeck(fixture("kitchen-sink.tex"));
+describe("parseDeck: kitchen-sink.slide.tex", () => {
+  const doc = parseDeck(fixture("kitchen-sink.slide.tex"));
   const frames = framesOf(doc);
 
   it("全フレームが列挙できる(生フレーム込み)", () => {
@@ -179,8 +179,8 @@ describe("parseDeck: kitchen-sink.tex", () => {
   });
 });
 
-describe("parseDeck: canvas.tex", () => {
-  const doc = parseDeck(fixture("canvas.tex"));
+describe("parseDeck: canvas.slide.tex", () => {
+  const doc = parseDeck(fixture("canvas.slide.tex"));
   const frames = framesOf(doc);
 
   it("キャンバスフレームを判定できる", () => {
@@ -205,7 +205,7 @@ describe("parseDeck: canvas.tex", () => {
   });
 
   it("許可外の decktext サイズは安全な値へフォールバックし、宣言値を保持する", () => {
-    const source = fixture("canvas.tex").replace("size=normal", "size=huge");
+    const source = fixture("canvas.slide.tex").replace("size=normal", "size=huge");
     const frame = framesOf(parseDeck(source))[1];
     if (frame?.type !== "frame") throw new Error("expected frame");
     const canvas = frame.body.find((block) => block.type === "canvas");
@@ -219,7 +219,7 @@ describe("parseDeck: canvas.tex", () => {
   });
 
   it("deckimage の size キーは許可せず、生ブロックとして原文を保持する", () => {
-    const source = fixture("canvas.tex").replace(
+    const source = fixture("canvas.slide.tex").replace(
       "x=0.520,y=0.140,w=0.400",
       "x=0.520,y=0.140,w=0.400,size=huge",
     );
@@ -245,8 +245,8 @@ describe("parseDeck: canvas.tex", () => {
   });
 });
 
-describe("parseDeck: macros.tex", () => {
-  const macroSource = fixture("macros.tex");
+describe("parseDeck: macros.slide.tex", () => {
+  const macroSource = fixture("macros.slide.tex");
   const doc = parseDeck(macroSource);
 
   it("マクロ定義を読む(展開可能性の判定込み)", () => {
@@ -278,7 +278,7 @@ describe("parseDeck: macros.tex", () => {
 
 describe("parseDeck: includegraphics", () => {
   it("width オプション付き画像を読む", () => {
-    const doc = parseDeck(fixture("basic.tex"));
+    const doc = parseDeck(fixture("basic.slide.tex"));
     const frames = framesOf(doc);
     const imgFrame = frames[7];
     if (imgFrame?.type !== "frame") throw new Error("expected frame");
@@ -291,8 +291,8 @@ describe("parseDeck: includegraphics", () => {
   });
 });
 
-describe("parseDeck: styled.tex(%% style 領域)", () => {
-  const doc = parseDeck(fixture("styled.tex"));
+describe("parseDeck: styled.slide.tex(%% style 領域)", () => {
+  const doc = parseDeck(fixture("styled.slide.tex"));
 
   it("スタイル語彙を読む", () => {
     const colors = doc.style.entries.filter((e) => e.type === "styleColor");
@@ -310,7 +310,7 @@ describe("parseDeck: styled.tex(%% style 領域)", () => {
 
   it("語彙外の記述は unknown-style の生ブロックになる", () => {
     const broken = parseDeck(
-      fixture("styled.tex").replace(
+      fixture("styled.slide.tex").replace(
         "\\deckcolor{structure}{0F62FE}",
         "\\deckcolor{structure}{bad}\n\\setbeamercolor{title}{fg=red}",
       ),
@@ -322,7 +322,10 @@ describe("parseDeck: styled.tex(%% style 領域)", () => {
 
   it("decklogo の size キーは許可せず、style 生ブロックとして保持する", () => {
     const broken = parseDeck(
-      fixture("styled.tex").replace("x=0.945,y=0.000,w=0.055", "x=0.945,y=0.000,w=0.055,size=huge"),
+      fixture("styled.slide.tex").replace(
+        "x=0.945,y=0.000,w=0.055",
+        "x=0.945,y=0.000,w=0.055,size=huge",
+      ),
     );
     const raw = broken.style.entries.find(
       (entry) => entry.type === "rawBlock" && entry.tex.includes("size=huge"),
@@ -332,7 +335,7 @@ describe("parseDeck: styled.tex(%% style 領域)", () => {
   });
 
   it("style 領域が無いデッキでは空になる", () => {
-    const doc2 = parseDeck(fixture("basic.tex"));
+    const doc2 = parseDeck(fixture("basic.slide.tex"));
     expect(doc2.style.entries).toHaveLength(0);
   });
 });

@@ -11,7 +11,7 @@
 |---|---|
 | A-1〜A-6 | 反映済み(design.md、subset-spec.md v1.1、ai-protocol.md §7、development-plan.md 改訂版) |
 | B-1 / B-2 | development-plan.md 改訂版に反映(HTML/PDF 比較は Phase 4 の受け入れへ移動、Phase 0.5 を独立工数として計上) |
-| C-1 | **確定: 案①採用**(タイトル帯 1 行固定高、2 行以上は L019 警告)。default テーマ 16:9 を実測(スライド 160×90mm、左右マージン各 1cm、タイトル 1 行時の本文先頭ベースライン上端から 28.58pt、タイトル 1 行追加ごと +18.0pt。計測fixture: `fixtures/measure-body-area.tex`)。境界定数は subset-spec §2.8 の値とfixtureで確定済み |
+| C-1 | **確定: 案①採用**(タイトル帯 1 行固定高、2 行以上は L019 警告)。default テーマ 16:9 を実測(スライド 160×90mm、左右マージン各 1cm、タイトル 1 行時の本文先頭ベースライン上端から 28.58pt、タイトル 1 行追加ごと +18.0pt。計測fixture: `fixtures/measure-body-area.slide.tex`)。境界定数は subset-spec §2.8 の値とfixtureで確定済み |
 | C-2 | 決定: `zref-savepos` 実測を `deck check` に統合(L012 の実装方式)。はみ出し warning / 重なり info(subset-spec §2.8) |
 | C-3 | 決定: `decktext` 内はインライン要素・数式・`\\`・リスト 1 段まで(subset-spec §2.8)。違反は L014(対象を decktext 内部まで拡張) |
 | C-4 | 決定: キャンバスオブジェクトへのオーバーレイは v1 対象外。付与時は生ブロック化 + L014 通知 |
@@ -113,6 +113,6 @@
 2. **文書リコンサイル(A の6件)**。subset-spec を v1.1 とし、キャンバス語彙・座標系・L011〜L016 を本文化。ドッグフーディング開始前にやらないとエージェント自身が旧仕様を読む。
 3. **Phase 0.5 の成果物定義を修正(B-1 / B-2)**。TeX 側 `deckcanvas` パッケージ実装 + PDF 期待画像 + C-2 の savepos 計測方式プロトタイプまで。HTML 比較は Phase 4 受け入れへ。
 4. **AST 型ドラフトのレビュー**。追加要件 §6 の型に C-3 の decktext 内語彙制約、source span、コメント保持を足した `ast.ts` を固める。
-5. **ゴールデンサンプルに canvas fixture を追加**。basic/macros/kitchen-sink に `canvas.tex` を1本。書いてみて窮屈な箇所を仕様へフィードバック。
+5. **ゴールデンサンプルに canvas fixture を追加**。basic/macros/kitchen-sink に `canvas.slide.tex` を1本。書いてみて窮屈な箇所を仕様へフィードバック。
 
 C-2〜C-8 は 2 のリコンサイル時に仕様へ反映すれば、そのまま実装のインプットになる。

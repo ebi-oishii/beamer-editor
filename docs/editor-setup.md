@@ -61,7 +61,7 @@ deck export talk.slide.tex --format pdf
 
 ## 候補比較
 
-2026-08-02に、VS Code 1.131.0上で `fixtures/basic.tex` と `fixtures/canvas.tex` の
+2026-08-02に、VS Code 1.131.0上で `fixtures/basic.slide.tex` と `fixtures/canvas.slide.tex` の
 代表構文をTextMate grammarで検証した。
 
 | 候補 | 基本LaTeX | `%% deck` | `deckcanvas` / `decktext` | 判断 |

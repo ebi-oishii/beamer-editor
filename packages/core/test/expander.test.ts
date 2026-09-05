@@ -22,8 +22,8 @@ function hasUnknownCommand(node: any): boolean {
   return false;
 }
 
-describe("expandDeck: macros.tex", () => {
-  const src = fixture("macros.tex");
+describe("expandDeck: macros.slide.tex", () => {
+  const src = fixture("macros.slide.tex");
   const result = expandDeck(src);
 
   it("展開結果全文がスナップショットと一致する", () => {
