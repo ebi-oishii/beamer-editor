@@ -1,4 +1,5 @@
-import { framesOf, type InlineNode, parseDeck } from "@beamer-editor/core";
+import { expandDeck, framesOf, mapExpandedToSource, parseDeck } from "@beamer-editor/core";
+import { frameTitleText } from "@beamer-editor/renderer";
 import { resolveSourceViewColumn, type VisibleSourceEditor } from "./source-navigation";
 
 /** TreeView が扱う TextDocument の最小面。offset は VS Code と同じ UTF-16 単位。 */
@@ -19,63 +20,37 @@ export interface SlideOutlineEntry<Document extends SlideOutlineDocument = Slide
   readonly start: number;
 }
 
-function inlineText(nodes: readonly InlineNode[], source: string): string {
-  return nodes
-    .map((node, index) => {
-      const previous = nodes[index - 1];
-      // Parser は空白だけの TextNode を省くため、装飾・数式の間にある見出しの
-      // 区切りだけは元ソースの span から戻す。
-      const separator =
-        previous && /\s/.test(source.slice(previous.span.end, node.span.start)) ? " " : "";
-      const text = (() => {
-        switch (node.type) {
-          case "text":
-            return node.value;
-          case "styled":
-          case "colorText":
-          case "href":
-            return inlineText(node.children, source);
-          case "url":
-            return node.url;
-          case "inlineMath":
-            return node.tex;
-          case "lineBreak":
-            return " ";
-          case "rawInline":
-            return node.tex;
-        }
-      })();
-      return separator + text;
-    })
-    .join("")
-    .replace(/\s+/g, " ")
-    .trim();
+/** VS Code の設定変更など、本文に変更の無いイベントでは一覧を再解析しない。 */
+export function hasSlideOutlineContentChanges(contentChanges: readonly unknown[]): boolean {
+  return contentChanges.length > 0;
 }
 
 /**
- * 元ソースを直接 parse して明示的な frame だけを出現順に返す。
- * 展開済み deck は使わないため、マクロ呼び出しから生じる仮想フレームは表示しない。
+ * 明示的に元ソースへ書かれた frame だけを、展開後のプレビュー番号で返す。
+ * マクロ展開で生じた仮想 frame は出さず、タイトル等はプレビューと同じ展開後 frame を使う。
  */
 export function slideOutlineEntries<Document extends SlideOutlineDocument>(
   document: Document,
 ): SlideOutlineEntry<Document>[] {
-  return framesOf(parseDeck(document.getText())).map((frame, index) => {
+  const source = document.getText();
+  const explicitStarts = new Set(framesOf(parseDeck(source)).map((frame) => frame.span.start));
+  const expanded = expandDeck(source);
+  return framesOf(expanded.doc).flatMap((frame, index) => {
+    const start = mapExpandedToSource(expanded.map, frame.span.start);
+    if (!explicitStarts.has(start)) return [];
     const raw = frame.type === "rawFrame";
-    const parsedTitle = raw
-      ? frame.title
-      : frame.title
-        ? inlineText(frame.title, document.getText())
-        : "";
     const frameNumber = index + 1;
-    return {
-      document,
-      version: document.version,
-      frameNumber,
-      title: parsedTitle || `frame ${frameNumber}`,
-      label: raw ? frame.label : frame.options.label,
-      raw,
-      start: frame.span.start,
-    };
+    return [
+      {
+        document,
+        version: document.version,
+        frameNumber,
+        title: frameTitleText(frame, frameNumber),
+        label: raw ? frame.label : frame.options.label,
+        raw,
+        start,
+      },
+    ];
   });
 }
 
@@ -115,6 +90,34 @@ export class SlideOutlineState<Document extends SlideOutlineDocument> {
 
   hasDocument(document: Document): boolean {
     return this.document === document;
+  }
+}
+
+/** 編集中の一覧再構築をまとめる。対象切替・close・dispose 時には必ず取消す。 */
+export class SlideOutlineRefreshScheduler<Document extends SlideOutlineDocument> {
+  private timer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(
+    private readonly state: SlideOutlineState<Document>,
+    private readonly changed: () => void,
+    private readonly delayMs = 120,
+  ) {}
+
+  schedule(document: Document): void {
+    this.cancel();
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      if (this.state.refresh(document)) this.changed();
+    }, this.delayMs);
+  }
+
+  cancel(): void {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  dispose(): void {
+    this.cancel();
   }
 }
 

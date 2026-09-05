@@ -101,8 +101,6 @@ export interface PreviewControllerOptions {
     document: PreviewDocument;
     expectedOptions: string;
   }) => Promise<CanvasEditResult>;
-  /** Preview panel が active になった通知。host 側の view state 更新に使う。 */
-  onDidBecomeActive?: () => void;
   /** フロー要素を deckcanvas へ移す(「自由配置にする」)。sourceSpan は元ソース上の範囲。 */
   detachToCanvas?: (request: {
     frameIndex: number;
@@ -235,9 +233,6 @@ export class PreviewController implements vscode.Disposable {
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
-      this.panel.onDidChangeViewState((event) => {
-        if (event.webviewPanel.active) options.onDidBecomeActive?.();
-      }),
       this.panel.webview.onDidReceiveMessage((raw) => this.handleMessage(raw)),
       events.onDidChangeTextDocument((event) => this.handleDocumentChange(event)),
     ];

@@ -49,8 +49,15 @@ workspace 全体が Beamer Editor 専用で、LaTeX Workshop による自動ビ�
 保持したうえで追加している。managed slide の設定をワークスペース設定へ固定したり、すべての
 LaTeX 自動ビルドを止めたりしない。
 
-PDF が必要な場合は、現時点では LaTeX Workshop の **Build LaTeX project** を明示的に実行するか、
-利用中の LaTeX compiler を直接実行する。Beamer Editor 自身の PDF export は Phase 6 で予定している。
+PDF が必要な場合は、LaTeX Workshop の **Build LaTeX project** を明示的に実行するか、
+利用中の LaTeX compiler を直接実行する。CLI では Tectonic を用いた最小の PDF export も利用できる。
+
+```bash
+deck export talk.slide.tex --format pdf
+```
+
+これはディスク上の TeX を展開・整形・lintせずそのまま Tectonic に渡す。VS Code からの export
+操作やプレビュー内の PDF 表示は引き続き Phase 6 の対象である。
 
 ## 候補比較
 

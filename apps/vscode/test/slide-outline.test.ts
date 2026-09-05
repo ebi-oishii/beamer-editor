@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  hasSlideOutlineContentChanges,
   managedOutlineDocument,
   revealSlideOutlineEntry,
+  SlideOutlineRefreshScheduler,
   SlideOutlineState,
   slideOutlineEntries,
 } from "../src/slide-outline";
@@ -27,11 +29,29 @@ body
     expect(
       entries.map(({ frameNumber, title, label, raw }) => ({ frameNumber, title, label, raw })),
     ).toEqual([
-      { frameNumber: 1, title: "Intro x", label: "intro", raw: false },
+      { frameNumber: 1, title: "Intro$x$", label: "intro", raw: false },
       { frameNumber: 2, title: "Raw title", label: "raw", raw: true },
       { frameNumber: 3, title: "frame 3", label: null, raw: false },
     ]);
     expect(source.slice(entries[0]?.start).startsWith("\\begin{frame}")).toBe(true);
+  });
+
+  it("omits macro-generated virtual frames while preserving preview frame numbers", () => {
+    const source = String.raw`\documentclass{beamer}
+%% macros:begin
+\newcommand{\virtual}{\begin{frame}{Second}\end{frame}}
+%% macros:end
+\begin{document}
+\begin{frame}{First}\end{frame}
+\virtual
+\begin{frame}{Third$x$}\end{frame}
+\end{document}`;
+    const entries = slideOutlineEntries(document(source));
+
+    expect(entries.map(({ frameNumber, title }) => [frameNumber, title])).toEqual([
+      [1, "First"],
+      [3, "Third$x$"],
+    ]);
   });
 
   it("uses UTF-16 source offsets without transforming the input", () => {
@@ -55,6 +75,24 @@ describe("SlideOutlineState", () => {
     expect(state.isCurrent(entry)).toBe(false);
     expect(state.setDocument(undefined)).toBe(true);
     expect(state.getEntries()).toEqual([]);
+  });
+
+  it("refreshes when the same document object has a newer version and reads its text once", () => {
+    let source = "\\begin{frame}{one}\\end{frame}";
+    const current = {
+      uri: { toString: () => "file:///deck.slide.tex" },
+      version: 1,
+      getText: vi.fn(() => source),
+    };
+    const state = new SlideOutlineState<typeof current>();
+    state.setDocument(current);
+    current.getText.mockClear();
+    source = "\\begin{frame}{two}\\end{frame}";
+    current.version = 2;
+
+    expect(state.refresh(current)).toBe(true);
+    expect(state.getEntries()[0]?.title).toBe("two");
+    expect(current.getText).toHaveBeenCalledTimes(1);
   });
 
   it("reveals in an already-visible source column and rejects a version changed while opening", async () => {
@@ -93,10 +131,44 @@ describe("SlideOutlineState", () => {
       },
       reveal,
     });
-    state.setDocument({ ...current, version: 2 });
+    current.version = 2;
     resume?.();
     await expect(opening).resolves.toBe(false);
     expect(revealed).toHaveLength(1);
+  });
+});
+
+describe("SlideOutlineRefreshScheduler", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("ignores empty changes at the caller and renders only the latest debounced version", () => {
+    vi.useFakeTimers();
+    let source = "\\begin{frame}{one}\\end{frame}";
+    const current = {
+      uri: { toString: () => "file:///deck.slide.tex" },
+      version: 1,
+      getText: () => source,
+    };
+    const state = new SlideOutlineState<typeof current>();
+    const changed = vi.fn();
+    state.setDocument(current);
+    const scheduler = new SlideOutlineRefreshScheduler(state, changed);
+
+    expect(hasSlideOutlineContentChanges([])).toBe(false);
+    expect(hasSlideOutlineContentChanges([{}])).toBe(true);
+
+    current.version = 2;
+    scheduler.schedule(current);
+    source = "\\begin{frame}{latest}\\end{frame}";
+    current.version = 3;
+    scheduler.schedule(current);
+    vi.advanceTimersByTime(119);
+    expect(changed).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(state.getEntries()[0]?.title).toBe("latest");
+    scheduler.dispose();
   });
 });
 
@@ -106,9 +178,13 @@ describe("slide outline manifest", () => {
       readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
     ) as {
       activationEvents: string[];
-      contributes: { commands: { command: string }[]; views: { explorer: { id: string }[] } };
+      contributes: {
+        commands: { command: string }[];
+        views: { explorer: { id: string }[] };
+        viewsWelcome: { view: string; when: string }[];
+      };
     };
-    expect(manifest.activationEvents).toContain("onView:beamerEditor.slides");
+    expect(manifest.activationEvents).not.toContain("onView:beamerEditor.slides");
     expect(manifest.contributes.views.explorer).toContainEqual({
       id: "beamerEditor.slides",
       name: "Beamer Slides",
@@ -118,6 +194,11 @@ describe("slide outline manifest", () => {
         (command) => command.command === "beamerEditor.revealSlide",
       ),
     ).toBe(false);
+    expect(manifest.contributes.viewsWelcome).toContainEqual({
+      view: "beamerEditor.slides",
+      when: "!beamerEditor.hasSlideOutlineDocument",
+      contents: "Open a managed Beamer slide to show its frames.",
+    });
   });
 });
 

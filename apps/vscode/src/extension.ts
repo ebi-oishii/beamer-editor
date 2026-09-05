@@ -20,9 +20,10 @@ import {
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
 import {
+  hasSlideOutlineContentChanges,
   managedOutlineDocument,
-  revealSlideOutlineEntry,
   type SlideOutlineEntry,
+  SlideOutlineRefreshScheduler,
   SlideOutlineState,
 } from "./slide-outline";
 import { resolveSourceViewColumn } from "./source-navigation";
@@ -93,6 +94,7 @@ async function jumpToOffset(
   offset: number,
   lineFlash: ReturnType<typeof createLineFlash>,
   fallbackViewColumn: vscode.ViewColumn | undefined,
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   const viewColumn =
     resolveSourceViewColumn(
@@ -107,6 +109,7 @@ async function jumpToOffset(
     viewColumn,
     preserveFocus: false,
   });
+  if (!isCurrent()) return;
   const position = document.positionAt(offset);
   const range = document.lineAt(position.line).range;
   editor.selection = new vscode.Selection(range.start, range.end);
@@ -127,8 +130,15 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   const lineFlash = createLineFlash();
   const slideOutlineState = new SlideOutlineState<vscode.TextDocument>();
   const slideOutlineChanged = new vscode.EventEmitter<void>();
-  context.subscriptions.push(lineFlash, foldingRangesChanged);
-  context.subscriptions.push(slideOutlineChanged);
+  const slideOutlineRefresh = new SlideOutlineRefreshScheduler(slideOutlineState, () =>
+    slideOutlineChanged.fire(),
+  );
+  context.subscriptions.push(
+    lineFlash,
+    foldingRangesChanged,
+    slideOutlineChanged,
+    slideOutlineRefresh,
+  );
 
   // lint → Problems パネル・波線(VS-5)。開いている .tex 文書ごとに独立管理する。
   const diagnosticCollection = vscode.languages.createDiagnosticCollection("beamer-editor");
@@ -182,7 +192,6 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       super(`${entry.frameNumber}. ${entry.title}`, vscode.TreeItemCollapsibleState.None);
       if (entry.label) this.description = `label: ${entry.label}`;
       else if (entry.raw) this.description = "raw";
-      this.contextValue = entry.raw ? "beamerEditor.rawSlide" : "beamerEditor.slide";
       this.tooltip = entry.raw
         ? `${entry.frameNumber}. ${entry.title} (raw frame)`
         : `${entry.frameNumber}. ${entry.title}`;
@@ -203,26 +212,24 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     vscode.window.registerTreeDataProvider("beamerEditor.slides", slideOutlineProvider),
     vscode.commands.registerCommand("beamerEditor.revealSlide", async (item: unknown) => {
       if (!(item instanceof SlideOutlineItem) || !slideOutlineState.isCurrent(item.entry)) return;
-      await revealSlideOutlineEntry(item.entry, slideOutlineState, {
-        visibleEditors: vscode.window.visibleTextEditors.map((editor) => ({
-          documentUri: editor.document.uri,
-          viewColumn: editor.viewColumn,
-        })),
-        fallbackViewColumn: vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One,
-        showTextDocument: (document, viewColumn) =>
-          vscode.window.showTextDocument(document, { viewColumn, preserveFocus: false }),
-        reveal: (editor, offset) => {
-          const position = editor.document.positionAt(offset);
-          const range = editor.document.lineAt(position.line).range;
-          editor.selection = new vscode.Selection(range.start, range.end);
-          editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
-        },
-      });
+      await jumpToOffset(
+        item.entry.document,
+        item.entry.start,
+        lineFlash,
+        vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One,
+        () => slideOutlineState.isCurrent(item.entry),
+      );
     }),
   );
 
   function updateSlideOutline(document: vscode.TextDocument | undefined): void {
+    slideOutlineRefresh.cancel();
     if (slideOutlineState.setDocument(document)) slideOutlineChanged.fire();
+    void vscode.commands.executeCommand(
+      "setContext",
+      "beamerEditor.hasSlideOutlineDocument",
+      document !== undefined,
+    );
   }
 
   const yenCodeActions = new YenBackslashCodeActionProvider();
@@ -383,6 +390,30 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       },
     );
 
+    // #94: プレビューが表示されているエディタグループをロックし、他のファイルが同じグループに
+    // 開かないようにする(ロック中のグループには新しいエディタが開かない)。ロックはアクティブな
+    // グループにしか掛けられないので、パネルが初めてフォーカスされたとき(手動オープン直後か、利用者
+    // がプレビューをクリックしたとき)に 1 回だけ行い、自動オープンでフォーカスを奪わない。
+    // 問題が起きるのは「プレビューがアクティブなときに別ファイルを開く」場面だけなのでこれで足りる。
+    // lockEditorGroup は「その時点でアクティブなグループ」に掛かる。パネル作成直後は workbench 側の
+    // 切り替えが終わっておらずソース側がまだアクティブなことがあるため、アクティブなタブがこの
+    // パネルであることを確かめてから実行する(違うグループをロックしない)。
+    let groupLocked = false;
+    const lockGroupIfActive = (): void => {
+      if (groupLocked || !panel.active) return;
+      if (vscode.window.tabGroups.activeTabGroup.activeTab?.label !== panel.title) return;
+      const enabled =
+        vscode.workspace.getConfiguration("beamerEditor").get<boolean>("preview.lockGroup") ?? true;
+      if (!enabled) return;
+      groupLocked = true;
+      void vscode.commands.executeCommand("workbench.action.lockEditorGroup");
+    };
+    const viewStateSubscription = panel.onDidChangeViewState(() => {
+      lockGroupIfActive();
+      if (panel.active) updateSlideOutline(isManaged(document) ? document : undefined);
+    });
+    lockGroupIfActive();
+
     const mediaUri = (name: string) =>
       panel.webview
         .asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", name))
@@ -395,6 +426,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
       },
       () => {
+        viewStateSubscription.dispose();
         if (!previewLifecycle.panelDisposed(document.uri, controller)) return;
         if (previewController === controller) previewController = undefined;
       },
@@ -471,7 +503,6 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           );
           return (await vscode.workspace.applyEdit(edit)) ? "applied" : "failed";
         },
-        onDidBecomeActive: () => updateSlideOutline(isManaged(document) ? document : undefined),
       },
     );
     previewLifecycle.register(document.uri, controller, document, automatic);
@@ -494,7 +525,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       if (slideOutlineState.hasDocument(document)) updateSlideOutline(undefined);
     }),
     vscode.workspace.onDidChangeTextDocument((event) => {
-      if (slideOutlineState.refresh(event.document)) slideOutlineChanged.fire();
+      if (
+        hasSlideOutlineContentChanges(event.contentChanges) &&
+        slideOutlineState.hasDocument(event.document)
+      )
+        slideOutlineRefresh.schedule(event.document);
     }),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       // Webview focus では editor が undefined になる。対応する panel の view-state

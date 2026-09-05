@@ -157,8 +157,7 @@ describe("PreviewController", () => {
   });
 
   it("releases its listeners and notifies its owner exactly once", () => {
-    const { panel, fireDispose, listenerDisposable, receiveDisposable, viewStateDisposable } =
-      makePanel();
+    const { panel, fireDispose, listenerDisposable, receiveDisposable } = makePanel();
     const { events, disposable } = makeEvents();
     const onDispose = vi.fn();
     const controller = new PreviewController(panel, ASSETS, makeDoc(), events, onDispose);
@@ -168,24 +167,9 @@ describe("PreviewController", () => {
 
     expect(listenerDisposable.dispose).toHaveBeenCalledTimes(1);
     expect(receiveDisposable.dispose).toHaveBeenCalledTimes(1);
-    expect(viewStateDisposable.dispose).toHaveBeenCalledTimes(1);
     expect(disposable.dispose).toHaveBeenCalledTimes(1);
     expect(onDispose).toHaveBeenCalledTimes(1);
     expect(panel.webview.html).toContain('id="app"');
-  });
-
-  it("owns the preview active-state listener and notifies only for active panels", () => {
-    const { panel, fireViewState, fireDispose, viewStateDisposable } = makePanel();
-    const { events } = makeEvents();
-    const onDidBecomeActive = vi.fn();
-    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), { onDidBecomeActive });
-
-    fireViewState(false);
-    fireViewState(true);
-    fireDispose();
-
-    expect(onDidBecomeActive).toHaveBeenCalledTimes(1);
-    expect(viewStateDisposable.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("closes the panel before releasing its resources", () => {
