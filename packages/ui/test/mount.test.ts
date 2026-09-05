@@ -429,7 +429,7 @@ describe("mountPreview", () => {
     ).toBe(true);
   });
 
-  it("Ctrl/Cmd+wheel だけを rAF ごとに一段階ズームし、通常 wheel は妨げない", () => {
+  it("Ctrl/Cmd+wheel は 1 フレーム分の delta を畳んで比例した倍率にし、通常 wheel は妨げない", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const saved: unknown[] = [];
@@ -458,17 +458,18 @@ describe("mountPreview", () => {
     expect(normal.defaultPrevented).toBe(false);
     expect(callbacks).toHaveLength(0);
 
+    // 2 イベント分(合計 -100px = マウス 1 ノッチ相当)を 1 フレームに畳む。
     const zoomIn = new WheelEvent("wheel", {
       bubbles: true,
       cancelable: true,
       ctrlKey: true,
-      deltaY: -1,
+      deltaY: -50,
     });
     const zoomInAgain = new WheelEvent("wheel", {
       bubbles: true,
       cancelable: true,
       ctrlKey: true,
-      deltaY: -1,
+      deltaY: -50,
     });
     act(() => {
       preview.dispatchEvent(zoomIn);
@@ -478,18 +479,29 @@ describe("mountPreview", () => {
     expect(zoomInAgain.defaultPrevented).toBe(true);
     expect(callbacks).toHaveLength(1);
     act(() => callbacks[0]?.(0));
-    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.1 });
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.105 });
 
     const zoomOut = new WheelEvent("wheel", {
       bubbles: true,
       cancelable: true,
       metaKey: true,
-      deltaY: 1,
+      deltaY: 100,
     });
     act(() => preview.dispatchEvent(zoomOut));
     expect(zoomOut.defaultPrevented).toBe(true);
     act(() => callbacks[1]?.(16));
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1 });
+
+    // ピンチのような小さな delta でも 3 桁の丸めで消えずに効く。
+    const pinch = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      deltaY: -5,
+    });
+    act(() => preview.dispatchEvent(pinch));
+    act(() => callbacks[2]?.(32));
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.005 });
   });
 
   it("wheel の倍率変更は現在のスクロール位置を戻さない", () => {
@@ -565,7 +577,7 @@ describe("mountPreview", () => {
     if (!preview || !scroll) throw new Error("preview fixture missing");
     act(() =>
       preview.dispatchEvent(
-        new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -1 }),
+        new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100 }),
       ),
     );
     Object.defineProperties(scroll, {
@@ -575,8 +587,8 @@ describe("mountPreview", () => {
     act(() => resizeCallbacks[0]?.([], {} as ResizeObserver));
     expect(cancelAnimationFrame).not.toHaveBeenCalled();
     act(() => animationCallbacks[0]?.(0));
-    // (500 - (12 + 4) * 2) / 607 = 0.771... を基準に一段階上げる。
-    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 0.87 });
+    // (500 - (12 + 4) * 2) / 607 = 0.771... を基準に、1 ノッチ(100px)ぶん = 約 10% 上げる。
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 0.852 });
   });
 
   it("resize 後も内側は論理サイズのまま、幅合わせの外側だけを再計算する", () => {
