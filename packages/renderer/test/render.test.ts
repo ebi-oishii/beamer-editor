@@ -191,6 +191,58 @@ describe("renderDeck: 自由配置候補の識別属性", () => {
   });
 });
 
+describe("renderDeck: プレースホルダ(#93)", () => {
+  const src = (body: string) => `\\documentclass[aspectratio=169]{beamer}
+\\begin{document}
+\\begin{frame}{T}
+${body}
+\\end{frame}
+\\end{document}
+`;
+  const html = (body: string) => renderDeck(parseDeck(src(body))).frames[0]?.html ?? "";
+
+  it("生ブロックは中身を描かず、環境名だけの箱にする(既定は本文幅 6 割・4:3)", () => {
+    const out = html("\\begin{tikzpicture}\n\\draw (0,0) -- (1,1);\n\\end{tikzpicture}");
+    expect(out).toContain('<div class="raw-block placeholder"');
+    expect(out).toContain('<span class="placeholder-label">tikzpicture</span>');
+    expect(out).toContain("width:60.0%;aspect-ratio:4 / 3");
+    expect(out).not.toContain("<pre>");
+    // 原文はホバーで見られるよう title に残す。
+    expect(out).toContain('title="\\begin{tikzpicture}');
+  });
+
+  it("\\resizebox / width= / height= の指定があれば箱の大きさに使う", () => {
+    expect(
+      html("\\resizebox{0.8\\textwidth}{!}{\\begin{tikzpicture}\\end{tikzpicture}}"),
+    ).toContain("width:80.0%");
+    expect(html("\\begin{tikzpicture}[width=0.5\\linewidth]\\end{tikzpicture}")).toContain(
+      "width:50.0%",
+    );
+    expect(html("\\begin{tikzpicture}[height=0.5\\textheight]\\end{tikzpicture}")).toMatch(
+      /width:60\.0%;height:\d+\.\d+pt/,
+    );
+  });
+
+  it("環境を命令で包んだ生インラインだけの段落(\\resizebox で包んだ tikz など)も箱にし、原文を本文に出さない", () => {
+    const out = html(
+      "\\resizebox{0.8\\textwidth}{!}{%\n\\begin{tikzpicture}\n\\draw (0,0) -- (1,1);\n\\end{tikzpicture}}",
+    );
+    expect(out).toContain('<div class="raw-block placeholder"');
+    expect(out).toContain('<span class="placeholder-label">tikzpicture</span>');
+    expect(out).toContain("width:80.0%");
+    expect(out).not.toContain("raw-inline");
+    // 短い生インライン(命令だけ)は従来どおり段落内に残す。
+    expect(html("before \\textsc{Small} after")).toContain("raw-inline");
+  });
+
+  it("PDF 画像はファイル名だけの箱にし、幅指定を使う", () => {
+    const out = html("\\includegraphics[width=0.4\\textwidth]{figs/plot.pdf}");
+    expect(out).toContain('<div class="image-placeholder placeholder"');
+    expect(out).toContain('<span class="placeholder-label">plot.pdf</span>');
+    expect(out).toContain("width:40.0%;aspect-ratio:4 / 3");
+  });
+});
+
 describe("renderDeck: kitchen-sink.tex", () => {
   const deck = renderDeck(parseDeck(fixture("kitchen-sink.tex")));
 

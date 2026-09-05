@@ -18,6 +18,7 @@ import type {
   InlineNode,
   ListItemNode,
   RawFrameNode,
+  RawInlineNode,
   SourceSpan,
   StyleLogoNode,
 } from "@beamer-editor/core";
@@ -61,6 +62,62 @@ const escapeHtml = (s: string) =>
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+
+/**
+ * コンパイルしないと描けないもの(生ブロック・PDF 画像)の代わりに置く箱(#93)。Overleaf のドラフトモードと
+ * 同じく中身は描かず、ラベル(環境名・ファイル名)だけを中央に出して場所を確保する。原文は title(ホバー)に残す。
+ */
+function placeholderHtml(
+  classes: string,
+  label: string,
+  title: string,
+  style: string,
+  attrs: string,
+): string {
+  const tip = title.length > 400 ? `${title.slice(0, 400)}…` : title;
+  return `<div class="${classes} placeholder"${attrs} style="${style}" title="${escapeHtml(tip)}"><span class="placeholder-label">${escapeHtml(label)}</span></div>`;
+}
+
+/** 大きさの指定が無いときの箱: 本文幅の 6 割、4:3。 */
+const DEFAULT_PLACEHOLDER_WIDTH = 0.6;
+
+function placeholderStyle(widthFactor: number | null, heightPt: number | null): string {
+  const width = `width:${((widthFactor ?? DEFAULT_PLACEHOLDER_WIDTH) * 100).toFixed(1)}%`;
+  return heightPt !== null
+    ? `${width};height:${heightPt.toFixed(1)}pt`
+    : `${width};aspect-ratio:4 / 3`;
+}
+
+/**
+ * 生ブロックの原文にある大きさの指定を拾う(`\\resizebox{0.8\\textwidth}{!}{…}`、`width=0.5\\linewidth`、
+ * `height=0.4\\textheight`)。係数が省かれていれば 1。無ければ null。
+ */
+function placeholderSize(tex: string): { width: number | null; height: number | null } {
+  const factor = (match: RegExpExecArray | null): number | null =>
+    match === null ? null : match[1] ? Number(match[1]) : 1;
+  return {
+    width: factor(
+      /(?:\\resizebox\{|width\s*=\s*)([0-9]*\.?[0-9]+)?\\(?:textwidth|linewidth|columnwidth)/.exec(
+        tex,
+      ),
+    ),
+    height: factor(/height\s*=\s*([0-9]*\.?[0-9]+)?\\(?:textheight|paperheight)/.exec(tex)),
+  };
+}
+
+const basename = (path: string): string => path.split(/[\\/]/).pop() ?? path;
+
+/** 段落の中身が(空白を除いて)環境を含む生インライン 1 つだけなら、それを返す。 */
+function figureLikeRawInline(children: InlineNode[]): RawInlineNode | null {
+  const meaningful = children.filter(
+    (child) => !(child.type === "text" && child.value.trim() === ""),
+  );
+  const only = meaningful[0];
+  return meaningful.length === 1 && only?.type === "rawInline" && /\\begin\{/.test(only.tex)
+    ? only
+    : null;
+}
+const environmentOf = (tex: string): string | null => /\\begin\{([^}]+)\}/.exec(tex)?.[1] ?? null;
 
 const NAMED_COLORS: Record<string, string> = {
   red: "#e74c3c",
@@ -265,8 +322,24 @@ class FrameRenderer {
 
   private renderBlock(block: BlockNode): string {
     switch (block.type) {
-      case "paragraph":
+      case "paragraph": {
+        // `\\resizebox{…}{!}{\\begin{tikzpicture}…}` のように、環境を命令で包んだものは段落内の生インラインになる。
+        // 図として置かれているので、生ブロックと同じ箱にする(原文を本文に流し込まない)。
+        const figure = figureLikeRawInline(block.children);
+        if (figure) {
+          const size = placeholderSize(figure.tex);
+          const heightPt =
+            size.height !== null ? size.height * this.theme.metrics.bodyAreaPt.height : null;
+          return placeholderHtml(
+            "raw-block",
+            environmentOf(figure.tex) ?? "生 LaTeX",
+            figure.tex,
+            placeholderStyle(size.width, heightPt),
+            `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}`,
+          );
+        }
         return `<p${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}>${this.renderInlines(block.children)}</p>`;
+      }
       case "list": {
         const tag = block.kind === "itemize" ? "ul" : "ol";
         const flow = this.flowBlockAttrs(block);
@@ -324,7 +397,17 @@ class FrameRenderer {
         const width = block.width ? `width:${(block.width.factor * 100).toFixed(1)}%` : "";
         const flow = this.flowBlockAttrs(block);
         if (block.path.toLowerCase().endsWith(".pdf")) {
-          return `<div class="image-placeholder"${flow} style="${width}"${this.overlayAttrs(null)}>PDF 画像(部分コンパイルは Phase 6): ${escapeHtml(block.path)}</div>`;
+          // PDF は Webview で描けないので、部分コンパイル(#81)までは箱で場所だけ確保する。
+          const heightPt = block.height
+            ? block.height.factor * this.theme.metrics.bodyAreaPt.width
+            : null;
+          return placeholderHtml(
+            "image-placeholder",
+            basename(block.path),
+            block.path,
+            placeholderStyle(block.width?.factor ?? null, heightPt),
+            `${flow}${this.overlayAttrs(null)}`,
+          );
         }
         return `<img${flow} src="${escapeHtml(block.path)}" style="${width}"${this.overlayAttrs(null)}>`;
       }
@@ -346,11 +429,18 @@ class FrameRenderer {
         return this.renderToc();
       case "canvas":
         return this.renderCanvas(block);
-      case "rawBlock":
-        return (
-          `<div class="raw-block"${this.overlayAttrs(null)}><div class="raw-badge">サブセット外${block.environment ? `: ${escapeHtml(block.environment)}` : ""}(プレビューは Phase 6 で部分コンパイル画像に)</div>` +
-          `<pre>${escapeHtml(block.tex)}</pre></div>`
+      case "rawBlock": {
+        const size = placeholderSize(block.tex);
+        const heightPt =
+          size.height !== null ? size.height * this.theme.metrics.bodyAreaPt.height : null;
+        return placeholderHtml(
+          "raw-block",
+          block.environment ?? "生 LaTeX",
+          block.tex,
+          placeholderStyle(size.width, heightPt),
+          this.overlayAttrs(null),
         );
+      }
     }
   }
 
@@ -385,12 +475,24 @@ class FrameRenderer {
       } else if (item.type === "canvasImage") {
         const attrs = describe("image", item.position);
         if (item.path.toLowerCase().endsWith(".pdf")) {
-          html += `<div class="canvas-item image-placeholder"${attrs} style="${posStyle(item.position.x, item.position.y, item.position.width)}">PDF 画像: ${escapeHtml(item.path)}</div>`;
+          html += placeholderHtml(
+            "canvas-item image-placeholder",
+            basename(item.path),
+            item.path,
+            `${posStyle(item.position.x, item.position.y, item.position.width)};aspect-ratio:4 / 3`,
+            attrs,
+          );
         } else {
           html += `<img class="canvas-item"${attrs} src="${escapeHtml(item.path)}" style="${posStyle(item.position.x, item.position.y, item.position.width)}">`;
         }
       } else {
-        html += `<div class="canvas-item raw-block"><pre>${escapeHtml(item.tex)}</pre></div>`;
+        html += placeholderHtml(
+          "canvas-item raw-block",
+          environmentOf(item.tex) ?? "生 LaTeX",
+          item.tex,
+          "width:30%;aspect-ratio:4 / 3",
+          "",
+        );
       }
     }
     return `${html}</div>`;
