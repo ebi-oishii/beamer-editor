@@ -48,6 +48,15 @@ function listFitsDecktext(list: ListNode, depth: number): boolean {
   );
 }
 
+/** リスト(入れ子含む)のどこかに \\pause があるか。 */
+function listHasPause(list: ListNode): boolean {
+  return list.items.some((item) =>
+    item.children.some(
+      (child) => child.type === "pause" || (child.type === "list" && listHasPause(child)),
+    ),
+  );
+}
+
 /** 自由配置へ移せる種類・構造か(decktext / deckimage に収まるか)。 */
 export function isDetachableBlock(block: BlockNode): boolean {
   switch (block.type) {
@@ -135,6 +144,7 @@ function removalSpan(block: BlockNode, ancestors: readonly Ancestor[]): SourceSp
  * - overlay 付きの block / \\item の中、または \\pause との前後関係が移動先(既存の deckcanvas、
  *   無ければフレーム末尾)と異なる → overlay(移すと表示開始 step が変わる)
  * - 項目の唯一の内容で、その項目に \\pause がある → overlay(項目ごと消すと後続の step が変わる)
+ * - \\pause を含むリスト → overlay(decktext は \\pause を許さない。L014)
  * リスト項目直下の段落(項目の本文そのもの)と deckcanvas の中身は対象外。deckcanvas が 2 つ以上あるフレームは空。
  */
 export function detachStatusesOf(frame: FrameNode): Map<BlockNode, DetachStatus> {
@@ -175,7 +185,9 @@ export function detachStatusesOf(frame: FrameNode): Map<BlockNode, DetachStatus>
               const rendered = item.children.filter((child) => child.type !== "pause");
               return rendered.length === 1 && rendered.length !== item.children.length;
             })();
-          if (soleOfPausedItem) result.set(block, { eligible: false, reason: "overlay" });
+          // \\pause を含むリストをそのまま decktext に入れると L014 になり step も失われる(#98 で扱う)。
+          if (soleOfPausedItem || (block.type === "list" && listHasPause(block)))
+            result.set(block, { eligible: false, reason: "overlay" });
           else
             result.set(block, {
               eligible: true,
@@ -253,6 +265,26 @@ function isBlank(text: string): boolean {
 function detectEol(source: string): string {
   const index = source.indexOf("\n");
   return index > 0 && source[index - 1] === "\r" ? "\r\n" : "\n";
+}
+
+/** `%` コメント(エスケープ `\\%` を除く)を含むか。 */
+function hasComment(text: string): boolean {
+  return /(^|[^\\])(\\\\)*%/.test(text);
+}
+
+/**
+ * 広げた削除範囲(\\item やリストごと)のうちブロック以外の部分にコメントがあれば、ブロックだけを
+ * 取り除く範囲に戻す。移動先へ書くのはブロックだけなので、広げたまま消すとコメントが失われる(§2.4)。
+ * 空の \\item は残るが、コメントの消失よりは軽い。
+ */
+function removeSpanKeepingComments(
+  source: string,
+  block: BlockNode,
+  removeSpan: SourceSpan,
+): SourceSpan {
+  const outside =
+    source.slice(removeSpan.start, block.span.start) + source.slice(block.span.end, removeSpan.end);
+  return hasComment(outside) ? block.span : removeSpan;
 }
 
 /** 段落の span は次の環境の直前まで(改行・字下げ込み)伸びることがあるので、末尾の空白を落とす。 */
@@ -381,7 +413,11 @@ export function detachBlockToCanvas(
     for (const [block, status] of detachStatusesOf(element)) {
       if (!status.eligible) continue;
       if (block.span.start === blockSpan.start && block.span.end === blockSpan.end) {
-        target = { block, removeSpan: status.removeSpan, center: status.center };
+        target = {
+          block,
+          removeSpan: removeSpanKeepingComments(source, block, status.removeSpan),
+          center: status.center,
+        };
         break;
       }
     }

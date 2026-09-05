@@ -341,6 +341,71 @@ describe("detachBlockToCanvas", () => {
     ).not.toBeNull();
   });
 
+  it("広げた削除範囲にコメントがあるときは \\item を残してコメントを失わない", () => {
+    const placement = { x: 0.1, y: 0.1, width: 0.3 };
+    const image = "\\includegraphics[width=0.4\\textwidth]{solo.png}";
+    const cases: [string, string][] = [
+      ["項目の直前", `    % keep me\n    \\item ${image}`],
+      ["項目と対象の間", `    \\item % keep me\n    ${image}`],
+      ["リスト内の末尾", `    \\item ${image}\n    % keep me`],
+    ];
+    for (const [label, items] of cases) {
+      const source = deck(
+        `\\begin{frame}{T}\n  \\begin{itemize}\n${items}\n  \\end{itemize}\n\\end{frame}`,
+      );
+      const result = apply(
+        source,
+        must(detachBlockToCanvas(source, spanOf(source, image), placement)),
+      );
+      expect(result, label).toContain("% keep me");
+      expect(result, label).toContain("\\begin{itemize}");
+      expect(result, label).toContain("\\item");
+      expect(result, label).not.toContain(image);
+      expect(result, label).toContain("\\deckimage[x=0.100,y=0.100,w=0.300]{solo.png}");
+    }
+    const plain = deck(`\\begin{frame}{T}
+  \\begin{itemize}
+    \\item ${image}
+  \\end{itemize}
+\\end{frame}`);
+    expect(detachBlockToCanvas(plain, spanOf(plain, image), placement)?.text).not.toContain(
+      "itemize",
+    );
+  });
+
+  it("\\pause を含むリストは、既存 deckcanvas の後ろにあっても overlay を理由に候補外にする", () => {
+    const source = deck(`\\begin{frame}{T}
+  \\begin{deckcanvas}
+    \\deckimage[x=0.1,y=0.1,w=0.3]{a.png}
+  \\end{deckcanvas}
+  \\begin{itemize}
+    \\item A
+    \\pause
+    \\item B
+  \\end{itemize}
+  \\begin{itemize}
+    \\item C
+  \\end{itemize}
+\\end{frame}`);
+    const frame = parseDeck(source).body.find((element) => element.type === "frame");
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    const statuses = [...detachStatusesOf(frame).entries()].filter(
+      ([block]) => block.type === "list",
+    );
+    expect(statuses.map(([, status]) => status)).toEqual([
+      { eligible: false, reason: "overlay" },
+      // 後ろのリストは \\pause の後にあるので、移動先(deckcanvas の前 = pause 0 個)と一致しない。
+      { eligible: false, reason: "overlay" },
+    ]);
+    const paused = source.slice(
+      source.indexOf("\\begin{itemize}"),
+      source.indexOf("\\end{itemize}") + "\\end{itemize}".length,
+    );
+    expect(
+      detachBlockToCanvas(source, spanOf(source, paused), { x: 0, y: 0, width: 1 }),
+    ).toBeNull();
+  });
+
   it("decktext と同じく 3 段までのリストは取り出せ、候補外の理由は detachStatusesOf が返す", () => {
     const statusesOf = (source: string) => {
       const frame = parseDeck(source).body.find((element) => element.type === "frame");
