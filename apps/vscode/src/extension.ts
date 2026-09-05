@@ -29,6 +29,7 @@ import {
   needsLatexWorkshopIgnorePrompt,
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
+import { PreviewHistoryController } from "./preview-history-controller";
 import { frameLensPositions, sourceHasFrameAt } from "./reveal-slide";
 import {
   hasSlideOutlineContentChanges,
@@ -141,6 +142,19 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   const latexWorkshopSessionPrompted = new Set<string>();
   const lineFlash = createLineFlash();
   const previewSources = new Map<vscode.WebviewPanel, vscode.TextDocument>();
+  const previewHistory = new PreviewHistoryController({
+    activePreview: () => {
+      for (const [panel, document] of previewSources) {
+        if (panel.active) return { panel, sourceUri: document.uri };
+      }
+      return undefined;
+    },
+    openTextDocument: (uri) => vscode.workspace.openTextDocument(uri),
+    showTextDocument: (document) => vscode.window.showTextDocument(document),
+    executeStandardCommand: (command) => vscode.commands.executeCommand(command),
+    isPreviewAlive: (panel) => previewSources.has(panel),
+    revealPreview: (panel, preserveFocus) => panel.reveal(undefined, preserveFocus),
+  });
   const exportOutput = vscode.window.createOutputChannel("Beamer Editor: PDF Export");
   context.subscriptions.push(lineFlash, foldingRangesChanged, exportOutput);
 
@@ -664,6 +678,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   handleManagedDocument(vscode.window.activeTextEditor?.document);
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("beamerEditor.preview.undo", () => previewHistory.undo()),
+    vscode.commands.registerCommand("beamerEditor.preview.redo", () => previewHistory.redo()),
     vscode.commands.registerCommand("beamerEditor.openPreview", () => {
       const editor = vscode.window.activeTextEditor;
       if (editor?.document.uri.scheme !== "file" || !editor.document.fileName.endsWith(".tex")) {

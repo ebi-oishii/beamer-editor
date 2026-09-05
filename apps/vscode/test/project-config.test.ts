@@ -156,6 +156,32 @@ describe("VS Code extension project configuration", () => {
     });
   });
 
+  it("routes undo and platform-specific redo only while a Beamer preview is active (#103)", () => {
+    const contributes = packageJson.contributes as {
+      keybindings: Array<{
+        command: string;
+        key: string;
+        mac?: string;
+        win?: string;
+        when?: string;
+      }>;
+    };
+    const when = "activeWebviewPanelId == beamerEditor.preview";
+    expect(contributes.keybindings).toContainEqual({
+      command: "beamerEditor.preview.undo",
+      key: "ctrl+z",
+      mac: "cmd+z",
+      when,
+    });
+    expect(contributes.keybindings).toContainEqual({
+      command: "beamerEditor.preview.redo",
+      key: "ctrl+shift+z",
+      mac: "shift+cmd+z",
+      win: "ctrl+y",
+      when,
+    });
+  });
+
   it("keeps ordinary LaTeX auto-build enabled while ignoring only repository fixtures", () => {
     const fixtureGlob = "**/fixtures/**/*.tex";
     const slideFixtureGlob = "**/*.slide.tex";

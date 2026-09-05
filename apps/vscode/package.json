@@ -137,6 +137,19 @@
         "key": "ctrl+k v",
         "mac": "cmd+k v",
         "when": "editorTextFocus && editorLangId == latex"
+      },
+      {
+        "command": "beamerEditor.preview.undo",
+        "key": "ctrl+z",
+        "mac": "cmd+z",
+        "when": "activeWebviewPanelId == beamerEditor.preview"
+      },
+      {
+        "command": "beamerEditor.preview.redo",
+        "key": "ctrl+shift+z",
+        "mac": "shift+cmd+z",
+        "win": "ctrl+y",
+        "when": "activeWebviewPanelId == beamerEditor.preview"
       }
     ],
     "views": {
