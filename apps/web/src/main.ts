@@ -13,13 +13,10 @@ import "katex/dist/katex.min.css";
 import { sourceJumpTarget } from "./editor-navigation.js";
 import "./style.css";
 
-const FIXTURES = [
-  "basic.slide.tex",
-  "macros.slide.tex",
-  "kitchen-sink.slide.tex",
-  "canvas.slide.tex",
-  "styled.slide.tex",
-];
+const FIXTURES = Object.keys(import.meta.glob("../../../fixtures/*.slide.tex"))
+  .map((path) => path.split("/").pop() ?? "")
+  .filter((name) => !name.startsWith("lint-") && !name.startsWith("measure-"))
+  .sort();
 
 const app = document.getElementById("app") as HTMLDivElement;
 app.innerHTML = `

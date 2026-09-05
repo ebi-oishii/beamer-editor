@@ -153,6 +153,7 @@ describe("canonical fixture properties", () => {
 
   it("fixture discovery includes canonical baselines and excludes helper fixtures", () => {
     const names = canonicalFixtures.map(({ name }) => name);
+    expect(names.every((name) => name.endsWith(".slide.tex"))).toBe(true);
     expect(names).toEqual(
       expect.arrayContaining([
         "basic.slide.tex",
