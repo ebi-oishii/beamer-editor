@@ -10,7 +10,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ShellHost } from "../shell-host.js";
 import { type RevealRequest, SlideScroll } from "./SlideScroll.js";
 import { type PreviewAction, type PreviewState, previewReducer } from "./state.js";
-import { stepZoom, wheelDeltaPixels, wheelZoom, type ZoomState } from "./zoom.js";
+import { roundZoom, stepZoom, wheelDeltaPixels, wheelZoom, type ZoomState } from "./zoom.js";
 
 const EMPTY_DECK: RenderedDeck = { title: "", frames: [], css: "" };
 const INITIAL_STATE: PreviewState = { current: 0, step: 1 };
@@ -50,9 +50,11 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   }, []);
 
   // ナビ状態を保存する(VS-7: current / step / zoom のみ。ソース本文や AST は保存しない)。
+  // 倍率は内部では丸めずに持ち(小さな delta を積み重ねるため)、保存では 3 桁にする。
+  const persistedZoom = zoom === "fit" ? zoom : roundZoom(zoom);
   useEffect(() => {
-    host.saveNavState?.({ current: state.current, step: state.step, zoom });
-  }, [host, state.current, state.step, zoom]);
+    host.saveNavState?.({ current: state.current, step: state.step, zoom: persistedZoom });
+  }, [host, state.current, state.step, persistedZoom]);
 
   // ホストからの deck 更新を購読する。version は同期的に読めるよう ref にも写す。
   const versionRef = useRef(Number.NEGATIVE_INFINITY);

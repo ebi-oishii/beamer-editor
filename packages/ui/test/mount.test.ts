@@ -504,6 +504,48 @@ describe("mountPreview", () => {
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.005 });
   });
 
+  it("小さな delta が別々のフレームに届いても積み重なり、保存値は 3 桁に丸める", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: { zoom: unknown }[] = [];
+    const callbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: 1 as const }),
+      saveNavState: (state: { zoom: unknown }) => saved.push(state),
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    if (!preview) throw new Error("preview fixture missing");
+    const wheel = (deltaY: number) => {
+      act(() =>
+        preview.dispatchEvent(
+          new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY }),
+        ),
+      );
+      act(() => callbacks.pop()?.(0));
+    };
+
+    // 1 フレーム 0.4px(3 桁の丸めでは消える大きさ)を 5 回。合計 2px 分の倍率になる。
+    for (let i = 0; i < 5; i++) wheel(-0.4);
+    expect(saved.at(-1)?.zoom).toBe(1.002);
+    // 同じ 2px を 1 回で送っても同じ倍率。
+    wheel(2);
+    expect(saved.at(-1)?.zoom).toBe(1);
+    wheel(-2);
+    expect(saved.at(-1)?.zoom).toBe(1.002);
+  });
+
   it("wheel の倍率変更は現在のスクロール位置を戻さない", () => {
     const container = document.createElement("div");
     document.body.append(container);
