@@ -452,4 +452,26 @@ describe("deck export", () => {
       stderr.mockRestore();
     }
   });
+
+  it("preserves frame-rendering compiler errors as operational export failures", async () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      for (const code of ["E_RASTERIZE", "E_LIMIT"] as const) {
+        const compiler = async () => {
+          throw Object.assign(new Error(`日本語の ${code} エラー`), { code });
+        };
+        expect(
+          await run(["export", "talk.tex", "--format", "pdf", "--json"], { exportPdf: compiler }),
+        ).toBe(EXIT_CODE.operationalFailure);
+        expect(JSON.parse(String(stderr.mock.calls.at(-1)?.[0]))).toEqual({
+          error: { code, message: `日本語の ${code} エラー` },
+        });
+      }
+      expect(stdout).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
 });

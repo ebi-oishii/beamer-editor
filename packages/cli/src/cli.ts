@@ -61,6 +61,8 @@ const ERROR_EXIT_CODE: Record<CliErrorCode, number> = {
   E_TECTONIC_NOT_FOUND: EXIT_CODE.operationalFailure,
   E_TECTONIC_VERSION: EXIT_CODE.operationalFailure,
   E_COMPILE: EXIT_CODE.operationalFailure,
+  E_RASTERIZE: EXIT_CODE.operationalFailure,
+  E_LIMIT: EXIT_CODE.operationalFailure,
   E_CANCELLED: EXIT_CODE.operationalFailure,
 };
 
