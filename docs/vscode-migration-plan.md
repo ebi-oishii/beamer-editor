@@ -1,8 +1,8 @@
 # VS Code 移植計画
 
-更新日: 2026-08-24<br>
+更新日: 2026-09-07<br>
 対象: Phase 5（共有 UI + VS Code シェル）<br>
-目的: Phase 7 の GUI 編集へ進む前に、VS Code 上で編集・プレビュー・診断の基盤を成立させる
+目的: VS Code 実装の記録を残し、チーム配布前に編集・プレビュー・診断の基盤を実機でスモーク確認する
 
 ## 1. 結論
 
@@ -46,15 +46,14 @@ Phase 5 の完了条件は、開発計画の M2（書ける）を満たすこと
 7. 未保存変更との競合を黙って上書きしない。
 8. 開発用 `.vsix` をチームメンバーがインストールして試せる。
 
-ここまでの受け入れを通過してから、Phase 7 の一般的なドラッグ移動・画像拡縮・表編集など
-「ソースを書き換える GUI 編集」へ進む。キャンバス画像・テキストのドラッグ移動（`x` / `y`）だけは、この
-ゲートより先行した限定的な Phase 7 slice として実装済みである。
+これらは Phase 5 が提供する能力要件である。キャンバス画像・テキストのドラッグ移動（`x` / `y`）は、
+限定的な Phase 7 slice として実装済みである。
 
 ### 2.1 反映済み範囲と継続作業
 
 VS-1 の拡張スキャフォールドと VS-2 の共有プレビュー UI は #21 / #20 でマージ済みである。VS-3〜VS-9 とその後の支援変更により、`.vsix`生成とCI artifact、ソースペインを維持するpreview jump、preview zoom が反映された。キャンバス画像・テキストのドラッグ移動は先行した限定的な Phase 7 slice として追加済みである。
 
-継続中の変更は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)で確認する。Phase 5 の完了は本書 §2 と §9 の受け入れ項目で判断し、実機確認が終わるまで恒久状態を更新しない。
+継続中の変更は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)で確認する。§9 の実機スモーク確認は、チーム配布前に実施する。
 
 ## 3. 移植するもの・しないもの
 
@@ -403,9 +402,9 @@ Phase 6のtectonic実行はWorkspace Trustがない場合に無効化する。
 PRを積み上げる場合でも、各PRは単独でbuild・typecheckできる状態にする。未マージの
 formatterやlinterへ依存するPRはbase branchを明記し、無関係な差分を混ぜない。
 
-## 9. GUI編集へ進むためのゲート
+## 9. チーム配布前の実機スモーク確認
 
-次のチェックは実装有無の一覧ではなく、残る一般的な Phase 7 GUI 編集へ進むために実機で確認する受け入れゲートである。実装済み項目も、実機受け入れが終わるまで未チェックとして残す。先行してマージ済みのキャンバス画像・テキストのドラッグ slice を未実装と示すものではない。
+次のチェックは自動テストを補完するチーム配布前の実機スモーク確認であり、Phase 7 の開発ゲートではない。実装済み項目も、配布前確認が終わるまで未チェックとして残す。先行してマージ済みのキャンバス画像・テキストのドラッグ slice を未実装と示すものではない。
 
 - [ ] VS Code標準エディタとWebviewプレビューの分離が安定している
 - [ ] `basic.slide.tex` / `canvas.slide.tex` / `japanese.slide.tex` がライブ更新できる
@@ -418,7 +417,7 @@ formatterやlinterへ依存するPRはbase branchを明記し、無関係な差�
 - [ ] Restricted Modeでparse / render / lintだけが安全に動く
 - [ ] `.vsix`を別環境へインストールして再現できる
 
-残る Phase 7 の一般 GUI 編集を広げるには、これに加えて次が必要になる。
+残る Phase 7 の一般 GUI 編集を広げるには、次の設計・テストが必要になる。
 
 - formatterの正規形と冪等性が合意済み
 - `ShellHost.applyEdits`の契約が確定済み
