@@ -433,11 +433,35 @@ describe("deck check", () => {
         includeImages: false,
       });
       const result = JSON.parse(String(stdout.mock.calls[0]?.[0]));
+      expect(Object.keys(result)).toEqual(["file", "engine", "diagnostics", "summary"]);
+      expect(Object.keys(result.engine)).toEqual(["name", "version"]);
+      expect(Object.keys(result.summary)).toEqual(["errors", "warnings", "infos"]);
       expect(result).toMatchObject({
         file: source.path,
         engine: { name: "tectonic", version: "0.16.0" },
         summary: { errors: 0, warnings: 4, infos: 1 },
       });
+      expect(
+        result.diagnostics.map((diagnostic: { category: string; code: string }) => [
+          diagnostic.category,
+          diagnostic.code,
+        ]),
+      ).toEqual([
+        ["lint", "L012"],
+        ["compile", "overfull-hbox"],
+        ["compile", "overfull-vbox"],
+        ["layout", "canvas-overflow"],
+        ["layout", "canvas-overlap"],
+      ]);
+      expect(
+        result.diagnostics.map((diagnostic: Record<string, unknown>) => Object.keys(diagnostic)),
+      ).toEqual([
+        ["category", "code", "severity", "message", "frame", "location"],
+        ["category", "code", "severity", "message", "frame", "sourceLines"],
+        ["category", "code", "severity", "message", "frame"],
+        ["category", "code", "severity", "message", "frame", "geometry"],
+        ["category", "code", "severity", "message", "frame", "geometry", "overlappingGeometry"],
+      ]);
       expect(result.diagnostics).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -465,6 +489,51 @@ describe("deck check", () => {
       );
       expect(stderr).not.toHaveBeenCalled();
       expect(await readFile(source.path, "utf8")).toBe(original);
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it("treats an info-only canvas overlap as success", async () => {
+    const source = await fixture(
+      "check-info.tex",
+      deck(String.raw`\begin{frame}[label=canvas]{Canvas}Text\end{frame}`),
+    );
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      expect(
+        await run(["check", source.path, "--json"], {
+          compileDeckFrames: async () => ({
+            engineVersion: "0.16.0",
+            frames: [],
+            warnings: [],
+            layoutDiagnostics: [
+              {
+                kind: "canvas-overlap",
+                severity: "info",
+                frame: { number: 1, label: "canvas" },
+                message: "オブジェクトが重なっています",
+                geometry: {
+                  frame: { number: 1, label: "canvas" },
+                  page: 1,
+                  kind: "text",
+                  x: 1,
+                  y: 2,
+                  width: 3,
+                  height: 4,
+                },
+              },
+            ],
+          }),
+        }),
+      ).toBe(EXIT_CODE.success);
+      expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({
+        summary: { errors: 0, warnings: 0, infos: 1 },
+        diagnostics: [{ category: "layout", code: "canvas-overlap", severity: "info" }],
+      });
+      expect(stderr).not.toHaveBeenCalled();
     } finally {
       stdout.mockRestore();
       stderr.mockRestore();
