@@ -42,6 +42,46 @@ function releasePointerCapture(element: HTMLElement, pointerId: number): void {
   }
 }
 
+interface DragState {
+  element: HTMLElement;
+  id: string;
+  x: number;
+  y: number;
+  /** 本文領域内へ収めるとき右端の余地になる箱の幅。移動では変わらない。 */
+  width: number;
+  /** pointerdown 時点の実測高さ。drag 中の再描画・load では再測定せず、次 gesture で更新する。 */
+  height: number;
+  grabX: number;
+  grabY: number;
+  pointerId: number;
+}
+
+/** ドラッグを取り消す共通処理: 箱を元の位置へ戻し、pointer capture を放す。 */
+function cancelDrag(drag: DragState): void {
+  drag.element.style.left = `${drag.x * 100}%`;
+  drag.element.style.top = `${drag.y * 100}%`;
+  drag.element.classList.remove("canvas-dragging");
+  releasePointerCapture(drag.element, drag.pointerId);
+}
+
+interface DragState {
+  element: HTMLElement;
+  id: string;
+  x: number;
+  y: number;
+  grabX: number;
+  grabY: number;
+  pointerId: number;
+}
+
+/** ドラッグを取り消す共通処理: 箱を元の位置へ戻し、pointer capture を放す。呼び出し側が dragRef を空にする。 */
+function cancelDrag(drag: DragState): void {
+  drag.element.style.left = `${drag.x * 100}%`;
+  drag.element.style.top = `${drag.y * 100}%`;
+  drag.element.classList.remove("canvas-dragging");
+  releasePointerCapture(drag.element, drag.pointerId);
+}
+
 export function Stage({
   frame,
   step,
@@ -61,19 +101,7 @@ export function Stage({
   onDetachToCanvas?: ((request: DetachRequest) => void) | undefined;
 }): JSX.Element {
   const scaleRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{
-    element: HTMLElement;
-    id: string;
-    x: number;
-    y: number;
-    /** 本文領域内へ収めるとき右端の余地になる箱の幅。移動では変わらない。 */
-    width: number;
-    /** pointerdown 時点の実測高さ。drag 中の再描画・load では再測定せず、次 gesture で更新する。 */
-    height: number;
-    grabX: number;
-    grabY: number;
-    pointerId: number;
-  }>();
+  const dragRef = useRef<DragState>();
   const [selected, setSelected] = useState<string | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const highlightRef = useRef<HTMLElement | null>(null);
@@ -147,10 +175,8 @@ export function Stage({
   useEffect(() => {
     const drag = dragRef.current;
     if (drag) {
-      drag.element.style.left = `${drag.x * 100}%`;
-      drag.element.style.top = `${drag.y * 100}%`;
-      drag.element.classList.remove("canvas-dragging", "canvas-selected");
-      releasePointerCapture(drag.element, drag.pointerId);
+      cancelDrag(drag);
+      drag.element.classList.remove("canvas-selected");
       dragRef.current = undefined;
     }
     setSelected(null);
@@ -175,17 +201,23 @@ export function Stage({
       if (event.key !== "Escape") return;
       const drag = dragRef.current;
       if (!drag) return;
-      drag.element.style.left = `${drag.x * 100}%`;
-      drag.element.style.top = `${drag.y * 100}%`;
-      drag.element.classList.remove("canvas-dragging");
-      releasePointerCapture(drag.element, drag.pointerId);
+      cancelDrag(drag);
       dragRef.current = undefined;
     };
     window.addEventListener("keydown", cancel);
     return () => window.removeEventListener("keydown", cancel);
   }, []);
   const onPointerDown = (event: PointerEvent) => {
-    if (dragRef.current) return;
+    const active = dragRef.current;
+    if (active) {
+      // ドラッグ中の右・中ボタンは、この時点で取り消す。contextmenu が来ない操作(Firefox の
+      // Shift+右クリックなど)でも drag と pointer capture を残さない(#108)。
+      if (event.button !== 0) {
+        cancelDrag(active);
+        dragRef.current = undefined;
+      }
+      return;
+    }
     // 右クリック(コンテキストメニュー)や中ボタンではドラッグを始めない。始めてしまうと pointerup が
     // メニューに吸われて dragRef が残り、以後のマウス移動に箱が追従し続ける(#108)。
     if (event.button !== 0) return;
@@ -302,10 +334,7 @@ export function Stage({
     const cancelOnContextMenu = () => {
       const drag = dragRef.current;
       if (!drag) return;
-      drag.element.style.left = `${drag.x * 100}%`;
-      drag.element.style.top = `${drag.y * 100}%`;
-      drag.element.classList.remove("canvas-dragging");
-      releasePointerCapture(drag.element, drag.pointerId);
+      cancelDrag(drag);
       dragRef.current = undefined;
     };
     scale.addEventListener("pointerdown", onPointerDown);

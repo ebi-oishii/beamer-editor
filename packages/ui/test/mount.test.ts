@@ -1485,6 +1485,27 @@ describe("mountPreview", () => {
     expect(moveCanvasElement).not.toHaveBeenCalled();
   });
 
+  it("ドラッグ中の右ボタン pointerdown は contextmenu を待たずにその場で取り消す(#108)", () => {
+    const { editable, moveCanvasElement, releasePointerCapture, scale } = mountCanvasPreview();
+    const left = editable.style.left;
+    const top = editable.style.top;
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(scale, "pointermove", 200, 150);
+    expect(editable.style.left).not.toBe(left);
+    // マウスの右ボタンは同じ pointerId で button: 2 の pointerdown として届く。contextmenu は出さない
+    // (Firefox の Shift+右クリックなど)状況でも、この時点で取り消し済みになる。
+    firePointer(editable, "pointerdown", 200, 150, 7, { button: 2 });
+    expect(editable.classList.contains("canvas-dragging")).toBe(false);
+    expect(editable.style.left).toBe(left);
+    expect(editable.style.top).toBe(top);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    // 以後のマウス移動に追従せず、離しても move を送らない。
+    firePointer(scale, "pointermove", 260, 200);
+    expect(editable.style.left).toBe(left);
+    firePointer(scale, "pointerup", 260, 200);
+    expect(moveCanvasElement).not.toHaveBeenCalled();
+  });
+
   it("canvas image の clickだけではmoveを送らない", () => {
     const { editable, moveCanvasElement, scale } = mountCanvasPreview();
 
