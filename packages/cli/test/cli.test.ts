@@ -1,5 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { readdirSync } from "node:fs";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { relative, resolve } from "node:path";
@@ -320,6 +331,52 @@ describe("deck outline", () => {
   });
 });
 
+type SnapshotFrame = {
+  address: { number: number; label: string | null };
+  span: { start: number; end: number };
+  images: { page: number; png: Uint8Array; width: number; height: number }[];
+};
+
+function snapshotFrame(
+  number: number,
+  label: string | null,
+  pages: readonly number[],
+): SnapshotFrame {
+  return {
+    address: { number, label },
+    span: { start: number, end: number + 1 },
+    images: pages.map((page) => ({
+      page,
+      png: new Uint8Array([number, page]),
+      width: 100 + page,
+      height: 200 + number,
+    })),
+  };
+}
+
+function snapshotCompiled(...frames: SnapshotFrame[]) {
+  return { engineVersion: "1.0", warnings: [], layoutDiagnostics: [], frames };
+}
+
+/** Runs `deck snapshot` in-process and returns its exit code together with both streams. */
+async function snapshot(
+  argv: readonly string[],
+  compiled: ReturnType<typeof snapshotCompiled> | (() => Promise<never>),
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  try {
+    const code = await run(["snapshot", ...argv], {
+      compileDeckFrames: typeof compiled === "function" ? compiled : async () => compiled as never,
+    });
+    const text = (spy: typeof stdout) => spy.mock.calls.map((call) => String(call[0])).join("");
+    return { code, stdout: text(stdout), stderr: text(stderr) };
+  } finally {
+    stdout.mockRestore();
+    stderr.mockRestore();
+  }
+}
+
 describe("deck snapshot", () => {
   it("parses output, frame and tectonic options and rejects unsafe extras", () => {
     expect(
@@ -339,10 +396,84 @@ describe("deck snapshot", () => {
     });
   });
 
-  it("writes selected PNGs atomically and leaves an existing directory alone", async () => {
-    const directory = await temporaryDirectory();
-    const output = `${directory}/snapshots`;
-    const compiled = {
+  it("emits exactly the documented success JSON and no extra field", async () => {
+    const output = `${await temporaryDirectory()}/snapshots`;
+    const { code, stdout, stderr } = await snapshot(
+      ["talk.tex", "-o", output, "--json"],
+      snapshotCompiled(snapshotFrame(1, "intro", [1, 2]), snapshotFrame(2, null, [3])),
+    );
+    expect(stderr).toBe("");
+    expect(code).toBe(EXIT_CODE.success);
+    expect(JSON.parse(stdout)).toEqual({
+      file: "talk.tex",
+      output,
+      frames: [
+        {
+          number: 1,
+          label: "intro",
+          images: [
+            { page: 1, file: "frame-000001-page-000001.png", width: 101, height: 201, bytes: 2 },
+            { page: 2, file: "frame-000001-page-000002.png", width: 102, height: 201, bytes: 2 },
+          ],
+        },
+        {
+          number: 2,
+          label: null,
+          images: [
+            { page: 3, file: "frame-000002-page-000003.png", width: 103, height: 202, bytes: 2 },
+          ],
+        },
+      ],
+      engine: { name: "tectonic", version: "1.0" },
+    });
+    await expect(readFile(`${output}/frame-000001-page-000002.png`)).resolves.toEqual(
+      Buffer.from([1, 2]),
+    );
+    await expect(readFile(`${output}/frame-000002-page-000003.png`)).resolves.toEqual(
+      Buffer.from([2, 3]),
+    );
+    // Publication removes the in-progress marker, so a complete directory holds PNGs only.
+    expect((await readdir(output)).sort()).toEqual([
+      "frame-000001-page-000001.png",
+      "frame-000001-page-000002.png",
+      "frame-000002-page-000003.png",
+    ]);
+  });
+
+  it("prints one line per image and includes the frame label when present", async () => {
+    const output = `${await temporaryDirectory()}/snapshots`;
+    const { code, stdout } = await snapshot(
+      ["talk.tex", "-o", output],
+      snapshotCompiled(
+        snapshotFrame(1, "intro", [1, 2]),
+        snapshotFrame(3, null, [1]),
+        snapshotFrame(4, "結果", [7]),
+      ),
+    );
+    expect(code).toBe(EXIT_CODE.success);
+    expect(stdout.split("\n")).toEqual([
+      `talk.tex: frame 1 (intro) page 1 -> ${output}/frame-000001-page-000001.png`,
+      `talk.tex: frame 1 (intro) page 2 -> ${output}/frame-000001-page-000002.png`,
+      `talk.tex: frame 3 page 1 -> ${output}/frame-000003-page-000001.png`,
+      `talk.tex: frame 4 (結果) page 7 -> ${output}/frame-000004-page-000007.png`,
+      "",
+    ]);
+  });
+
+  it("keeps the in-progress marker in place until every PNG is written", async () => {
+    const output = `${await temporaryDirectory()}/snapshots`;
+    const listings: string[][] = [];
+    // Reading `png` is the last thing that happens before each file is written.
+    const image = (page: number) => ({
+      page,
+      width: 1,
+      height: 1,
+      get png() {
+        listings.push(readdirSync(output).sort());
+        return new Uint8Array([page]);
+      },
+    });
+    const { code } = await snapshot(["talk.tex", "-o", output], {
       engineVersion: "1.0",
       warnings: [],
       layoutDiagnostics: [],
@@ -350,45 +481,139 @@ describe("deck snapshot", () => {
         {
           address: { number: 1, label: "intro" },
           span: { start: 0, end: 1 },
-          images: [{ page: 1, png: new Uint8Array([1, 2]), width: 1, height: 1 }],
+          images: [image(1), image(2)],
         },
       ],
-    };
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      await expect(
-        run(["snapshot", "talk.tex", "-o", output, "--json"], {
-          compileDeckFrames: async () => compiled,
-        }),
-      ).resolves.toBe(0);
-      await expect(readFile(`${output}/frame-000001-page-000001.png`)).resolves.toEqual(
-        Buffer.from([1, 2]),
+    } as never);
+    expect(code).toBe(EXIT_CODE.success);
+    expect(listings).toEqual([
+      [".deck-snapshot-incomplete"],
+      [".deck-snapshot-incomplete", "frame-000001-page-000001.png"],
+    ]);
+    expect(await readdir(output)).toEqual([
+      "frame-000001-page-000001.png",
+      "frame-000001-page-000002.png",
+    ]);
+  });
+
+  it("rejects an existing directory and leaves its contents untouched", async () => {
+    const output = `${await temporaryDirectory()}/snapshots`;
+    await mkdir(output);
+    await writeFile(`${output}/keep.txt`, "keep\n", "utf8");
+    const { code, stderr } = await snapshot(
+      ["talk.tex", "-o", output, "--json"],
+      snapshotCompiled(snapshotFrame(1, "intro", [1])),
+    );
+    expect(code).toBe(EXIT_CODE.operationalFailure);
+    expect(JSON.parse(stderr).error.code).toBe("E_OUTPUT_EXISTS");
+    expect(await readdir(output)).toEqual(["keep.txt"]);
+    await expect(readFile(`${output}/keep.txt`, "utf8")).resolves.toBe("keep\n");
+  });
+
+  it("rejects a regular file and a broken symlink as an existing output", async () => {
+    const directory = await temporaryDirectory();
+    const file = `${directory}/file`;
+    await writeFile(file, "content\n", "utf8");
+    const dangling = `${directory}/dangling`;
+    await symlink(`${directory}/absent`, dangling);
+    for (const path of [file, dangling]) {
+      const { code, stderr } = await snapshot(
+        ["talk.tex", "-o", path, "--json"],
+        snapshotCompiled(snapshotFrame(1, "intro", [1])),
       );
-      expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({
-        file: "talk.tex",
-        output,
-        engine: { name: "tectonic", version: "1.0" },
-        frames: [
-          {
-            number: 1,
-            label: "intro",
-            images: [
-              {
-                page: 1,
-                file: "frame-000001-page-000001.png",
-                width: 1,
-                height: 1,
-                bytes: 2,
-              },
-            ],
-          },
-        ],
-      });
-      await expect(
-        run(["snapshot", "talk.tex", "-o", output], { compileDeckFrames: async () => compiled }),
-      ).resolves.toBe(3);
-    } finally {
-      stdout.mockRestore();
+      expect(code).toBe(EXIT_CODE.operationalFailure);
+      expect(JSON.parse(stderr).error.code).toBe("E_OUTPUT_EXISTS");
+    }
+    await expect(readFile(file, "utf8")).resolves.toBe("content\n");
+    expect((await lstat(dangling)).isSymbolicLink()).toBe(true);
+  });
+
+  it("reports E_IO when the parent is missing or is a regular file", async () => {
+    const directory = await temporaryDirectory();
+    await writeFile(`${directory}/notadir`, "x", "utf8");
+    for (const output of [`${directory}/absent/snapshots`, `${directory}/notadir/snapshots`]) {
+      const { code, stderr } = await snapshot(
+        ["talk.tex", "-o", output, "--json"],
+        snapshotCompiled(snapshotFrame(1, "intro", [1])),
+      );
+      expect(code).toBe(EXIT_CODE.operationalFailure);
+      expect(JSON.parse(stderr).error.code).toBe("E_IO");
+      await expect(stat(output)).rejects.toThrow();
+    }
+  });
+
+  it("removes the directory it created when a PNG write fails", async () => {
+    const output = `${await temporaryDirectory()}/snapshots`;
+    // Two images sharing frame and page collide on the exclusive write of the second file.
+    const { code, stderr } = await snapshot(
+      ["talk.tex", "-o", output, "--json"],
+      snapshotCompiled(snapshotFrame(1, "intro", [1, 1])),
+    );
+    expect(code).toBe(EXIT_CODE.operationalFailure);
+    expect(JSON.parse(stderr).error.code).toBe("E_IO");
+    await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("creates no directory when compilation or rasterization fails", async () => {
+    const output = `${await temporaryDirectory()}/snapshots`;
+    const { code, stderr } = await snapshot(["talk.tex", "-o", output, "--json"], async () => {
+      throw Object.assign(new Error("rasterize に失敗しました"), { code: "E_RASTERIZE" });
+    });
+    expect(code).toBe(EXIT_CODE.operationalFailure);
+    expect(JSON.parse(stderr).error).toEqual({
+      code: "E_RASTERIZE",
+      message: "rasterize に失敗しました",
+    });
+    await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reports E_COMPILE and creates no directory when no page is selected", async () => {
+    const output = `${await temporaryDirectory()}/snapshots`;
+    const { code, stderr } = await snapshot(
+      ["talk.tex", "-o", output, "--json"],
+      snapshotCompiled(snapshotFrame(1, "intro", [])),
+    );
+    expect(code).toBe(EXIT_CODE.operationalFailure);
+    expect(JSON.parse(stderr).error.code).toBe("E_COMPILE");
+    await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("resolves every selector form and rejects ambiguous ones with E_INPUT", async () => {
+    const compiled = snapshotCompiled(
+      snapshotFrame(1, "intro", [1]),
+      snapshotFrame(2, "42", [2]),
+      snapshotFrame(3, "dup", [3]),
+      snapshotFrame(4, "dup", [4]),
+    );
+    for (const [frame, line, file] of [
+      ["2", "frame 2 (42) page 2", "frame-000002-page-000002.png"],
+      ["intro", "frame 1 (intro) page 1", "frame-000001-page-000001.png"],
+      ["label:intro", "frame 1 (intro) page 1", "frame-000001-page-000001.png"],
+      ["label:42", "frame 2 (42) page 2", "frame-000002-page-000002.png"],
+    ] as const) {
+      const output = `${await temporaryDirectory()}/snapshots`;
+      const { code, stdout } = await snapshot(
+        ["talk.tex", "-o", output, "--frame", frame],
+        compiled,
+      );
+      expect(code).toBe(EXIT_CODE.success);
+      expect(stdout).toBe(`talk.tex: ${line} -> ${output}/${file}\n`);
+      expect(await readdir(output)).toEqual([file]);
+    }
+    for (const [frame, message] of [
+      ["0", "数字の label は label:<LABEL> で指定してください"],
+      ["9", "指定した frame がありません"],
+      ["label:absent", "指定した frame がありません"],
+      ["dup", "frame label が重複しています"],
+    ] as const) {
+      const output = `${await temporaryDirectory()}/snapshots`;
+      const { code, stderr } = await snapshot(
+        ["talk.tex", "-o", output, "--frame", frame, "--json"],
+        compiled,
+      );
+      expect(code).toBe(EXIT_CODE.operationalFailure);
+      expect(JSON.parse(stderr).error).toEqual({ code: "E_INPUT", message });
+      await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
     }
   });
 });
