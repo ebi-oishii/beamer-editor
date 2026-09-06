@@ -1,7 +1,17 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { copyFile, link, lstat, mkdtemp, rename, rm, stat } from "node:fs/promises";
+import {
+  copyFile,
+  link,
+  lstat,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
@@ -10,6 +20,12 @@ const DEFAULT_COMPILE_TIMEOUT_MS = 300_000;
 const VERSION_TIMEOUT_MS = 10_000;
 const TERMINATE_GRACE_MS = 1_000;
 const HARD_SETTLE_GRACE_MS = 1_000;
+const DEFAULT_DECK_PAGE_LIMIT = 200;
+const DEFAULT_DECK_PDF_BYTES_LIMIT = 64 * 1024 * 1024;
+const DEFAULT_DECK_PNG_BYTES_LIMIT = 64 * 1024 * 1024;
+const DEFAULT_DECK_LOG_BYTES_LIMIT = 8 * 1024 * 1024;
+const DEFAULT_DECK_IMAGE_PIXELS_LIMIT = 32 * 1024 * 1024;
+const DEFAULT_DECK_IMAGE_DIMENSION_LIMIT = 8_192;
 
 export interface PdfExportRequest {
   inputPath: string;
@@ -35,6 +51,8 @@ export type PdfExportErrorCode =
   | "E_TECTONIC_NOT_FOUND"
   | "E_TECTONIC_VERSION"
   | "E_COMPILE"
+  | "E_RASTERIZE"
+  | "E_LIMIT"
   | "E_IO"
   | "E_CANCELLED";
 
@@ -458,4 +476,541 @@ export async function exportPdf(
 export function defaultPdfOutputPath(inputPath: string): string {
   const absoluteInput = isAbsolute(inputPath) ? inputPath : resolve(inputPath);
   return defaultOutputPath(absoluteInput);
+}
+
+// ---------------------------------------------------------------------------
+// Deck/frame compilation
+// ---------------------------------------------------------------------------
+
+/** A logical Beamer frame. `number` is its one-based source order. */
+export interface FrameAddress {
+  number: number;
+  label: string | null;
+}
+
+/** A PNG rendered from one physical PDF page. */
+export interface FrameImage {
+  /** One-based physical PDF page number. */
+  page: number;
+  png: Uint8Array;
+  width: number;
+  height: number;
+}
+
+export interface SourceLineRange {
+  start: number;
+  end: number;
+}
+
+export interface CompileWarning {
+  kind: "overfull-hbox" | "overfull-vbox";
+  message: string;
+  excessPt: number | null;
+  frame: FrameAddress | null;
+  sourceLines: SourceLineRange | null;
+}
+
+export interface CompiledFrame {
+  address: FrameAddress;
+  /** UTF-16 offsets in the original, unmodified source. */
+  span: { start: number; end: number };
+  images: readonly FrameImage[];
+}
+
+export interface DeckFramesResult {
+  engineVersion: string;
+  frames: readonly CompiledFrame[];
+  warnings: readonly CompileWarning[];
+}
+
+export interface CompileDeckFramesRequest {
+  inputPath: string;
+  tectonicPath?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  /** Whether to render physical PDF pages as PNGs. Defaults to true. */
+  includeImages?: boolean;
+  /** Maximum physical PDF pages accepted. Defaults to 200. */
+  maxPages?: number;
+  /** Maximum compiled PDF size. Defaults to 64 MiB. */
+  maxPdfBytes?: number;
+  /** Maximum combined PNG size. Defaults to 64 MiB. */
+  maxPngBytes?: number;
+  /** Maximum Tectonic log size accepted for frame mapping. Defaults to 8 MiB. */
+  maxLogBytes?: number;
+  /** Maximum decoded pixels for one rendered page. Defaults to 32 megapixels. */
+  maxPixelsPerPage?: number;
+  /** Maximum decoded width or height for one rendered page. Defaults to 8192 px. */
+  maxImageDimension?: number;
+}
+
+/**
+ * A host-provided PDF renderer. Keeping it injected lets the VS Code host use
+ * its existing PDF.js instance without adding a native dependency here.
+ */
+export interface DeckFrameRasterizer {
+  rasterize(
+    pdfPath: string,
+    options: {
+      signal?: AbortSignal;
+      maxPages: number;
+      maxPngBytes: number;
+      maxPixelsPerPage: number;
+      maxImageDimension: number;
+    },
+  ): Promise<readonly FrameImage[]>;
+}
+
+export interface CompileDeckFramesDependencies {
+  runner?: ProcessRunner;
+  temporaryDirectory?: (prefix: string) => Promise<string>;
+  rasterizer?: DeckFrameRasterizer;
+}
+
+interface MeasuredFrame {
+  address: FrameAddress;
+  span: { start: number; end: number };
+  lines: SourceLineRange;
+}
+
+const FRAME_MARKER_PREFIX = "BEAMER_EDITOR_FRAME:";
+const FRAME_MARKER_WIDTH = 6;
+
+function markerForFrame(number: number): string {
+  return `\\typeout{${FRAME_MARKER_PREFIX}${String(number).padStart(FRAME_MARKER_WIDTH, "0")}}`;
+}
+
+/**
+ * Masks comments while retaining every original offset and line break. This is
+ * deliberately a small scanner rather than the editor parser: compilation must
+ * also cover RawFrame source the editor does not understand.
+ */
+function withoutComments(source: string): string {
+  let value = "";
+  let comment = false;
+  let backslashes = 0;
+  for (const character of source) {
+    if (character === "\n" || character === "\r") {
+      value += character;
+      comment = false;
+      backslashes = 0;
+    } else if (comment) {
+      value += " ";
+    } else if (character === "%" && backslashes % 2 === 0) {
+      value += " ";
+      comment = true;
+      backslashes = 0;
+    } else {
+      value += character;
+      backslashes = character === "\\" ? backslashes + 1 : 0;
+    }
+  }
+  return value;
+}
+
+function sourceLineAt(source: string, offset: number): number {
+  let line = 1;
+  for (let index = 0; index < offset; index += 1) if (source[index] === "\n") line += 1;
+  return line;
+}
+
+function frameLabel(options: string | undefined): string | null {
+  if (!options) return null;
+  // A label option cannot use an unbraced comma in normal Beamer syntax. Keep
+  // the original text otherwise, rather than attempting to interpret TeX.
+  const match = /(?:^|,)\s*label\s*=\s*([^,\]]+)/.exec(options);
+  return match?.[1]?.trim() || null;
+}
+
+/** Parse frame boundaries from source without changing any original offsets. */
+export function findDeckFrames(source: string): readonly CompiledFrame[] {
+  const masked = withoutComments(source);
+  const begin = /\\begin\s*\{\s*frame\s*\}(?:<[^>\r\n]*>)?\s*(?:\[([^\]\r\n]*)\])?/g;
+  const end = /\\end\s*\{\s*frame\s*\}/g;
+  const frames: CompiledFrame[] = [];
+  for (let match = begin.exec(masked); match; match = begin.exec(masked)) {
+    end.lastIndex = begin.lastIndex;
+    const closing = end.exec(masked);
+    if (!closing) break;
+    const number = frames.length + 1;
+    frames.push({
+      address: { number, label: frameLabel(match[1]) },
+      span: { start: match.index, end: end.lastIndex },
+      images: [],
+    });
+    begin.lastIndex = end.lastIndex;
+  }
+  return frames;
+}
+
+/** Add same-line markers so original source line numbers remain valid. */
+export function injectFrameMarkers(
+  source: string,
+  frames: readonly Pick<CompiledFrame, "address" | "span">[] = findDeckFrames(source),
+): string {
+  let value = "";
+  let cursor = 0;
+  for (const frame of frames) {
+    value += source.slice(cursor, frame.span.start);
+    value += markerForFrame(frame.address.number);
+    cursor = frame.span.start;
+  }
+  return value + source.slice(cursor);
+}
+
+function measuredFrames(source: string): readonly MeasuredFrame[] {
+  return findDeckFrames(source).map((frame) => ({
+    address: frame.address,
+    span: frame.span,
+    lines: {
+      start: sourceLineAt(source, frame.span.start),
+      end: sourceLineAt(source, frame.span.end),
+    },
+  }));
+}
+
+interface LogEvent {
+  type: "marker" | "page";
+  value: number;
+}
+
+function* logEvents(output: string): IterableIterator<LogEvent> {
+  const expression = new RegExp(`${FRAME_MARKER_PREFIX}(\\d+)|\\[(\\d+)\\]`, "g");
+  for (let match = expression.exec(output); match; match = expression.exec(output)) {
+    const value = Number(match[1] ?? match[2]);
+    if (Number.isSafeInteger(value) && value > 0)
+      yield { type: match[1] === undefined ? "page" : "marker", value };
+  }
+}
+
+/**
+ * Associate physical page numbers with logical frame numbers. Never guesses:
+ * repeated/out-of-order markers or a page before the first marker are errors.
+ */
+export function groupFramePages(
+  log: string,
+  frames: readonly { address: FrameAddress }[],
+  maxPages?: number,
+): ReadonlyMap<number, readonly number[]> {
+  const pages = new Map<number, number[]>();
+  for (const frame of frames) pages.set(frame.address.number, []);
+  let active: number | undefined;
+  let expectedMarker = 1;
+  let expectedPage = 1;
+  let pageCount = 0;
+  for (const event of logEvents(log)) {
+    if (event.type === "marker") {
+      if (event.value !== expectedMarker || !pages.has(event.value))
+        throw new PdfExportError("E_COMPILE", "frame marker とソース frame の対応を確認できません");
+      active = event.value;
+      expectedMarker += 1;
+    } else {
+      if (event.value !== expectedPage || active === undefined)
+        throw new PdfExportError("E_COMPILE", "PDF page と frame marker の対応を確認できません");
+      pageCount += 1;
+      if (maxPages !== undefined && pageCount > maxPages)
+        throw new PdfExportError("E_LIMIT", `PDF page 数が上限 ${maxPages} を超えています`);
+      pages.get(active)?.push(event.value);
+      expectedPage += 1;
+    }
+  }
+  if (expectedMarker !== frames.length + 1)
+    throw new PdfExportError(
+      "E_COMPILE",
+      "すべての frame marker を Tectonic 出力から取得できません",
+    );
+  return pages;
+}
+
+function parseOverfullWarnings(
+  log: string,
+  frames: readonly MeasuredFrame[],
+): readonly CompileWarning[] {
+  const warnings: CompileWarning[] = [];
+  const expression =
+    /Overfull \\(hbox|vbox) \(([-+]?\d+(?:\.\d+)?)pt too (?:wide|high)\)(?:[^\n]*?\bat lines? (\d+)(?:--(\d+))?|[^\n]*?has occurred while \\output is active)?/g;
+  for (let match = expression.exec(log); match; match = expression.exec(log)) {
+    const start = match[3] === undefined ? undefined : Number(match[3]);
+    const end = match[4] === undefined ? start : Number(match[4]);
+    const owner =
+      start === undefined
+        ? undefined
+        : frames.find((frame) => start >= frame.lines.start && start <= frame.lines.end);
+    warnings.push({
+      kind: match[1] === "hbox" ? "overfull-hbox" : "overfull-vbox",
+      message: match[0],
+      excessPt: Number(match[2]),
+      frame: owner?.address ?? null,
+      sourceLines: start === undefined || end === undefined ? null : { start, end },
+    });
+  }
+  return warnings;
+}
+
+function positiveLimit(value: number | undefined, fallback: number, name: string): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value <= 0)
+    throw new PdfExportError("E_INPUT", `${name} は 1 以上の整数にしてください`);
+  return value;
+}
+
+function compiledLogName(inputPath: string): string {
+  return `${basename(inputPath, extname(inputPath))}.log`;
+}
+
+async function readCompilationLog(path: string, maxBytes: number): Promise<string> {
+  let info: Awaited<ReturnType<typeof stat>>;
+  try {
+    info = await stat(path);
+  } catch (error) {
+    throw new PdfExportError("E_COMPILE", "Tectonic の最終 pass の log を読み込めません", error);
+  }
+  if (!info.isFile() || info.size === 0)
+    throw new PdfExportError("E_COMPILE", "Tectonic の最終 pass の log がありません");
+  if (info.size > maxBytes)
+    throw new PdfExportError("E_LIMIT", `Tectonic log が上限 ${maxBytes} bytes を超えています`);
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    throw new PdfExportError("E_COMPILE", "Tectonic の最終 pass の log を読み込めません", error);
+  }
+}
+
+/**
+ * Compile a complete deck once, then group its physical PDF pages by logical
+ * frame. The original input is only read; a same-basename marked copy is kept
+ * under an OS temporary directory and removed on every exit path.
+ */
+export async function compileDeckFrames(
+  request: CompileDeckFramesRequest,
+  dependencies: CompileDeckFramesDependencies = {},
+): Promise<DeckFramesResult> {
+  const runner = dependencies.runner ?? nodeProcessRunner;
+  const includeImages = request.includeImages ?? true;
+  const rasterizer = dependencies.rasterizer;
+  if (includeImages && rasterizer === undefined)
+    throw new PdfExportError("E_RASTERIZE", "frame PNG を生成する rasterizer が設定されていません");
+  const signal = request.signal;
+  throwIfCancelled(signal);
+  const inputPath = resolve(request.inputPath);
+  if (!(await regularFile(inputPath)))
+    throw new PdfExportError("E_INPUT", `入力 TeX を読み込めません: ${request.inputPath}`);
+  const maxPages = positiveLimit(request.maxPages, DEFAULT_DECK_PAGE_LIMIT, "maxPages");
+  const maxPdfBytes = positiveLimit(
+    request.maxPdfBytes,
+    DEFAULT_DECK_PDF_BYTES_LIMIT,
+    "maxPdfBytes",
+  );
+  const maxPngBytes = positiveLimit(
+    request.maxPngBytes,
+    DEFAULT_DECK_PNG_BYTES_LIMIT,
+    "maxPngBytes",
+  );
+  const maxLogBytes = positiveLimit(
+    request.maxLogBytes,
+    DEFAULT_DECK_LOG_BYTES_LIMIT,
+    "maxLogBytes",
+  );
+  const maxPixelsPerPage = positiveLimit(
+    request.maxPixelsPerPage,
+    DEFAULT_DECK_IMAGE_PIXELS_LIMIT,
+    "maxPixelsPerPage",
+  );
+  const maxImageDimension = positiveLimit(
+    request.maxImageDimension,
+    DEFAULT_DECK_IMAGE_DIMENSION_LIMIT,
+    "maxImageDimension",
+  );
+  const source = await readFile(inputPath, "utf8").catch((error: unknown) => {
+    throw new PdfExportError("E_INPUT", `入力 TeX を読み込めません: ${request.inputPath}`, error);
+  });
+  const frames = measuredFrames(source);
+  if (frames.length === 0)
+    throw new PdfExportError("E_INPUT", "入力 TeX に frame 環境がありません");
+  if (frames.length > 999_999)
+    throw new PdfExportError("E_LIMIT", "frame 数が marker の上限を超えています");
+
+  const tectonic = request.tectonicPath ?? "tectonic";
+  let versionResult: ProcessResult;
+  try {
+    versionResult = await runner.run(
+      tectonic,
+      ["--version"],
+      runnerOptions(dirname(inputPath), signal, VERSION_TIMEOUT_MS),
+    );
+  } catch (error) {
+    if (isAbort(error, signal))
+      throw new PdfExportError("E_CANCELLED", "コンパイルはキャンセルされました", error);
+    if (error instanceof ProcessNotFoundError || isNotFound(error))
+      throw new PdfExportError("E_TECTONIC_NOT_FOUND", errorMessage(error), error);
+    throw new PdfExportError(
+      "E_TECTONIC_VERSION",
+      `Tectonic のバージョンを取得できません: ${String(error)}`,
+      error,
+    );
+  }
+  if (versionResult.cancelled || signal?.aborted)
+    throw new PdfExportError("E_CANCELLED", "コンパイルはキャンセルされました");
+  const engineVersion =
+    versionResult.exitCode === 0
+      ? versionFrom(`${versionResult.stdout}\n${versionResult.stderr}`)
+      : undefined;
+  if (!engineVersion)
+    throw new PdfExportError(
+      "E_TECTONIC_VERSION",
+      `Tectonic のバージョンを確認できません${processDetail(versionResult)}`,
+    );
+
+  const makeTemp =
+    dependencies.temporaryDirectory ?? ((prefix: string) => mkdtemp(join(tmpdir(), prefix)));
+  let temporaryDirectory: string | undefined;
+  try {
+    temporaryDirectory = await makeTemp("beamer-editor-frames-");
+    const measuredInput = join(temporaryDirectory, basename(inputPath));
+    await writeFile(measuredInput, injectFrameMarkers(source, frames));
+    throwIfCancelled(signal);
+    let compileResult: ProcessResult;
+    try {
+      compileResult = await runner.run(
+        tectonic,
+        ["-X", "compile", "--keep-logs", "--outdir", temporaryDirectory, measuredInput],
+        runnerOptions(
+          dirname(inputPath),
+          signal,
+          request.timeoutMs && request.timeoutMs > 0
+            ? request.timeoutMs
+            : DEFAULT_COMPILE_TIMEOUT_MS,
+        ),
+      );
+    } catch (error) {
+      if (isAbort(error, signal))
+        throw new PdfExportError("E_CANCELLED", "コンパイルはキャンセルされました", error);
+      if (error instanceof ProcessNotFoundError || isNotFound(error))
+        throw new PdfExportError("E_TECTONIC_NOT_FOUND", errorMessage(error), error);
+      throw new PdfExportError(
+        "E_COMPILE",
+        `Tectonic の実行に失敗しました: ${String(error)}`,
+        error,
+      );
+    }
+    if (compileResult.cancelled || signal?.aborted)
+      throw new PdfExportError("E_CANCELLED", "コンパイルはキャンセルされました");
+    if (compileResult.timedOut)
+      throw new PdfExportError(
+        "E_COMPILE",
+        `コンパイルがタイムアウトしました${processDetail(compileResult)}`,
+      );
+    const pdfPath = join(temporaryDirectory, compiledPdfName(inputPath));
+    if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(pdfPath)))
+      throw new PdfExportError(
+        "E_COMPILE",
+        `PDF のコンパイルに失敗しました${processDetail(compileResult)}`,
+      );
+    const pdfInfo = await stat(pdfPath);
+    if (pdfInfo.size > maxPdfBytes)
+      throw new PdfExportError("E_LIMIT", `PDF が上限 ${maxPdfBytes} bytes を超えています`);
+    const log = await readCompilationLog(
+      join(temporaryDirectory, compiledLogName(inputPath)),
+      maxLogBytes,
+    );
+    const groups = groupFramePages(log, frames, maxPages);
+    const warnings = parseOverfullWarnings(log, frames);
+    if (signal?.aborted)
+      throw new PdfExportError("E_CANCELLED", "コンパイルはキャンセルされました");
+    if (!includeImages) {
+      return {
+        engineVersion,
+        frames: frames.map((frame) => ({
+          address: frame.address,
+          span: frame.span,
+          images: [],
+        })),
+        warnings,
+      };
+    }
+    // Kept as a local guard for TypeScript after the analysis-only early return.
+    if (rasterizer === undefined)
+      throw new PdfExportError(
+        "E_RASTERIZE",
+        "frame PNG を生成する rasterizer が設定されていません",
+      );
+    let images: readonly FrameImage[];
+    try {
+      images = await rasterizer.rasterize(
+        pdfPath,
+        signal === undefined
+          ? { maxPages, maxPngBytes, maxPixelsPerPage, maxImageDimension }
+          : { signal, maxPages, maxPngBytes, maxPixelsPerPage, maxImageDimension },
+      );
+    } catch (error) {
+      if (error instanceof PdfExportError) throw error;
+      if (isAbort(error, signal))
+        throw new PdfExportError("E_CANCELLED", "コンパイルはキャンセルされました", error);
+      throw new PdfExportError(
+        "E_RASTERIZE",
+        `PDF page の rasterize に失敗しました: ${String(error)}`,
+        error,
+      );
+    }
+    if (signal?.aborted)
+      throw new PdfExportError("E_CANCELLED", "コンパイルはキャンセルされました");
+    if (images.length > maxPages)
+      throw new PdfExportError("E_LIMIT", `PDF page 数が上限 ${maxPages} を超えています`);
+    const imageByPage = new Map<number, FrameImage>();
+    let pngBytes = 0;
+    for (const image of images) {
+      if (!Number.isSafeInteger(image.page) || image.page < 1 || imageByPage.has(image.page))
+        throw new PdfExportError("E_RASTERIZE", "rasterizer が不正な PDF page を返しました");
+      if (
+        !Number.isSafeInteger(image.width) ||
+        !Number.isSafeInteger(image.height) ||
+        image.width <= 0 ||
+        image.height <= 0 ||
+        image.width > maxImageDimension ||
+        image.height > maxImageDimension ||
+        image.width * image.height > maxPixelsPerPage
+      )
+        throw new PdfExportError(
+          "E_LIMIT",
+          "rasterizer が画像サイズ上限を超える page を返しました",
+        );
+      pngBytes += image.png.byteLength;
+      if (pngBytes > maxPngBytes)
+        throw new PdfExportError("E_LIMIT", `PNG 合計が上限 ${maxPngBytes} bytes を超えています`);
+      imageByPage.set(image.page, image);
+    }
+    let expectedPageCount = 0;
+    for (const pages of groups.values()) {
+      expectedPageCount += pages.length;
+      if (pages.some((page) => !imageByPage.has(page)))
+        throw new PdfExportError(
+          "E_RASTERIZE",
+          "rasterizer の PDF page と Tectonic 出力が一致しません",
+        );
+    }
+    if (images.length !== expectedPageCount)
+      throw new PdfExportError(
+        "E_RASTERIZE",
+        "rasterizer の PDF page と Tectonic 出力が一致しません",
+      );
+    return {
+      engineVersion,
+      frames: frames.map((frame) => ({
+        address: frame.address,
+        span: frame.span,
+        images:
+          groups.get(frame.address.number)?.map((page) => imageByPage.get(page) as FrameImage) ??
+          [],
+      })),
+      warnings,
+    };
+  } catch (error) {
+    if (error instanceof PdfExportError) throw error;
+    if (isAbort(error, signal))
+      throw new PdfExportError("E_CANCELLED", "コンパイルはキャンセルされました", error);
+    throw new PdfExportError("E_IO", `frame コンパイルに失敗しました: ${String(error)}`, error);
+  } finally {
+    if (temporaryDirectory)
+      await rm(temporaryDirectory, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
