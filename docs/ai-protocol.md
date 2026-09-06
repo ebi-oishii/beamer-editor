@@ -49,14 +49,14 @@
 | `deck outline <file>` | 構造把握・アドレス解決 | フレーム一覧(text / `--json`) |
 | `deck lint <file>` | 語彙・規則の検証(L001〜) | ソース位置付き指摘(text / `--json`) |
 | `deck format <file> --write` | 正規形化 | 差分の有無 |
-| `deck check <file>` | 実コンパイルによる検証 | エラーと Overfull 警告をフレームアドレスに割り付けて報告 |
+| `deck check <file> [--tectonic <path>] [--json]` | 実コンパイルによる検証 | lint、Overfull、キャンバスのはみ出し・重なりをフレームアドレスに割り付けて報告。入力・出力は変更しない |
 | `deck snapshot <file> --frame <addr> -o <png>` | フレームの見た目の自己確認 | 実コンパイル画像 |
 | `deck export <file> -o <pdf>` | 最終出力 | PDF |
 | `deck init` | 新規デッキプロジェクトの雛形生成(スキル同梱。§8) | 生成ファイル一覧 |
 
 `deck check` はキャンバスフレーム([subset-spec.md](subset-spec.md) §2.8)について、savepos 実測による本文領域外へのはみ出し・オブジェクト重なりの検出も報告する(絶対配置は Overfull 警告が出ないため)。
 
-`check` と `snapshot` は tectonic を使うため数秒かかるが、エージェントの検証は対話的操作ではないので許容する(人間のプレビューは常に即時の HTML 側)。
+`check` と `snapshot` は tectonic を使うため数秒かかるが、エージェントの検証は対話的操作ではないので許容する(人間のプレビューは常に即時の HTML 側)。`check` は診断なし（または情報のみ）を 0、警告を 1、lint エラーを 2、Tectonic・入出力・使用法などの操作失敗を 3 で終了する。`--json` の操作失敗は stderr に出る。
 
 ## 5. 行動規約(ガードレール)
 

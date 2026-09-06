@@ -27,8 +27,8 @@ AI がスライドの叩き台を生成し、人間が微調整して完成さ�
 
 実装中。**M1(読める)到達済み**。Phase 5 の VS Code 基盤はマージ済みで、M2 は実機受け入れ確認を残す(開発順序は開発計画を参照)。進行中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。
 
-- 実装済み: パーサ + AST(Phase 1)、キャンバス正規形フォーマッタ + lint 基盤 + canonical fixture property tests(Phase 2)、マクロ展開器(Phase 3)、HTML プレビュー + KaTeX(Phase 4)、スタイル語彙 v1(S1)、Noto Sans CJK 対応(S2)、VS Code 拡張スキャフォールド(VS-1)〜テーマ/a11y(VS-7)、CSP/Workspace Trust(VS-8)、テスト・`.vsix`生成・CI artifact(VS-9)、プレビュー上のキャンバス画像ドラッグ。
-- 次: M2 の実機受け入れ確認（特に別環境での`.vsix`導入）→ ドッグフーディング開始([vscode-migration-plan.md](docs/vscode-migration-plan.md))、Phase 2 の残り(正規形の全域化、L003/L006/L008/L010)。
+- 実装済み: パーサ + AST(Phase 1)、キャンバス正規形フォーマッタ + lint 基盤 + canonical fixture property tests(Phase 2)、マクロ展開器(Phase 3)、HTML プレビュー + KaTeX(Phase 4)、スタイル語彙 v1(S1)、Noto Sans CJK 対応(S2)、VS Code 拡張スキャフォールド(VS-1)〜テーマ/a11y(VS-7)、CSP/Workspace Trust(VS-8)、テスト・`.vsix`生成・CI artifact(VS-9)、プレビュー上のキャンバス画像ドラッグ、CLI の `lint` / `format` / `outline` / `export` / `check`。
+- 次: `deck snapshot` (#89) により実コンパイル結果をフレーム単位で画像確認できるようにする。M2 実機確認は配布前のスモークテストとして継続する。
 
 ## 開発
 
@@ -52,3 +52,16 @@ pnpm --dir packages/cli deck export talk.slide.tex --format pdf
 
 `-o output.pdf` で出力先を指定できる。既存ファイルを置き換える場合は明示的に
 `--overwrite` を指定する。`--tectonic /path/to/tectonic` と `--json` も利用できる。
+
+### 実コンパイル検査
+
+`deck check` は入力を変更せず、静的 lint と Tectonic による実コンパイルを 1 回実行する。
+Overfull とキャンバスの本文領域外・重なりをフレーム番号 / label 付きで報告する。
+
+```bash
+pnpm --dir packages/cli deck check talk.slide.tex
+pnpm --dir packages/cli deck check talk.slide.tex --tectonic /path/to/tectonic --json
+```
+
+診断なし（または情報のみ）は終了コード 0、警告は 1、lint エラーは 2、Tectonic・入出力・
+使用法などの操作失敗は 3 で終了する。`--json` の操作失敗は stderr に出力される。
