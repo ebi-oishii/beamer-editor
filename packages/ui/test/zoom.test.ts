@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MIN_ZOOM,
+  parseZoom,
   roundZoom,
   stepZoom,
   wheelDeltaPixels,
@@ -85,6 +86,15 @@ describe("wheelZoom", () => {
     expect(wheelDeltaPixels(3, 1)).toBe(48);
     expect(wheelDeltaPixels(1, 2)).toBe(400);
     expect(wheelDeltaPixels(-7, 0)).toBe(-7);
+  });
+});
+
+describe("parseZoom", () => {
+  it("操作で作れる値(正の有限な数)と fit を受け、それ以外は fit に戻す", () => {
+    // fit が範囲外のときに作られる手動倍率(0.111 や 3.5)も、保存して読み戻せる。
+    for (const value of [1, 0.111, 0.24, 3.5, "fit"]) expect(parseZoom(value)).toBe(value);
+    for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "1", undefined, null])
+      expect(parseZoom(value)).toBe("fit");
   });
 });
 

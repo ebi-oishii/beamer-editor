@@ -61,9 +61,12 @@ describe("createMessageShellHost", () => {
     expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
     stored = { current: 2, step: 3, zoom: "invalid" };
     expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
+    // fit が 0.25 より小さい・3 より大きいときの手動倍率は範囲の外に出るので、保存値もそのまま受ける。
     stored = { current: 2, step: 3, zoom: 0.24 };
-    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: 0.24 });
     stored = { current: 2, step: 3, zoom: 3.01 };
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: 3.01 });
+    stored = { current: 2, step: 3, zoom: 0 };
     expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
     stored = { current: 2, step: 3, zoom: Number.POSITIVE_INFINITY };
     expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });

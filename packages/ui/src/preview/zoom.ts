@@ -14,17 +14,14 @@ export function roundZoom(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-/** 保存済みの zoom 値を検証する。不正値は fit に戻す。 */
+/**
+ * 保存済みの zoom 値を検証する。不正値は fit に戻す。
+ * 手動倍率の範囲は fit の現在値まで広がる(zoomRange)ので、[MIN_ZOOM, MAX_ZOOM] の外の値も
+ * 正しく保存されうる。受け付けるのは、操作で作れる値と同じ「正の有限な数」。
+ */
 export function parseZoom(value: unknown): ZoomState {
   if (value === "fit") return value;
-  if (
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    value >= MIN_ZOOM &&
-    value <= MAX_ZOOM
-  ) {
-    return value;
-  }
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
   return "fit";
 }
 

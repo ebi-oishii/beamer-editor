@@ -633,6 +633,69 @@ describe("mountPreview", () => {
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 0.852 });
   });
 
+  it("fit が下限より小さいときに作った手動倍率は、保存して再表示しても fit に戻らない", () => {
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    const animationCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      animationCallbacks.push(callback);
+      return animationCallbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: { zoom: unknown }[] = [];
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: "fit" as const }),
+      saveNavState: (state: { zoom: unknown }) => saved.push(state),
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    const scroll = container.querySelector<HTMLElement>(".slide-scroll");
+    if (!preview || !scroll) throw new Error("preview fixture missing");
+    // (93 - (12 + 4) * 2) / 607 = 0.1005 で、fit が下限 0.25 より小さい。
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 93 },
+      clientHeight: { configurable: true, value: 400 },
+    });
+    act(() => resizeCallbacks[0]?.([], {} as ResizeObserver));
+    act(() =>
+      preview.dispatchEvent(
+        new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100 }),
+      ),
+    );
+    act(() => animationCallbacks[0]?.(0));
+    // 1 ノッチぶん拡大した 0.111 が保存される(0.25 へ飛ばない)。
+    expect(saved.at(-1)?.zoom).toBe(0.111);
+
+    // 保存した状態から再表示しても、fit に戻らず同じ倍率で始まる。
+    const restored: { zoom: unknown }[] = [];
+    const again = document.createElement("div");
+    document.body.append(again);
+    act(() => {
+      mountPreview(again, {
+        ...fakeHost(),
+        loadNavState: () => saved.at(-1) as { current: number; step: number; zoom: "fit" | number },
+        saveNavState: (state: { zoom: unknown }) => restored.push(state),
+      });
+    });
+    expect(restored.at(-1)?.zoom).toBe(0.111);
+  });
+
   it("resize 後も内側は論理サイズのまま、幅合わせの外側だけを再計算する", () => {
     const callbacks: ResizeObserverCallback[] = [];
     class ResizeObserverMock {
