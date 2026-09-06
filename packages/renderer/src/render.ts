@@ -18,6 +18,7 @@ import type {
   InlineNode,
   LengthSpec,
   ListItemNode,
+  ParagraphNode,
   PreviewLogo,
   PreviewStyle,
   RawFrameNode,
@@ -101,35 +102,42 @@ function aspectOf(widthFactor: number | null, heightFactor: number | null): numb
   return Math.max(MIN_PLACEHOLDER_WIDTH, widthFactor ?? DEFAULT_PLACEHOLDER_WIDTH) / heightFactor;
 }
 
-const WIDTH_UNIT = "(?:textwidth|linewidth|columnwidth)";
-const HEIGHT_UNIT = "(?:textheight|paperheight)";
+type WrapperUnit = "textwidth" | "linewidth" | "columnwidth" | "textheight" | "paperheight";
+/** 外枠の大きさ指定 1 つ(係数と単位)。行幅への換算は描画側が段組みなどの文脈を見て行う。 */
+interface WrapperLength {
+  factor: number;
+  unit: WrapperUnit;
+}
+
+const WRAPPER_UNIT = "(textwidth|linewidth|columnwidth|textheight|paperheight)";
 const FACTOR = "([0-9]*\\.?[0-9]+)?";
 
 /**
  * 生ブロックを包む外枠の大きさ指定を拾う。見るのは最初の `\\begin{` より前(`\\resizebox{0.8\\textwidth}{!}{`
  * や `\\includegraphics[width=…]` の部分)だけで、環境の中身(`\\node[text width=…, minimum height=…]` など)
  * は見ない。`width=` / `height=` はオプションのキー先頭(`[` か `,` の直後)にあるものだけを取る。
- * 高さは \\textheight 基準なので、行幅に対する比へ換算して返す。係数が省かれていれば 1、無ければ null。
+ * 係数と単位はそのまま返す(係数が省かれていれば 1)。指定が無ければ null。
  */
-function placeholderSize(
-  tex: string,
-  textheightInLinewidth: number,
-): { width: number | null; height: number | null } {
+function placeholderSize(tex: string): {
+  width: WrapperLength | null;
+  height: WrapperLength | null;
+} {
   const begin = tex.indexOf("\\begin{");
   const wrapper = begin === -1 ? tex : tex.slice(0, begin);
-  const factor = (match: RegExpExecArray | null): number | null =>
-    match === null ? null : match[1] ? Number(match[1]) : 1;
+  const length = (match: RegExpExecArray | null): WrapperLength | null =>
+    match === null
+      ? null
+      : { factor: match[1] ? Number(match[1]) : 1, unit: match[2] as WrapperUnit };
   const width =
-    factor(new RegExp(`\\\\resizebox\\{\\s*${FACTOR}\\\\${WIDTH_UNIT}\\s*\\}`).exec(wrapper)) ??
-    factor(new RegExp(`[\\[,]\\s*width\\s*=\\s*${FACTOR}\\\\${WIDTH_UNIT}`).exec(wrapper));
-  const heightInTextheight =
-    factor(
-      new RegExp(`\\\\resizebox\\{[^}]*\\}\\{\\s*${FACTOR}\\\\${HEIGHT_UNIT}\\s*\\}`).exec(wrapper),
-    ) ?? factor(new RegExp(`[\\[,]\\s*height\\s*=\\s*${FACTOR}\\\\${HEIGHT_UNIT}`).exec(wrapper));
-  return {
-    width,
-    height: heightInTextheight === null ? null : heightInTextheight * textheightInLinewidth,
-  };
+    length(new RegExp(`\\\\resizebox\\{\\s*${FACTOR}\\\\${WRAPPER_UNIT}\\s*\\}`).exec(wrapper)) ??
+    length(new RegExp(`[\\[,]\\s*width\\s*=\\s*${FACTOR}\\\\${WRAPPER_UNIT}`).exec(wrapper));
+  const height =
+    length(
+      new RegExp(`\\\\resizebox\\{[^}]*\\}\\{\\s*${FACTOR}\\\\${WRAPPER_UNIT}\\s*\\}`).exec(
+        wrapper,
+      ),
+    ) ?? length(new RegExp(`[\\[,]\\s*height\\s*=\\s*${FACTOR}\\\\${WRAPPER_UNIT}`).exec(wrapper));
+  return { width, height };
 }
 
 const basename = (path: string): string => path.split(/[\\/]/).pop() ?? path;
@@ -267,6 +275,8 @@ function math(tex: string, displayMode: boolean): string {
 class FrameRenderer {
   /** 現在の \pause 通過数。要素の data-min に反映する。 */
   private pauseCount = 0;
+  /** 今描いている場所の行幅(本文幅に対する比)。段組みの中では段の幅になる。 */
+  private linewidthFactor = 1;
   /** フレーム内で観測したオーバーレイの最大ステップ。 */
   private maxStep = 1;
 
@@ -404,6 +414,12 @@ class FrameRenderer {
     let prevParagraph = false;
     for (const block of blocks) {
       if (block.type === "paragraph") {
+        const figure = this.figurePlaceholder(block);
+        if (figure) {
+          out += figure;
+          prevParagraph = false;
+          continue;
+        }
         out += `${prevParagraph ? "<br>" : ""}<span${this.overlayAttrs(null)}>${this.renderInlines(block.children)}</span>`;
         prevParagraph = true;
       } else {
@@ -428,22 +444,11 @@ class FrameRenderer {
 
   private renderBlock(block: BlockNode): string {
     switch (block.type) {
-      case "paragraph": {
-        // `\\resizebox{…}{!}{\\begin{tikzpicture}…}` のように、環境を命令で包んだものは段落内の生インラインになる。
-        // 図として置かれているので、生ブロックと同じ箱にする(原文を本文に流し込まない)。
-        const figure = figureLikeRawInline(block.children);
-        if (figure) {
-          const size = placeholderSize(figure.tex, this.textheightInLinewidth());
-          return placeholderHtml(
-            "raw-block",
-            environmentOf(figure.tex) ?? "生 LaTeX",
-            figure.tex,
-            placeholderStyle(size.width, aspectOf(size.width, size.height)),
-            `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}`,
-          );
-        }
-        return `<p${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}>${this.renderInlines(block.children)}</p>`;
-      }
+      case "paragraph":
+        return (
+          this.figurePlaceholder(block) ??
+          `<p${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}>${this.renderInlines(block.children)}</p>`
+        );
       case "list": {
         const tag = block.kind === "itemize" ? "ul" : "ol";
         const flow = this.flowBlockAttrs(block);
@@ -457,10 +462,14 @@ class FrameRenderer {
       }
       case "columns": {
         const cols = block.columns
-          .map(
-            (c) =>
-              `<div class="col" style="width:${(c.width.factor * 100).toFixed(1)}%">${this.renderBlocks(c.children)}</div>`,
-          )
+          .map((c) => {
+            // 段の中では行幅が段の幅になる。固定長(\\textheight など)を比にするときの分母。
+            const outer = this.linewidthFactor;
+            this.linewidthFactor = outer * (c.width.factor > 0 ? c.width.factor : 1);
+            const inner = this.renderBlocks(c.children);
+            this.linewidthFactor = outer;
+            return `<div class="col" style="width:${(c.width.factor * 100).toFixed(1)}%">${inner}</div>`;
+          })
           .join("");
         return `<div class="columns${block.topAligned ? " top" : ""}"${this.flowBlockAttrs(block)}>${cols}</div>`;
       }
@@ -534,23 +543,59 @@ class FrameRenderer {
         return this.renderToc();
       case "canvas":
         return this.renderCanvas(block);
-      case "rawBlock": {
-        const size = placeholderSize(block.tex, this.textheightInLinewidth());
-        return placeholderHtml(
-          "raw-block",
-          block.environment ?? "生 LaTeX",
+      case "rawBlock":
+        return this.rawBlockPlaceholder(
           block.tex,
-          placeholderStyle(size.width, aspectOf(size.width, size.height)),
+          block.environment,
           `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}`,
         );
-      }
     }
   }
 
-  /** \\textheight を行幅に対する比で表す(箱の縦寸法を aspect-ratio に畳むため)。 */
-  private textheightInLinewidth(): number {
-    const { bodyAreaPt: body } = this.theme.metrics;
-    return body.height / body.width;
+  /**
+   * 外枠の長さを、今の行幅(段組みなら段の幅)に対する比にする。箱の幅は親基準の % で、高さは幅との比
+   * (aspect-ratio)で出すため、行幅系の単位はそのまま比になり段に追従する。\\textheight / \\paperheight は
+   * 段の幅と無関係な固定長なので、段の幅で割って段の中でも同じ高さに見せる。
+   */
+  private lengthInLinewidth(length: WrapperLength | null): number | null {
+    if (length === null) return null;
+    const { bodyAreaPt: body, slideHeightPt } = this.theme.metrics;
+    switch (length.unit) {
+      case "textheight":
+        return (length.factor * body.height) / body.width / this.linewidthFactor;
+      case "paperheight":
+        return (length.factor * slideHeightPt) / body.width / this.linewidthFactor;
+      default:
+        return length.factor;
+    }
+  }
+
+  /** 生ブロック(またはそれを包んだ生インライン)の箱。大きさは外枠の指定から、今の行幅を基準に決める。 */
+  private rawBlockPlaceholder(tex: string, environment: string | null, attrs: string): string {
+    const size = placeholderSize(tex);
+    const width = this.lengthInLinewidth(size.width);
+    return placeholderHtml(
+      "raw-block",
+      environment ?? "生 LaTeX",
+      tex,
+      placeholderStyle(width, aspectOf(width, this.lengthInLinewidth(size.height))),
+      attrs,
+    );
+  }
+
+  /**
+   * `\\resizebox{…}{!}{\\begin{tikzpicture}…}` のように、環境を命令で包んだものは段落内の生インラインになる。
+   * 図として置かれているので、生ブロックと同じ箱にする(原文を本文に流し込まない)。段落がブロックとして
+   * 出るときも \\item の中で出るときも、この同じ判定を通す。図でなければ null。
+   */
+  private figurePlaceholder(block: ParagraphNode): string | null {
+    const figure = figureLikeRawInline(block.children);
+    if (!figure) return null;
+    return this.rawBlockPlaceholder(
+      figure.tex,
+      environmentOf(figure.tex),
+      `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}`,
+    );
   }
 
   private renderCanvas(block: CanvasNode): string {
@@ -639,6 +684,7 @@ class FrameRenderer {
   ): { html: string; stepCount: number; canvasElements: RenderedCanvasElement[] } {
     this.pauseCount = 0;
     this.maxStep = 1;
+    this.linewidthFactor = 1;
     this.canvasElements = [];
     this.detachStatuses = detachStatusesOf(frame);
     const body = this.renderBlocks(frame.body);
