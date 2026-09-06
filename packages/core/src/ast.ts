@@ -506,3 +506,42 @@ export function frameLabel(frame: AnyFrameNode): string | null {
 export function framesOf(doc: DeckDocument): AnyFrameNode[] {
   return doc.body.filter((el): el is AnyFrameNode => el.type === "frame" || el.type === "rawFrame");
 }
+
+/** フレーム一覧・プレビューで共通に使う表示用タイトル。 */
+export function frameTitleText(frame: FrameNode | RawFrameNode, frameNumber: number): string {
+  if (frame.type === "rawFrame") {
+    const title = frame.title?.replace(/\s+/g, " ").trim();
+    return title || `frame ${frameNumber}`;
+  }
+  if (!frame.title || frame.title.length === 0) return `frame ${frameNumber}`;
+
+  let text = "";
+  const append = (nodes: InlineNode[]): void => {
+    for (const node of nodes) {
+      switch (node.type) {
+        case "text":
+          text += node.value;
+          break;
+        case "styled":
+        case "colorText":
+        case "href":
+          append(node.children);
+          break;
+        case "url":
+          text += node.url;
+          break;
+        case "inlineMath":
+          text += `$${node.tex}$`;
+          break;
+        case "rawInline":
+          text += node.tex;
+          break;
+        case "lineBreak":
+          text += " ";
+          break;
+      }
+    }
+  };
+  append(frame.title);
+  return text;
+}

@@ -159,6 +159,15 @@ describe("parseDeck: kitchen-sink.slide.tex", () => {
     expect(raw[0]?.tex).toContain("shrink=5");
   });
 
+  it("生フレームの label は開始タグのオプションからだけ回復する", () => {
+    const [frame] = framesOf(
+      parseDeck(String.raw`\begin{frame}[label=slide,shrink=5]{Raw title}
+\includegraphics[label=figure]{chart.pdf}
+\end{frame}`),
+    );
+    expect(frame).toMatchObject({ type: "rawFrame", label: "slide", title: "Raw title" });
+  });
+
   it("verbatim は fragile フレームの生ブロックになる", () => {
     const vf = frames[4];
     if (vf?.type !== "frame") throw new Error("expected frame");

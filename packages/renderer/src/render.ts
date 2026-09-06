@@ -25,7 +25,7 @@ import type {
   RawInlineNode,
   SourceSpan,
 } from "@beamer-editor/core";
-import { type DetachStatus, detachStatusesOf, framesOf } from "@beamer-editor/core";
+import { type DetachStatus, detachStatusesOf, framesOf, frameTitleText } from "@beamer-editor/core";
 import katex from "katex";
 import { DEFAULT_THEME, type Theme } from "./theme.js";
 
@@ -738,16 +738,8 @@ function inlineToPlain(nodes: InlineNode[]): string {
   return out;
 }
 
-/**
- * フレーム一覧・プレビューで共通に使う表示用タイトル。
- * 数式・raw inline の文字列表現も renderDeck と完全に揃える。
- */
-export function frameTitleText(frame: FrameNode | RawFrameNode, frameNumber: number): string {
-  if (frame.type === "rawFrame") return frame.title ?? `frame ${frameNumber}`;
-  return frame.title && frame.title.length > 0
-    ? inlineToPlain(frame.title)
-    : `frame ${frameNumber}`;
-}
+// renderer 利用者との既存互換を保つ。実装の唯一の所有者は core。
+export { frameTitleText } from "@beamer-editor/core";
 
 /** デッキ全体を描画する。 */
 export function renderDeck(
