@@ -3,6 +3,7 @@ import {
   type CanvasNode,
   type DeckDocument,
   type FrameNode,
+  frameLabel,
   framesOf,
   isCanvasFrame,
 } from "../src/ast.js";
@@ -63,5 +64,14 @@ describe("ast smoke", () => {
       ],
     };
     expect(framesOf(doc)).toHaveLength(2);
+  });
+
+  it("解釈済み・生フレームの空白付き label を共通に正規化する", () => {
+    const parsed = makeFrame([]);
+    parsed.options.label = "  id  ";
+    expect(frameLabel(parsed)).toBe("id");
+    expect(
+      frameLabel({ type: "rawFrame", span: span(0, 1), tex: "", title: null, label: "   " }),
+    ).toBe(null);
   });
 });

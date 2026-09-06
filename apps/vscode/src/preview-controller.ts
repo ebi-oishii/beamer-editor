@@ -88,6 +88,11 @@ export interface PreviewControllerOptions {
   /** 描画が成功するたびに呼ぶ(生ブロックの部分コンパイルの起点。#81)。 */
   onRendered?: (outcome: RenderOutcome) => void;
   /**
+   * Webview からの取り消し / やり直し要求(Cmd/Ctrl+Z。#103)。エディタ操作は vscode API が要るため
+   * extension.ts が注入する。既定は何もしない。
+   */
+  undoRedo?: (kind: "undo" | "redo") => void | Promise<void>;
+  /**
    * 画像などローカルリソースのパスを Webview で読める URI へ変換する
    * (asWebviewUri。extension.ts が注入)。未指定なら書き換えない。
    */
@@ -202,6 +207,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly onError: (message: string) => void;
   private readonly onWarning: (message: string) => void;
   private readonly navigate: (offset: number) => void;
+  private readonly undoRedo: (kind: "undo" | "redo") => void | Promise<void>;
   private readonly resolveResource: ((path: string) => string) | undefined;
   private readonly onRendered: (outcome: RenderOutcome) => void;
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
@@ -248,6 +254,7 @@ export class PreviewController implements vscode.Disposable {
     this.onError = options.onError ?? (() => {});
     this.onWarning = options.onWarning ?? (() => {});
     this.navigate = options.navigate ?? (() => {});
+    this.undoRedo = options.undoRedo ?? (() => {});
     this.resolveResource = options.resolveResource;
     this.onRendered = options.onRendered ?? (() => {});
     this.moveCanvasElement = options.moveCanvasElement;
@@ -315,6 +322,14 @@ export class PreviewController implements vscode.Disposable {
       void this.handleMove(msg);
     } else if (msg.type === "detachToCanvas") {
       void this.handleDetach(msg);
+    } else if (msg.type === "undoRedo") {
+      // 注入された処理は同期で呼び出し、同期の例外も非同期の rejection も onError へ回す。
+      const report = () => this.onError(`failed to ${msg.kind} the source document.`);
+      try {
+        Promise.resolve(this.undoRedo(msg.kind)).catch(report);
+      } catch {
+        report();
+      }
     }
     // activeFrameChanged はソース側カーソル追従(VS-5 以降)で使う予定(現状 no-op)。
   }
