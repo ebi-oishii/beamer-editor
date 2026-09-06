@@ -156,7 +156,7 @@ function firePointer(
   });
 }
 
-function mountCanvasPreview() {
+function mountCanvasPreview(deck: RenderedDeck = CANVAS_DECK) {
   const container = document.createElement("div");
   document.body.append(container);
   const moveCanvasElement = vi.fn();
@@ -165,7 +165,7 @@ function mountCanvasPreview() {
     mountPreview(container, host);
   });
   act(() => {
-    host.push(CANVAS_DECK);
+    host.push(deck);
   });
 
   const scale = container.querySelector<HTMLElement>(".slide-scale");
@@ -1265,7 +1265,7 @@ describe("mountPreview", () => {
     expect(cards[1]?.classList.contains("active")).toBe(true);
   });
 
-  it("canvas image は pointerup で一度だけ範囲外座標を clamp せず送る", () => {
+  it("canvas image は pointerup で一度だけ、本文領域内へ収めた座標を送る", () => {
     const { editable, moveCanvasElement, releasePointerCapture, scale, setPointerCapture } =
       mountCanvasPreview();
 
@@ -1274,14 +1274,58 @@ describe("mountPreview", () => {
     expect(editable.classList.contains("canvas-editable")).toBe(true);
     expect(setPointerCapture).toHaveBeenCalledWith(7);
 
+    // 素の論理位置は (-0.1, 1.25)。高さ 0.3 を含めて左上/下端で止まって見える。
     firePointer(scale, "pointermove", 70, 310);
     expect(moveCanvasElement).not.toHaveBeenCalled();
-    expect(editable.style.left).toBe("-10%");
-    expect(editable.style.top).toBe("125%");
+    expect(editable.style.left).toBe("0%");
+    expect(editable.style.top).toBe("70%");
 
     firePointer(scale, "pointerup", 70, 310);
-    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, -0.1, 1.25);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 0.7);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
+  });
+
+  it("canvas image は右端でも x + width が 1 を超えない位置で止まる", () => {
+    const { editable, moveCanvasElement, scale } = mountCanvasPreview();
+
+    firePointer(editable, "pointerdown", 150, 100);
+    // 幅 0.3 の箱を右へ振り切ると x は 0.7 で止まる。
+    firePointer(scale, "pointermove", 900, 150);
+    expect(editable.style.left).toBe("70%");
+
+    firePointer(scale, "pointerup", 900, 150);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.7, 0.45);
+  });
+
+  it("領域外の既存位置を選択クリックだけで補正せず、pointermove 後にだけ補正する", () => {
+    const frame = CANVAS_DECK.frames[0];
+    if (!frame?.canvasElements) throw new Error("canvas fixture missing");
+    const deck: RenderedDeck = {
+      ...CANVAS_DECK,
+      frames: [
+        {
+          ...frame,
+          canvasElements: frame.canvasElements.map((element) =>
+            element.id === "canvas-image-0"
+              ? { ...element, position: { ...element.position, x: 0.9 } }
+              : element,
+          ),
+        },
+      ],
+    };
+    const { editable, moveCanvasElement, scale } = mountCanvasPreview(deck);
+    // x=0.9 の見た目の位置で pointerdown/up しても、選択だけでは source を直さない。
+    vi.spyOn(editable, "getBoundingClientRect").mockReturnValue(domRect(460, 90, 120, 60));
+    firePointer(editable, "pointerdown", 470, 100);
+    firePointer(scale, "pointerup", 470, 100);
+    expect(moveCanvasElement).not.toHaveBeenCalled();
+    expect(editable.style.left).toBe("90%");
+    expect(editable.style.top).toBe("20%");
+
+    firePointer(editable, "pointerdown", 470, 100);
+    firePointer(scale, "pointermove", 480, 100);
+    firePointer(scale, "pointerup", 480, 100);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.7, 0.2);
   });
 
   it("canvas image の clickだけではmoveを送らない", () => {
@@ -1291,6 +1335,54 @@ describe("mountPreview", () => {
     firePointer(scale, "pointerup", 150, 100);
 
     expect(moveCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("本文より高い画像の選択クリックは表示を戻し、moveを送らない", () => {
+    const { editable, moveCanvasElement, scale } = mountCanvasPreview();
+    vi.spyOn(editable, "getBoundingClientRect").mockReturnValue(domRect(140, 90, 120, 300));
+
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(scale, "pointerup", 150, 100);
+
+    expect(moveCanvasElement).not.toHaveBeenCalled();
+    expect(editable.style.left).toBe("10%");
+    expect(editable.style.top).toBe("20%");
+  });
+
+  it("実際に y=0 へ移動した gesture は commit する", () => {
+    const { editable, moveCanvasElement, scale } = mountCanvasPreview();
+
+    firePointer(editable, "pointerdown", 150, 100);
+    // x は元の 0.1 のまま、y だけ 0 へ動かす。
+    firePointer(scale, "pointerup", 150, 60);
+
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.1, 0);
+  });
+
+  it("高さ 0 は不明として扱い、画像 anchor を y=1 で止める", () => {
+    const { editable, moveCanvasElement, scale } = mountCanvasPreview();
+    vi.spyOn(editable, "getBoundingClientRect").mockReturnValue(domRect(140, 90, 120, 0));
+
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(scale, "pointerup", 70, 310);
+
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 1);
+  });
+
+  it("高さは gesture 開始時に固定し、次 gesture でだけ再測定する", () => {
+    const { editable, moveCanvasElement, scale } = mountCanvasPreview();
+    const bounds = vi.spyOn(editable, "getBoundingClientRect");
+    bounds.mockReturnValue(domRect(140, 90, 120, 60));
+
+    firePointer(editable, "pointerdown", 150, 100);
+    // 画像 load 等で高さが変化しても、この drag では開始時の 0.3 を使う。
+    bounds.mockReturnValue(domRect(140, 90, 120, 0));
+    firePointer(scale, "pointerup", 70, 310);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 0.7);
+
+    firePointer(editable, "pointerdown", 150, 100, 8);
+    firePointer(scale, "pointerup", 70, 310, 8);
+    expect(moveCanvasElement).toHaveBeenLastCalledWith(0, "canvas-image-0", 1, 0, 1);
   });
 
   it("drag中の別pointerdownは現在のdragを上書きしない", () => {
@@ -1310,7 +1402,7 @@ describe("mountPreview", () => {
 
     firePointer(scale, "pointermove", 70, 310, 7);
     firePointer(scale, "pointerup", 70, 310, 7);
-    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, -0.1, 1.25);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 0.7);
     expect(releasePointerCapture).toHaveBeenCalledExactlyOnceWith(7);
   });
 

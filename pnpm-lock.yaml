@@ -182,6 +182,9 @@ importers:
 
   packages/ui:
     dependencies:
+      '@beamer-editor/core':
+        specifier: workspace:*
+        version: link:../core
       '@beamer-editor/renderer':
         specifier: workspace:*
         version: link:../renderer
