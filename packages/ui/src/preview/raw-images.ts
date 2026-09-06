@@ -24,6 +24,8 @@ export function decodeBase64(text: string): Uint8Array {
 export class RawImageStore {
   private readonly states = new Map<string, RawImageState>();
   private readonly listeners = new Set<() => void>();
+  /** key ごとの受信世代。依存の更新や再試行で同じ key に複数の PDF が届くので、最新の結果だけを反映する。 */
+  private readonly generations = new Map<string, number>();
 
   constructor(
     private readonly rasterize: ((pdf: Uint8Array) => Promise<RasterImage>) | undefined,
@@ -42,6 +44,9 @@ export class RawImageStore {
 
   /** ホストからの結果を受け取る。PDF はラスタライズが終わってから ready になる。 */
   receive(key: string, result: RawBlockImageResult): void {
+    const generation = (this.generations.get(key) ?? 0) + 1;
+    this.generations.set(key, generation);
+    const latest = () => this.generations.get(key) === generation;
     if ("error" in result) {
       this.set(key, { status: "failed", message: result.error });
       return;
@@ -66,10 +71,15 @@ export class RawImageStore {
       this.set(key, { status: "failed", message: `PDF を読めません: ${String(error)}` });
       return;
     }
+    // ラスタライズの完了順は届いた順と逆になりうる。古い結果で新しい結果を上書きしない。
     this.rasterize(pdf).then(
-      (image) => this.set(key, { status: "ready", image }),
-      (error: unknown) =>
-        this.set(key, { status: "failed", message: `PDF を画像にできません: ${String(error)}` }),
+      (image) => {
+        if (latest()) this.set(key, { status: "ready", image });
+      },
+      (error: unknown) => {
+        if (latest())
+          this.set(key, { status: "failed", message: `PDF を画像にできません: ${String(error)}` });
+      },
     );
   }
 

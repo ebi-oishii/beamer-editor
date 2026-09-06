@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  affectsRawBlockCompile,
   dependencyFingerprint,
   RawBlockCompiler,
   type RawBlockCompilerFileSystem,
@@ -216,6 +217,86 @@ describe("RawBlockCompiler", () => {
     expect(onReady).toHaveBeenCalledWith("k1", new Uint8Array([1]));
   });
 
+  it("エンジンが使えない失敗は、一度だけ onUnavailable を出してキューを止め、箱を失敗にしない", async () => {
+    const { fs } = memoryFs();
+    let tectonic = false;
+    const compile = vi.fn(async () => {
+      if (!tectonic) throw new Error("Tectonic が見つかりません: tectonic");
+      return new Uint8Array([1]);
+    });
+    const onFailed = vi.fn();
+    const onUnavailable = vi.fn();
+    const onReady = vi.fn();
+    const compiler = new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile,
+      buildDocument: (tex) => tex,
+      isUnavailable: (error) => error instanceof Error && error.message.includes("見つかりません"),
+      onUnavailable,
+      onReady,
+      onFailed,
+    });
+    const blocks = [
+      { key: "k1", tex: "a", environment: null },
+      { key: "k2", tex: "b", environment: null },
+    ];
+    compiler.request(blocks, "");
+    await flush();
+    // 1 本目で分かった時点で止まる。2 本目は試さず、どちらも失敗扱いにしない。
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(onUnavailable).toHaveBeenCalledExactlyOnceWith("Tectonic が見つかりません: tectonic");
+    expect(onFailed).not.toHaveBeenCalled();
+    // 以後の描画で要求されても何もしない(通知も増えない)。
+    compiler.request(blocks, "");
+    await flush();
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(onUnavailable).toHaveBeenCalledTimes(1);
+    // 設定が直って reset されたら判定し直し、今度は両方コンパイルする。
+    tectonic = true;
+    compiler.reset();
+    compiler.request(blocks, "");
+    await flush();
+    await flush();
+    expect(compile).toHaveBeenCalledTimes(3);
+    expect(onReady.mock.calls.map(([key]) => key)).toEqual(["k1", "k2"]);
+  });
+
+  it("reset は失敗の記録も消す", async () => {
+    const { fs } = memoryFs();
+    let broken = true;
+    const compile = vi.fn(async () => {
+      if (broken) throw new Error("! Undefined control sequence.");
+      return new Uint8Array([1]);
+    });
+    const compiler = new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile,
+      buildDocument: (tex) => tex,
+      onReady: vi.fn(),
+      onFailed: vi.fn(),
+    });
+    const blocks = [{ key: "k1", tex: "x", environment: null }];
+    compiler.request(blocks, "");
+    await flush();
+    broken = false;
+    compiler.reset();
+    compiler.request(blocks, "");
+    await flush();
+    expect(compile).toHaveBeenCalledTimes(2);
+  });
+
+  it("affectsRawBlockCompile は Tectonic の場所と有効/無効の設定だけを見る", () => {
+    expect(affectsRawBlockCompile((section) => section === "beamerEditor.tectonicPath")).toBe(true);
+    expect(
+      affectsRawBlockCompile((section) => section === "beamerEditor.preview.compileRawBlocks"),
+    ).toBe(true);
+    expect(affectsRawBlockCompile((section) => section === "beamerEditor.managedFiles")).toBe(
+      false,
+    );
+  });
+
   it("dispose すると実行中のコンパイルを中止し、結果を届けない", async () => {
     const { fs } = memoryFs();
     let aborted = false;
@@ -266,6 +347,27 @@ describe("dependencyFingerprint", () => {
         hash,
       ),
     ).toBe("h(figs/plot.pdf|100|10\nmystyle.sty|200|20\ngone.png|missing)");
+  });
+
+  it("\\graphicspath のディレクトリの下も探し、そこにある画像の更新で指紋が変わる", async () => {
+    const files = new Map<string, { mtimeMs: number; size: number }>([
+      ["/deck/images/foo.png", { mtimeMs: 10, size: 1 }],
+    ]);
+    const statHere = async (path: string) => files.get(path) ?? null;
+    const before = await dependencyFingerprint(["foo"], resolvePath, statHere, hash, ["images/"]);
+    expect(before).toBe("h(images/foo.png|10|1)");
+    files.set("/deck/images/foo.png", { mtimeMs: 11, size: 1 });
+    expect(await dependencyFingerprint(["foo"], resolvePath, statHere, hash, ["images/"])).not.toBe(
+      before,
+    );
+    // 末尾の / が無い指定も同じ。デッキ直下にあればそちらが先。
+    expect(await dependencyFingerprint(["foo"], resolvePath, statHere, hash, ["images"])).toBe(
+      "h(images/foo.png|11|1)",
+    );
+    files.set("/deck/foo.pdf", { mtimeMs: 5, size: 9 });
+    expect(await dependencyFingerprint(["foo"], resolvePath, statHere, hash, ["images/"])).toBe(
+      "h(foo.pdf|5|9)",
+    );
   });
 
   it("依存が無ければ空文字で、ファイルの更新時刻が変われば指紋も変わる", async () => {

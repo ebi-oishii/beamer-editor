@@ -2,7 +2,11 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildFragmentDocument, fragmentDependencies } from "../src/fragment.js";
+import {
+  buildFragmentDocument,
+  fragmentDependencies,
+  fragmentGraphicsPaths,
+} from "../src/fragment.js";
 import { compileFragment, type ProcessRunner } from "../src/index.js";
 
 describe("buildFragmentDocument", () => {
@@ -81,6 +85,17 @@ describe("fragmentDependencies", () => {
       ),
     ).toEqual(["a.png", "after-escaped-percent.png"]);
     expect(fragmentDependencies("\\draw (0,0) -- (1,1);")).toEqual([]);
+  });
+});
+
+describe("fragmentGraphicsPaths", () => {
+  it("\\graphicspath の探索ディレクトリを出現順に拾い、コメントの中は見ない", () => {
+    expect(
+      fragmentGraphicsPaths(
+        "% \\graphicspath{{old/}}\n\\graphicspath{ {images/} {figs/} }\n\\graphicspath{{images/}{../shared/}}",
+      ),
+    ).toEqual(["images/", "figs/", "../shared/"]);
+    expect(fragmentGraphicsPaths("\\includegraphics{a.png}")).toEqual([]);
   });
 });
 

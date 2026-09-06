@@ -48,8 +48,30 @@ const PACKAGES = /\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)
  * コメントの中は見ない。中身がファイル名に見えないもの(改行や `\\` を含む、`\\addplot table {…}` の
  * インラインデータなど)は拾わない。
  */
+/** 行コメント(`\\%` は残す)を除く。 */
+function withoutComments(tex: string): string {
+  return tex.replace(/(^|[^\\])%[^\n]*/g, "$1");
+}
+
+const GRAPHICS_PATH = /\\graphicspath\s*\{((?:\s*\{[^{}]*\}\s*)+)\}/g;
+
+/**
+ * `\\graphicspath{{images/}{figs/}}` の探索ディレクトリ(出現順、重複なし)。`\\includegraphics{foo}` の
+ * 実体はこの下にもあり得るので、依存ファイルの指紋を取るときはここも探す。
+ */
+export function fragmentGraphicsPaths(tex: string): string[] {
+  const found = new Set<string>();
+  for (const match of withoutComments(tex).matchAll(GRAPHICS_PATH)) {
+    for (const entry of (match[1] ?? "").matchAll(/\{([^{}]*)\}/g)) {
+      const directory = (entry[1] ?? "").trim();
+      if (directory !== "" && !/[\\\n%]/.test(directory)) found.add(directory);
+    }
+  }
+  return [...found];
+}
+
 export function fragmentDependencies(tex: string): string[] {
-  const code = tex.replace(/(^|[^\\])%[^\n]*/g, "$1");
+  const code = withoutComments(tex);
   const hits: { index: number; name: string }[] = [];
   const collect = (pattern: RegExp, expand: (value: string) => string[]) => {
     for (const match of code.matchAll(pattern)) {

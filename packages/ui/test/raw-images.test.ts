@@ -61,6 +61,45 @@ describe("RawImageStore / applyRawImages", () => {
     expect(boxes[2]?.dataset.rawStatus).toBeUndefined();
   });
 
+  it("同じ key に複数の PDF が届いて完了順が逆になっても、最後に届いた結果だけを反映する", async () => {
+    const pending = new Map<
+      string,
+      (image: { dataUrl: string; width: number; height: number }) => void
+    >();
+    const rasterize = vi.fn(
+      (pdf: Uint8Array) =>
+        new Promise<{ dataUrl: string; width: number; height: number }>((resolve) => {
+          pending.set(new TextDecoder().decode(pdf), resolve);
+        }),
+    );
+    const store = new RawImageStore(rasterize);
+    store.receive("k", { pdfBase64: btoa("first") });
+    store.receive("k", { pdfBase64: btoa("second") });
+    expect(rasterize).toHaveBeenCalledTimes(2);
+    // 後から届いた方が先に終わる。
+    pending.get("second")?.({ dataUrl: "data:second", width: 2, height: 2 });
+    await vi.waitFor(() => expect(store.get("k")?.status).toBe("ready"));
+    pending.get("first")?.({ dataUrl: "data:first", width: 1, height: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.get("k")).toEqual({
+      status: "ready",
+      image: { dataUrl: "data:second", width: 2, height: 2 },
+    });
+    // 古い方が失敗しても、新しい結果を失敗で上書きしない。
+    const failing = new RawImageStore(
+      vi.fn((pdf: Uint8Array) =>
+        new TextDecoder().decode(pdf) === "old"
+          ? new Promise<never>((_, reject) => setTimeout(() => reject(new Error("late")), 0))
+          : Promise.resolve({ dataUrl: "data:new", width: 1, height: 1 }),
+      ),
+    );
+    failing.receive("k", { pdfBase64: btoa("old") });
+    failing.receive("k", { pdfBase64: btoa("new") });
+    await vi.waitFor(() => expect(failing.get("k")?.status).toBe("ready"));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(failing.get("k")?.status).toBe("ready");
+  });
+
   it("上限を超える PDF は復号もラスタライズもせずに失敗にする", () => {
     const rasterize = vi.fn();
     const store = new RawImageStore(rasterize);

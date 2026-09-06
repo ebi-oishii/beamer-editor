@@ -4,6 +4,8 @@ import {
   compileFragment,
   FRAGMENT_DOCUMENT_VERSION,
   fragmentDependencies,
+  fragmentGraphicsPaths,
+  PdfExportError,
 } from "@beamer-editor/compiler";
 import {
   canvasPositionReplacement,
@@ -38,7 +40,11 @@ import {
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
 import { PreviewHistory } from "./preview-history";
-import { dependencyFingerprint, RawBlockCompiler } from "./raw-block-compiler";
+import {
+  affectsRawBlockCompile,
+  dependencyFingerprint,
+  RawBlockCompiler,
+} from "./raw-block-compiler";
 import { frameLensPositions, sourceHasFrameAt } from "./reveal-slide";
 import {
   hasSlideOutlineContentChanges,
@@ -589,7 +595,27 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           (name) => (path.isAbsolute(name) ? name : path.join(documentDir.fsPath, name)),
           statDependency,
           fragmentHash,
+          fragmentGraphicsPaths(`${preamble}\n${tex}`),
         ),
+      // Tectonic が無い・壊れているときは、ブロックごとに赤枠にせず一度だけ案内する(元 #119)。
+      isUnavailable: (error) =>
+        error instanceof PdfExportError &&
+        (error.code === "E_TECTONIC_NOT_FOUND" || error.code === "E_TECTONIC_VERSION"),
+      onUnavailable: (message) => {
+        void vscode.window
+          .showWarningMessage(
+            `Beamer preview: 生ブロックの部分コンパイルを止めました。${message}`,
+            "設定を開く",
+          )
+          .then((action) => {
+            if (action === "設定を開く")
+              return vscode.commands.executeCommand(
+                "workbench.action.openSettings",
+                "beamerEditor.tectonicPath",
+              );
+            return undefined;
+          });
+      },
       compile: async (fragment, signal) => {
         const config = vscode.workspace.getConfiguration("beamerEditor", document.uri);
         const seconds = config.get<number>("pdfExport.timeoutSeconds", 300);
@@ -627,6 +653,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       () => {
         previewSources.delete(panel);
         rawBlockCompiler.dispose();
+        rawBlockSettings.dispose();
         templateWatcher.dispose();
         viewStateSubscription.dispose();
         if (!previewLifecycle.panelDisposed(document.uri, controller)) return;
@@ -728,7 +755,15 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     templateWatcher.onDidChange(refreshTemplates);
     templateWatcher.onDidCreate(refreshTemplates);
     templateWatcher.onDidDelete(refreshTemplates);
-    context.subscriptions.push(templateWatcher);
+    // Tectonic の場所や部分コンパイルの有効/無効が変わったら、エンジンの判定と失敗を捨てて描画し直す
+    // (プレビューを開き直さずに再試行できる)。
+    const rawBlockSettings = vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!affectsRawBlockCompile((section) => event.affectsConfiguration(section, document.uri)))
+        return;
+      rawBlockCompiler.reset();
+      controller.refresh();
+    });
+    context.subscriptions.push(templateWatcher, rawBlockSettings);
     previewLifecycle.register(document.uri, controller, document, automatic);
     previewController = controller;
   }
