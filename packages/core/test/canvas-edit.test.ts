@@ -60,9 +60,14 @@ describe("clampCanvasPosition", () => {
   it("height 未指定時は下端を y=1 で止める", () => {
     expect(clampCanvasPosition(0.1, 1.25, 0.4)).toEqual({ x: 0.1, y: 1 });
   });
-  it("寸法を含めて右下端へ収める", () => {
+  it("既知かつ本文より小さい高さを含めて右下端へ収める", () => {
     expect(clampCanvasPosition(0.1, 0.9, 0.4, 0.3)).toEqual({ x: 0.1, y: 0.7 });
-    expect(clampCanvasPosition(0.1, 0.9, 0.4, 1.1)).toEqual({ x: 0.1, y: 0 });
+  });
+  it("高さが不明・ゼロ・本文以上なら anchor だけを 0..1 に収める", () => {
+    for (const height of [undefined, 0, Number.NaN, Number.POSITIVE_INFINITY, 1, 1.1]) {
+      expect(clampCanvasPosition(0.1, 0.9, 0.4, height)).toEqual({ x: 0.1, y: 0.9 });
+      expect(clampCanvasPosition(0.1, 1.2, 0.4, height)).toEqual({ x: 0.1, y: 1 });
+    }
   });
   it("範囲内の位置は変えない", () => {
     expect(clampCanvasPosition(0.05, 0.15, 0.5)).toEqual({ x: 0.05, y: 0.15 });

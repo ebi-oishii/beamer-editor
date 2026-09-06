@@ -68,7 +68,7 @@ export function Stage({
     y: number;
     /** 本文領域内へ収めるとき右端の余地になる箱の幅。移動では変わらない。 */
     width: number;
-    /** pointerdown 時点の実測高さ。描画中の内容変化の影響を受けない。 */
+    /** pointerdown 時点の実測高さ。drag 中の再描画・load では再測定せず、次 gesture で更新する。 */
     height: number;
     grabX: number;
     grabY: number;
@@ -266,17 +266,24 @@ export function Stage({
         drag.grabX,
         drag.grabY,
       );
-    const point = raw && clampCanvasPosition(raw.x, raw.y, drag.width, drag.height);
     drag.element.classList.remove("canvas-dragging");
     releasePointerCapture(drag.element, drag.pointerId);
-    if (!commit || !point) {
+    if (!commit || !raw) {
       drag.element.style.left = `${drag.x * 100}%`;
       drag.element.style.top = `${drag.y * 100}%`;
     } else {
-      const x = point.x;
-      const y = point.y;
-      if (x !== roundCanvasCoordinate(drag.x) || y !== roundCanvasCoordinate(drag.y))
-        onMoveCanvasElement(drag.id, x, y);
+      // 選択クリックでは既存の領域外配置まで黙って書き換えない。pointer 由来の
+      // 座標が実際に動いた gesture だけを clamp して source へ commit する。
+      if (
+        roundCanvasCoordinate(raw.x) === roundCanvasCoordinate(drag.x) &&
+        roundCanvasCoordinate(raw.y) === roundCanvasCoordinate(drag.y)
+      ) {
+        drag.element.style.left = `${drag.x * 100}%`;
+        drag.element.style.top = `${drag.y * 100}%`;
+      } else {
+        const point = clampCanvasPosition(raw.x, raw.y, drag.width, drag.height);
+        onMoveCanvasElement(drag.id, point.x, point.y);
+      }
     }
     dragRef.current = undefined;
   };

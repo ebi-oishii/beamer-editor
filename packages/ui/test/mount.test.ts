@@ -1244,7 +1244,7 @@ describe("mountPreview", () => {
     expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.7, 0.45);
   });
 
-  it("領域外の既存位置も最初の drag で本文領域内へ補正する", () => {
+  it("領域外の既存位置を選択クリックだけで補正せず、pointermove 後にだけ補正する", () => {
     const frame = CANVAS_DECK.frames[0];
     if (!frame?.canvasElements) throw new Error("canvas fixture missing");
     const deck: RenderedDeck = {
@@ -1261,10 +1261,17 @@ describe("mountPreview", () => {
       ],
     };
     const { editable, moveCanvasElement, scale } = mountCanvasPreview(deck);
-    // x=0.9 の見た目の位置で pointerdown/up し、移動量ゼロのまま終了する。
+    // x=0.9 の見た目の位置で pointerdown/up しても、選択だけでは source を直さない。
     vi.spyOn(editable, "getBoundingClientRect").mockReturnValue(domRect(460, 90, 120, 60));
     firePointer(editable, "pointerdown", 470, 100);
     firePointer(scale, "pointerup", 470, 100);
+    expect(moveCanvasElement).not.toHaveBeenCalled();
+    expect(editable.style.left).toBe("90%");
+    expect(editable.style.top).toBe("20%");
+
+    firePointer(editable, "pointerdown", 470, 100);
+    firePointer(scale, "pointermove", 480, 100);
+    firePointer(scale, "pointerup", 480, 100);
     expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.7, 0.2);
   });
 
@@ -1275,6 +1282,54 @@ describe("mountPreview", () => {
     firePointer(scale, "pointerup", 150, 100);
 
     expect(moveCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("本文より高い画像の選択クリックは表示を戻し、moveを送らない", () => {
+    const { editable, moveCanvasElement, scale } = mountCanvasPreview();
+    vi.spyOn(editable, "getBoundingClientRect").mockReturnValue(domRect(140, 90, 120, 300));
+
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(scale, "pointerup", 150, 100);
+
+    expect(moveCanvasElement).not.toHaveBeenCalled();
+    expect(editable.style.left).toBe("10%");
+    expect(editable.style.top).toBe("20%");
+  });
+
+  it("実際に y=0 へ移動した gesture は commit する", () => {
+    const { editable, moveCanvasElement, scale } = mountCanvasPreview();
+
+    firePointer(editable, "pointerdown", 150, 100);
+    // x は元の 0.1 のまま、y だけ 0 へ動かす。
+    firePointer(scale, "pointerup", 150, 60);
+
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.1, 0);
+  });
+
+  it("高さ 0 は不明として扱い、画像 anchor を y=1 で止める", () => {
+    const { editable, moveCanvasElement, scale } = mountCanvasPreview();
+    vi.spyOn(editable, "getBoundingClientRect").mockReturnValue(domRect(140, 90, 120, 0));
+
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(scale, "pointerup", 70, 310);
+
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 1);
+  });
+
+  it("高さは gesture 開始時に固定し、次 gesture でだけ再測定する", () => {
+    const { editable, moveCanvasElement, scale } = mountCanvasPreview();
+    const bounds = vi.spyOn(editable, "getBoundingClientRect");
+    bounds.mockReturnValue(domRect(140, 90, 120, 60));
+
+    firePointer(editable, "pointerdown", 150, 100);
+    // 画像 load 等で高さが変化しても、この drag では開始時の 0.3 を使う。
+    bounds.mockReturnValue(domRect(140, 90, 120, 0));
+    firePointer(scale, "pointerup", 70, 310);
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0, 0.7);
+
+    firePointer(editable, "pointerdown", 150, 100, 8);
+    firePointer(scale, "pointerup", 70, 310, 8);
+    expect(moveCanvasElement).toHaveBeenLastCalledWith(0, "canvas-image-0", 1, 0, 1);
   });
 
   it("drag中の別pointerdownは現在のdragを上書きしない", () => {

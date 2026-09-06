@@ -39,7 +39,7 @@ export function clampCanvasPlacement(placement: CanvasPlacement): CanvasPlacemen
  * 幅を変えずに位置だけを本文領域内へ収める(ドラッグ移動)。
  * 右端と下端は箱の実寸を含めて本文領域内へ収める。返す x/y は小数 3 桁なので、
  * 上限は丸める前の寸法に対して下向きに量子化する。これにより返却後も
- * `x + width <= 1` を保つ。寸法の欠落・不正値は 0 として扱う。
+ * `x + width <= 1` を保つ。高さは実測できた場合だけ下端も含めて収める。
  */
 export function clampCanvasPosition(
   x: number,
@@ -67,10 +67,15 @@ export function clampCanvasPosition(
     return Object.is(clamped, -0) ? 0 : clamped;
   };
   const safeWidth = size(width);
-  const safeHeight = size(height);
+  // 高さが不明、または本文以上なら UI だけでは収納できない。その場合でも anchor
+  // 自体は本文の座標系に保ち、溢れの検出は TeX の実測検証へ委ねる。
+  const heightLimit =
+    typeof height === "number" && Number.isFinite(height) && height > 0 && height < 1
+      ? upperBound(height)
+      : 1;
   return {
     x: coordinate(x, upperBound(safeWidth)),
-    y: coordinate(y, upperBound(safeHeight)),
+    y: coordinate(y, heightLimit),
   };
 }
 
