@@ -1061,15 +1061,32 @@ class Parser {
       span: null,
     };
     const rawFrame = (): RawFrameNode => {
-      const titleMatch = /\\begin\{frame\}(?:\[[^\]]*\])?\{([^{}]*)\}/.exec(
-        this.src.slice(pos, bodyEnd),
-      );
-      const labelMatch = /label=([^,\]]+)/.exec(this.src.slice(pos, bodyEnd));
+      let headerCursor = bodyStart;
+      let label: string | null = null;
+      if (this.src[headerCursor] === "[") {
+        const close = readBalanced(this.src, headerCursor, "[", "]");
+        if (close !== null && close <= bodyEnd) {
+          for (const part of this.src.slice(headerCursor + 1, close).split(",")) {
+            const option = part.trim();
+            if (option.startsWith("label=")) label = option.slice("label=".length).trim();
+          }
+          headerCursor = close + 1;
+        }
+      }
+      while (headerCursor < bodyEnd && /[ \t]/.test(this.src[headerCursor] as string))
+        headerCursor++;
+      let title: string | null = null;
+      if (this.src[headerCursor] === "{") {
+        const close = readBalanced(this.src, headerCursor);
+        if (close !== null && close <= bodyEnd) {
+          title = this.src.slice(headerCursor + 1, close);
+        }
+      }
       return {
         type: "rawFrame",
         tex: this.src.slice(pos, next),
-        title: titleMatch ? (titleMatch[1] as string) : null,
-        label: labelMatch ? (labelMatch[1] as string) : null,
+        title,
+        label,
         span: span(pos, next),
       };
     };
