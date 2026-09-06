@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { framesOf, parseDeck } from "@beamer-editor/core";
 import { describe, expect, it } from "vitest";
 import { frameTitleText, renderDeck } from "../src/render.js";
+import { DEFAULT_THEME } from "../src/theme.js";
 
 const fixture = (name: string) => readFileSync(join(__dirname, "../../../fixtures", name), "utf8");
 
@@ -344,6 +345,56 @@ ${tikz}
     expect(pdf.frames[0]?.html).toContain("image-placeholder");
     expect(pdf.frames[0]?.html).not.toContain("data-raw-key");
     expect(pdf.rawBlocks).toEqual([]);
+  });
+
+  it("\\item の中の図(命令で包んだ環境だけの段落)も、ブロックの段落と同じ判定で箱にする", () => {
+    const out = html(
+      "\\begin{itemize}\n\\item \\resizebox{0.5\\textwidth}{!}{\\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture}}\n\\item text \\myemph{x}\n\\end{itemize}",
+    );
+    expect(out).toContain('<li><div class="raw-block placeholder"');
+    expect(out).toContain("width:50.0%;aspect-ratio:4 / 3");
+    expect(out).not.toMatch(/raw-inline[^<]*\\resizebox/);
+    // 本文のある項目の生インラインは従来どおり原文のまま。
+    expect(out).toContain(
+      '<span class="raw-inline" title="サブセット外(生ブロック)">\\myemph{x}</span>',
+    );
+  });
+
+  it("高さの単位ごとに基準を分ける: 行幅系はそのまま比、\\textheight / \\paperheight は固定長として段の幅で割る", () => {
+    const tikz = "{\\begin{tikzpicture}\\end{tikzpicture}}";
+    const { bodyAreaPt: body, slideHeightPt } = DEFAULT_THEME.metrics;
+    // 行幅系の高さは、幅と同じく親基準の比になる(4:3 に落ちない)。
+    expect(html(`\\resizebox{!}{0.5\\linewidth}${tikz}`)).toContain(
+      `width:60.0%;aspect-ratio:${aspect(0.6, 0.5)}`,
+    );
+    // \paperheight と \textheight は別の基準。
+    const textheight = html(`\\resizebox{!}{0.5\\textheight}${tikz}`);
+    const paperheight = html(`\\resizebox{!}{0.5\\paperheight}${tikz}`);
+    expect(textheight).toContain(`aspect-ratio:${aspect(0.6, (0.5 * body.height) / body.width)}`);
+    expect(paperheight).toContain(
+      `aspect-ratio:${aspect(0.6, (0.5 * slideHeightPt) / body.width)}`,
+    );
+    expect(paperheight).not.toContain(
+      `aspect-ratio:${aspect(0.6, (0.5 * body.height) / body.width)}`,
+    );
+    // 0.3\textwidth の段の中: 固定長は段の幅に比例して縮まず(段の幅で割った比)、行幅系は段に追従する。
+    const column = (inner: string) =>
+      `\\begin{columns}\n\\begin{column}{0.3\\textwidth}\n${inner}\n\\end{column}\n\\end{columns}`;
+    expect(html(column(`\\resizebox{!}{0.5\\textheight}${tikz}`))).toContain(
+      `aspect-ratio:${aspect(0.6, (0.5 * body.height) / body.width / 0.3)}`,
+    );
+    expect(html(column(`\\resizebox{!}{0.5\\paperheight}${tikz}`))).toContain(
+      `aspect-ratio:${aspect(0.6, (0.5 * slideHeightPt) / body.width / 0.3)}`,
+    );
+    expect(html(column(`\\resizebox{!}{0.5\\linewidth}${tikz}`))).toContain(
+      `aspect-ratio:${aspect(0.6, 0.5)}`,
+    );
+    // 段を出たら元の行幅に戻る。
+    expect(
+      html(
+        `${column(`\\resizebox{!}{0.5\\textheight}${tikz}`)}\n\n\\resizebox{!}{0.5\\textheight}${tikz}`,
+      ),
+    ).toContain(`aspect-ratio:${aspect(0.6, (0.5 * body.height) / body.width)}`);
   });
 
   it("PDF 画像はファイル名だけの箱にし、幅は %、高さは幅との比で出す(段組みでも溢れない)", () => {
