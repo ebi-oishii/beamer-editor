@@ -29,6 +29,7 @@ import {
   needsLatexWorkshopIgnorePrompt,
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
+import { PreviewHistory } from "./preview-history";
 import { frameLensPositions, sourceHasFrameAt } from "./reveal-slide";
 import {
   hasSlideOutlineContentChanges,
@@ -141,6 +142,33 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   const latexWorkshopSessionPrompted = new Set<string>();
   const lineFlash = createLineFlash();
   const previewSources = new Map<vscode.WebviewPanel, vscode.TextDocument>();
+  // Webview からの undo / redo(#103)。対象のソースへフォーカスを移してコマンドを実行し、終わったら
+  // Webview へ戻す。要求は拡張全体で直列にし、押下時点の panel と文書に対して実行する。
+  const previewHistory = new PreviewHistory<{
+    panel: vscode.WebviewPanel;
+    uri: vscode.Uri;
+    viewColumn: vscode.ViewColumn | undefined;
+  }>({
+    apply: async (kind, target) => {
+      const document =
+        vscode.workspace.textDocuments.find(
+          (candidate) => candidate.uri.toString() === target.uri.toString(),
+        ) ?? (await vscode.workspace.openTextDocument(target.uri));
+      await vscode.window.showTextDocument(document, {
+        preserveFocus: false,
+        preview: false,
+        ...(target.viewColumn !== undefined ? { viewColumn: target.viewColumn } : {}),
+      });
+      await vscode.commands.executeCommand(kind);
+    },
+    isOpen: (panel) => previewSources.has(panel),
+    reveal: (panel) => panel.reveal(undefined, false),
+    onError: (error, kind) => {
+      void vscode.window.showErrorMessage(
+        `Beamer preview: ${kind} に失敗しました: ${String(error)}`,
+      );
+    },
+  });
   const exportOutput = vscode.window.createOutputChannel("Beamer Editor: PDF Export");
   context.subscriptions.push(lineFlash, foldingRangesChanged, exportOutput);
 
@@ -544,21 +572,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
             ) ?? document;
           void jumpToOffset(target, offset, lineFlash, sourceViewColumn);
         },
-        // Webview からの Cmd/Ctrl+Z(#103)。undo / redo はフォーカスのあるエディタに効くコマンドなので、
-        // ソースのエディタへ一度フォーカスを移して実行し、終わったら Webview へ戻す。
-        undoRedo: async (kind) => {
-          const target =
-            vscode.workspace.textDocuments.find(
-              (candidate) => candidate.uri.toString() === document.uri.toString(),
-            ) ?? document;
-          await vscode.window.showTextDocument(target, {
-            preserveFocus: false,
-            preview: false,
-            ...(sourceViewColumn !== undefined ? { viewColumn: sourceViewColumn } : {}),
-          });
-          await vscode.commands.executeCommand(kind);
-          panel.reveal(undefined, false);
-        },
+        // Webview からの Cmd/Ctrl+Z(#103)。押下時点の panel と文書を固定して列に入れる。
+        undoRedo: (kind) =>
+          previewHistory.request(kind, { panel, uri: document.uri, viewColumn: sourceViewColumn }),
         resolveResource: (path) => {
           const uri = path.startsWith("/")
             ? vscode.Uri.file(path)

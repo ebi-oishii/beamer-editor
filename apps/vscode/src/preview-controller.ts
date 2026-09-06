@@ -314,7 +314,13 @@ export class PreviewController implements vscode.Disposable {
     } else if (msg.type === "detachToCanvas") {
       void this.handleDetach(msg);
     } else if (msg.type === "undoRedo") {
-      void this.undoRedo(msg.kind);
+      // 注入された処理は同期で呼び出し、同期の例外も非同期の rejection も onError へ回す。
+      const report = () => this.onError(`failed to ${msg.kind} the source document.`);
+      try {
+        Promise.resolve(this.undoRedo(msg.kind)).catch(report);
+      } catch {
+        report();
+      }
     }
     // activeFrameChanged はソース側カーソル追従(VS-5 以降)で使う予定(現状 no-op)。
   }
