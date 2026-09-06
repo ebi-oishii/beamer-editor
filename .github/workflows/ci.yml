@@ -36,9 +36,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: xvfb-run -a pnpm --dir apps/vscode test:integration
 
-  # 開発用配布物(.vsix)を生成し、Actions の artifact としてダウンロード可能にする(VS-8)
+  # 開発用配布物(.vsix)を生成し、Actions の artifact としてダウンロード可能にする(VS-8)。
+  # プラットフォーム別に Tectonic の公式バイナリを同梱する(#130)。universal は同梱なし(対象外の環境向け)。
   vsix:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [darwin-arm64, darwin-x64, linux-x64, linux-arm64, win32-x64, universal]
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -47,8 +52,11 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --dir apps/vscode package
+      - run: pnpm --dir apps/vscode package -- --target ${{ matrix.target }} --out beamer-editor-${{ matrix.target }}.vsix
+      - name: 同梱した Tectonic が VSIX に入っていることを確かめる
+        if: matrix.target != 'universal'
+        run: unzip -l apps/vscode/beamer-editor-${{ matrix.target }}.vsix | grep -E 'extension/bin/tectonic(\.exe)?$'
       - uses: actions/upload-artifact@v4
         with:
-          name: beamer-editor-vsix
-          path: apps/vscode/beamer-editor.vsix
+          name: beamer-editor-vsix-${{ matrix.target }}
+          path: apps/vscode/beamer-editor-${{ matrix.target }}.vsix

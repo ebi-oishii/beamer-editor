@@ -48,7 +48,7 @@ LaTeX Workshop が入っている環境で managed file を初めて開くと、
 
 ## PDF 書き出し
 
-コマンドパレット、`.tex` エディター、または対応するプレビューのタイトルから **Beamer Editor: Export...** を実行すると、保存先を選んで PDF を書き出せます。実行には [Tectonic](https://tectonic-typesetting.github.io/) が必要です。PATH にない場合は `beamerEditor.tectonicPath` で実行ファイルを指定してください。
+コマンドパレット、`.tex` エディター、または対応するプレビューのタイトルから **Beamer Editor: Export...** を実行すると、保存先を選んで PDF を書き出せます。コンパイルには [Tectonic](https://tectonic-typesetting.github.io/) を使います。Tectonic は拡張に同梱されているので(macOS arm64 / x86_64、Linux x64 / arm64、Windows x64)、別途インストールする必要はありません。初回のコンパイル時に TeX のパッケージを Tectonic が必要な分だけダウンロードします。対象外の環境や別の版を使いたいときは `beamerEditor.tectonicPath` で実行ファイルを指定してください(同梱の無い環境では PATH の `tectonic` を使います)。
 
 編集中の内容は先に保存され、コンパイルは既定で300秒後に停止します（`beamerEditor.pdfExport.timeoutSeconds` で5〜1800秒に変更可）。失敗時は通知の「詳細を表示」からTectonicのエラーを確認できます。既存PDFはコンパイルが成功するまで置換されません。外部プログラムを起動するため、Restricted Modeではコマンドとボタンが無効になります。
 
