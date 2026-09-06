@@ -22,7 +22,7 @@
 5. deck lint <file>             エラー 0 になるまで修正
 6. deck check <file>            内容量・レイアウトを変えた場合は実コンパイル検証
    (Overfull 警告・コンパイルエラーがフレームアドレス付きで返る)
-7. deck snapshot --frame <addr> 見た目に確信が持てないときは画像で目視(vision)
+7. deck snapshot <file> -o <new-directory> --frame <addr> 見た目に確信が持てないときは画像で目視(vision)
 8. 報告                          変更フレームのアドレス + 一行説明 + lint/check 結果
 ```
 
@@ -50,7 +50,7 @@
 | `deck lint <file>` | 語彙・規則の検証(L001〜) | ソース位置付き指摘(text / `--json`) |
 | `deck format <file> --write` | 正規形化 | 差分の有無 |
 | `deck check <file> [--tectonic <path>] [--json]` | 実コンパイルによる検証 | lint、Overfull、キャンバスのはみ出し・重なりをフレームアドレスに割り付けて報告。入力・出力は変更しない |
-| `deck snapshot <file> --frame <addr> -o <png>` | フレームの見た目の自己確認 | 実コンパイル画像 |
+| `deck snapshot <file> -o <directory> [--frame <N\|LABEL\|label:LABEL>]` | フレームの見た目の自己確認 | 実コンパイル PNG。出力先は新規ディレクトリ |
 | `deck export <file> -o <pdf>` | 最終出力 | PDF |
 | `deck init` | 新規デッキプロジェクトの雛形生成(スキル同梱。§8) | 生成ファイル一覧 |
 
@@ -176,7 +176,7 @@ references/subset-cheatsheet.md を参照。範囲外の LaTeX も書けるが�
 2. 編集する
 3. `deck format <file> --write` → `deck lint <file>` をエラー 0 まで
 4. 内容量やレイアウトを変えたら `deck check <file>`(溢れ検出)
-5. 見た目に確信がなければ `deck snapshot --frame <addr>` で画像確認
+5. 見た目に確信がなければ `deck snapshot <file> -o <new-directory> --frame <addr>` で画像確認
 6. 変更フレームのアドレス + 一行説明 + lint/check 結果を報告
 
 ## 規約

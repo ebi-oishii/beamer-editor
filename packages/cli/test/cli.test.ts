@@ -4,7 +4,14 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { relative, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EXIT_CODE, exitCodeForError, parseCheckArgs, parseExportArgs, run } from "../src/cli.ts";
+import {
+  EXIT_CODE,
+  exitCodeForError,
+  parseCheckArgs,
+  parseExportArgs,
+  parseSnapshotArgs,
+  run,
+} from "../src/cli.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const require = createRequire(import.meta.url);
@@ -245,6 +252,7 @@ describe("deck lint", () => {
         "  deck format <file> [--write] [--json]  デッキを正規化\n" +
         "  deck outline <file> [--json]        フレーム一覧を表示\n" +
         "  deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査\n" +
+        "  deck snapshot <file> -o <directory> [--frame <N|LABEL|label:LABEL>] [--tectonic <path>] [--json]\n" +
         "  deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]\n" +
         "  deck fonts status [--json]          フォントカタログ全 family の解決状態\n" +
         '  deck fonts fetch [family] [--json]  family(既定 "Noto Sans CJK JP")を取得・配置\n',
@@ -309,6 +317,79 @@ describe("deck outline", () => {
     const missing = runCli("outline", "missing.tex", "--json");
     expect(missing.status).toBe(3);
     expect(JSON.parse(missing.stderr).error.code).toBe("E_IO");
+  });
+});
+
+describe("deck snapshot", () => {
+  it("parses output, frame and tectonic options and rejects unsafe extras", () => {
+    expect(
+      parseSnapshotArgs(["talk.tex", "-o", "images", "--frame", "label:intro", "--json"]),
+    ).toMatchObject({
+      input: "talk.tex",
+      output: "images",
+      frame: "label:intro",
+      json: true,
+      error: undefined,
+    });
+    expect(parseSnapshotArgs(["talk.tex", "-o", "one", "--output", "two"])).toMatchObject({
+      error: expect.stringContaining("重複"),
+    });
+    expect(parseSnapshotArgs(["talk.tex", "-o", "out", "--write"])).toMatchObject({
+      error: expect.stringContaining("不明"),
+    });
+  });
+
+  it("writes selected PNGs atomically and leaves an existing directory alone", async () => {
+    const directory = await temporaryDirectory();
+    const output = `${directory}/snapshots`;
+    const compiled = {
+      engineVersion: "1.0",
+      warnings: [],
+      layoutDiagnostics: [],
+      frames: [
+        {
+          address: { number: 1, label: "intro" },
+          span: { start: 0, end: 1 },
+          images: [{ page: 1, png: new Uint8Array([1, 2]), width: 1, height: 1 }],
+        },
+      ],
+    };
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await expect(
+        run(["snapshot", "talk.tex", "-o", output, "--json"], {
+          compileDeckFrames: async () => compiled,
+        }),
+      ).resolves.toBe(0);
+      await expect(readFile(`${output}/frame-000001-page-000001.png`)).resolves.toEqual(
+        Buffer.from([1, 2]),
+      );
+      expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({
+        file: "talk.tex",
+        output,
+        engine: { name: "tectonic", version: "1.0" },
+        frames: [
+          {
+            number: 1,
+            label: "intro",
+            images: [
+              {
+                page: 1,
+                file: "frame-000001-page-000001.png",
+                width: 1,
+                height: 1,
+                bytes: 2,
+              },
+            ],
+          },
+        ],
+      });
+      await expect(
+        run(["snapshot", "talk.tex", "-o", output], { compileDeckFrames: async () => compiled }),
+      ).resolves.toBe(3);
+    } finally {
+      stdout.mockRestore();
+    }
   });
 });
 

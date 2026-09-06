@@ -9,8 +9,10 @@
     "deck": "tsx src/cli.ts"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.80",
     "@beamer-editor/compiler": "workspace:*",
-    "@beamer-editor/core": "workspace:*"
+    "@beamer-editor/core": "workspace:*",
+    "pdfjs-dist": "^5.4.624"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

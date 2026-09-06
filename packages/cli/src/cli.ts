@@ -17,8 +17,8 @@
  * | 3 | 操作失敗 (E_USAGE / E_IO / E_INTERNAL / 取得不能な font など) |
  */
 
-import { readFile, writeFile } from "node:fs/promises";
-import { dirname, extname, resolve } from "node:path";
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   type CanvasGeometry,
@@ -49,6 +49,7 @@ import {
   nodeFontIO,
   resolveFont,
 } from "./fonts.ts";
+import { nodePdfRasterizer } from "./pdf-rasterizer.ts";
 
 /** 既定で取得する標準フォント(theme-design.md §4)。 */
 const DEFAULT_FAMILY = "Noto Sans CJK JP";
@@ -217,6 +218,7 @@ const USAGE = `使い方: deck <command> ...
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示
   deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査
+  deck snapshot <file> -o <directory> [--frame <N|LABEL|label:LABEL>] [--tectonic <path>] [--json]
   deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]
   deck fonts status [--json]          フォントカタログ全 family の解決状態
   deck fonts fetch [family] [--json]  family(既定 "${DEFAULT_FAMILY}")を取得・配置
@@ -660,7 +662,7 @@ export interface CliDependencies {
   compileDeckFrames?: (request: {
     inputPath: string;
     tectonicPath?: string;
-    includeImages: false;
+    includeImages: boolean;
   }) => Promise<DeckFramesResult>;
   exportPdf?: (request: {
     inputPath: string;
@@ -668,6 +670,205 @@ export interface CliDependencies {
     overwrite?: boolean;
     tectonicPath?: string;
   }) => Promise<PdfExportResult>;
+}
+
+export interface ParsedSnapshotArgs {
+  input: string | undefined;
+  output: string | undefined;
+  frame: string | undefined;
+  tectonic: string | undefined;
+  json: boolean;
+  error: string | undefined;
+}
+
+export function parseSnapshotArgs(argv: readonly string[]): ParsedSnapshotArgs {
+  let input: string | undefined,
+    output: string | undefined,
+    frame: string | undefined,
+    tectonic: string | undefined;
+  let json = false,
+    error: string | undefined;
+  const seen = new Set<string>();
+  const value = (name: string, next: string | undefined) => {
+    if (seen.has(name)) {
+      error ??= `オプションを重複して指定できません: ${name}`;
+      return undefined;
+    }
+    seen.add(name);
+    if (!next || next.startsWith("-")) {
+      error ??= `オプションには値が必要です: ${name}`;
+      return undefined;
+    }
+    return next;
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "-o" || arg === "--output" || arg === "--frame" || arg === "--tectonic") {
+      const name = arg === "-o" ? "--output" : arg;
+      const v = value(name, argv[i + 1]);
+      if (v !== undefined) {
+        if (name === "--output") output = v;
+        else if (name === "--frame") frame = v;
+        else tectonic = v;
+        i++;
+      }
+    } else if (arg === "--json") {
+      if (seen.has(arg)) error ??= "オプションを重複して指定できません: --json";
+      seen.add(arg);
+      json = true;
+    } else if (arg?.startsWith("-")) error ??= `不明なオプション: ${arg}`;
+    else if (!input) input = arg;
+    else error ??= "snapshot には入力ファイルを 1 つ指定してください";
+  }
+  if (!error && !input) error = "snapshot には入力ファイルを指定してください";
+  if (!error && !output) error = "snapshot には --output を指定してください";
+  return { input, output, frame, tectonic, json, error };
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function selectedFrame(
+  frame: string | undefined,
+  frames: readonly DeckFramesResult["frames"][number][],
+): readonly DeckFramesResult["frames"][number][] {
+  if (!frame) return frames;
+  if (/^[1-9]\d*$/.test(frame)) {
+    const found = frames[Number(frame) - 1];
+    if (!found) throw Object.assign(new Error("指定した frame がありません"), { code: "E_INPUT" });
+    return [found];
+  }
+  const label = frame.startsWith("label:") ? frame.slice(6) : frame;
+  if (/^\d+$/.test(frame) && !frame.startsWith("label:"))
+    throw Object.assign(new Error("数字の label は label:<LABEL> で指定してください"), {
+      code: "E_INPUT",
+    });
+  const found = frames.filter((item) => item.address.label === label);
+  if (found.length !== 1)
+    throw Object.assign(
+      new Error(found.length > 1 ? "frame label が重複しています" : "指定した frame がありません"),
+      { code: "E_INPUT" },
+    );
+  return found;
+}
+
+async function runSnapshot(
+  parsed: ParsedSnapshotArgs,
+  dependencies: CliDependencies,
+): Promise<number> {
+  if (parsed.error) return usageError(parsed.error, parsed.json);
+  const input = parsed.input as string,
+    output = resolve(parsed.output as string);
+  if (await pathExists(output)) {
+    writeError("E_OUTPUT_EXISTS", `出力先は既に存在します: ${output}`, parsed.json);
+    return 3;
+  }
+  try {
+    const parent = await lstat(dirname(output));
+    if (!parent.isDirectory() || parent.isSymbolicLink())
+      throw new Error("出力先の親は通常のディレクトリである必要があります");
+  } catch (error) {
+    writeError("E_IO", `出力先を作成できません: ${errorMessage(error)}`, parsed.json);
+    return 3;
+  }
+  let staging: string | undefined;
+  let published = false;
+  let ownerMarker: string | undefined;
+  try {
+    const compiler =
+      dependencies.compileDeckFrames ??
+      ((request: { inputPath: string; tectonicPath?: string; includeImages: boolean }) =>
+        compileDeckFrames(request, { rasterizer: nodePdfRasterizer }));
+    const compiled = await compiler({
+      inputPath: input,
+      ...(parsed.tectonic ? { tectonicPath: parsed.tectonic } : {}),
+      includeImages: true,
+    });
+    const frames = selectedFrame(parsed.frame, compiled.frames);
+    const images = frames.flatMap((item) =>
+      item.images.map((image) => ({ frame: item.address.number, image })),
+    );
+    if (!images.length)
+      throw Object.assign(new Error("snapshot 可能な PDF page がありません"), {
+        code: "E_COMPILE",
+      });
+    staging = await mkdtemp(join(dirname(output), `.${basename(output)}.staging-`));
+    const outputs = images.map(({ frame, image }) => ({
+      frame,
+      image,
+      file: `frame-${String(frame).padStart(6, "0")}-page-${String(image.page).padStart(6, "0")}.png`,
+    }));
+    for (const item of outputs)
+      await writeFile(join(staging, item.file), item.image.png, { flag: "wx" });
+    // mkdir is atomic and never replaces an existing directory. It is the publication reservation;
+    // any concurrent creator wins and we leave their entry untouched.
+    try {
+      await mkdir(output);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST")
+        throw Object.assign(new Error(`出力先は既に存在します: ${output}`), {
+          code: "E_OUTPUT_EXISTS",
+        });
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+        code: "E_IO",
+      });
+    }
+    published = true;
+    ownerMarker = `.deck-snapshot-owner-${basename(staging)}`;
+    await writeFile(join(output, ownerMarker), "owned\n", { flag: "wx" });
+    for (const item of outputs) await rename(join(staging, item.file), join(output, item.file));
+    await rm(join(output, ownerMarker));
+    ownerMarker = undefined;
+    await rm(staging, { recursive: true, force: true });
+    staging = undefined;
+    const result = {
+      input,
+      output: parsed.output,
+      frames: frames.map((item) => ({
+        number: item.address.number,
+        label: item.address.label,
+        images: item.images.map((image) => ({
+          page: image.page,
+          file: `frame-${String(item.address.number).padStart(6, "0")}-page-${String(image.page).padStart(6, "0")}.png`,
+          width: image.width,
+          height: image.height,
+          bytes: image.png.byteLength,
+        })),
+      })),
+      engine: { name: "tectonic", version: compiled.engineVersion },
+    };
+    if (parsed.json)
+      process.stdout.write(`${JSON.stringify({ file: input, ...result }, null, 2)}\n`);
+    else
+      for (const item of outputs)
+        process.stdout.write(
+          `${input}: frame ${item.frame} page ${item.image.page} -> ${join(parsed.output as string, item.file)}\n`,
+        );
+    return 0;
+  } catch (error) {
+    if (staging !== undefined) await rm(staging, { recursive: true, force: true });
+    if (published && ownerMarker !== undefined) {
+      try {
+        if ((await readFile(join(output, ownerMarker), "utf8")) === "owned\n")
+          await rm(output, { recursive: true, force: true });
+      } catch {
+        // Never delete a target which another writer removed or replaced.
+      }
+    }
+    const candidate =
+      error && typeof error === "object" && "code" in error && typeof error.code === "string"
+        ? error.code
+        : "E_RASTERIZE";
+    const code: CliErrorCode = candidate in ERROR_EXIT_CODE ? (candidate as CliErrorCode) : "E_IO";
+    writeError(code, errorMessage(error), parsed.json);
+    return 3;
+  }
 }
 
 function defaultPdfOutputForDisplay(input: string): string {
@@ -734,6 +935,7 @@ export async function run(
 ): Promise<number> {
   if (argv[0] === "export") return runExport(parseExportArgs(argv.slice(1)), dependencies);
   if (argv[0] === "check") return runCheck(parseCheckArgs(argv.slice(1)), dependencies);
+  if (argv[0] === "snapshot") return runSnapshot(parseSnapshotArgs(argv.slice(1)), dependencies);
   const { command, sub, family, json, write, unknownOptions } = parseArgs(argv);
   if (unknownOptions.length > 0) return usageError(`不明なオプション: ${unknownOptions[0]}`, json);
   if (command === "lint") {
