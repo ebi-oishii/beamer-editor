@@ -20,7 +20,16 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { exportPdf, type PdfExportErrorCode, type PdfExportResult } from "@beamer-editor/compiler";
+import {
+  type CanvasGeometry,
+  type CanvasLayoutDiagnostic,
+  type CompileWarning,
+  compileDeckFrames,
+  type DeckFramesResult,
+  exportPdf,
+  type PdfExportErrorCode,
+  type PdfExportResult,
+} from "@beamer-editor/compiler";
 import {
   formatDeck,
   frameLabel,
@@ -207,6 +216,7 @@ const USAGE = `使い方: deck <command> ...
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示
+  deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査
   deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]
   deck fonts status [--json]          フォントカタログ全 family の解決状態
   deck fonts fetch [family] [--json]  family(既定 "${DEFAULT_FAMILY}")を取得・配置
@@ -299,6 +309,237 @@ async function runOutline(file: string, json: boolean): Promise<number> {
       process.stdout.write(`${frame.number}. [${frame.label ?? "-"}] ${frame.title}\n`);
     }
   }
+  return EXIT_CODE.success;
+}
+
+export interface ParsedCheckArgs {
+  input: string | undefined;
+  tectonic: string | undefined;
+  json: boolean;
+  write: boolean;
+  error: string | undefined;
+}
+
+/** check は値を伴う --tectonic を持つので汎用パーサとは分離する。 */
+export function parseCheckArgs(argv: readonly string[]): ParsedCheckArgs {
+  let input: string | undefined;
+  let tectonic: string | undefined;
+  let json = false;
+  let write = false;
+  let error: string | undefined;
+  const seen = new Set<string>();
+  const takeValue = (name: string, value: string | undefined): string | undefined => {
+    if (seen.has(name)) {
+      error ??= `オプションを重複して指定できません: ${name}`;
+      return undefined;
+    }
+    seen.add(name);
+    if (value === undefined || value.startsWith("-")) {
+      error ??= `オプションには値が必要です: ${name}`;
+      return undefined;
+    }
+    return value;
+  };
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg === undefined) break;
+    if (arg === "--tectonic") {
+      const value = takeValue("--tectonic", argv[index + 1]);
+      if (value !== undefined) {
+        tectonic = value;
+        index++;
+      }
+    } else if (arg === "--json" || arg === "--write") {
+      if (seen.has(arg)) error ??= `オプションを重複して指定できません: ${arg}`;
+      seen.add(arg);
+      if (arg === "--json") json = true;
+      else write = true;
+    } else if (arg.startsWith("-")) {
+      error ??= `不明なオプション: ${arg}`;
+    } else if (input === undefined) {
+      input = arg;
+    } else {
+      error ??= "check には入力ファイルを 1 つ指定してください";
+    }
+  }
+  if (!error && input === undefined) error = "check には入力ファイルを指定してください";
+  return { input, tectonic, json, write, error };
+}
+
+type CheckSeverity = "error" | "warning" | "info";
+
+interface CheckFrame {
+  number: number;
+  label: string | null;
+}
+
+interface CheckDiagnostic {
+  category: "lint" | "compile" | "layout";
+  code: string;
+  severity: CheckSeverity;
+  message: string;
+  frame: CheckFrame | null;
+  location?: { line: number; column: number; endLine: number; endColumn: number };
+  sourceLines?: { start: number; end: number };
+  geometry?: CanvasGeometry;
+  overlappingGeometry?: CanvasGeometry;
+}
+
+function checkFrame(frame: CheckFrame | null): string {
+  return frame === null
+    ? ""
+    : ` [frame ${frame.number}${frame.label === null ? "" : ` (${frame.label})`}]`;
+}
+
+function frameForLint(diagnostic: LintDiagnostic, result: DeckFramesResult): CheckFrame | null {
+  return (
+    result.frames.find(
+      (frame) =>
+        diagnostic.span.start >= frame.span.start && diagnostic.span.start < frame.span.end,
+    )?.address ?? null
+  );
+}
+
+function lintCheckDiagnostics(
+  source: string,
+  diagnostics: readonly LintDiagnostic[],
+  result: DeckFramesResult,
+): CheckDiagnostic[] {
+  return diagnostics.map((diagnostic) => {
+    const start = location(source, diagnostic.span.start);
+    const end = location(source, diagnostic.span.end);
+    return {
+      category: "lint",
+      code: diagnostic.code,
+      severity: diagnostic.severity,
+      message: diagnostic.message,
+      frame: frameForLint(diagnostic, result),
+      location: {
+        line: start.line,
+        column: start.column,
+        endLine: end.line,
+        endColumn: end.column,
+      },
+    };
+  });
+}
+
+function compileCheckDiagnostics(warnings: readonly CompileWarning[]): CheckDiagnostic[] {
+  return warnings.map((warning) => ({
+    category: "compile",
+    code: warning.kind,
+    severity: "warning",
+    message: warning.message,
+    frame: warning.frame,
+    ...(warning.sourceLines === null ? {} : { sourceLines: warning.sourceLines }),
+  }));
+}
+
+function layoutCheckDiagnostics(diagnostics: readonly CanvasLayoutDiagnostic[]): CheckDiagnostic[] {
+  return diagnostics.map((diagnostic) => ({
+    category: "layout",
+    code: diagnostic.kind,
+    severity: diagnostic.severity,
+    message: diagnostic.message,
+    frame: diagnostic.frame,
+    geometry: diagnostic.geometry,
+    ...(diagnostic.overlappingGeometry === undefined
+      ? {}
+      : { overlappingGeometry: diagnostic.overlappingGeometry }),
+  }));
+}
+
+function checkSummary(diagnostics: readonly CheckDiagnostic[]) {
+  let errors = 0;
+  let warnings = 0;
+  let infos = 0;
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.severity === "error") errors++;
+    else if (diagnostic.severity === "warning") warnings++;
+    else infos++;
+  }
+  return { errors, warnings, infos };
+}
+
+function writeCheckText(file: string, diagnostics: readonly CheckDiagnostic[]): void {
+  if (diagnostics.length === 0) {
+    process.stdout.write(`${file}: OK\n`);
+    return;
+  }
+  for (const diagnostic of diagnostics) {
+    const position = diagnostic.location
+      ? `${file}:${diagnostic.location.line}:${diagnostic.location.column}`
+      : diagnostic.sourceLines
+        ? `${file}:${diagnostic.sourceLines.start}${
+            diagnostic.sourceLines.end === diagnostic.sourceLines.start
+              ? ""
+              : `-${diagnostic.sourceLines.end}`
+          }`
+        : file;
+    process.stdout.write(
+      `${position}: ${diagnostic.severity} ${diagnostic.code}: ${diagnostic.message}${checkFrame(diagnostic.frame)}\n`,
+    );
+  }
+}
+
+async function runCheck(parsed: ParsedCheckArgs, dependencies: CliDependencies): Promise<number> {
+  if (parsed.error) return usageError(parsed.error, parsed.json);
+  if (parsed.write) return usageError("check は --write をサポートしません", parsed.json);
+  const input = parsed.input as string;
+  let source: string;
+  try {
+    source = await readFile(resolve(input), "utf8");
+  } catch (error) {
+    writeError("E_IO", `読み込みに失敗しました: ${input}: ${errorMessage(error)}`, parsed.json);
+    return exitCodeForError("E_IO");
+  }
+  const lintDiagnostics = lintSource(source, createNodeFileProbes(dirname(resolve(input))));
+  let compiled: DeckFramesResult;
+  try {
+    compiled = await (dependencies.compileDeckFrames ?? compileDeckFrames)({
+      inputPath: input,
+      ...(parsed.tectonic === undefined ? {} : { tectonicPath: parsed.tectonic }),
+      includeImages: false,
+    });
+  } catch (error) {
+    const possibleCode =
+      error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      typeof error.code === "string"
+        ? error.code
+        : undefined;
+    const code: CliErrorCode =
+      possibleCode !== undefined && possibleCode in ERROR_EXIT_CODE
+        ? (possibleCode as CliErrorCode)
+        : "E_INTERNAL";
+    writeError(code, errorMessage(error), parsed.json);
+    return exitCodeForError(code);
+  }
+  const diagnostics = [
+    ...lintCheckDiagnostics(source, lintDiagnostics, compiled),
+    ...compileCheckDiagnostics(compiled.warnings),
+    ...layoutCheckDiagnostics(compiled.layoutDiagnostics),
+  ];
+  const summary = checkSummary(diagnostics);
+  if (parsed.json) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          file: input,
+          engine: { name: "tectonic", version: compiled.engineVersion },
+          diagnostics,
+          summary,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } else {
+    writeCheckText(input, diagnostics);
+  }
+  if (summary.errors > 0) return EXIT_CODE.lintError;
+  if (summary.warnings > 0) return EXIT_CODE.lintWarning;
   return EXIT_CODE.success;
 }
 
@@ -416,6 +657,11 @@ export function parseExportArgs(argv: readonly string[]): ParsedExportArgs {
 }
 
 export interface CliDependencies {
+  compileDeckFrames?: (request: {
+    inputPath: string;
+    tectonicPath?: string;
+    includeImages: false;
+  }) => Promise<DeckFramesResult>;
   exportPdf?: (request: {
     inputPath: string;
     outputPath?: string;
@@ -487,6 +733,7 @@ export async function run(
   dependencies: CliDependencies = {},
 ): Promise<number> {
   if (argv[0] === "export") return runExport(parseExportArgs(argv.slice(1)), dependencies);
+  if (argv[0] === "check") return runCheck(parseCheckArgs(argv.slice(1)), dependencies);
   const { command, sub, family, json, write, unknownOptions } = parseArgs(argv);
   if (unknownOptions.length > 0) return usageError(`不明なオプション: ${unknownOptions[0]}`, json);
   if (command === "lint") {
