@@ -144,6 +144,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   const previewSources = new Map<vscode.WebviewPanel, vscode.TextDocument>();
   // Webview からの undo / redo(#103)。対象のソースへフォーカスを移してコマンドを実行し、終わったら
   // Webview へ戻す。要求は拡張全体で直列にし、押下時点の panel と文書に対して実行する。
+  /** プレビューからの undo / redo を試す回数と、効かなかったときの待ち(ms)。 */
+  const HISTORY_ATTEMPTS = 3;
+  const HISTORY_RETRY_DELAY_MS = 50;
   const previewHistory = new PreviewHistory<{
     panel: vscode.WebviewPanel;
     uri: vscode.Uri;
@@ -154,12 +157,22 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         vscode.workspace.textDocuments.find(
           (candidate) => candidate.uri.toString() === target.uri.toString(),
         ) ?? (await vscode.workspace.openTextDocument(target.uri));
-      await vscode.window.showTextDocument(document, {
-        preserveFocus: false,
-        preview: false,
-        ...(target.viewColumn !== undefined ? { viewColumn: target.viewColumn } : {}),
-      });
-      await vscode.commands.executeCommand(kind);
+      // undo / redo はキーボードフォーカスのあるエディタに効く。Webview からフォーカスを戻した直後は、
+      // エディタが表示されていてもフォーカスがまだ移っていないことがある(Linux の CI で再現)。
+      // エディタグループへ明示的にフォーカスを移してから実行し、文書が変わらなければ少し待って
+      // 数回だけやり直す。取り消すものが無いときも同じ経路で(短い待ちの後に)終わる。
+      const before = document.version;
+      for (let attempt = 0; attempt < HISTORY_ATTEMPTS; attempt++) {
+        await vscode.window.showTextDocument(document, {
+          preserveFocus: false,
+          preview: false,
+          ...(target.viewColumn !== undefined ? { viewColumn: target.viewColumn } : {}),
+        });
+        await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
+        await vscode.commands.executeCommand(kind);
+        if (document.version !== before) return;
+        await new Promise((resolve) => setTimeout(resolve, HISTORY_RETRY_DELAY_MS));
+      }
     },
     isOpen: (panel) => previewSources.has(panel),
     reveal: (panel) => panel.reveal(undefined, false),
