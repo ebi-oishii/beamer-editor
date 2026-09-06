@@ -54,27 +54,11 @@ interface DragState {
   grabX: number;
   grabY: number;
   pointerId: number;
+  /** contextmenu と buttons の扱いは mouse gesture にだけ適用する。 */
+  pointerType: string;
 }
 
 /** ドラッグを取り消す共通処理: 箱を元の位置へ戻し、pointer capture を放す。 */
-function cancelDrag(drag: DragState): void {
-  drag.element.style.left = `${drag.x * 100}%`;
-  drag.element.style.top = `${drag.y * 100}%`;
-  drag.element.classList.remove("canvas-dragging");
-  releasePointerCapture(drag.element, drag.pointerId);
-}
-
-interface DragState {
-  element: HTMLElement;
-  id: string;
-  x: number;
-  y: number;
-  grabX: number;
-  grabY: number;
-  pointerId: number;
-}
-
-/** ドラッグを取り消す共通処理: 箱を元の位置へ戻し、pointer capture を放す。呼び出し側が dragRef を空にする。 */
 function cancelDrag(drag: DragState): void {
   drag.element.style.left = `${drag.x * 100}%`;
   drag.element.style.top = `${drag.y * 100}%`;
@@ -208,19 +192,6 @@ export function Stage({
     return () => window.removeEventListener("keydown", cancel);
   }, []);
   const onPointerDown = (event: PointerEvent) => {
-    const active = dragRef.current;
-    if (active) {
-      // ドラッグ中の右・中ボタンは、この時点で取り消す。contextmenu が来ない操作(Firefox の
-      // Shift+右クリックなど)でも drag と pointer capture を残さない(#108)。
-      if (event.button !== 0) {
-        cancelDrag(active);
-        dragRef.current = undefined;
-      }
-      return;
-    }
-    // 右クリック(コンテキストメニュー)や中ボタンではドラッグを始めない。始めてしまうと pointerup が
-    // メニューに吸われて dragRef が残り、以後のマウス移動に箱が追従し続ける(#108)。
-    if (event.button !== 0) return;
     const clearSelection = () => {
       if (dragRef.current || !selected) return;
       scaleRef.current
@@ -229,15 +200,32 @@ export function Stage({
       setSelected(null);
     };
     const element = (event.target as HTMLElement).closest<HTMLElement>("[data-canvas-element-id]");
+    const id = element?.dataset.canvasElementId;
+    const descriptor = frame.canvasElements?.find(
+      (candidate) => candidate.id === id && candidate.editable,
+    );
+    const canvas = element?.closest<HTMLElement>(".canvas");
+    const active = dragRef.current;
+    if (active) {
+      // Mouse の右・中ボタンは、この時点で取り消す。contextmenu が来ない操作でも drag と
+      // pointer capture を残さない(#108)。touch/pen の追加接触は別 pointer として届くため無視する。
+      if (active.pointerType === "mouse" && event.button !== 0) {
+        cancelDrag(active);
+        dragRef.current = undefined;
+      }
+      return;
+    }
+    if (event.button !== 0) {
+      // 背景・編集不能要素の右/中クリックは従来どおり選択を外す。一方、編集可能な箱の右クリックは
+      // context menu の対象を選び直さず、現在の選択を維持する。primary click と同じ「対象を選択」の
+      // 副作用を持たせないことで、メニュー操作後にも選択枠が不意に変わらない。
+      if (!descriptor || !canvas) clearSelection();
+      return;
+    }
     if (!element) {
       clearSelection();
       return;
     }
-    const id = element.dataset.canvasElementId;
-    const descriptor = frame.canvasElements?.find(
-      (candidate) => candidate.id === id && candidate.editable,
-    );
-    const canvas = element.closest<HTMLElement>(".canvas");
     if (!id || !descriptor || !canvas) {
       clearSelection();
       return;
@@ -264,6 +252,7 @@ export function Stage({
       grabX: event.clientX - bounds.left,
       grabY: event.clientY - bounds.top,
       pointerId: event.pointerId,
+      pointerType: event.pointerType,
     };
     element.setPointerCapture(event.pointerId);
     element.classList.add("canvas-selected", "canvas-dragging");
@@ -273,6 +262,14 @@ export function Stage({
   const move = (event: PointerEvent) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    // ボタンを押したまま別のボタンを押しても pointerdown は来ず、buttons が変わった pointermove が来る。
+    // 主ボタン以外が加わった(右・中ボタン)か、主ボタンが離れているのに move が来た(pointerup が
+    // コンテキストメニューに吸われた)ときは、contextmenu を待たずにここで取り消す(#108)。
+    if (drag.pointerType === "mouse" && event.buttons !== 1) {
+      cancelDrag(drag);
+      dragRef.current = undefined;
+      return;
+    }
     const canvas = drag.element.closest<HTMLElement>(".canvas");
     const raw =
       canvas &&
@@ -330,10 +327,11 @@ export function Stage({
     if (!scale) return;
     const pointerUp = (event: PointerEvent) => finish(event, true);
     const pointerCancel = (event: PointerEvent) => finish(event, false);
-    // ドラッグ中に右クリックされたら取り消して元の位置に戻す(#108)。メニューの有無に関わらず効かせる。
+    // mouse の右クリックだけは pointerup がメニューに吸われ得るため取り消す。touch/pen の長押し
+    // contextmenu は通常の gesture なので pointercancel / pointerup まで維持する。
     const cancelOnContextMenu = () => {
       const drag = dragRef.current;
-      if (!drag) return;
+      if (drag?.pointerType !== "mouse") return;
       cancelDrag(drag);
       dragRef.current = undefined;
     };

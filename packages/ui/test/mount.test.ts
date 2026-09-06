@@ -9,15 +9,18 @@ import type { NavState, ShellHost } from "../src/shell-host.js";
 
 class TestPointerEvent extends MouseEvent {
   readonly pointerId: number;
+  readonly pointerType: string;
 
   constructor(
     type: string,
     init: MouseEventInit & {
       pointerId: number;
+      pointerType?: string;
     },
   ) {
     super(type, init);
     this.pointerId = init.pointerId;
+    this.pointerType = init.pointerType ?? "mouse";
   }
 }
 
@@ -151,6 +154,8 @@ function firePointer(
     clientX,
     clientY,
     pointerId,
+    // 実ブラウザと同じく、押している間の pointerdown / pointermove は主ボタンが buttons に立っている。
+    buttons: type === "pointerdown" || type === "pointermove" ? 1 : 0,
     ...init,
   });
   act(() => {
@@ -1445,12 +1450,14 @@ describe("mountPreview", () => {
     firePointer(scale, "pointermove", 480, 100);
     firePointer(scale, "pointerup", 480, 100);
     expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.7, 0.2);
+  });
+
   it("右クリックはドラッグを始めず、その後のマウス移動で箱が追従しない(#108)", () => {
     const { editable, moveCanvasElement, scale, setPointerCapture } = mountCanvasPreview();
     const left = editable.style.left;
     const top = editable.style.top;
 
-    firePointer(editable, "pointerdown", 150, 100, 7, { button: 2 });
+    firePointer(editable, "pointerdown", 150, 100, 7, { button: 2, buttons: 2 });
     expect(editable.classList.contains("canvas-dragging")).toBe(false);
     expect(setPointerCapture).not.toHaveBeenCalled();
     act(() => {
@@ -1463,6 +1470,27 @@ describe("mountPreview", () => {
     expect(editable.style.top).toBe(top);
     firePointer(scale, "pointerup", 320, 260);
     expect(moveCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("touch/pen の長押し contextmenu はドラッグを取り消さず、pointerup で一度だけcommitする(#108)", () => {
+    for (const pointerType of ["touch", "pen"]) {
+      const { editable, moveCanvasElement, scale } = mountCanvasPreview();
+      firePointer(editable, "pointerdown", 150, 100, 7, { pointerType });
+      // touch/pen は buttons が 0 でも mouse の chord 検出を適用しない。
+      firePointer(scale, "pointermove", 200, 150, 7, { pointerType, buttons: 0 });
+      act(() => {
+        editable.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      });
+      expect(editable.classList.contains("canvas-dragging")).toBe(true);
+      firePointer(scale, "pointerup", 200, 150, 7, { pointerType });
+      expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(
+        0,
+        "canvas-image-0",
+        1,
+        0.225,
+        0.45,
+      );
+    }
   });
 
   it("ドラッグ中に右クリックされたらドラッグを取り消して元の位置に戻す(#108)", () => {
@@ -1485,24 +1513,39 @@ describe("mountPreview", () => {
     expect(moveCanvasElement).not.toHaveBeenCalled();
   });
 
-  it("ドラッグ中の右ボタン pointerdown は contextmenu を待たずにその場で取り消す(#108)", () => {
+  it("ドラッグ中に右・中ボタンが加わった pointermove は contextmenu を待たずにその場で取り消す(#108)", () => {
     const { editable, moveCanvasElement, releasePointerCapture, scale } = mountCanvasPreview();
     const left = editable.style.left;
     const top = editable.style.top;
-    firePointer(editable, "pointerdown", 150, 100);
-    firePointer(scale, "pointermove", 200, 150);
+    firePointer(editable, "pointerdown", 150, 100, 7, { button: 0, buttons: 1 });
+    firePointer(scale, "pointermove", 200, 150, 7, { buttons: 1 });
     expect(editable.style.left).not.toBe(left);
-    // マウスの右ボタンは同じ pointerId で button: 2 の pointerdown として届く。contextmenu は出さない
-    // (Firefox の Shift+右クリックなど)状況でも、この時点で取り消し済みになる。
-    firePointer(editable, "pointerdown", 200, 150, 7, { button: 2 });
+    // 左を押したまま右を押すと、実ブラウザでは pointerdown ではなく button=2 / buttons=3 の pointermove が
+    // 来る。contextmenu が出ない操作(Firefox の Shift+右クリックなど)でも、この時点で取り消し済みになる。
+    firePointer(scale, "pointermove", 200, 150, 7, { button: 2, buttons: 3 });
     expect(editable.classList.contains("canvas-dragging")).toBe(false);
     expect(editable.style.left).toBe(left);
     expect(editable.style.top).toBe(top);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
     // 以後のマウス移動に追従せず、離しても move を送らない。
+    firePointer(scale, "pointermove", 260, 200, 7, { buttons: 3 });
+    firePointer(scale, "pointermove", 280, 220, 7, { buttons: 1 });
+    expect(editable.style.left).toBe(left);
+    firePointer(scale, "pointerup", 280, 220);
+    expect(moveCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("主ボタンが離れているのに pointermove が来たら(pointerup が吸われた)ドラッグを取り消す(#108)", () => {
+    const { editable, moveCanvasElement, releasePointerCapture, scale } = mountCanvasPreview();
+    const left = editable.style.left;
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(scale, "pointermove", 200, 150);
+    firePointer(scale, "pointermove", 220, 160, 7, { buttons: 0 });
+    expect(editable.classList.contains("canvas-dragging")).toBe(false);
+    expect(editable.style.left).toBe(left);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
     firePointer(scale, "pointermove", 260, 200);
     expect(editable.style.left).toBe(left);
-    firePointer(scale, "pointerup", 260, 200);
     expect(moveCanvasElement).not.toHaveBeenCalled();
   });
 
@@ -1603,6 +1646,24 @@ describe("mountPreview", () => {
     expect(editable.style.top).toBe("20%");
     expect(moveCanvasElement).not.toHaveBeenCalled();
     expect(releasePointerCapture).toHaveBeenCalledTimes(2);
+  });
+
+  it("右/中クリックは背景・編集不能要素では選択解除し、編集可能な箱では選択を維持する(#108)", () => {
+    const { editable, noneditable, scale } = mountCanvasPreview();
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(scale, "pointercancel", 150, 100);
+    expect(editable.classList.contains("canvas-selected")).toBe(true);
+
+    firePointer(editable, "pointerdown", 150, 100, 7, { button: 2, buttons: 2 });
+    expect(editable.classList.contains("canvas-selected")).toBe(true);
+
+    firePointer(scale, "pointerdown", 0, 0, 7, { button: 2, buttons: 2 });
+    expect(editable.classList.contains("canvas-selected")).toBe(false);
+
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(scale, "pointercancel", 150, 100);
+    firePointer(noneditable, "pointerdown", 0, 0, 7, { button: 1, buttons: 4 });
+    expect(editable.classList.contains("canvas-selected")).toBe(false);
   });
 
   it("背景・編集不能画像で選択解除し、deck更新中のdragをcancelする", () => {
