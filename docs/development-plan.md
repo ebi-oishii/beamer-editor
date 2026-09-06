@@ -98,7 +98,7 @@
 
 ### Phase 5: 共有 UI + VS Code シェル
 
-VS-1 の拡張スキャフォールドと VS-2 の共有プレビュー UI は #21 / #20 でマージ済みである。VS-3〜VS-9 とその後の支援変更により、編集追従、ソースジャンプ、lint診断、外部編集統合テスト、theme/a11y、CSP/Workspace Trust、テスト・`.vsix`生成・CI artifact が反映された。さらにソースペインを維持するpreview jump、preview zoom、先行した限定的な Phase 7 slice であるキャンバス画像・テキストのドラッグ移動、managed slide の自動プレビュー・lint と LaTeX Workshop との scoped な共存、LaTeX 言語サポートの方針を追加した。**M2 の残りは実機での受け入れ確認**(移植計画 §2 の8項目、特に別環境への`.vsix`導入)。継続中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
+VS-1 の拡張スキャフォールドと VS-2 の共有プレビュー UI は #21 / #20 でマージ済みである。VS-3〜VS-9 とその後の支援変更により、編集追従、ソースジャンプ、lint診断、外部編集統合テスト、theme/a11y、CSP/Workspace Trust、テスト・`.vsix`生成・CI artifact が反映された。さらにソースペインを維持するpreview jump、preview zoom、先行した限定的な Phase 7 slice であるキャンバス画像・テキストのドラッグ移動、managed slide の自動プレビュー・lint と LaTeX Workshop との scoped な共存、LaTeX 言語サポートの方針を追加した。**Phase 5 の基盤は成立済み**であり、別環境への`.vsix`導入など環境依存の項目はチーム配布前の実機スモークで確認する。継続中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。手順・PR 分割は [vscode-migration-plan.md](vscode-migration-plan.md) を参照。
 
 **5a. packages/ui — 共有 UI と ShellHost 契約(S)**
 
@@ -215,6 +215,8 @@ Electron は次が VS Code 版で安定してから着手する(追加要件 §6
 
 ## 現在の次手
 
-1. M2 の実機受け入れを完了する（移植計画 §2 の8項目、特に別環境への`.vsix`導入）。
-2. Phase 2 の正規形をキャンバス外へ広げ、L003/L006/L008/L010を実装する。
-3. 受け入れ結果を反映し、ドッグフーディング開始条件を満たす。
+1. [#123](https://github.com/ebi-oishii/beamer-editor/issues/123) で Phase 2 の正規形をキャンバス外へ広げ、L003/L006/L008/L010を実装する。
+2. [#125](https://github.com/ebi-oishii/beamer-editor/issues/125) のフレーム別警告を実装する。
+3. [#126](https://github.com/ebi-oishii/beamer-editor/issues/126) のキャンバス実測検査を実装する。
+4. [#88 `deck check`](https://github.com/ebi-oishii/beamer-editor/issues/88) で #125 と #126 の検査を CLI として統合する。
+5. [#89 `deck snapshot`](https://github.com/ebi-oishii/beamer-editor/issues/89) で検査対象の見た目を確認できるようにする。
