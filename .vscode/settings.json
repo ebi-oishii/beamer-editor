@@ -32,11 +32,13 @@
     "/usr/local/share/miktex-texmf/**",
     "**/Library/Application Support/MiKTeX/texmfs/**",
     "/dev/null",
-    "**/fixtures/**/*.tex"
+    "**/fixtures/**/*.tex",
+    "**/*.slide.tex"
   ],
   "latex-workshop.latex.autoBuild.onSave.files.ignore": [
     "**/*.sty",
     "**/*.cls",
-    "**/fixtures/**/*.tex"
+    "**/fixtures/**/*.tex",
+    "**/*.slide.tex"
   ]
 }

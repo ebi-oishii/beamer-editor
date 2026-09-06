@@ -45,7 +45,7 @@ describe("frameIndexAtSourceOffset", () => {
 
 describe("frameLensPositions", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../../../fixtures/basic.tex", import.meta.url)),
+    fileURLToPath(new URL("../../../fixtures/basic.slide.tex", import.meta.url)),
     "utf8",
   );
   const lines = source.split("\n");
@@ -65,7 +65,7 @@ describe("frameLensPositions", () => {
 
 describe("sourceHasFrameAt", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../../../fixtures/basic.tex", import.meta.url)),
+    fileURLToPath(new URL("../../../fixtures/basic.slide.tex", import.meta.url)),
     "utf8",
   );
 

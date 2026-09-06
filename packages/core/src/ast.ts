@@ -185,6 +185,9 @@ export interface DeckStyle extends BaseNode {
 
 export type DeckElement = FrameNode | RawFrameNode | SectionNode;
 
+/** 解釈済み・生の両方を含むフレーム。 */
+export type AnyFrameNode = FrameNode | RawFrameNode;
+
 export interface SectionNode extends BaseNode {
   type: "section";
   level: "section" | "subsection";
@@ -493,9 +496,13 @@ export function isCanvasFrame(frame: FrameNode): boolean {
   return frame.body.some((block) => block.type === "canvas");
 }
 
+/** フレームの label。空白だけの値は label なしとして扱う。 */
+export function frameLabel(frame: AnyFrameNode): string | null {
+  const label = frame.type === "frame" ? frame.options.label : frame.label;
+  return label?.trim() || null;
+}
+
 /** 文書中のフレーム(生フレーム含む)を出現順に返す。序数アドレス(ai-protocol §3)の基盤。 */
-export function framesOf(doc: DeckDocument): Array<FrameNode | RawFrameNode> {
-  return doc.body.filter(
-    (el): el is FrameNode | RawFrameNode => el.type === "frame" || el.type === "rawFrame",
-  );
+export function framesOf(doc: DeckDocument): AnyFrameNode[] {
+  return doc.body.filter((el): el is AnyFrameNode => el.type === "frame" || el.type === "rawFrame");
 }

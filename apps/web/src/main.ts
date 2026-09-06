@@ -13,7 +13,10 @@ import "katex/dist/katex.min.css";
 import { sourceJumpTarget } from "./editor-navigation.js";
 import "./style.css";
 
-const FIXTURES = ["basic.tex", "macros.tex", "kitchen-sink.tex", "canvas.tex", "styled.tex"];
+const FIXTURES = Object.keys(import.meta.glob("../../../fixtures/*.slide.tex"))
+  .map((path) => path.split("/").pop() ?? "")
+  .filter((name) => !name.startsWith("lint-") && !name.startsWith("measure-"))
+  .sort();
 
 const app = document.getElementById("app") as HTMLDivElement;
 app.innerHTML = `
@@ -113,7 +116,7 @@ const fixturesBox = $<HTMLElement>("#fixtures");
 for (const name of FIXTURES) {
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.textContent = name.replace(".tex", "");
+  btn.textContent = name.replace(".slide.tex", "");
   btn.addEventListener("click", () => void loadFixture(name));
   fixturesBox.append(btn);
 }
@@ -141,4 +144,4 @@ sourceArea.addEventListener("input", () => {
   timer = setTimeout(() => reparse(sourceArea.value), 120);
 });
 
-void loadFixture("basic.tex");
+void loadFixture("basic.slide.tex");

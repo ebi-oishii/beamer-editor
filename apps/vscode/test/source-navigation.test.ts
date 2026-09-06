@@ -10,7 +10,7 @@ function fixture(name: string): string {
 
 describe("resolveJumpOffset", () => {
   it("マクロ展開後の deck からでも、各フレームの元ソース位置を解決できる", () => {
-    const source = fixture("macros.tex");
+    const source = fixture("macros.slide.tex");
     const outcome = renderDocument(source, 1);
 
     expect(outcome.deck.frames.length).toBeGreaterThan(0);
@@ -23,7 +23,7 @@ describe("resolveJumpOffset", () => {
   });
 
   it("日本語(サロゲート・CJK)を含む文書でも UTF-16 オフセットが正しい", () => {
-    const source = fixture("japanese.tex");
+    const source = fixture("japanese.slide.tex");
     const outcome = renderDocument(source, 1);
 
     expect(outcome.deck.frames.length).toBeGreaterThan(0);

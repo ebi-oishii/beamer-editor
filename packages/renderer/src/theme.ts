@@ -34,7 +34,7 @@ export interface Theme {
 
 /**
  * beamer default テーマ(11pt・16:9)。
- * metrics は fixtures/measure-body-area.tex の実測(2026-07-10)。
+ * metrics は fixtures/measure-body-area.slide.tex の実測(2026-07-10)。
  * fixtures/deck-canvas-preamble.tex の定数と一致させること。
  */
 export const DEFAULT_THEME: Theme = {

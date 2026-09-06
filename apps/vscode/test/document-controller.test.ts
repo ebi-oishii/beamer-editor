@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { renderDocument } from "../src/document-controller";
 
 const macrosSource = readFileSync(
-  fileURLToPath(new URL("../../../fixtures/macros.tex", import.meta.url)),
+  fileURLToPath(new URL("../../../fixtures/macros.slide.tex", import.meta.url)),
   "utf8",
 );
 

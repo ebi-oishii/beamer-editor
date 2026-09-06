@@ -5,7 +5,8 @@ import type { BlockNode, DeckDocument, SourceSpan } from "../src/ast.js";
 import { formatDeck } from "../src/formatter.js";
 import { parseDeck } from "../src/parser.js";
 
-// Fixture enrollment: fixtures/*.tex is canonical except reserved prefixes lint-/measure- and deck-*-preamble.tex.
+// Fixture enrollment: fixtures/*.slide.tex is canonical except the reserved prefixes lint-/measure-.
+// Preamble libraries (deck-*-preamble.tex) are plain .tex and never enrolled.
 interface CanonicalFixture {
   name: string;
   source: string;
@@ -17,14 +18,9 @@ const ROUND_TRIP_DIAGNOSTIC =
 
 function loadCanonicalFixtures(): CanonicalFixture[] {
   return readdirSync(fixturesDirectory, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".tex"))
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".slide.tex"))
     .map((entry) => entry.name)
-    .filter(
-      (name) =>
-        !name.startsWith("lint-") &&
-        !name.startsWith("measure-") &&
-        !/^deck-.*-preamble\.tex$/.test(name),
-    )
+    .filter((name) => !name.startsWith("lint-") && !name.startsWith("measure-"))
     .sort()
     .map((name) => ({ name, source: readFileSync(join(fixturesDirectory, name), "utf8") }));
 }
@@ -157,19 +153,20 @@ describe("canonical fixture properties", () => {
 
   it("fixture discovery includes canonical baselines and excludes helper fixtures", () => {
     const names = canonicalFixtures.map(({ name }) => name);
+    expect(names.every((name) => name.endsWith(".slide.tex"))).toBe(true);
     expect(names).toEqual(
       expect.arrayContaining([
-        "basic.tex",
-        "canvas.tex",
-        "japanese.tex",
-        "kitchen-sink.tex",
-        "macros.tex",
-        "styled.tex",
+        "basic.slide.tex",
+        "canvas.slide.tex",
+        "japanese.slide.tex",
+        "kitchen-sink.slide.tex",
+        "macros.slide.tex",
+        "styled.slide.tex",
       ]),
     );
     for (const helper of [
-      "lint-static.tex",
-      "measure-body-area.tex",
+      "lint-static.slide.tex",
+      "measure-body-area.slide.tex",
       "deck-style-preamble.tex",
       "deck-canvas-preamble.tex",
     ]) {

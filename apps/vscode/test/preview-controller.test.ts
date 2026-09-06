@@ -603,6 +603,31 @@ describe("PreviewController", () => {
     });
   });
 
+  it("undoRedo メッセージは注入された undoRedo へ kind をそのまま渡す", () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const undoRedo = vi.fn();
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), { undoRedo });
+    fire({ type: "undoRedo", kind: "undo" });
+    fire({ type: "undoRedo", kind: "redo" });
+    fire({ type: "undoRedo", kind: "reset" });
+    expect(undoRedo.mock.calls).toEqual([["undo"], ["redo"]]);
+  });
+
+  it("undoRedo が失敗しても未処理の rejection にせず onError で通知する", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const onError = vi.fn();
+    const undoRedo = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), { undoRedo, onError });
+    fire({ type: "undoRedo", kind: "undo" });
+    await vi.waitFor(() =>
+      expect(onError).toHaveBeenCalledWith("failed to undo the source document."),
+    );
+  });
+
   describe("revealSourceOffset(ソース → プレビュー)", () => {
     const twoFrames = (_text: string, version: number): RenderOutcome => ({
       deck: {

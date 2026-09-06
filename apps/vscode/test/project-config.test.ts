@@ -158,14 +158,17 @@ describe("VS Code extension project configuration", () => {
 
   it("keeps ordinary LaTeX auto-build enabled while ignoring only repository fixtures", () => {
     const fixtureGlob = "**/fixtures/**/*.tex";
+    const slideFixtureGlob = "**/*.slide.tex";
     expect(workspaceSettings).not.toHaveProperty("latex-workshop.latex.autoBuild.run");
     expect(workspaceSettings["latex-workshop.latex.watch.files.ignore"]).toEqual([
       ...WATCH_IGNORE_DEFAULTS_10_16_1,
       fixtureGlob,
+      slideFixtureGlob,
     ]);
     expect(workspaceSettings["latex-workshop.latex.autoBuild.onSave.files.ignore"]).toEqual([
       ...AUTO_BUILD_ON_SAVE_IGNORE_DEFAULTS_10_16_1,
       fixtureGlob,
+      slideFixtureGlob,
     ]);
   });
 

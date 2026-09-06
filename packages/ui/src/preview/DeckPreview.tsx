@@ -160,6 +160,8 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   };
   const moveRef = useRef(move);
   moveRef.current = move;
+  const hostRef = useRef(host);
+  hostRef.current = host;
 
   // Webview が開かれた直後にも動くよう、フォーカスを強制せず ownerDocument で扱う。
   // プレビュー内か document 自身に発生したキーだけを受け、他の UI の入力を奪わない。
@@ -179,6 +181,14 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         return;
       }
       if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+        // Cmd/Ctrl+Z はソース文書の取り消し(Shift 付き、または Ctrl+Y はやり直し)。#103
+        // ドラッグや自由配置の編集はソースへの WorkspaceEdit なので、プレビューにいるまま戻せる。
+        const key = event.key.toLowerCase();
+        if ((key === "z" || key === "y") && hostRef.current.undoRedo) {
+          event.preventDefault();
+          hostRef.current.undoRedo(key === "y" || event.shiftKey ? "redo" : "undo");
+          return;
+        }
         if (event.key === "+" || event.key === "=") {
           event.preventDefault();
           setZoom((current) => stepZoom(current, fitScaleRef.current, 1));

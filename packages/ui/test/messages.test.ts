@@ -37,6 +37,19 @@ describe("parseExtensionToWebview", () => {
 });
 
 describe("parseWebviewToExtension", () => {
+  it("undoRedo は kind が undo / redo のときだけ受ける", () => {
+    expect(parseWebviewToExtension({ type: "undoRedo", kind: "undo" })).toEqual({
+      type: "undoRedo",
+      kind: "undo",
+    });
+    expect(parseWebviewToExtension({ type: "undoRedo", kind: "redo" })).toEqual({
+      type: "undoRedo",
+      kind: "redo",
+    });
+    expect(parseWebviewToExtension({ type: "undoRedo", kind: "reset" })).toBeNull();
+    expect(parseWebviewToExtension({ type: "undoRedo" })).toBeNull();
+  });
+
   it("正当なものを受理する", () => {
     expect(parseWebviewToExtension({ type: "ready" })).toEqual({ type: "ready" });
     expect(parseWebviewToExtension({ type: "jumpToSource", frameIndex: 4, version: 2 })).toEqual({

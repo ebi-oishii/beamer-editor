@@ -37,7 +37,7 @@ VS Code 公式も、標準 API で足りない表示だけに Webview を使う�
 
 Phase 5 の完了条件は、開発計画の M2（書ける）を満たすこととする。
 
-1. VS Code 標準エディタで `fixtures/basic.tex` を開ける。
+1. VS Code 標準エディタで `fixtures/basic.slide.tex` を開ける。
 2. コマンドからプレビューをエディタ横に開ける。
 3. ソース変更後、保存を待たずにプレビューが追従する。
 4. プレビュー上のフレーム操作から対応するソース位置へ移動できる。
@@ -384,7 +384,7 @@ Phase 6のtectonic実行はWorkspace Trustがない場合に無効化する。
 
 - unit / integration testがCIで実行できる。
 - `vsce package`で`.vsix`を生成できる。
-- 別環境へ`.vsix`を入れて `basic.tex` の編集・プレビューを実演できる。
+- 別環境へ`.vsix`を入れて `basic.slide.tex` の編集・プレビューを実演できる。
 
 ## 8. 推奨するPR分割
 
@@ -408,7 +408,7 @@ formatterやlinterへ依存するPRはbase branchを明記し、無関係な差�
 次のチェックは実装有無の一覧ではなく、残る一般的な Phase 7 GUI 編集へ進むために実機で確認する受け入れゲートである。実装済み項目も、実機受け入れが終わるまで未チェックとして残す。先行してマージ済みのキャンバス画像・テキストのドラッグ slice を未実装と示すものではない。
 
 - [ ] VS Code標準エディタとWebviewプレビューの分離が安定している
-- [ ] `basic.tex` / `canvas.tex` / `japanese.tex` がライブ更新できる
+- [ ] `basic.slide.tex` / `canvas.slide.tex` / `japanese.slide.tex` がライブ更新できる
 - [ ] preview → source jumpが日本語を含め正しい
 - [ ] lint diagnosticsが正しい位置へ表示される
 - [ ] clean bufferへの外部編集が反映される

@@ -95,7 +95,7 @@ describe("formatDeck", () => {
   });
 
   it("既存の正規形fixtureを変更しない", () => {
-    for (const name of ["canvas.tex", "styled.tex"]) {
+    for (const name of ["canvas.slide.tex", "styled.slide.tex"]) {
       const source = fixture(name);
       expect(formatDeck(source)).toBe(source);
     }

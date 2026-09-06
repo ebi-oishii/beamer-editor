@@ -27,7 +27,7 @@
 
 | 項目 | 状況 |
 |---|---|
-| C-1: 本文領域の定義 | **確定済み(2026-07-10)**。案①(タイトル帯 1 行固定高、2 行以上は L019 警告)を採用。Tectonic 0.16.9 と `zref-savepos` で `fixtures/measure-body-area.tex` を計測し、結果を [subset-spec.md](subset-spec.md) §2.8、renderer の境界定数、計測 artifact に記録した |
+| C-1: 本文領域の定義 | **確定済み(2026-07-10)**。案①(タイトル帯 1 行固定高、2 行以上は L019 警告)を採用。Tectonic 0.16.9 と `zref-savepos` で `fixtures/measure-body-area.slide.tex` を計測し、結果を [subset-spec.md](subset-spec.md) §2.8、renderer の境界定数、計測 artifact に記録した |
 | C-2〜C-8: 設計の穴 | 仕様へ反映済み(savepos 検証 = L012 実装方式、decktext 内語彙、canvas オーバーレイ対象外、寸法プローブ注入、L016〜L019、adjust 時の label 自動付与)。[issues-to-resolve.md](issues-to-resolve.md) の解決状況を参照 |
 | A-1〜A-6: 文書リコンサイル | 反映済み(subset-spec v1.1、design.md、ai-protocol.md §7、本書) |
 | AST 型 | 実装済み(`packages/core/src/ast.ts`。キャンバスノード・decktext 内語彙制約・source span・コメント保持を含む) |
@@ -40,11 +40,11 @@
 
 - pnpm workspace モノレポ、TypeScript、vitest、Biome(lint + format)。
 - `fixtures/` にゴールデンサンプルデッキを 4 本手書きする:
-  1. `basic.tex` — サブセット語彙だけの標準的なデッキ(15 フレーム程度)
-  2. `macros.tex` — マクロ定義と呼び出しを多用したデッキ
-  3. `kitchen-sink.tex` — サブセット外(TikZ、`\only`、凝ったマクロ)を意図的に混ぜたデッキ
-  4. `canvas.tex` — キャンバスフレーム(`decktext` / `deckimage`)のデッキ。書いてみて窮屈な箇所は仕様へフィードバックする
-- サンプルは tectonic でコンパイルが通ることを確認しておく(`canvas.tex` は Phase 0.5 のマクロ実装後に通す)。
+  1. `basic.slide.tex` — サブセット語彙だけの標準的なデッキ(15 フレーム程度)
+  2. `macros.slide.tex` — マクロ定義と呼び出しを多用したデッキ
+  3. `kitchen-sink.slide.tex` — サブセット外(TikZ、`\only`、凝ったマクロ)を意図的に混ぜたデッキ
+  4. `canvas.slide.tex` — キャンバスフレーム(`decktext` / `deckimage`)のデッキ。書いてみて窮屈な箇所は仕様へフィードバックする
+- サンプルは tectonic でコンパイルが通ることを確認しておく(`canvas.slide.tex` は Phase 0.5 のマクロ実装後に通す)。
 - 完了条件: `pnpm test` が空のテストで通り、サンプル 1〜3 が PDF になる。
 
 ### Phase 0.5: GUI ソース契約の固定(S〜M)
@@ -52,12 +52,12 @@
 キャンバスの「ソース表現と操作セマンティクス」を実装前に固定する。**TeX 側マクロは textpos 統合・minipage 幅・fontsize 切替・縦横比保持を含む本物の TeX エンジニアリングであり、独立した工数として計上する**(レビュー B-2)。
 
 - `deckcanvas` / `decktext` / `deckimage` の TeX 実装(ツール管理プリアンブルに入る本物の LaTeX 定義)。
-- C-1 で確定した本文領域の境界定数を TeX 実装と fixture へ適用する(計測デッキは `fixtures/measure-body-area.tex`)。
+- C-1 で確定した本文領域の境界定数を TeX 実装と fixture へ適用する(計測デッキは `fixtures/measure-body-area.slide.tex`)。
 - `zref-savepos` によるはみ出し・重なり計測のプロトタイプ(Phase 6 の check 統合の土台。C-2)。
 - 座標系・数値精度・文字サイズ enum・キャンバス frame の正規形を fixture とテストで固定。
-- `canvas.tex` の PDF 期待画像を生成し、受け入れ基準にする。
+- `canvas.slide.tex` の PDF 期待画像を生成し、受け入れ基準にする。
 - lint L011〜L019 の仕様確定(実装は Phase 2)。
-- 完了条件: `canvas.tex` が tectonic でコンパイルでき、PDF 期待画像がレビューで合意される。**HTML との一致検証はここでは行わない**(HTML レンダラは Phase 4 で誕生するため、比較は Phase 4 の受け入れ条件へ。レビュー B-1)。
+- 完了条件: `canvas.slide.tex` が tectonic でコンパイルでき、PDF 期待画像がレビューで合意される。**HTML との一致検証はここでは行わない**(HTML レンダラは Phase 4 で誕生するため、比較は Phase 4 の受け入れ条件へ。レビュー B-1)。
 
 ### Phase 1: core — トークナイザ + パーサ + AST(L)【最重要】
 
@@ -66,7 +66,7 @@
 - サブセット仕様 v1.1 の再帰下降パース。**未知 → 生ブロック**の 3 段フォールバック(コマンド / 環境 / フレーム)。
 - **キャンバスノードを AST に含める**(`CanvasNode` / `CanvasTextNode` / `CanvasImageNode`。追加要件 §6 の型に decktext 内語彙制約・source span・コメント保持を加える)。
 - コメントと source span の保持。
-- テスト: スナップショットテストを大量に。`kitchen-sink.tex` で生ブロック境界が仕様どおりに切れることを確認。
+- テスト: スナップショットテストを大量に。`kitchen-sink.slide.tex` で生ブロック境界が仕様どおりに切れることを確認。
 - 完了条件: サンプル 4 本がパースでき、AST から素朴に再出力したテキストが再パースで同一 AST になる(ラウンドトリップ)。
 
 ### Phase 2: core — フォーマッタ + リンター(M)
@@ -84,7 +84,7 @@
 - 定義のパース(展開可能性の判定)、単純置換の展開、ソースマップ。
 - 展開不能な呼び出しの生ブロック化。
 - Phase 2 と並行可能(どちらも Phase 1 の AST にのみ依存)。
-- 完了条件: `macros.tex` の展開結果が期待スナップショットと一致し、任意の展開後位置から元ソース位置を引ける。
+- 完了条件: `macros.slide.tex` の展開結果が期待スナップショットと一致し、任意の展開後位置から元ソース位置を引ける。
 
 ### Phase 4: renderer — HTML プレビュー(M)
 
@@ -94,7 +94,7 @@
 - オーバーレイのステップ表示。生ブロックはこの段階ではプレースホルダ表示。
 - 開発用に `apps/web` を簡易ビューア(ファイルドロップ → 表示)として先行させ、動作確認の場にする。
 - Phase 2/3 と並行可能。
-- 完了条件(= M1): `basic.tex` と `canvas.tex` がブラウザでスライドとして閲覧でき、数式・段組・ブロック・オーバーレイ・キャンバス配置が表示される。**HTML と PDF 期待画像(Phase 0.5)の比較で、位置の大きな逆転や領域外配置がないこと**(レビュー B-1 の移動先)。
+- 完了条件(= M1): `basic.slide.tex` と `canvas.slide.tex` がブラウザでスライドとして閲覧でき、数式・段組・ブロック・オーバーレイ・キャンバス配置が表示される。**HTML と PDF 期待画像(Phase 0.5)の比較で、位置の大きな逆転や領域外配置がないこと**(レビュー B-1 の移動先)。
 
 ### Phase 5: 共有 UI + VS Code シェル
 
@@ -115,7 +115,7 @@ VS-1 の拡張スキャフォールドと VS-2 の共有プレビュー UI は #
 
 Electron(旧 5c)はここでは作らない(「後続」参照)。
 
-完了条件(= M2): VS Code 拡張で `basic.tex` を編集しながらプレビューが追従し、別プロセス(Claude Code / Codex の公式拡張、または CLI)の書き込みが即時反映される。**ここからドッグフーディング開始**(公式 AI 拡張との併用を運用検証する)。
+完了条件(= M2): VS Code 拡張で `basic.slide.tex` を編集しながらプレビューが追従し、別プロセス(Claude Code / Codex の公式拡張、または CLI)の書き込みが即時反映される。**ここからドッグフーディング開始**(公式 AI 拡張との併用を運用検証する)。
 
 ### Phase 6: compiler — 書き出しと部分コンパイル(M)
 
@@ -124,7 +124,7 @@ Electron(旧 5c)はここでは作らない(「後続」参照)。
 - 生ブロックの standalone 部分コンパイル → pdf.js ラスタライズ → コンテンツハッシュキャッシュ → プレビューに差し込み。
 - フレーム単位の画像出力と、コンパイルログの Overfull 警告をフレームアドレスへ割り付ける機構(Phase 8 の `deck snapshot` / `deck check` の土台)。
 - キャンバスフレームの savepos 実測を check 相当の検査に統合: 本文領域外へのはみ出し(warning)・オブジェクト重なり(info)をフレームアドレス付きで報告(C-2 / L012)。
-- 完了条件(= M3): `kitchen-sink.tex` の TikZ が(初回コンパイル後)プレビューに画像として表示され、PDF 書き出しが 1 クリックで動き、`canvas.tex` の意図的なはみ出しが検出される。
+- 完了条件(= M3): `kitchen-sink.slide.tex` の TikZ が(初回コンパイル後)プレビューに画像として表示され、PDF 書き出しが 1 クリックで動き、`canvas.slide.tex` の意図的なはみ出しが検出される。
 
 ### Phase 7: GUI 操作(M)
 
@@ -176,9 +176,9 @@ Electron(旧 5c)はここでは作らない(「後続」参照)。
 
 | # | 内容 | 規模 | 依存 |
 |---|---|---|---|
-| S1 | スタイル語彙 v1(`\deckcolor` `\deckfont` `\decklogo` `\deckfooter`): TeX 側マクロ + パーサの style 領域 + renderer の CSS 変数/ロゴ/フッター描画 + `styled.tex` fixture。**済(2026-07-14。L020 の lint 化のみ Phase 2 へ)** | M | Phase 1 |
-| S2 | Noto Sans CJK: `\deckfont` のフォント解決・`deck fonts fetch`・日本語 fixture → design.md §9 の CJK 未決事項を解消。**済(2026-07-19)**。xeCJK 統合 + `packages/cli`(fonts status/fetch)+ renderer 和文フォールバック + `fixtures/japanese.tex`。tectonic で警告 0 コンパイル確認 | S〜M | tectonic |
-| S4 | テンプレート(`.sty` + 画像)の読み込み(#70、theme-design.md §2.1)。**済(2026-09-05)**。preamble-extra の `\usetheme` / `\usepackage` を解決し、標準記法から色・フォント・ロゴ・背景をプレビューへ、L022 / L023、`.sty` 変更の監視、`fixtures/templated.tex` | M | S1 |
+| S1 | スタイル語彙 v1(`\deckcolor` `\deckfont` `\decklogo` `\deckfooter`): TeX 側マクロ + パーサの style 領域 + renderer の CSS 変数/ロゴ/フッター描画 + `styled.slide.tex` fixture。**済(2026-07-14。L020 の lint 化のみ Phase 2 へ)** | M | Phase 1 |
+| S2 | Noto Sans CJK: `\deckfont` のフォント解決・`deck fonts fetch`・日本語 fixture → design.md §9 の CJK 未決事項を解消。**済(2026-07-19)**。xeCJK 統合 + `packages/cli`(fonts status/fetch)+ renderer 和文フォールバック + `fixtures/japanese.slide.tex`。tectonic で警告 0 コンパイル確認 | S〜M | tectonic |
+| S4 | テンプレート(`.sty` + 画像)の読み込み(#70、theme-design.md §2.1)。**済(2026-09-05)**。preamble-extra の `\usetheme` / `\usepackage` を解決し、標準記法から色・フォント・ロゴ・背景をプレビューへ、L022 / L023、`.sty` 変更の監視、`fixtures/templated.slide.tex` | M | S1 |
 | S3 | 「見本に合わせて」ワークフロー: pptx からの色・フォント抽出補助、SKILL への指示パターン追加、実物の社用テンプレで実演 | S〜M | S1, S2, 実物の PPT |
 
 幾何まで変える本格テーマ(タイトル帯高の変更等)は将来候補として theme-design.md に保持(必要になったら計測付きテーマパック方式)。

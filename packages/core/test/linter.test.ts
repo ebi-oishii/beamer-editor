@@ -891,19 +891,19 @@ code
     const { readFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const fixtureNames = [
-      "basic.tex",
-      "macros.tex",
-      "kitchen-sink.tex",
-      "canvas.tex",
-      "styled.tex",
-      "japanese.tex",
+      "basic.slide.tex",
+      "macros.slide.tex",
+      "kitchen-sink.slide.tex",
+      "canvas.slide.tex",
+      "styled.slide.tex",
+      "japanese.slide.tex",
     ];
     const newCodes = new Set(["L005", "L007", "L012", "L013", "L014", "L019"]);
 
-    const fixturesWithRawSyntax = new Set(["macros.tex", "kitchen-sink.tex"]);
+    const fixturesWithRawSyntax = new Set(["macros.slide.tex", "kitchen-sink.slide.tex"]);
     for (const name of fixtureNames) {
       const source = await readFile(join(__dirname, "../../../fixtures", name), "utf8");
-      const expectedCodes = name === "canvas.tex" ? ["L012"] : [];
+      const expectedCodes = name === "canvas.slide.tex" ? ["L012"] : [];
       expect(
         lintDeck(parseDeck(source))
           .filter((entry) => newCodes.has(entry.code))
@@ -918,7 +918,10 @@ code
   it("静的 lint 規則の検出は専用 fixture でも担保する", async () => {
     const { readFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
-    const source = await readFile(join(__dirname, "../../../fixtures/lint-static.tex"), "utf8");
+    const source = await readFile(
+      join(__dirname, "../../../fixtures/lint-static.slide.tex"),
+      "utf8",
+    );
     const codes = new Set(lintDeck(parseDeck(source)).map((entry) => entry.code));
 
     for (const code of ["L001", "L005", "L007", "L012", "L013", "L014", "L019"]) {
