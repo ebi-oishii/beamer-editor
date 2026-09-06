@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { MIN_FIT_SCALE } from "../src/preview/scroll-layout.js";
 import {
+  MAX_ZOOM,
   MIN_ZOOM,
   parseZoom,
   roundZoom,
@@ -32,6 +34,10 @@ describe("stepZoom", () => {
   it("fit が下限より小さいときは、縮小しても fit のまま、拡大は fit から連続して動く", () => {
     expect(stepZoom("fit", 0.1, -1)).toBe("fit");
     expect(stepZoom("fit", 0.1, 1)).toBe(0.2);
+  });
+
+  it("fit より拡大した後も、縮小で fit の方向へ戻れる", () => {
+    expect(stepZoom(0.2, 0.1, -1)).toBe(0.1);
   });
 });
 
@@ -77,9 +83,9 @@ describe("wheelZoom", () => {
     expect(manual(wheelZoom(0.1, 0.1, -100))).toBeCloseTo(0.1105, 4);
   });
 
-  it("fit が上限より大きいときも同じ規則(拡大は fit のまま、縮小は連続して動く)", () => {
-    expect(wheelZoom("fit", 3.5, -100)).toBe("fit");
-    expect(manual(wheelZoom("fit", 3.5, 100))).toBeCloseTo(3.167, 3);
+  it("fit より拡大した後も、縮小で fit の方向へ戻れる", () => {
+    // 0.11 から縮小すると 0.1 未満になるが、fit の 0.1 に張り付く。
+    expect(wheelZoom(0.11, 0.1, 100)).toBe(0.1);
   });
 
   it("行・ページ単位の delta は px に換算する", () => {
@@ -90,10 +96,24 @@ describe("wheelZoom", () => {
 });
 
 describe("parseZoom", () => {
-  it("操作で作れる値(正の有限な数)と fit を受け、それ以外は fit に戻す", () => {
-    // fit が範囲外のときに作られる手動倍率(0.111 や 3.5)も、保存して読み戻せる。
-    for (const value of [1, 0.111, 0.24, 3.5, "fit"]) expect(parseZoom(value)).toBe(value);
-    for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "1", undefined, null])
+  it("操作で作れる範囲 [MIN_FIT_SCALE, MAX_ZOOM] の数と fit を受け、境界の外は fit に戻す", () => {
+    // fit が 0.25 より小さいときに作られる手動倍率(0.111 など)も、保存して読み戻せる。
+    for (const value of [MIN_FIT_SCALE, 0.111, 0.24, 1, MAX_ZOOM, "fit"])
+      expect(parseZoom(value)).toBe(value);
+    // fitWidthScale の下限 0.1 より小さい値、MAX_ZOOM より大きい値は操作では作れないので、壊れた state として扱う。
+    for (const value of [
+      0.099,
+      3.01,
+      0.000001,
+      Number.MAX_VALUE,
+      0,
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      "1",
+      undefined,
+      null,
+    ])
       expect(parseZoom(value)).toBe("fit");
   });
 });

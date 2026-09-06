@@ -1,5 +1,7 @@
 /** プレビューの拡大率に関する、UI 非依存の小さな補助関数。 */
 
+import { MIN_FIT_SCALE } from "./scroll-layout.js";
+
 export type ZoomState = "fit" | number;
 
 export const MIN_ZOOM = 0.25;
@@ -16,22 +18,25 @@ export function roundZoom(value: number): number {
 
 /**
  * 保存済みの zoom 値を検証する。不正値は fit に戻す。
- * 手動倍率の範囲は fit の現在値まで広がる(zoomRange)ので、[MIN_ZOOM, MAX_ZOOM] の外の値も
- * 正しく保存されうる。受け付けるのは、操作で作れる値と同じ「正の有限な数」。
+ * 操作で作れる手動倍率は [MIN_FIT_SCALE, MAX_ZOOM]: fit は fitWidthScale が [MIN_FIT_SCALE, MAX_FIT_SCALE]
+ * に収め、手動倍率の下限はその fit まで広がり(zoomRange)、上限は MAX_ZOOM。保存値の検証もこの範囲に揃える
+ * (壊れた・古い state の 0.000001 や巨大な値を CSS の scale に渡さない)。
  */
 export function parseZoom(value: unknown): ZoomState {
   if (value === "fit") return value;
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  if (typeof value === "number" && value >= MIN_FIT_SCALE && value <= MAX_ZOOM) return value;
   return "fit";
 }
 
 /**
- * 手動倍率の範囲。基準になる倍率(fit の現在値、または今の手動倍率)が [MIN_ZOOM, MAX_ZOOM] の外なら、
- * その値まで範囲を広げる。fit が 0.1 のときに縮小しようとして下限の 0.25 へ「拡大」する、のような
- * 操作と逆向きの飛びを起こさないための規則。範囲の外にいる間は、範囲へ戻る向きにだけ動ける。
+ * 手動倍率の範囲。fit と基準になる倍率(現在の手動倍率)のどちらかが MIN_ZOOM より小さいなら、
+ * 小さい方まで下限を広げる。fit が 0.1 のときに拡大して 0.2 になった後も、縮小で fit 方向へ
+ * 戻れるように fitScale を常に下限へ含める。fit から縮小して下限の 0.25 へ「拡大」する、といった
+ * 操作と逆向きの飛びも起こさない。範囲の外にいる間は、範囲へ戻る向きにだけ動ける。
+ * 上限は fit が MAX_FIT_SCALE(< MAX_ZOOM)で止まるので広げる必要がない。
  */
-function zoomRange(base: number): { min: number; max: number } {
-  return { min: Math.min(MIN_ZOOM, base), max: Math.max(MAX_ZOOM, base) };
+function zoomRange(base: number, fitScale: number): { min: number; max: number } {
+  return { min: Math.min(MIN_ZOOM, fitScale, base), max: MAX_ZOOM };
 }
 
 /** fit から動かなかった操作は fit のままにする(ウィンドウの大きさに追従し続ける)。 */
@@ -42,7 +47,7 @@ function settle(zoom: ZoomState, base: number, next: number): ZoomState {
 /** fit 値を基準にした +/- 操作を含め、次の倍率を作る(0.1 刻み、2 桁に丸める)。 */
 export function stepZoom(zoom: ZoomState, fitScale: number, direction: 1 | -1): ZoomState {
   const base = zoom === "fit" ? fitScale : zoom;
-  const { min, max } = zoomRange(base);
+  const { min, max } = zoomRange(base, fitScale);
   const stepped = Math.round((base + direction * ZOOM_STEP) * 100) / 100;
   return settle(zoom, base, Math.min(max, Math.max(min, stepped)));
 }
@@ -60,7 +65,7 @@ export const WHEEL_DELTA_CAP = 250;
  */
 export function wheelZoom(zoom: ZoomState, fitScale: number, deltaY: number): ZoomState {
   const base = zoom === "fit" ? fitScale : zoom;
-  const { min, max } = zoomRange(base);
+  const { min, max } = zoomRange(base, fitScale);
   const delta = Math.max(-WHEEL_DELTA_CAP, Math.min(WHEEL_DELTA_CAP, deltaY));
   const next = base * Math.exp(-delta * WHEEL_ZOOM_RATE);
   return settle(zoom, base, Math.min(max, Math.max(min, next)));
