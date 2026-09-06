@@ -869,7 +869,13 @@ async function runSnapshot(
         );
     return 0;
   } catch (error) {
-    if (reserved) await rm(output, { recursive: true, force: true });
+    if (reserved)
+      try {
+        await rm(output, { recursive: true, force: true });
+      } catch {
+        // Cleanup must not mask the failure that triggered it. The reserved directory stays
+        // behind with its marker, and the original E_* classification below still reaches stderr.
+      }
     const candidate =
       error && typeof error === "object" && "code" in error && typeof error.code === "string"
         ? error.code
