@@ -1,8 +1,9 @@
 import {
+  type AnyFrameNode,
   type BlockNode,
   type CanvasNode,
   type DeckDocument,
-  type FrameNode,
+  frameLabel,
   framesOf,
   type InlineNode,
   isCanvasFrame,
@@ -59,25 +60,18 @@ export interface LintOptions {
 
 export const CURRENT_DECK_SOURCE_VERSION = 1;
 
-type AnyFrame = FrameNode | RawFrameNode;
-
 const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlisting", "minted"]);
 const VERBATIM_DELIMITERS = [...VERBATIM_ENVS].map((environment) => ({
   begin: `\\begin{${environment}}`,
   end: `\\end{${environment}}`,
 }));
 const YEN = new Set(["¥", "￥"]);
-function frameLabel(frame: AnyFrame): string | null {
-  const label = frame.type === "frame" ? frame.options.label : frame.label;
-  return label?.trim() || null;
-}
-
-function frameLabelSpan(frame: AnyFrame): SourceSpan {
+function frameLabelSpan(frame: AnyFrameNode): SourceSpan {
   return frame.type === "frame" ? (frame.options.span ?? frame.span) : frame.span;
 }
 
-function lintDuplicateLabels(frames: AnyFrame[]): LintDiagnostic[] {
-  const byLabel = new Map<string, AnyFrame[]>();
+function lintDuplicateLabels(frames: AnyFrameNode[]): LintDiagnostic[] {
+  const byLabel = new Map<string, AnyFrameNode[]>();
 
   for (const frame of frames) {
     const label = frameLabel(frame);
