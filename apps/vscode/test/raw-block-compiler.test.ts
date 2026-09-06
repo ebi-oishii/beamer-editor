@@ -262,6 +262,118 @@ describe("RawBlockCompiler", () => {
     expect(onReady.mock.calls.map(([key]) => key)).toEqual(["k1", "k2"]);
   });
 
+  it("reset は実行中のコンパイルを中止し、旧ジョブの結果を捨てて同じ block を新しい設定で作り直す", async () => {
+    const { fs, files } = memoryFs();
+    const pending: { resolve: (pdf: Uint8Array) => void; signal: AbortSignal }[] = [];
+    // 中止を無視して完了する(最悪の)コンパイラ。結果は世代で捨てられなければならない。
+    const compile = vi.fn(
+      (_document: string, signal: AbortSignal) =>
+        new Promise<Uint8Array>((resolve) => {
+          pending.push({ resolve, signal });
+        }),
+    );
+    const onReady = vi.fn();
+    const onFailed = vi.fn();
+    const compiler = new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile,
+      buildDocument: (tex) => tex,
+      onReady,
+      onFailed,
+    });
+    const blocks = [{ key: "k1", tex: "x", environment: null }];
+    compiler.request(blocks, "");
+    await flush();
+    expect(pending).toHaveLength(1);
+    // tectonicPath が変わった: reset → refresh で同じ block が再投入される。
+    compiler.reset();
+    expect(pending[0]?.signal.aborted).toBe(true);
+    compiler.request(blocks, "");
+    await flush();
+    // 旧ジョブが(中止を無視して)先に完了しても、その画像は届けず done にも入れない。
+    pending[0]?.resolve(new Uint8Array([1]));
+    await flush();
+    await flush();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(pending).toHaveLength(2);
+    pending[1]?.resolve(new Uint8Array([2]));
+    await flush();
+    await flush();
+    expect(onReady).toHaveBeenCalledExactlyOnceWith("k1", new Uint8Array([2]));
+    expect(onFailed).not.toHaveBeenCalled();
+    expect(files.get("/cache/k1.pdf")).toEqual(new Uint8Array([2]));
+  });
+
+  it("reset の後に要求が来なければ(無効化)、進行中だった結果は届けない", async () => {
+    const { fs } = memoryFs();
+    let release: ((pdf: Uint8Array) => void) | undefined;
+    const compile = vi.fn(
+      () =>
+        new Promise<Uint8Array>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const onReady = vi.fn();
+    const compiler = new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile,
+      buildDocument: (tex) => tex,
+      onReady,
+      onFailed: vi.fn(),
+    });
+    const blocks = [{ key: "k1", tex: "x", environment: null }];
+    compiler.request(blocks, "");
+    await flush();
+    compiler.reset();
+    release?.(new Uint8Array([1]));
+    await flush();
+    await flush();
+    expect(onReady).not.toHaveBeenCalled();
+    // 有効に戻して要求すれば、done に入っていないので改めてコンパイルする。
+    compiler.request(blocks, "");
+    await flush();
+    expect(compile).toHaveBeenCalledTimes(2);
+  });
+
+  it("reset 前のジョブの失敗は failed にも onFailed にもならず、新しいジョブが進む", async () => {
+    const { fs } = memoryFs();
+    const pending: { resolve: (pdf: Uint8Array) => void; reject: (error: unknown) => void }[] = [];
+    const compile = vi.fn(
+      () =>
+        new Promise<Uint8Array>((resolve, reject) => {
+          pending.push({ resolve, reject });
+        }),
+    );
+    const onReady = vi.fn();
+    const onFailed = vi.fn();
+    const compiler = new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile,
+      buildDocument: (tex) => tex,
+      onReady,
+      onFailed,
+    });
+    const blocks = [{ key: "k1", tex: "x", environment: null }];
+    compiler.request(blocks, "");
+    await flush();
+    compiler.reset();
+    compiler.request(blocks, "");
+    await flush();
+    pending[0]?.reject(new Error("aborted"));
+    await flush();
+    await flush();
+    expect(onFailed).not.toHaveBeenCalled();
+    expect(pending).toHaveLength(2);
+    pending[1]?.resolve(new Uint8Array([2]));
+    await flush();
+    await flush();
+    expect(onReady).toHaveBeenCalledExactlyOnceWith("k1", new Uint8Array([2]));
+  });
+
   it("reset は失敗の記録も消す", async () => {
     const { fs } = memoryFs();
     let broken = true;

@@ -10,6 +10,8 @@
  *   テンプレートや画像の更新で resetFailures() が呼ばれたときは、もう一度試す
  * - Tectonic が見つからない(isUnavailable)ときは、ブロックごとに失敗にせず、一度だけ onUnavailable を
  *   出してキューを止める。箱はプレースホルダのまま残る。設定が変わって reset() されたら判定し直す
+ * - reset() は実行中のコンパイルも中止し、reset 前に始まった処理の結果(成功・失敗・キャッシュ読み)は
+ *   世代で見分けて捨てる。新しい設定でのジョブを古い結果で潰さない
  */
 
 import type { RawBlockRef } from "@beamer-editor/renderer";
@@ -57,6 +59,8 @@ export class RawBlockCompiler {
   private disposed = false;
   /** エンジンが使えないと分かった後は、reset() まで何もしない。 */
   private unavailable = false;
+  /** reset() ごとに進む世代。処理の途中で変わっていたら、その処理の結果は捨てる。 */
+  private generation = 0;
   private controller: AbortController | undefined;
 
   constructor(private readonly options: RawBlockCompilerOptions) {}
@@ -78,14 +82,17 @@ export class RawBlockCompiler {
   }
 
   /**
-   * エンジンの判定と失敗の記録を消し、待ち行列も捨てる。Tectonic の場所や有効/無効の設定が変わったときに
-   * 呼び、次の描画で判定し直す(プレビューを開き直さなくてよい)。
+   * エンジンの判定と失敗の記録を消し、待ち行列を捨て、実行中のコンパイルを中止する。Tectonic の場所や
+   * 有効/無効の設定が変わったときに呼び、次の描画で判定し直す(プレビューを開き直さなくてよい)。
+   * 中止が効かずに旧ジョブが完了しても、世代が違うのでその結果は届けず、done / failed にも入れない。
    */
   reset(): void {
+    this.generation += 1;
     this.unavailable = false;
     this.failed.clear();
     this.queue.length = 0;
     this.queued.clear();
+    this.controller?.abort();
   }
 
   dispose(): void {
@@ -112,21 +119,25 @@ export class RawBlockCompiler {
 
   private async process(job: Job): Promise<void> {
     const { fs, cacheDir } = this.options;
+    const generation = this.generation;
+    /** dispose されたか、途中で reset() された(この処理の結果はもう要らない)。 */
+    const stale = () => this.disposed || generation !== this.generation;
     let fingerprint = "";
     try {
       fingerprint = (await this.options.fingerprint?.(job.tex, job.preamble)) ?? "";
     } catch {
       // 指紋が取れなければ依存なしとして扱う。
     }
-    if (this.disposed) return;
+    if (stale()) return;
     const cacheName = fingerprint === "" ? job.key : `${job.key}-${fingerprint}`;
     if (this.done.has(cacheName) || this.failed.has(cacheName)) return;
     const cachePath = `${cacheDir}/${cacheName}.pdf`;
     try {
       if (await fs.exists(cachePath)) {
         const pdf = await fs.readFile(cachePath);
+        if (stale()) return;
         this.done.add(cacheName);
-        if (!this.disposed) this.options.onReady(job.key, pdf);
+        this.options.onReady(job.key, pdf);
         return;
       }
     } catch {
@@ -138,7 +149,7 @@ export class RawBlockCompiler {
         this.options.buildDocument(job.tex, job.preamble),
         this.controller.signal,
       );
-      if (this.disposed) return;
+      if (stale()) return;
       this.done.add(cacheName);
       try {
         await fs.mkdir(cacheDir);
@@ -150,7 +161,7 @@ export class RawBlockCompiler {
       }
       this.options.onReady(job.key, pdf);
     } catch (error) {
-      if (this.disposed) return;
+      if (stale()) return;
       const message = error instanceof Error ? error.message : String(error);
       if (this.options.isUnavailable?.(error)) {
         // ブロックごとの赤枠にはせず、箱はそのまま残して一度だけ知らせる。残りも試さない。
