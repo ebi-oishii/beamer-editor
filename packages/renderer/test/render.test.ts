@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { framesOf, parseDeck } from "@beamer-editor/core";
 import { describe, expect, it } from "vitest";
 import { frameTitleText, renderDeck } from "../src/render.js";
+import { DEFAULT_THEME } from "../src/theme.js";
 
 const fixture = (name: string) => readFileSync(join(__dirname, "../../../fixtures", name), "utf8");
 
@@ -219,6 +220,143 @@ describe("renderDeck: 自由配置候補の識別属性", () => {
     expect(rendered).toMatch(
       /<ul data-flow-block="list"[^>]*data-detach-blocked="unsupported-kind"/,
     );
+  });
+});
+
+describe("renderDeck: プレースホルダ(#93)", () => {
+  const src = (body: string) => `\\documentclass[aspectratio=169]{beamer}
+\\begin{document}
+\\begin{frame}{T}
+${body}
+\\end{frame}
+\\end{document}
+`;
+  const html = (body: string) => renderDeck(parseDeck(src(body))).frames[0]?.html ?? "";
+  // \\textheight を行幅に対する比にした値(本文領域 236.97pt / 398.34pt)。高さは aspect-ratio に畳む。
+  const TEXTHEIGHT_IN_LINEWIDTH = 236.97 / 398.34;
+  const aspect = (width: number, heightInLinewidth: number) =>
+    (width / heightInLinewidth).toFixed(3);
+
+  it("生ブロックは中身を描かず、環境名だけの箱にする(既定は本文幅 6 割・4:3)", () => {
+    const out = html("\\begin{tikzpicture}\n\\draw (0,0) -- (1,1);\n\\end{tikzpicture}");
+    expect(out).toContain('<div class="raw-block placeholder"');
+    expect(out).toContain('<span class="placeholder-label">tikzpicture</span>');
+    expect(out).toContain("width:60.0%;aspect-ratio:4 / 3");
+    expect(out).not.toContain("<pre>");
+    // 原文はホバーで見られるよう title に残す。
+    expect(out).toContain('title="\\begin{tikzpicture}');
+  });
+
+  it("外枠の \\resizebox の指定は箱の大きさに使い、高さは幅との比(aspect-ratio)で出す", () => {
+    expect(
+      html("\\resizebox{0.8\\textwidth}{!}{\\begin{tikzpicture}\\end{tikzpicture}}"),
+    ).toContain("width:80.0%;aspect-ratio:4 / 3");
+    // 高さだけの指定は既定幅との比。pt の絶対値にしない(段組みの中で溢れる)。
+    expect(
+      html("\\resizebox{!}{0.5\\textheight}{\\begin{tikzpicture}\\end{tikzpicture}}"),
+    ).toContain(`width:60.0%;aspect-ratio:${aspect(0.6, 0.5 * TEXTHEIGHT_IN_LINEWIDTH)}`);
+    expect(
+      html("\\resizebox{!}{0.5\\textheight}{\\begin{tikzpicture}\\end{tikzpicture}}"),
+    ).not.toMatch(/height:\d/);
+    // 幅 0 の指定でも不可視にならない。
+    expect(html("\\resizebox{0\\textwidth}{!}{\\begin{tikzpicture}\\end{tikzpicture}}")).toContain(
+      "width:5.0%",
+    );
+  });
+
+  it("環境の中身の width= / height=(\\node の text width や minimum height)は箱の大きさに使わない", () => {
+    expect(
+      html("\\begin{tikzpicture}\n\\node[text width=0.2\\textwidth] {x};\n\\end{tikzpicture}"),
+    ).toContain("width:60.0%;aspect-ratio:4 / 3");
+    expect(
+      html("\\begin{tikzpicture}\n\\node[minimum height=0.9\\textheight] {x};\n\\end{tikzpicture}"),
+    ).toContain("width:60.0%;aspect-ratio:4 / 3");
+    expect(
+      html("\\begin{figure}\n\\includegraphics[width=\\textwidth]{a.png}\n\\end{figure}"),
+    ).toContain("width:60.0%;aspect-ratio:4 / 3");
+  });
+
+  it("図を包む命令 + 描画系の環境だけの段落は箱にし、本文を持つ生インラインは従来どおり残す", () => {
+    const out = html(
+      "\\resizebox{0.8\\textwidth}{!}{%\n\\begin{tikzpicture}\n\\draw (0,0) -- (1,1);\n\\end{tikzpicture}}",
+    );
+    expect(out).toContain('<div class="raw-block placeholder"');
+    expect(out).toContain('<span class="placeholder-label">tikzpicture</span>');
+    expect(out).toContain("width:80.0%");
+    expect(out).not.toContain("raw-inline");
+    // 本文のある段落は潰さない(小さい環境を含む文、表を包んだもの、命令だけの短い生インライン)。
+    for (const body of [
+      "\\myemph{text with \\begin{small}stuff\\end{small} inside}",
+      "\\scalebox{0.8}{\\begin{tabular}{ll}a&b\\\\\\end{tabular}}",
+      "before \\textsc{Small} after",
+    ]) {
+      const rendered = html(body);
+      expect(rendered, body).toContain("raw-inline");
+      expect(rendered, body).not.toContain("placeholder");
+    }
+  });
+
+  it("\\item の中の図(命令で包んだ環境だけの段落)も、ブロックの段落と同じ判定で箱にする", () => {
+    const out = html(
+      "\\begin{itemize}\n\\item \\resizebox{0.5\\textwidth}{!}{\\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture}}\n\\item text \\myemph{x}\n\\end{itemize}",
+    );
+    expect(out).toContain('<li><div class="raw-block placeholder"');
+    expect(out).toContain("width:50.0%;aspect-ratio:4 / 3");
+    expect(out).not.toMatch(/raw-inline[^<]*\\resizebox/);
+    // 本文のある項目の生インラインは従来どおり原文のまま。
+    expect(out).toContain(
+      '<span class="raw-inline" title="サブセット外(生ブロック)">\\myemph{x}</span>',
+    );
+  });
+
+  it("高さの単位ごとに基準を分ける: 行幅系はそのまま比、\\textheight / \\paperheight は固定長として段の幅で割る", () => {
+    const tikz = "{\\begin{tikzpicture}\\end{tikzpicture}}";
+    const { bodyAreaPt: body, slideHeightPt } = DEFAULT_THEME.metrics;
+    // 行幅系の高さは、幅と同じく親基準の比になる(4:3 に落ちない)。
+    expect(html(`\\resizebox{!}{0.5\\linewidth}${tikz}`)).toContain(
+      `width:60.0%;aspect-ratio:${aspect(0.6, 0.5)}`,
+    );
+    // \paperheight と \textheight は別の基準。
+    const textheight = html(`\\resizebox{!}{0.5\\textheight}${tikz}`);
+    const paperheight = html(`\\resizebox{!}{0.5\\paperheight}${tikz}`);
+    expect(textheight).toContain(`aspect-ratio:${aspect(0.6, (0.5 * body.height) / body.width)}`);
+    expect(paperheight).toContain(
+      `aspect-ratio:${aspect(0.6, (0.5 * slideHeightPt) / body.width)}`,
+    );
+    expect(paperheight).not.toContain(
+      `aspect-ratio:${aspect(0.6, (0.5 * body.height) / body.width)}`,
+    );
+    // 0.3\textwidth の段の中: 固定長は段の幅に比例して縮まず(段の幅で割った比)、行幅系は段に追従する。
+    const column = (inner: string) =>
+      `\\begin{columns}\n\\begin{column}{0.3\\textwidth}\n${inner}\n\\end{column}\n\\end{columns}`;
+    expect(html(column(`\\resizebox{!}{0.5\\textheight}${tikz}`))).toContain(
+      `aspect-ratio:${aspect(0.6, (0.5 * body.height) / body.width / 0.3)}`,
+    );
+    expect(html(column(`\\resizebox{!}{0.5\\paperheight}${tikz}`))).toContain(
+      `aspect-ratio:${aspect(0.6, (0.5 * slideHeightPt) / body.width / 0.3)}`,
+    );
+    expect(html(column(`\\resizebox{!}{0.5\\linewidth}${tikz}`))).toContain(
+      `aspect-ratio:${aspect(0.6, 0.5)}`,
+    );
+    // 段を出たら元の行幅に戻る。
+    expect(
+      html(
+        `${column(`\\resizebox{!}{0.5\\textheight}${tikz}`)}\n\n\\resizebox{!}{0.5\\textheight}${tikz}`,
+      ),
+    ).toContain(`aspect-ratio:${aspect(0.6, (0.5 * body.height) / body.width)}`);
+  });
+
+  it("PDF 画像はファイル名だけの箱にし、幅は %、高さは幅との比で出す(段組みでも溢れない)", () => {
+    const out = html("\\includegraphics[width=0.4\\textwidth]{figs/plot.pdf}");
+    expect(out).toContain('<div class="image-placeholder placeholder"');
+    expect(out).toContain('<span class="placeholder-label">plot.pdf</span>');
+    expect(out).toContain("width:40.0%;aspect-ratio:4 / 3");
+    // height=0.5\\linewidth は既定幅 0.6 との比 1.2 になり、段の幅に追従する。
+    const inColumn = html(
+      "\\begin{columns}\n\\begin{column}{0.3\\textwidth}\n\\includegraphics[height=0.5\\linewidth]{f.pdf}\n\\end{column}\n\\end{columns}",
+    );
+    expect(inColumn).toContain(`width:60.0%;aspect-ratio:${aspect(0.6, 0.5)}`);
+    expect(inColumn).not.toMatch(/height:\d/);
   });
 });
 
