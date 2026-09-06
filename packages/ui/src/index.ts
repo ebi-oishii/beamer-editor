@@ -12,7 +12,12 @@ export {
 export { DeckPreview } from "./preview/DeckPreview.js";
 export { mountPreview } from "./preview/mount.js";
 export { applyOverlay, isVisibleAtStep } from "./preview/overlay.js";
-export { applyRawImages, decodeBase64, RawImageStore } from "./preview/raw-images.js";
+export {
+  applyRawImages,
+  decodeBase64,
+  MAX_RAW_PDF_BYTES,
+  RawImageStore,
+} from "./preview/raw-images.js";
 export {
   type PreviewAction,
   type PreviewState,

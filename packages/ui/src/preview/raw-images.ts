@@ -6,6 +6,9 @@
 
 import type { RasterImage, RawBlockImageResult } from "../shell-host.js";
 
+/** 受け取る PDF の上限(バイト)。これを超えるものは復号・ラスタライズせず失敗として箱を残す。 */
+export const MAX_RAW_PDF_BYTES = 8 * 1024 * 1024;
+
 export type RawImageState =
   | { status: "pending" }
   | { status: "ready"; image: RasterImage }
@@ -45,6 +48,14 @@ export class RawImageStore {
     }
     if (!this.rasterize) {
       this.set(key, { status: "failed", message: "このホストでは PDF を画像にできません" });
+      return;
+    }
+    // base64 は 3 バイトを 4 文字にするので、復号せずに大きさを判定できる。
+    if (result.pdfBase64.length > Math.ceil(MAX_RAW_PDF_BYTES / 3) * 4) {
+      this.set(key, {
+        status: "failed",
+        message: `PDF が大きすぎます(上限 ${MAX_RAW_PDF_BYTES / 1024 / 1024} MB)`,
+      });
       return;
     }
     this.set(key, { status: "pending" });

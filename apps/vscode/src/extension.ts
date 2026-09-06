@@ -1,12 +1,19 @@
 import * as path from "node:path";
-import { buildFragmentDocument, compileFragment } from "@beamer-editor/compiler";
+import {
+  buildFragmentDocument,
+  compileFragment,
+  FRAGMENT_DOCUMENT_VERSION,
+  fragmentDependencies,
+} from "@beamer-editor/compiler";
 import {
   canvasPositionReplacement,
   detachBlockToCanvas,
+  fragmentHash,
   type LintDiagnostic,
   type LintSeverity,
   parseDeck,
 } from "@beamer-editor/core";
+import { MAX_RAW_PDF_BYTES } from "@beamer-editor/ui";
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
 import { renderDocument } from "./document-controller";
@@ -30,7 +37,7 @@ import {
   needsLatexWorkshopIgnorePrompt,
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
-import { RawBlockCompiler } from "./raw-block-compiler";
+import { dependencyFingerprint, RawBlockCompiler } from "./raw-block-compiler";
 import { frameLensPositions, sourceHasFrameAt } from "./reveal-slide";
 import {
   hasSlideOutlineContentChanges,
@@ -517,8 +524,22 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       new vscode.RelativePattern(documentDir, "**/*.{sty,png,jpg,jpeg,pdf}"),
     );
     // 生ブロックの部分コンパイル(#81)。Workspace Trust が無いときと設定で切ったときは起動しない。
-    // PDF は globalStorage にキーで置き、Webview へは base64 で渡す(リソース許可を広げない)。
-    const rawCacheDir = vscode.Uri.joinPath(context.globalStorageUri, "raw-blocks");
+    // PDF は globalStorage の下に「組み立て方の版 / デッキのディレクトリ」ごとに分けて置く(別プロジェクトの
+    // 同じ TeX が別の画像や .sty を参照していても混ざらない)。Webview へは base64 で渡す(リソース許可を広げない)。
+    const rawCacheDir = vscode.Uri.joinPath(
+      context.globalStorageUri,
+      "raw-blocks",
+      `v${FRAGMENT_DOCUMENT_VERSION}`,
+      fragmentHash(documentDir.fsPath),
+    );
+    const statDependency = async (target: string) => {
+      try {
+        const info = await vscode.workspace.fs.stat(vscode.Uri.file(target));
+        return info.type & vscode.FileType.File ? { mtimeMs: info.mtime, size: info.size } : null;
+      } catch {
+        return null;
+      }
+    };
     const rawBlockCompiler = new RawBlockCompiler({
       cacheDir: rawCacheDir.fsPath,
       fs: {
@@ -526,16 +547,21 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         writeFile: async (target, data) =>
           vscode.workspace.fs.writeFile(vscode.Uri.file(target), data),
         mkdir: async (target) => vscode.workspace.fs.createDirectory(vscode.Uri.file(target)),
-        exists: async (target) => {
-          try {
-            await vscode.workspace.fs.stat(vscode.Uri.file(target));
-            return true;
-          } catch {
-            return false;
-          }
-        },
+        exists: async (target) => (await statDependency(target)) !== null,
+        rename: async (from, to) =>
+          vscode.workspace.fs.rename(vscode.Uri.file(from), vscode.Uri.file(to), {
+            overwrite: true,
+          }),
       },
       buildDocument: buildFragmentDocument,
+      // 生ブロックと前置きが参照する画像・.sty などの更新時刻と大きさ。変わればキャッシュを作り直す。
+      fingerprint: (tex, preamble) =>
+        dependencyFingerprint(
+          fragmentDependencies(`${preamble}\n${tex}`),
+          (name) => (path.isAbsolute(name) ? name : path.join(documentDir.fsPath, name)),
+          statDependency,
+          fragmentHash,
+        ),
       compile: async (fragment, signal) => {
         const config = vscode.workspace.getConfiguration("beamerEditor", document.uri);
         const seconds = config.get<number>("pdfExport.timeoutSeconds", 300);
@@ -546,6 +572,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           cwd: documentDir.fsPath,
           signal,
           timeoutMs: Math.max(5, Math.min(1800, normalized)) * 1000,
+          maxOutputBytes: MAX_RAW_PDF_BYTES,
           ...(tectonicPath ? { tectonicPath } : {}),
         });
         return result.pdf;
@@ -662,6 +689,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       },
     );
     const refreshTemplates = () => {
+      // 画像や .sty が足されたり直ったりしたときは、失敗していた生ブロックも次の描画で再試行する。
+      rawBlockCompiler.resetFailures();
       controller.refresh();
       lintController.refresh(vscode.workspace.textDocuments);
     };

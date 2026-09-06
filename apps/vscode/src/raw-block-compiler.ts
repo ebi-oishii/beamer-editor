@@ -1,10 +1,13 @@
 /**
  * 生ブロックの部分コンパイル(#81)のキューとキャッシュ。`vscode` API には依存しない(注入)。
  *
- * - 描画のたびに RenderedDeck.rawBlocks を受け取り、まだ画像の無い key だけをキューに入れる
+ * - 描画のたびに RenderedDeck.rawBlocks を受け取り、まだ画像の無いものだけをキューに入れる
  * - コンパイルは 1 本ずつ(UI を塞がない・tectonic を並列に起動しない)
- * - 成功した PDF は cacheDir/<key>.pdf に置き、次回はコンパイルせずに読む
- * - 失敗した key は同じセッションでは再試行しない(本文か前置きを直せば key が変わる)
+ * - 成功した PDF は cacheDir/<key>[-<依存の指紋>].pdf に置き、次回はコンパイルせずに読む。
+ *   書き込みは一時ファイル + rename で、途中の状態を別のプレビューに読まれない
+ * - 依存ファイル(画像・.sty など)の指紋がキャッシュの名前に入るので、外部ファイルを直せば作り直す
+ * - 失敗は同じ指紋のまま再試行しない(本文・前置き・依存ファイルを直せば名前が変わる)。
+ *   テンプレートや画像の更新で resetFailures() が呼ばれたときは、もう一度試す
  */
 
 import type { RawBlockRef } from "@beamer-editor/renderer";
@@ -14,6 +17,8 @@ export interface RawBlockCompilerFileSystem {
   writeFile(path: string, data: Uint8Array): Promise<void>;
   mkdir(path: string): Promise<void>;
   exists(path: string): Promise<boolean>;
+  /** 一時ファイルから最終名へ置き換える(上書き)。 */
+  rename(from: string, to: string): Promise<void>;
 }
 
 export interface RawBlockCompilerOptions {
@@ -23,14 +28,24 @@ export interface RawBlockCompilerOptions {
   compile(document: string, signal: AbortSignal): Promise<Uint8Array>;
   /** 生ブロック本文と前置きから standalone 文書を組み立てる(compiler の buildFragmentDocument)。 */
   buildDocument(tex: string, preamble: string): string;
+  /** 生ブロックが参照する外部ファイルの指紋。無ければ ""。変わればキャッシュも失敗も別扱いになる。 */
+  fingerprint?(tex: string, preamble: string): Promise<string>;
   onReady(key: string, pdf: Uint8Array): void;
   onFailed(key: string, message: string): void;
 }
 
+interface Job {
+  key: string;
+  tex: string;
+  preamble: string;
+}
+
 export class RawBlockCompiler {
-  private readonly queue: { key: string; tex: string; preamble: string }[] = [];
+  private readonly queue: Job[] = [];
   private readonly queued = new Set<string>();
+  /** 画像を届け終えたキャッシュ名(key + 依存の指紋)。 */
   private readonly done = new Set<string>();
+  /** 失敗したキャッシュ名。 */
   private readonly failed = new Set<string>();
   private running = false;
   private disposed = false;
@@ -38,16 +53,20 @@ export class RawBlockCompiler {
 
   constructor(private readonly options: RawBlockCompilerOptions) {}
 
-  /** 描画結果の生ブロック一覧。未処理の key だけをキューへ入れ、処理を進める。 */
+  /** 描画結果の生ブロック一覧。キューに無いものを入れ、処理を進める(済んだものは処理時に指紋で見分ける)。 */
   request(blocks: readonly RawBlockRef[], preamble: string): void {
     if (this.disposed) return;
     for (const block of blocks) {
-      if (this.done.has(block.key) || this.failed.has(block.key) || this.queued.has(block.key))
-        continue;
+      if (this.queued.has(block.key)) continue;
       this.queued.add(block.key);
       this.queue.push({ key: block.key, tex: block.tex, preamble });
     }
     void this.pump();
+  }
+
+  /** 失敗の記録を消す。テンプレート・画像などの外部ファイルが変わったときに呼び、次の描画で再試行させる。 */
+  resetFailures(): void {
+    this.failed.clear();
   }
 
   dispose(): void {
@@ -72,13 +91,22 @@ export class RawBlockCompiler {
     }
   }
 
-  private async process(job: { key: string; tex: string; preamble: string }): Promise<void> {
+  private async process(job: Job): Promise<void> {
     const { fs, cacheDir } = this.options;
-    const cachePath = `${cacheDir}/${job.key}.pdf`;
+    let fingerprint = "";
+    try {
+      fingerprint = (await this.options.fingerprint?.(job.tex, job.preamble)) ?? "";
+    } catch {
+      // 指紋が取れなければ依存なしとして扱う。
+    }
+    if (this.disposed) return;
+    const cacheName = fingerprint === "" ? job.key : `${job.key}-${fingerprint}`;
+    if (this.done.has(cacheName) || this.failed.has(cacheName)) return;
+    const cachePath = `${cacheDir}/${cacheName}.pdf`;
     try {
       if (await fs.exists(cachePath)) {
         const pdf = await fs.readFile(cachePath);
-        this.done.add(job.key);
+        this.done.add(cacheName);
         if (!this.disposed) this.options.onReady(job.key, pdf);
         return;
       }
@@ -92,20 +120,59 @@ export class RawBlockCompiler {
         this.controller.signal,
       );
       if (this.disposed) return;
-      this.done.add(job.key);
+      this.done.add(cacheName);
       try {
         await fs.mkdir(cacheDir);
-        await fs.writeFile(cachePath, pdf);
+        const temporary = `${cachePath}.${Math.random().toString(36).slice(2)}.tmp`;
+        await fs.writeFile(temporary, pdf);
+        await fs.rename(temporary, cachePath);
       } catch {
         // キャッシュに書けなくても画像は出す。
       }
       this.options.onReady(job.key, pdf);
     } catch (error) {
       if (this.disposed) return;
-      this.failed.add(job.key);
+      this.failed.add(cacheName);
       this.options.onFailed(job.key, error instanceof Error ? error.message : String(error));
     } finally {
       this.controller = undefined;
     }
   }
+}
+
+export interface DependencyStat {
+  mtimeMs: number;
+  size: number;
+}
+
+/** 拡張子の無い参照(`\\includegraphics{fig}` など)に試す拡張子。先に見つかったものを使う。 */
+export const DEPENDENCY_EXTENSIONS = ["", ".pdf", ".png", ".jpg", ".jpeg", ".eps", ".tex"];
+
+/**
+ * 依存ファイル名の一覧から指紋を作る。存在するものは更新時刻と大きさ、無いものは missing として並べ、
+ * hash にかける。名前が無ければ ""(キャッシュ名に何も足さない)。
+ */
+export async function dependencyFingerprint(
+  names: readonly string[],
+  resolvePath: (name: string) => string,
+  stat: (path: string) => Promise<DependencyStat | null>,
+  hash: (text: string) => string,
+): Promise<string> {
+  if (names.length === 0) return "";
+  const lines: string[] = [];
+  for (const name of names) {
+    const candidates = /\.[A-Za-z0-9]+$/.test(name)
+      ? [name]
+      : DEPENDENCY_EXTENSIONS.map((extension) => `${name}${extension}`);
+    let line = `${name}|missing`;
+    for (const candidate of candidates) {
+      const info = await stat(resolvePath(candidate));
+      if (info) {
+        line = `${candidate}|${info.mtimeMs}|${info.size}`;
+        break;
+      }
+    }
+    lines.push(line);
+  }
+  return hash(lines.join("\n"));
 }

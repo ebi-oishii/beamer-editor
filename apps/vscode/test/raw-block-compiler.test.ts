@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { RawBlockCompiler, type RawBlockCompilerFileSystem } from "../src/raw-block-compiler";
+import {
+  dependencyFingerprint,
+  RawBlockCompiler,
+  type RawBlockCompilerFileSystem,
+} from "../src/raw-block-compiler";
 
 function memoryFs(initial: Record<string, Uint8Array> = {}) {
   const files = new Map(Object.entries(initial));
@@ -14,6 +18,12 @@ function memoryFs(initial: Record<string, Uint8Array> = {}) {
     },
     mkdir: async () => {},
     exists: async (path) => files.has(path),
+    rename: async (from, to) => {
+      const data = files.get(from);
+      if (!data) throw new Error(`ENOENT ${from}`);
+      files.delete(from);
+      files.set(to, data);
+    },
   };
   return { fs, files };
 }
@@ -108,6 +118,104 @@ describe("RawBlockCompiler", () => {
     expect(compile).toHaveBeenCalledTimes(1);
   });
 
+  it("依存ファイルの指紋がキャッシュ名に入り、指紋が変わればコンパイルし直す", async () => {
+    const { fs, files } = memoryFs();
+    let fingerprint = "aaaa";
+    const compile = vi.fn(async () => new Uint8Array([fingerprint.charCodeAt(0)]));
+    const onReady = vi.fn();
+    const compiler = new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile,
+      buildDocument: (tex) => tex,
+      fingerprint: async () => fingerprint,
+      onReady,
+      onFailed: vi.fn(),
+    });
+    const blocks = [{ key: "k1", tex: "x", environment: null }];
+    compiler.request(blocks, "");
+    await flush();
+    expect([...files.keys()]).toEqual(["/cache/k1-aaaa.pdf"]);
+    // 同じ指紋なら何もしない(届け直しもしない)。
+    compiler.request(blocks, "");
+    await flush();
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(onReady).toHaveBeenCalledTimes(1);
+    // 画像を差し替えるなどで指紋が変わると、同じ key でもコンパイルし直して届ける。
+    fingerprint = "bbbb";
+    compiler.request(blocks, "");
+    await flush();
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(onReady).toHaveBeenLastCalledWith("k1", new Uint8Array(["b".charCodeAt(0)]));
+    expect([...files.keys()].sort()).toEqual(["/cache/k1-aaaa.pdf", "/cache/k1-bbbb.pdf"]);
+  });
+
+  it("キャッシュは一時ファイルに書いてから最終名へ置き換え、一時ファイルを残さない", async () => {
+    const { files } = memoryFs();
+    const writes: string[] = [];
+    const renames: [string, string][] = [];
+    const fs: RawBlockCompilerFileSystem = {
+      readFile: async () => {
+        throw new Error("unused");
+      },
+      writeFile: async (path, data) => {
+        writes.push(path);
+        files.set(path, data);
+      },
+      mkdir: async () => {},
+      exists: async () => false,
+      rename: async (from, to) => {
+        renames.push([from, to]);
+        files.set(to, files.get(from) as Uint8Array);
+        files.delete(from);
+      },
+    };
+    new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile: async () => new Uint8Array([7]),
+      buildDocument: (tex) => tex,
+      onReady: vi.fn(),
+      onFailed: vi.fn(),
+    }).request([{ key: "k1", tex: "x", environment: null }], "");
+    await flush();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatch(/^\/cache\/k1\.pdf\.[a-z0-9]+\.tmp$/);
+    expect(renames).toEqual([[writes[0], "/cache/k1.pdf"]]);
+    expect([...files.keys()]).toEqual(["/cache/k1.pdf"]);
+  });
+
+  it("resetFailures の後は失敗した key をもう一度試す", async () => {
+    const { fs } = memoryFs();
+    let broken = true;
+    const compile = vi.fn(async () => {
+      if (broken) throw new Error("missing figure.png");
+      return new Uint8Array([1]);
+    });
+    const onReady = vi.fn();
+    const compiler = new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile,
+      buildDocument: (tex) => tex,
+      onReady,
+      onFailed: vi.fn(),
+    });
+    const blocks = [{ key: "k1", tex: "x", environment: null }];
+    compiler.request(blocks, "");
+    await flush();
+    compiler.request(blocks, "");
+    await flush();
+    expect(compile).toHaveBeenCalledTimes(1);
+    // 画像が置かれてテンプレート監視が refresh を呼んだ、という状況。
+    broken = false;
+    compiler.resetFailures();
+    compiler.request(blocks, "");
+    await flush();
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(onReady).toHaveBeenCalledWith("k1", new Uint8Array([1]));
+  });
+
   it("dispose すると実行中のコンパイルを中止し、結果を届けない", async () => {
     const { fs } = memoryFs();
     let aborted = false;
@@ -137,5 +245,33 @@ describe("RawBlockCompiler", () => {
     expect(aborted).toBe(true);
     expect(onReady).not.toHaveBeenCalled();
     expect(onFailed).not.toHaveBeenCalled();
+  });
+});
+
+describe("dependencyFingerprint", () => {
+  const hash = (text: string) => `h(${text})`;
+  const table = new Map<string, { mtimeMs: number; size: number }>([
+    ["/deck/figs/plot.pdf", { mtimeMs: 100, size: 10 }],
+    ["/deck/mystyle.sty", { mtimeMs: 200, size: 20 }],
+  ]);
+  const stat = async (path: string) => table.get(path) ?? null;
+  const resolvePath = (name: string) => `/deck/${name}`;
+
+  it("拡張子の無い参照は候補を順に試し、無いものは missing として指紋に入れる", async () => {
+    expect(
+      await dependencyFingerprint(
+        ["figs/plot", "mystyle.sty", "gone.png"],
+        resolvePath,
+        stat,
+        hash,
+      ),
+    ).toBe("h(figs/plot.pdf|100|10\nmystyle.sty|200|20\ngone.png|missing)");
+  });
+
+  it("依存が無ければ空文字で、ファイルの更新時刻が変われば指紋も変わる", async () => {
+    expect(await dependencyFingerprint([], resolvePath, stat, hash)).toBe("");
+    const before = await dependencyFingerprint(["figs/plot"], resolvePath, stat, hash);
+    table.set("/deck/figs/plot.pdf", { mtimeMs: 101, size: 10 });
+    expect(await dependencyFingerprint(["figs/plot"], resolvePath, stat, hash)).not.toBe(before);
   });
 });

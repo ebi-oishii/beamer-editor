@@ -489,6 +489,8 @@ export interface FragmentCompileRequest {
   cwd?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** 生成 PDF のバイト数の上限。超えたら読み込まずに E_COMPILE にする(巨大な出力でメモリを使い切らない)。 */
+  maxOutputBytes?: number;
 }
 
 export interface FragmentCompileResult {
@@ -550,6 +552,12 @@ export async function compileFragment(
         "E_COMPILE",
         `部分コンパイルに失敗しました${processDetail(compileResult)}`,
       );
+    const { size } = await stat(compiledPdf);
+    if (request.maxOutputBytes !== undefined && size > request.maxOutputBytes)
+      throw new PdfExportError(
+        "E_COMPILE",
+        `生成された PDF が大きすぎます(${size} バイト、上限 ${request.maxOutputBytes} バイト)`,
+      );
     const pdf = new Uint8Array(await readFile(compiledPdf));
     return { pdf, engineVersion };
   } catch (error) {
@@ -567,4 +575,8 @@ export async function compileFragment(
   }
 }
 
-export { buildFragmentDocument } from "./fragment.js";
+export {
+  buildFragmentDocument,
+  FRAGMENT_DOCUMENT_VERSION,
+  fragmentDependencies,
+} from "./fragment.js";

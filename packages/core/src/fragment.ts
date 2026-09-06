@@ -31,3 +31,8 @@ export function rawFragmentKey(tex: string, preamble: string): string {
   const head = preamble.replace(/\r\n/g, "\n").trim();
   return `${fnv1a(body, 0x811c9dc5)}${fnv1a(`${head}\u0000${body}`, 0x01000193)}`;
 }
+
+/** 任意の文字列の 16 桁 hex ハッシュ(キャッシュの置き場や依存ファイルの指紋に使う)。 */
+export function fragmentHash(text: string): string {
+  return `${fnv1a(text, 0x811c9dc5)}${fnv1a(text, 0x01000193)}`;
+}

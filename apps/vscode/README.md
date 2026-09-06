@@ -47,7 +47,7 @@ LaTeX Workshop が入っている環境で managed file を初めて開くと、
 
 ## 生ブロックの部分コンパイル
 
-TikZ などサブセット外のブロックは、プレビューではまず環境名だけの箱(プレースホルダ)で場所を確保し、裏で Tectonic により standalone 文書としてコンパイルして、できた画像を箱に差し込みます。結果は内容とプリアンブル(preamble-extra とマクロ定義)のハッシュでキャッシュされるので、変えていないブロックは再コンパイルされません。失敗したブロックは赤い枠の箱として残り、ホバーで Tectonic のエラーを確認できます。Tectonic の場所は `beamerEditor.tectonicPath`、無効にするには `beamerEditor.preview.compileRawBlocks` を false にします。Restricted Mode では動きません。
+TikZ などサブセット外のブロックは、プレビューではまず環境名だけの箱(プレースホルダ)で場所を確保し、裏で Tectonic により standalone 文書としてコンパイルして、できた画像を箱に差し込みます。結果は内容とプリアンブル(preamble-extra とマクロ定義)のハッシュでキャッシュされるので、変えていないブロックは再コンパイルされません。キャッシュはデッキのディレクトリごとに分かれ、ブロックが参照する画像や .sty が更新されると作り直します。失敗したブロックは赤い枠の箱として残り、ホバーで Tectonic のエラーを確認できます(生成 PDF が 8 MB を超えるものや、極端に大きなページも箱のまま失敗扱いになります)。Tectonic の場所は `beamerEditor.tectonicPath`、無効にするには `beamerEditor.preview.compileRawBlocks` を false にします。Restricted Mode では動きません。
 
 ## PDF 書き出し
 

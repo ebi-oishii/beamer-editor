@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { applyRawImages, decodeBase64, RawImageStore } from "../src/preview/raw-images.js";
+import {
+  applyRawImages,
+  decodeBase64,
+  MAX_RAW_PDF_BYTES,
+  RawImageStore,
+} from "../src/preview/raw-images.js";
 
 const PDF_B64 = btoa("%PDF-1.7 fake");
 
@@ -54,6 +59,18 @@ describe("RawImageStore / applyRawImages", () => {
     expect(boxes[1]?.dataset.rawError).toContain("画像にできません");
     // 結果が無い箱はそのまま。
     expect(boxes[2]?.dataset.rawStatus).toBeUndefined();
+  });
+
+  it("上限を超える PDF は復号もラスタライズもせずに失敗にする", () => {
+    const rasterize = vi.fn();
+    const store = new RawImageStore(rasterize);
+    const tooLong = "A".repeat(Math.ceil(MAX_RAW_PDF_BYTES / 3) * 4 + 4);
+    store.receive("huge", { pdfBase64: tooLong });
+    expect(store.get("huge")).toEqual({
+      status: "failed",
+      message: "PDF が大きすぎます(上限 8 MB)",
+    });
+    expect(rasterize).not.toHaveBeenCalled();
   });
 
   it("decodeBase64 はバイト列を復元する", () => {

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildFragmentDocument } from "../src/fragment.js";
+import { buildFragmentDocument, fragmentDependencies } from "../src/fragment.js";
 import { compileFragment, type ProcessRunner } from "../src/index.js";
 
 describe("buildFragmentDocument", () => {
@@ -38,6 +38,49 @@ describe("buildFragmentDocument", () => {
     expect(doc).not.toContain("setbeamercolor");
     expect(doc).not.toContain("\\logo");
     expect(doc).not.toContain("usebackgroundtemplate");
+  });
+});
+
+describe("fragmentDependencies", () => {
+  it("画像・入力ファイル・データ表・ローカル .sty の参照を出現順に拾い、拡張子は補完しない", () => {
+    expect(
+      fragmentDependencies(
+        [
+          "\\usepackage[final]{mystyle,tikz}",
+          "\\begin{tikzpicture}",
+          "\\node {\\includegraphics[width=2cm]{figs/plot}};",
+          "\\addplot[blue] table[x=t,y=v] {data/run1.dat};",
+          "\\pgfplotstableread{data/run2.csv}\\tbl",
+          "\\input{parts/inner.tex}",
+          "\\end{tikzpicture}",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      "mystyle.sty",
+      "tikz.sty",
+      "figs/plot",
+      "data/run1.dat",
+      "data/run2.csv",
+      "parts/inner.tex",
+    ]);
+  });
+
+  it("コメントの中・インラインデータ・同じ参照の重複は拾わない", () => {
+    expect(
+      fragmentDependencies(
+        [
+          "% \\includegraphics{commented.png}",
+          "\\includegraphics{a.png} % \\input{also-commented}",
+          "\\includegraphics{a.png}",
+          "\\addplot table {",
+          "1 2",
+          "3 4",
+          "};",
+          "100\\% \\includegraphics{after-escaped-percent.png}",
+        ].join("\n"),
+      ),
+    ).toEqual(["a.png", "after-escaped-percent.png"]);
+    expect(fragmentDependencies("\\draw (0,0) -- (1,1);")).toEqual([]);
   });
 });
 
@@ -91,6 +134,24 @@ describe("compileFragment", () => {
     await expect(compileFragment({ document: "\\bad" }, { runner: failing })).rejects.toMatchObject(
       { code: "E_COMPILE", message: expect.stringContaining("Undefined control sequence") },
     );
+  });
+
+  it("生成 PDF が上限を超えたら読み込まずに E_COMPILE にする", async () => {
+    const calls: { command: string; args: string[]; cwd: string }[] = [];
+    await expect(
+      compileFragment(
+        { document: "x", maxOutputBytes: FAKE_PDF.length - 1 },
+        { runner: runner(calls) },
+      ),
+    ).rejects.toMatchObject({
+      code: "E_COMPILE",
+      message: expect.stringContaining("大きすぎます"),
+    });
+    const ok = await compileFragment(
+      { document: "x", maxOutputBytes: FAKE_PDF.length },
+      { runner: runner(calls) },
+    );
+    expect(Array.from(ok.pdf)).toEqual(Array.from(FAKE_PDF));
   });
 
   it("tectonic が無ければ E_TECTONIC_NOT_FOUND", async () => {

@@ -30,3 +30,43 @@ export function buildFragmentDocument(body: string, preamble: string): string {
     .filter((line, index, all) => line !== "" || index === all.length - 1)
     .join("\n");
 }
+
+/**
+ * standalone 文書の組み立て方の版。buildFragmentDocument の前置きを変えたら上げる。
+ * 画像キャッシュの置き場に入り、古い組み立て方で作った PDF を使い続けない。
+ */
+export const FRAGMENT_DOCUMENT_VERSION = 1;
+
+const FILE_ARGUMENT =
+  /\\(?:includegraphics|includepdf|includesvg|includestandalone|input|include|InputIfFileExists|lstinputlisting|verbatiminput|pgfplotstableread)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;
+const PLOT_TABLE = /\\addplot\s*(?:\[[^\]]*\])?\s*table\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;
+const PACKAGES = /\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;
+
+/**
+ * 生ブロック(と前置き)が参照する外部ファイルの候補(原文のまま、出現順、重複なし)。
+ * 画像・入力ファイル・データ表・ローカルの .sty を拾う。実在するか・拡張子の補完は呼び出し側が決める。
+ * コメントの中は見ない。中身がファイル名に見えないもの(改行や `\\` を含む、`\\addplot table {…}` の
+ * インラインデータなど)は拾わない。
+ */
+export function fragmentDependencies(tex: string): string[] {
+  const code = tex.replace(/(^|[^\\])%[^\n]*/g, "$1");
+  const hits: { index: number; name: string }[] = [];
+  const collect = (pattern: RegExp, expand: (value: string) => string[]) => {
+    for (const match of code.matchAll(pattern)) {
+      for (const name of expand(match[1] ?? "")) hits.push({ index: match.index ?? 0, name });
+    }
+  };
+  collect(FILE_ARGUMENT, (value) => [value.trim()]);
+  collect(PLOT_TABLE, (value) => [value.trim()]);
+  collect(PACKAGES, (value) =>
+    value
+      .split(",")
+      .map((name) => name.trim())
+      .filter((name) => name !== "")
+      .map((name) => `${name}.sty`),
+  );
+  hits.sort((a, b) => a.index - b.index);
+  const found = new Set<string>();
+  for (const { name } of hits) if (name !== "" && !/[\\\n%]/.test(name)) found.add(name);
+  return [...found];
+}

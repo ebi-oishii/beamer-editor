@@ -15,6 +15,7 @@ import {
   type WebviewToExtension,
 } from "@beamer-editor/ui";
 import * as pdfjs from "pdfjs-dist";
+import { rasterScaleFor } from "./raster-scale";
 // KaTeX の数式 CSS とフォント。esbuild が media/webview.css + フォントへ抽出する。
 import "katex/dist/katex.min.css";
 
@@ -51,13 +52,18 @@ const container = document.getElementById("app");
 // worker の URI は拡張側が #app の data-pdf-worker に入れる(別オリジンなので pdf.js が blob 経由で起動する)。
 const pdfWorker = container?.dataset.pdfWorker;
 if (pdfWorker) pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
-const RASTER_SCALE = 3;
 async function rasterizePdf(pdf: Uint8Array): Promise<RasterImage> {
   const task = pdfjs.getDocument({ data: pdf });
   const loaded = await task.promise;
   try {
     const page = await loaded.getPage(1);
-    const viewport = page.getViewport({ scale: RASTER_SCALE });
+    const base = page.getViewport({ scale: 1 });
+    const scale = rasterScaleFor(base.width, base.height);
+    if (scale === null)
+      throw new Error(
+        `PDF のページが大きすぎます(${Math.round(base.width)} × ${Math.round(base.height)} pt)`,
+      );
+    const viewport = page.getViewport({ scale });
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
