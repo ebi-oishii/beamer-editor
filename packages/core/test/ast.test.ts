@@ -5,6 +5,7 @@ import {
   type FrameNode,
   frameLabel,
   framesOf,
+  frameTitleText,
   isCanvasFrame,
 } from "../src/ast.js";
 
@@ -73,5 +74,24 @@ describe("ast smoke", () => {
     expect(
       frameLabel({ type: "rawFrame", span: span(0, 1), tex: "", title: null, label: "   " }),
     ).toBe(null);
+  });
+
+  it("フレームタイトルを一覧向けのプレーンテキストへ変換する", () => {
+    const frame = makeFrame([]);
+    frame.title = [
+      { type: "text", span: span(0, 1), value: "Result " },
+      { type: "inlineMath", span: span(1, 4), delimiter: "dollar", tex: "x" },
+    ];
+    expect(frameTitleText(frame, 2)).toBe("Result $x$");
+    expect(frameTitleText(makeFrame([]), 3)).toBe("frame 3");
+    expect(
+      frameTitleText({ type: "rawFrame", span: span(0, 1), tex: "", title: "Raw", label: null }, 4),
+    ).toBe("Raw");
+    expect(
+      frameTitleText(
+        { type: "rawFrame", span: span(0, 1), tex: "", title: "Raw\n  title", label: null },
+        5,
+      ),
+    ).toBe("Raw title");
   });
 });

@@ -74,6 +74,8 @@ const ERROR_MESSAGES: Record<Exclude<PdfExportErrorCode, "E_CANCELLED">, string>
   E_TECTONIC_NOT_FOUND: "Tectonic が見つかりません。",
   E_TECTONIC_VERSION: "Tectonic のバージョンを確認できませんでした。",
   E_COMPILE: "PDF のコンパイルに失敗しました。",
+  E_RASTERIZE: "PDF ページ画像の生成に失敗しました。",
+  E_LIMIT: "PDF の処理上限を超えました。",
   E_IO: "PDF の書き出し中に入出力エラーが発生しました。",
 };
 

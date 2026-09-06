@@ -435,12 +435,60 @@ describe("PreviewController", () => {
       frameIndex: 0,
       elementId: "canvas-image-0",
       version: 7,
-      x: -0.25,
-      y: 1.5,
+      // 範囲外は本文領域の端へ収めてから渡す(幅 1 の箱なので x は 0 に固定)。
+      x: 0,
+      y: 1,
       sourceSpan: { start: 10, end: 25 },
       document: doc,
       expectedOptions: doc.getText().slice(10, 25),
     });
+  });
+
+  it("moveCanvasElement: 範囲外の座標を本文領域内へ収めてから callback へ渡す", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const moveCanvasElement = vi.fn(async () => "applied" as const);
+    new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      moveCanvasElement,
+    });
+    fire({ type: "ready" });
+    // 幅 0.4 の decktext を右下へ振り切る。x は 1 - 0.4、y は 1 で止まる。
+    fire({
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-text-0",
+      version: 7,
+      x: 0.95,
+      y: 1.4,
+    });
+    await Promise.resolve();
+    expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ x: 0.6, y: 1 }),
+    );
+  });
+
+  it("moveCanvasElement: clamp 後に現在位置と同じになる move は書き込まない", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const moveCanvasElement = vi.fn(async () => "applied" as const);
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      render: canvasRender,
+      moveCanvasElement,
+    });
+    fire({ type: "ready" });
+    // 幅 1 の画像は x=0 から動かせないので、左へはみ出す move は no-op になる。
+    fire({
+      type: "moveCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 7,
+      x: -0.002,
+      y: 0,
+    });
+    await Promise.resolve();
+    expect(moveCanvasElement).not.toHaveBeenCalled();
   });
 
   describe("detachToCanvas", () => {

@@ -1,0 +1,381 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  compileDeckFrames,
+  type DeckFrameRasterizer,
+  findDeckFrames,
+  groupFramePages,
+  injectFrameMarkers,
+  PdfExportError,
+  type ProcessResult,
+  type ProcessRunner,
+} from "../src/index.ts";
+
+const directories: string[] = [];
+
+async function directory(): Promise<string> {
+  const value = await mkdtemp(join(tmpdir(), "beamer-editor-frames-test-"));
+  directories.push(value);
+  return value;
+}
+
+async function source(text: string): Promise<string> {
+  const dir = await directory();
+  const path = join(dir, "talk.slide.tex");
+  await writeFile(path, text);
+  return path;
+}
+
+function result(overrides: Partial<ProcessResult> = {}): ProcessResult {
+  return { exitCode: 0, stdout: "tectonic 0.16.0", stderr: "", ...overrides };
+}
+
+function rasterizer(images: Array<{ page: number; png?: Uint8Array }>): DeckFrameRasterizer {
+  return {
+    async rasterize() {
+      return images.map((image) => ({
+        page: image.page,
+        png: image.png ?? new Uint8Array([image.page]),
+        width: 1600,
+        height: 900,
+      }));
+    },
+  };
+}
+
+afterEach(async () => {
+  await Promise.all(
+    directories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+  );
+});
+
+describe("frame measurement helpers", () => {
+  const deck = String.raw`\documentclass{beamer}
+\begin{document}
+% \begin{frame}[label=ignored]
+\begin{frame}<2->[allowframebreaks,label=first] One
+\end{frame}
+\begin{frame}[label = second] Two
+\end{frame}
+\end{document}
+`;
+
+  it("finds normal and raw frame syntax while retaining original spans", () => {
+    const frames = findDeckFrames(deck);
+    expect(frames.map((frame) => frame.address)).toEqual([
+      { number: 1, label: "first" },
+      { number: 2, label: "second" },
+    ]);
+    expect(deck.slice(frames[0]?.span.start, frames[0]?.span.end)).toContain("allowframebreaks");
+  });
+
+  it("injects fixed-width same-line markers without changing source line count", () => {
+    const measured = injectFrameMarkers(deck);
+    expect(measured.match(/BEAMER_EDITOR_FRAME:\d{6}/g)).toHaveLength(2);
+    expect(measured.split("\n")).toHaveLength(deck.split("\n").length);
+    expect(measured).toContain("BEAMER_EDITOR_FRAME:000001}\\begin{frame}");
+  });
+
+  it("groups overlay and allowframebreaks pages under the same logical frame", () => {
+    const groups = groupFramePages(
+      "BEAMER_EDITOR_FRAME:000001 [1] [2] BEAMER_EDITOR_FRAME:000002 [3]",
+      findDeckFrames(deck),
+    );
+    expect(groups.get(1)).toEqual([1, 2]);
+    expect(groups.get(2)).toEqual([3]);
+  });
+
+  it("does not guess when page/marker output is inconsistent", () => {
+    expect(() => groupFramePages("[1] BEAMER_EDITOR_FRAME:000001", findDeckFrames(deck))).toThrow(
+      PdfExportError,
+    );
+    expect(() => groupFramePages("BEAMER_EDITOR_FRAME:000002 [1]", findDeckFrames(deck))).toThrow(
+      PdfExportError,
+    );
+  });
+
+  it("stops reading a long log as soon as the physical page limit is exceeded", () => {
+    const frames = [{ address: { number: 1, label: null } }];
+    const log = `BEAMER_EDITOR_FRAME:000001 [1] [2]${" [3]".repeat(10_000)}`;
+    expect.assertions(1);
+    try {
+      groupFramePages(log, frames, 1);
+    } catch (error) {
+      expect(error).toMatchObject({ code: "E_LIMIT" });
+    }
+  });
+});
+
+describe("compileDeckFrames", () => {
+  const deck = String.raw`\documentclass{beamer}
+\begin{document}
+\begin{frame}[label=one] A
+\end{frame}
+\begin{frame}[allowframebreaks,label=two] B
+\end{frame}
+\end{document}
+`;
+
+  it("compiles once, preserves the source, and groups rendered pages and warnings", async () => {
+    const inputPath = await source(deck);
+    const calls: Array<readonly string[]> = [];
+    let measuredSource = "";
+    const runner: ProcessRunner = {
+      async run(_command, args) {
+        calls.push(args);
+        if (args[0] === "--version") return result();
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        const measuredInput = args.at(-1) as string;
+        measuredSource = await readFile(measuredInput, "utf8");
+        await writeFile(join(outdir, basename(measuredInput).replace(/\.tex$/, ".pdf")), "%PDF");
+        await writeFile(
+          join(outdir, basename(measuredInput).replace(/\.tex$/, ".log")),
+          "BEAMER_EDITOR_FRAME:000001 [1] Overfull \\hbox (2.5pt too wide) in paragraph at lines 3--4\nBEAMER_EDITOR_FRAME:000002 [2] [3] Overfull \\vbox (1pt too high) detected at line 99\nOverfull \\vbox (3pt too high) has occurred while \\output is active",
+        );
+        return result({ stdout: "compiler output is deliberately not parsed" });
+      },
+    };
+    const value = await compileDeckFrames(
+      { inputPath },
+      { runner, rasterizer: rasterizer([{ page: 1 }, { page: 2 }, { page: 3 }]) },
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain("--keep-logs");
+    expect(await readFile(inputPath, "utf8")).toBe(deck);
+    expect(measuredSource).toContain("BEAMER_EDITOR_FRAME:000001");
+    expect(value.frames.map((frame) => frame.images.map((image) => image.page))).toEqual([
+      [1],
+      [2, 3],
+    ]);
+    expect(value.warnings).toMatchObject([
+      {
+        kind: "overfull-hbox",
+        excessPt: 2.5,
+        frame: { number: 1, label: "one" },
+        sourceLines: { start: 3, end: 4 },
+      },
+      { kind: "overfull-vbox", excessPt: 1, frame: null, sourceLines: { start: 99, end: 99 } },
+      { kind: "overfull-vbox", excessPt: 3, frame: null, sourceLines: null },
+    ]);
+
+    const analysisOnly = await compileDeckFrames({ inputPath, includeImages: false }, { runner });
+    expect(analysisOnly.frames.map((frame) => frame.images)).toEqual([[], []]);
+    expect(analysisOnly.warnings).toEqual(value.warnings);
+  });
+
+  it("rejects page and PNG limits", async () => {
+    const inputPath = await source(deck);
+    const runner: ProcessRunner = {
+      async run(_command, args) {
+        if (args[0] === "--version") return result();
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        const measuredInput = args.at(-1) as string;
+        await writeFile(join(outdir, basename(measuredInput).replace(/\.tex$/, ".pdf")), "%PDF");
+        await writeFile(
+          join(outdir, basename(measuredInput).replace(/\.tex$/, ".log")),
+          "BEAMER_EDITOR_FRAME:000001 [1] BEAMER_EDITOR_FRAME:000002 [2]",
+        );
+        return result();
+      },
+    };
+    await expect(
+      compileDeckFrames(
+        { inputPath, maxPages: 1 },
+        { runner, rasterizer: rasterizer([{ page: 1 }, { page: 2 }]) },
+      ),
+    ).rejects.toMatchObject({ code: "E_LIMIT" });
+    await expect(
+      compileDeckFrames({ inputPath, maxPages: 1, includeImages: false }, { runner }),
+    ).rejects.toMatchObject({ code: "E_LIMIT" });
+    await expect(
+      compileDeckFrames(
+        { inputPath, maxPngBytes: 1 },
+        { runner, rasterizer: rasterizer([{ page: 1, png: new Uint8Array([1, 2]) }, { page: 2 }]) },
+      ),
+    ).rejects.toMatchObject({ code: "E_LIMIT" });
+  });
+
+  it("uses a rasterizer by default, but does not require one for analysis-only output", async () => {
+    const inputPath = await source(deck);
+    await expect(compileDeckFrames({ inputPath })).rejects.toMatchObject({ code: "E_RASTERIZE" });
+  });
+
+  it("re-checks cancellation before returning analysis-only output", async () => {
+    const inputPath = await source(deck);
+    let abortedChecks = 0;
+    // The first four checks occur before the PDF/log reads. The fifth is the
+    // analysis-only check immediately before its return.
+    const signal = {
+      get aborted() {
+        abortedChecks += 1;
+        return abortedChecks === 5;
+      },
+    } as AbortSignal;
+    const runner: ProcessRunner = {
+      async run(_command, args) {
+        if (args[0] === "--version") return result();
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        const measuredInput = args.at(-1) as string;
+        await writeFile(join(outdir, basename(measuredInput).replace(/\.tex$/, ".pdf")), "%PDF");
+        await writeFile(
+          join(outdir, basename(measuredInput).replace(/\.tex$/, ".log")),
+          "BEAMER_EDITOR_FRAME:000001 [1] BEAMER_EDITOR_FRAME:000002 [2]",
+        );
+        return result();
+      },
+    };
+    await expect(
+      compileDeckFrames({ inputPath, includeImages: false, signal }, { runner }),
+    ).rejects.toMatchObject({ code: "E_CANCELLED" });
+    expect(abortedChecks).toBe(5);
+  });
+
+  it("passes decode-safe budgets to the rasterizer before it allocates an image", async () => {
+    const inputPath = await source(deck);
+    let received:
+      | {
+          maxPages: number;
+          maxPngBytes: number;
+          maxPixelsPerPage: number;
+          maxImageDimension: number;
+        }
+      | undefined;
+    const runner: ProcessRunner = {
+      async run(_command, args) {
+        if (args[0] === "--version") return result();
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        const measuredInput = args.at(-1) as string;
+        await writeFile(join(outdir, basename(measuredInput).replace(/\.tex$/, ".pdf")), "%PDF");
+        await writeFile(
+          join(outdir, basename(measuredInput).replace(/\.tex$/, ".log")),
+          "BEAMER_EDITOR_FRAME:000001 [1] BEAMER_EDITOR_FRAME:000002 [2]",
+        );
+        return result();
+      },
+    };
+    const preflightFailure = new PdfExportError("E_LIMIT", "image would exceed decoder budget");
+    await expect(
+      compileDeckFrames(
+        {
+          inputPath,
+          maxPages: 7,
+          maxPngBytes: 1234,
+          maxPixelsPerPage: 5678,
+          maxImageDimension: 90,
+        },
+        {
+          runner,
+          rasterizer: {
+            async rasterize(_pdfPath, options) {
+              received = options;
+              throw preflightFailure;
+            },
+          },
+        },
+      ),
+    ).rejects.toBe(preflightFailure);
+    expect(received).toMatchObject({
+      maxPages: 7,
+      maxPngBytes: 1234,
+      maxPixelsPerPage: 5678,
+      maxImageDimension: 90,
+    });
+  });
+
+  it("fails with typed errors when the final Tectonic log is absent or too large", async () => {
+    const inputPath = await source(deck);
+    let writeLog = false;
+    const runner: ProcessRunner = {
+      async run(_command, args) {
+        if (args[0] === "--version") return result();
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        const measuredInput = args.at(-1) as string;
+        await writeFile(join(outdir, basename(measuredInput).replace(/\.tex$/, ".pdf")), "%PDF");
+        if (writeLog)
+          await writeFile(
+            join(outdir, basename(measuredInput).replace(/\.tex$/, ".log")),
+            "BEAMER_EDITOR_FRAME:000001 [1] BEAMER_EDITOR_FRAME:000002 [2]",
+          );
+        return result();
+      },
+    };
+    await expect(
+      compileDeckFrames({ inputPath }, { runner, rasterizer: rasterizer([]) }),
+    ).rejects.toMatchObject({ code: "E_COMPILE" });
+    writeLog = true;
+    await expect(
+      compileDeckFrames({ inputPath, maxLogBytes: 1 }, { runner, rasterizer: rasterizer([]) }),
+    ).rejects.toMatchObject({ code: "E_LIMIT" });
+  });
+
+  it("cleans the marked copy when compilation fails", async () => {
+    const inputPath = await source(deck);
+    let temporary = "";
+    const runner: ProcessRunner = {
+      run: async (_command, args) =>
+        args[0] === "--version" ? result() : result({ exitCode: 1, stderr: "bad TeX" }),
+    };
+    await expect(
+      compileDeckFrames(
+        { inputPath },
+        {
+          runner,
+          rasterizer: rasterizer([]),
+          temporaryDirectory: async () => {
+            temporary = await directory();
+            return temporary;
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ code: "E_COMPILE" });
+    await expect(readFile(join(temporary, "talk.slide.tex"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("cleans temporary files after rasterizer failure and propagates cancellation", async () => {
+    const inputPath = await source(deck);
+    let temporary = "";
+    const runner: ProcessRunner = {
+      async run(_command, args) {
+        if (args[0] === "--version") return result();
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        const measuredInput = args.at(-1) as string;
+        await writeFile(join(outdir, basename(measuredInput).replace(/\.tex$/, ".pdf")), "%PDF");
+        await writeFile(
+          join(outdir, basename(measuredInput).replace(/\.tex$/, ".log")),
+          "BEAMER_EDITOR_FRAME:000001 [1] BEAMER_EDITOR_FRAME:000002 [2]",
+        );
+        return result();
+      },
+    };
+    await expect(
+      compileDeckFrames(
+        { inputPath },
+        {
+          runner,
+          rasterizer: { rasterize: async () => Promise.reject(new Error("renderer failed")) },
+          temporaryDirectory: async () => {
+            temporary = await directory();
+            return temporary;
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ code: "E_RASTERIZE" });
+    await expect(readFile(join(temporary, "talk.slide.tex"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      compileDeckFrames(
+        { inputPath, signal: controller.signal },
+        { runner, rasterizer: rasterizer([]) },
+      ),
+    ).rejects.toMatchObject({ code: "E_CANCELLED" });
+  });
+});

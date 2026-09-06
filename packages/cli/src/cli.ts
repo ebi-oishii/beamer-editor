@@ -1,9 +1,10 @@
 /**
- * `deck` コマンドライン本体。lint / format は core の解析・整形結果を、fonts は
+ * `deck` コマンドライン本体。outline / lint / format は core の解析・整形結果を、fonts は
  * スタイルトラック S2 のフォント解決結果をそのまま境界へ出す。
  *
  *   deck lint <file> [--json]             診断を stdout に出す
  *   deck format <file> [--write] [--json] 整形結果または書き込み結果を stdout に出す
+ *   deck outline <file> [--json]          フレーム一覧を stdout に出す
  *
  * --json を含む成功結果は stdout、E_* エラーは stderr の JSON を維持する。人間向けの
  * 成功結果とエラーも、それぞれ stdout と stderr に出す。
@@ -20,7 +21,15 @@ import { readFile, writeFile } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { exportPdf, type PdfExportErrorCode, type PdfExportResult } from "@beamer-editor/compiler";
-import { formatDeck, type LintDiagnostic, lintSource } from "@beamer-editor/core";
+import {
+  formatDeck,
+  frameLabel,
+  framesOf,
+  frameTitleText,
+  type LintDiagnostic,
+  lintSource,
+  parseDeck,
+} from "@beamer-editor/core";
 import { createNodeFileProbes } from "./file-probes.ts";
 import {
   defaultFontPaths,
@@ -52,6 +61,8 @@ const ERROR_EXIT_CODE: Record<CliErrorCode, number> = {
   E_TECTONIC_NOT_FOUND: EXIT_CODE.operationalFailure,
   E_TECTONIC_VERSION: EXIT_CODE.operationalFailure,
   E_COMPILE: EXIT_CODE.operationalFailure,
+  E_RASTERIZE: EXIT_CODE.operationalFailure,
+  E_LIMIT: EXIT_CODE.operationalFailure,
   E_CANCELLED: EXIT_CODE.operationalFailure,
 };
 
@@ -195,6 +206,7 @@ const USAGE = `使い方: deck <command> ...
 
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
+  deck outline <file> [--json]        フレーム一覧を表示
   deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]
   deck fonts status [--json]          フォントカタログ全 family の解決状態
   deck fonts fetch [family] [--json]  family(既定 "${DEFAULT_FAMILY}")を取得・配置
@@ -265,6 +277,28 @@ async function runLint(file: string, json: boolean): Promise<number> {
   }
   if (result.summary.errors > 0) return EXIT_CODE.lintError;
   if (result.summary.warnings > 0) return EXIT_CODE.lintWarning;
+  return EXIT_CODE.success;
+}
+
+async function runOutline(file: string, json: boolean): Promise<number> {
+  let source: string;
+  try {
+    source = await readFile(resolve(file), "utf8");
+  } catch (error) {
+    writeError("E_IO", `読み込みに失敗しました: ${file}: ${errorMessage(error)}`, json);
+    return exitCodeForError("E_IO");
+  }
+  const frames = framesOf(parseDeck(source)).map((frame, index) => ({
+    number: index + 1,
+    label: frameLabel(frame),
+    title: frameTitleText(frame, index + 1),
+  }));
+  if (json) process.stdout.write(`${JSON.stringify({ file, frames }, null, 2)}\n`);
+  else {
+    for (const frame of frames) {
+      process.stdout.write(`${frame.number}. [${frame.label ?? "-"}] ${frame.title}\n`);
+    }
+  }
   return EXIT_CODE.success;
 }
 
@@ -465,6 +499,12 @@ export async function run(
     if (sub === undefined || family !== undefined)
       return usageError("format にはファイルを 1 つ指定してください", json);
     return runFormat(sub, write, json);
+  }
+  if (command === "outline") {
+    if (write) return usageError("outline は --write をサポートしません", json);
+    if (sub === undefined || family !== undefined)
+      return usageError("outline にはファイルを 1 つ指定してください", json);
+    return runOutline(sub, json);
   }
   if (command === "fonts") {
     if (write) return usageError("fonts は --write をサポートしません", json);

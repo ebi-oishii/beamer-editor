@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canvasPointFromPointer, normalizeCanvasCoordinate } from "../src/preview/canvas-drag.js";
+import { canvasPointFromPointer } from "../src/preview/canvas-drag.js";
 
 describe("canvasPointFromPointer", () => {
   it("拡大率を別途割らず rect と grab offset から論理位置を出す", () => {
@@ -13,10 +13,5 @@ describe("canvasPointFromPointer", () => {
   });
   it("ゼロ寸法は拒否する", () => {
     expect(canvasPointFromPointer({ left: 0, top: 0, width: 0, height: 1 }, 0, 0, 0, 0)).toBeNull();
-  });
-  it("3桁丸めは -0 と範囲外値を保持する", () => {
-    expect(normalizeCanvasCoordinate(-0.0004)).toBe(0);
-    expect(normalizeCanvasCoordinate(-0.5004)).toBe(-0.5);
-    expect(normalizeCanvasCoordinate(1.2346)).toBe(1.235);
   });
 });

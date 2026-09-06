@@ -249,6 +249,8 @@ describe("ExportController", () => {
       "E_OUTPUT_EXISTS",
       "E_TECTONIC_VERSION",
       "E_COMPILE",
+      "E_RASTERIZE",
+      "E_LIMIT",
       "E_IO",
     ] as const) {
       const host = createHost({ showError: vi.fn(async () => "詳細を表示") });

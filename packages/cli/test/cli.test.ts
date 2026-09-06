@@ -243,10 +243,71 @@ describe("deck lint", () => {
         "使い方: deck <command> ...\n\n" +
         "  deck lint <file> [--json]           デッキを検査\n" +
         "  deck format <file> [--write] [--json]  デッキを正規化\n" +
+        "  deck outline <file> [--json]        フレーム一覧を表示\n" +
         "  deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]\n" +
         "  deck fonts status [--json]          フォントカタログ全 family の解決状態\n" +
         '  deck fonts fetch [family] [--json]  family(既定 "Noto Sans CJK JP")を取得・配置\n',
     );
+  });
+});
+
+describe("deck outline", () => {
+  it("展開せずに出現順のフレーム番号、label、タイトルを出力する", async () => {
+    const source = await fixture(
+      "outline.tex",
+      deck(String.raw`\begin{frame}[label=intro]{Intro $x$}\end{frame}
+\begin{frame}\end{frame}
+\begin{frame}[label=raw,shrink=5]{Raw
+  title}\includegraphics[label=figure]{chart.pdf}\end{frame}
+\begin{frame}[label=   ,shrink=5]{No label}\end{frame}`),
+    );
+    const result = runCli("outline", source.argvPath);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(
+      "1. [intro] Intro $x$\n2. [-] frame 2\n3. [raw] Raw title\n4. [-] No label\n",
+    );
+
+    const json = runCli("outline", source.argvPath, "--json");
+    expect(json.status).toBe(0);
+    expect(JSON.parse(json.stdout)).toEqual({
+      file: source.argvPath,
+      frames: [
+        { number: 1, label: "intro", title: "Intro $x$" },
+        { number: 2, label: null, title: "frame 2" },
+        { number: 3, label: "raw", title: "Raw title" },
+        { number: 4, label: null, title: "No label" },
+      ],
+    });
+  });
+
+  it("空デッキを成功として出力し、使用法と I/O エラーを既存形式で返す", async () => {
+    const source = await fixture("empty.tex", deck(""));
+    const empty = runCli("outline", source.argvPath, "--json");
+    expect(empty.status).toBe(0);
+    expect(JSON.parse(empty.stdout)).toEqual({ file: source.argvPath, frames: [] });
+
+    const write = runCli("outline", source.argvPath, "--write", "--json");
+    expect(write.status).toBe(3);
+    expect(JSON.parse(write.stderr)).toEqual({
+      error: { code: "E_USAGE", message: "outline は --write をサポートしません" },
+    });
+    const extra = runCli("outline", source.argvPath, "other.tex", "--json");
+    expect(extra.status).toBe(3);
+    expect(JSON.parse(extra.stderr)).toEqual({
+      error: { code: "E_USAGE", message: "outline にはファイルを 1 つ指定してください" },
+    });
+    const absent = runCli("outline", "--json");
+    expect(absent.status).toBe(3);
+    expect(JSON.parse(absent.stderr)).toEqual({
+      error: { code: "E_USAGE", message: "outline にはファイルを 1 つ指定してください" },
+    });
+    const unknown = runCli("outline", source.argvPath, "--unknown", "--json");
+    expect(unknown.status).toBe(3);
+    expect(JSON.parse(unknown.stderr).error.code).toBe("E_USAGE");
+    const missing = runCli("outline", "missing.tex", "--json");
+    expect(missing.status).toBe(3);
+    expect(JSON.parse(missing.stderr).error.code).toBe("E_IO");
   });
 });
 
@@ -386,6 +447,28 @@ describe("deck export", () => {
       expect(JSON.parse(String(stderr.mock.calls[0]?.[0]))).toEqual({
         error: { code: "E_IO", message: "output cannot be inspected" },
       });
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it("preserves frame-rendering compiler errors as operational export failures", async () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      for (const code of ["E_RASTERIZE", "E_LIMIT"] as const) {
+        const compiler = async () => {
+          throw Object.assign(new Error(`日本語の ${code} エラー`), { code });
+        };
+        expect(
+          await run(["export", "talk.tex", "--format", "pdf", "--json"], { exportPdf: compiler }),
+        ).toBe(EXIT_CODE.operationalFailure);
+        expect(JSON.parse(String(stderr.mock.calls.at(-1)?.[0]))).toEqual({
+          error: { code, message: `日本語の ${code} エラー` },
+        });
+      }
+      expect(stdout).not.toHaveBeenCalled();
     } finally {
       stdout.mockRestore();
       stderr.mockRestore();
