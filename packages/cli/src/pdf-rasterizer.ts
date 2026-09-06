@@ -17,13 +17,26 @@ async function loadModules(): Promise<Modules> {
   }
 }
 
+function isCanvasExtent(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
 /** Node-only adapter; imports occur only when snapshot needs PNG rendering. */
 export function createNodePdfRasterizer(
   load: () => Promise<Modules> = loadModules,
 ): DeckFrameRasterizer {
   return {
     async rasterize(pdfPath, options): Promise<readonly FrameImage[]> {
-      const { pdfjs, createCanvas } = await load();
+      let modules: Modules;
+      try {
+        modules = await load();
+      } catch (error) {
+        // An injected loader fails the same way the default dynamic import does.
+        throw error instanceof PdfExportError
+          ? error
+          : new PdfExportError("E_RASTERIZE", "PDF rasterizer を読み込めません", error);
+      }
+      const { pdfjs, createCanvas } = modules;
       const loadingTask = pdfjs.getDocument({ url: pdfPath, useWorkerFetch: false });
       try {
         const pdf = await loadingTask.promise;
@@ -46,6 +59,13 @@ export function createNodePdfRasterizer(
               const viewport = page.getViewport({ scale: 1600 / base.width });
               const width = Math.ceil(viewport.width);
               const height = Math.ceil(viewport.height);
+              // A degenerate or non-finite viewport must never reach createCanvas, and 0 / NaN
+              // slip through the upper-bound comparisons below.
+              if (!isCanvasExtent(width) || !isCanvasExtent(height))
+                throw new PdfExportError(
+                  "E_RASTERIZE",
+                  `PDF page の画像サイズを解釈できません: ${width}x${height}`,
+                );
               if (
                 width > options.maxImageDimension ||
                 height > options.maxImageDimension ||
@@ -63,6 +83,9 @@ export function createNodePdfRasterizer(
               });
               const cancel = () => renderTask.cancel();
               options.signal?.addEventListener("abort", cancel, { once: true });
+              // An abort raised between creating renderTask and registering the listener would
+              // otherwise never reach the task.
+              if (options.signal?.aborted) renderTask.cancel();
               try {
                 await renderTask.promise;
               } catch (error) {

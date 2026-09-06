@@ -17,8 +17,8 @@
  * | 3 | 操作失敗 (E_USAGE / E_IO / E_INTERNAL / 取得不能な font など) |
  */
 
-import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   type CanvasGeometry,
@@ -725,6 +725,16 @@ export function parseSnapshotArgs(argv: readonly string[]): ParsedSnapshotArgs {
   return { input, output, frame, tectonic, json, error };
 }
 
+/**
+ * Present only while `deck snapshot` is writing into its output directory. Removing it is the
+ * publication step, so its absence means the directory is complete.
+ */
+const INCOMPLETE_MARKER = ".deck-snapshot-incomplete";
+
+function snapshotFileName(frame: number, page: number): string {
+  return `frame-${String(frame).padStart(6, "0")}-page-${String(page).padStart(6, "0")}.png`;
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await lstat(path);
@@ -764,7 +774,9 @@ async function runSnapshot(
 ): Promise<number> {
   if (parsed.error) return usageError(parsed.error, parsed.json);
   const input = parsed.input as string,
-    output = resolve(parsed.output as string);
+    displayOutput = parsed.output as string,
+    output = resolve(displayOutput);
+  // An early, readable rejection. mkdir below stays the authority on existence.
   if (await pathExists(output)) {
     writeError("E_OUTPUT_EXISTS", `出力先は既に存在します: ${output}`, parsed.json);
     return 3;
@@ -777,9 +789,9 @@ async function runSnapshot(
     writeError("E_IO", `出力先を作成できません: ${errorMessage(error)}`, parsed.json);
     return 3;
   }
-  let staging: string | undefined;
-  let published = false;
-  let ownerMarker: string | undefined;
+  // Only a successful mkdir makes this process the owner of `output`, and only an owner may
+  // remove it on failure.
+  let reserved = false;
   try {
     const compiler =
       dependencies.compileDeckFrames ??
@@ -791,23 +803,20 @@ async function runSnapshot(
       includeImages: true,
     });
     const frames = selectedFrame(parsed.frame, compiled.frames);
-    const images = frames.flatMap((item) =>
-      item.images.map((image) => ({ frame: item.address.number, image })),
+    const outputs = frames.flatMap((item) =>
+      item.images.map((image) => ({
+        frame: item.address.number,
+        label: item.address.label,
+        image,
+        file: snapshotFileName(item.address.number, image.page),
+      })),
     );
-    if (!images.length)
+    if (!outputs.length)
       throw Object.assign(new Error("snapshot 可能な PDF page がありません"), {
         code: "E_COMPILE",
       });
-    staging = await mkdtemp(join(dirname(output), `.${basename(output)}.staging-`));
-    const outputs = images.map(({ frame, image }) => ({
-      frame,
-      image,
-      file: `frame-${String(frame).padStart(6, "0")}-page-${String(image.page).padStart(6, "0")}.png`,
-    }));
-    for (const item of outputs)
-      await writeFile(join(staging, item.file), item.image.png, { flag: "wx" });
-    // mkdir is atomic and never replaces an existing directory. It is the publication reservation;
-    // any concurrent creator wins and we leave their entry untouched.
+    // mkdir is atomic and never replaces an existing directory, so it doubles as the publication
+    // reservation: a concurrent creator wins and we leave their entry untouched.
     try {
       await mkdir(output);
     } catch (error) {
@@ -819,48 +828,48 @@ async function runSnapshot(
         code: "E_IO",
       });
     }
-    published = true;
-    ownerMarker = `.deck-snapshot-owner-${basename(staging)}`;
-    await writeFile(join(output, ownerMarker), "owned\n", { flag: "wx" });
-    for (const item of outputs) await rename(join(staging, item.file), join(output, item.file));
-    await rm(join(output, ownerMarker));
-    ownerMarker = undefined;
-    await rm(staging, { recursive: true, force: true });
-    staging = undefined;
-    const result = {
-      input,
-      output: parsed.output,
-      frames: frames.map((item) => ({
-        number: item.address.number,
-        label: item.address.label,
-        images: item.images.map((image) => ({
-          page: image.page,
-          file: `frame-${String(item.address.number).padStart(6, "0")}-page-${String(image.page).padStart(6, "0")}.png`,
-          width: image.width,
-          height: image.height,
-          bytes: image.png.byteLength,
-        })),
-      })),
-      engine: { name: "tectonic", version: compiled.engineVersion },
-    };
+    reserved = true;
+    // The completion marker exists for the whole write. Its removal is what publishes the
+    // directory, so a reader that sees it must treat the directory as unfinished.
+    await writeFile(
+      join(output, INCOMPLETE_MARKER),
+      "deck snapshot はこのディレクトリへの書き込み中です。完了時にこのファイルは削除されます。\n",
+      { flag: "wx" },
+    );
+    for (const item of outputs)
+      await writeFile(join(output, item.file), item.image.png, { flag: "wx" });
+    await rm(join(output, INCOMPLETE_MARKER));
     if (parsed.json)
-      process.stdout.write(`${JSON.stringify({ file: input, ...result }, null, 2)}\n`);
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            file: input,
+            output: displayOutput,
+            frames: frames.map((item) => ({
+              number: item.address.number,
+              label: item.address.label,
+              images: item.images.map((image) => ({
+                page: image.page,
+                file: snapshotFileName(item.address.number, image.page),
+                width: image.width,
+                height: image.height,
+                bytes: image.png.byteLength,
+              })),
+            })),
+            engine: { name: "tectonic", version: compiled.engineVersion },
+          },
+          null,
+          2,
+        )}\n`,
+      );
     else
       for (const item of outputs)
         process.stdout.write(
-          `${input}: frame ${item.frame} page ${item.image.page} -> ${join(parsed.output as string, item.file)}\n`,
+          `${input}: frame ${item.frame}${item.label === null ? "" : ` (${item.label})`} page ${item.image.page} -> ${join(displayOutput, item.file)}\n`,
         );
     return 0;
   } catch (error) {
-    if (staging !== undefined) await rm(staging, { recursive: true, force: true });
-    if (published && ownerMarker !== undefined) {
-      try {
-        if ((await readFile(join(output, ownerMarker), "utf8")) === "owned\n")
-          await rm(output, { recursive: true, force: true });
-      } catch {
-        // Never delete a target which another writer removed or replaced.
-      }
-    }
+    if (reserved) await rm(output, { recursive: true, force: true });
     const candidate =
       error && typeof error === "object" && "code" in error && typeof error.code === "string"
         ? error.code

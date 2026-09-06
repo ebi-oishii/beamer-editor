@@ -28,7 +28,7 @@ AI がスライドの叩き台を生成し、人間が微調整して完成さ�
 実装中。**M1(読める)到達済み**。Phase 5 の VS Code 基盤は成立済みで、環境依存の項目は配布前スモークテストで確認する。進行中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。
 
 - 実装済み: パーサ + AST(Phase 1)、キャンバス正規形フォーマッタ + lint 基盤 + canonical fixture property tests(Phase 2)、マクロ展開器(Phase 3)、HTML プレビュー + KaTeX(Phase 4)、スタイル語彙 v1(S1)、Noto Sans CJK 対応(S2)、VS Code 拡張スキャフォールド(VS-1)〜テーマ/a11y(VS-7)、CSP/Workspace Trust(VS-8)、テスト・`.vsix`生成・CI artifact(VS-9)、プレビュー上のキャンバス画像ドラッグ、CLI の `lint` / `format` / `outline` / `export` / `check`。
-- `deck snapshot <file> -o <directory>` で実コンパイル結果をフレーム単位の PNG として確認できる。M2 実機確認は配布前のスモークテストとして継続する。
+- `deck snapshot <file> -o <new-directory>` で実コンパイル結果をフレーム単位の PNG として確認できる(出力先は新規ディレクトリのみ。既存パスは `E_OUTPUT_EXISTS` で拒否する。詳細は [docs/ai-protocol.md](docs/ai-protocol.md) §4)。M2 実機確認は配布前のスモークテストとして継続する。
 
 ## 開発
 
