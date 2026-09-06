@@ -42,6 +42,11 @@ export interface ShellHost {
   jumpToSource(frameIndex: number, version: number): void;
   /** ui → ホスト: プレビュー内でアクティブフレームが変わった通知。 */
   notifyActiveFrame(frameIndex: number): void;
+  /**
+   * ui → ホスト: Webview にフォーカスがあるときの Cmd/Ctrl+Z / Shift+Cmd+Z(Ctrl+Y)。ソース文書の
+   * 取り消し / やり直しを実行する(#103)。実装しないホストではキーを奪わない。
+   */
+  undoRedo?(kind: "undo" | "redo"): void;
   moveCanvasElement?(
     frameIndex: number,
     elementId: string,
@@ -114,6 +119,9 @@ export function createMessageShellHost(
     },
     notifyActiveFrame(frameIndex) {
       transport.post({ type: "activeFrameChanged", frameIndex });
+    },
+    undoRedo(kind) {
+      transport.post({ type: "undoRedo", kind });
     },
     moveCanvasElement(frameIndex, elementId, version, x, y) {
       transport.post({ type: "moveCanvasElement", frameIndex, elementId, version, x, y });

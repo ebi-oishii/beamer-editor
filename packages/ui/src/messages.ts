@@ -19,6 +19,8 @@ export type WebviewToExtension =
   /** version はプレビューが表示中の deck の document version(古い版からのジャンプ検出に使う)。 */
   | { type: "jumpToSource"; frameIndex: number; version: number }
   | { type: "activeFrameChanged"; frameIndex: number }
+  /** Webview にフォーカスがあるときの Cmd/Ctrl+Z(undo)/ Shift+Cmd+Z・Ctrl+Y(redo)。ソース文書に対して実行する(#103)。 */
+  | { type: "undoRedo"; kind: "undo" | "redo" }
   | {
       type: "moveCanvasElement";
       frameIndex: number;
@@ -99,6 +101,9 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
       if (typeof raw.frameIndex === "number") {
         return { type: "activeFrameChanged", frameIndex: raw.frameIndex };
       }
+      return null;
+    case "undoRedo":
+      if (raw.kind === "undo" || raw.kind === "redo") return { type: "undoRedo", kind: raw.kind };
       return null;
     case "moveCanvasElement":
       if (
