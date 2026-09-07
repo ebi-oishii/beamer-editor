@@ -429,7 +429,7 @@ describe("mountPreview", () => {
     ).toBe(true);
   });
 
-  it("Ctrl/Cmd+wheel だけを rAF ごとに一段階ズームし、通常 wheel は妨げない", () => {
+  it("Ctrl/Cmd+wheel は 1 フレーム分の delta を畳んで比例した倍率にし、通常 wheel は妨げない", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const saved: unknown[] = [];
@@ -458,17 +458,18 @@ describe("mountPreview", () => {
     expect(normal.defaultPrevented).toBe(false);
     expect(callbacks).toHaveLength(0);
 
+    // 2 イベント分(合計 -100px = マウス 1 ノッチ相当)を 1 フレームに畳む。
     const zoomIn = new WheelEvent("wheel", {
       bubbles: true,
       cancelable: true,
       ctrlKey: true,
-      deltaY: -1,
+      deltaY: -50,
     });
     const zoomInAgain = new WheelEvent("wheel", {
       bubbles: true,
       cancelable: true,
       ctrlKey: true,
-      deltaY: -1,
+      deltaY: -50,
     });
     act(() => {
       preview.dispatchEvent(zoomIn);
@@ -478,18 +479,71 @@ describe("mountPreview", () => {
     expect(zoomInAgain.defaultPrevented).toBe(true);
     expect(callbacks).toHaveLength(1);
     act(() => callbacks[0]?.(0));
-    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.1 });
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.105 });
 
     const zoomOut = new WheelEvent("wheel", {
       bubbles: true,
       cancelable: true,
       metaKey: true,
-      deltaY: 1,
+      deltaY: 100,
     });
     act(() => preview.dispatchEvent(zoomOut));
     expect(zoomOut.defaultPrevented).toBe(true);
     act(() => callbacks[1]?.(16));
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1 });
+
+    // ピンチのような小さな delta でも 3 桁の丸めで消えずに効く。
+    const pinch = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      deltaY: -5,
+    });
+    act(() => preview.dispatchEvent(pinch));
+    act(() => callbacks[2]?.(32));
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.005 });
+  });
+
+  it("小さな delta が別々のフレームに届いても積み重なり、保存値は 3 桁に丸める", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: { zoom: unknown }[] = [];
+    const callbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: 1 as const }),
+      saveNavState: (state: { zoom: unknown }) => saved.push(state),
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    if (!preview) throw new Error("preview fixture missing");
+    const wheel = (deltaY: number) => {
+      act(() =>
+        preview.dispatchEvent(
+          new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY }),
+        ),
+      );
+      act(() => callbacks.pop()?.(0));
+    };
+
+    // 1 フレーム 0.4px(3 桁の丸めでは消える大きさ)を 5 回。合計 2px 分の倍率になる。
+    for (let i = 0; i < 5; i++) wheel(-0.4);
+    expect(saved.at(-1)?.zoom).toBe(1.002);
+    // 同じ 2px を 1 回で送っても同じ倍率。
+    wheel(2);
+    expect(saved.at(-1)?.zoom).toBe(1);
+    wheel(-2);
+    expect(saved.at(-1)?.zoom).toBe(1.002);
   });
 
   it("wheel の倍率変更は現在のスクロール位置を戻さない", () => {
@@ -565,7 +619,7 @@ describe("mountPreview", () => {
     if (!preview || !scroll) throw new Error("preview fixture missing");
     act(() =>
       preview.dispatchEvent(
-        new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -1 }),
+        new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100 }),
       ),
     );
     Object.defineProperties(scroll, {
@@ -575,8 +629,71 @@ describe("mountPreview", () => {
     act(() => resizeCallbacks[0]?.([], {} as ResizeObserver));
     expect(cancelAnimationFrame).not.toHaveBeenCalled();
     act(() => animationCallbacks[0]?.(0));
-    // (500 - (12 + 4) * 2) / 607 = 0.771... を基準に一段階上げる。
-    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 0.87 });
+    // (500 - (12 + 4) * 2) / 607 = 0.771... を基準に、1 ノッチ(100px)ぶん = 約 10% 上げる。
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 0.852 });
+  });
+
+  it("fit が下限より小さいときに作った手動倍率は、保存して再表示しても fit に戻らない", () => {
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    const animationCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      animationCallbacks.push(callback);
+      return animationCallbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: { zoom: unknown }[] = [];
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: "fit" as const }),
+      saveNavState: (state: { zoom: unknown }) => saved.push(state),
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    const scroll = container.querySelector<HTMLElement>(".slide-scroll");
+    if (!preview || !scroll) throw new Error("preview fixture missing");
+    // (93 - (12 + 4) * 2) / 607 = 0.1005 で、fit が下限 0.25 より小さい。
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 93 },
+      clientHeight: { configurable: true, value: 400 },
+    });
+    act(() => resizeCallbacks[0]?.([], {} as ResizeObserver));
+    act(() =>
+      preview.dispatchEvent(
+        new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100 }),
+      ),
+    );
+    act(() => animationCallbacks[0]?.(0));
+    // 1 ノッチぶん拡大した 0.111 が保存される(0.25 へ飛ばない)。
+    expect(saved.at(-1)?.zoom).toBe(0.111);
+
+    // 保存した状態から再表示しても、fit に戻らず同じ倍率で始まる。
+    const restored: { zoom: unknown }[] = [];
+    const again = document.createElement("div");
+    document.body.append(again);
+    act(() => {
+      mountPreview(again, {
+        ...fakeHost(),
+        loadNavState: () => saved.at(-1) as { current: number; step: number; zoom: "fit" | number },
+        saveNavState: (state: { zoom: unknown }) => restored.push(state),
+      });
+    });
+    expect(restored.at(-1)?.zoom).toBe(0.111);
   });
 
   it("resize 後も内側は論理サイズのまま、幅合わせの外側だけを再計算する", () => {
