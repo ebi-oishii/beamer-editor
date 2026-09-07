@@ -1010,7 +1010,8 @@ async function readCompilationLog(path: string, maxBytes: number): Promise<strin
 /**
  * Compile a complete deck once, then group its physical PDF pages by logical
  * frame. The original input is only read; a same-basename marked copy is kept
- * under an OS temporary directory and removed on every exit path.
+ * under an OS temporary directory and removed on every exit path. Tectonic
+ * searches the original input directory for its relative dependencies.
  */
 export async function compileDeckFrames(
   request: CompileDeckFramesRequest,
@@ -1104,7 +1105,16 @@ export async function compileDeckFrames(
     try {
       compileResult = await runner.run(
         tectonic,
-        ["-X", "compile", "--keep-logs", "--outdir", temporaryDirectory, measuredInput],
+        [
+          "-X",
+          "compile",
+          "-Z",
+          `search-path=${dirname(inputPath)}`,
+          "--keep-logs",
+          "--outdir",
+          temporaryDirectory,
+          measuredInput,
+        ],
         runnerOptions(
           dirname(inputPath),
           signal,
