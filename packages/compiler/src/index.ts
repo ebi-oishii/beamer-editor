@@ -620,7 +620,7 @@ function withoutComments(source: string): string {
       comment = false;
       backslashes = 0;
     } else if (comment) {
-      value += " ";
+      value += " ".repeat(character.length);
     } else if (character === "%" && backslashes % 2 === 0) {
       value += " ";
       comment = true;

@@ -83,6 +83,28 @@ describe("frame measurement helpers", () => {
     expect(measured).toContain("BEAMER_EDITOR_FRAME:000001}\\begin{frame}");
   });
 
+  it.each([
+    "\n",
+    "\r\n",
+  ])("preserves UTF-16 spans after comments with astral characters (%j)", (newline) => {
+    const first = String.raw`\begin{frame}[label=first]One\end{frame}`;
+    const second = String.raw`\begin{frame}[label=second]Two\end{frame}`;
+    const original = [`% 😀 𠮷`, first, `% 🚀 comment`, second].join(newline);
+    const frames = findDeckFrames(original);
+    expect(frames.map((frame) => original.slice(frame.span.start, frame.span.end))).toEqual([
+      first,
+      second,
+    ]);
+    expect(injectFrameMarkers(original)).toBe(
+      [
+        `% 😀 𠮷`,
+        `\\typeout{BEAMER_EDITOR_FRAME:000001}${first}`,
+        `% 🚀 comment`,
+        `\\typeout{BEAMER_EDITOR_FRAME:000002}${second}`,
+      ].join(newline),
+    );
+  });
+
   it("groups overlay and allowframebreaks pages under the same logical frame", () => {
     const groups = groupFramePages(
       "BEAMER_EDITOR_FRAME:000001 [1] [2] BEAMER_EDITOR_FRAME:000002 [3]",
@@ -543,6 +565,33 @@ describe("compileDeckFrames", () => {
       ),
     ).rejects.toMatchObject({ code: "E_CANCELLED" });
   });
+
+  it.runIf(process.env.TECTONIC_INTEGRATION === "1")(
+    "compiles frames after comments containing astral characters",
+    async () => {
+      const inputPath = await source(String.raw`\documentclass{beamer}
+\begin{document}
+% 😀 comment
+\begin{frame}[label=first]One\end{frame}
+% 𠮷 🚀 comment
+\begin{frame}[label=second]Two\end{frame}
+\end{document}
+`);
+      const value = await compileDeckFrames(
+        { inputPath, timeoutMs: 120_000 },
+        { rasterizer: rasterizer([{ page: 1 }, { page: 2 }]) },
+      );
+      expect(value.frames.map((frame) => frame.images.map((image) => image.page))).toEqual([
+        [1],
+        [2],
+      ]);
+      expect(value.frames.map((frame) => frame.address)).toEqual([
+        { number: 1, label: "first" },
+        { number: 2, label: "second" },
+      ]);
+    },
+    180_000,
+  );
 
   it.runIf(process.env.TECTONIC_INTEGRATION === "1")(
     "uses resolved zref-savepos geometry from the final Tectonic pass for canvas overflow",
