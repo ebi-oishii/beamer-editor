@@ -1,4 +1,4 @@
-import type { SourceSpan } from "./ast.js";
+import { CANVAS_FONT_SIZES, type CanvasFontSize, type SourceSpan } from "./ast.js";
 
 /** 箱の最小幅(正規化値)。極端に細い箱を作らない。 */
 export const CANVAS_MIN_WIDTH = 0.05;
@@ -173,5 +173,23 @@ export function canvasWidthReplacement(options: string, width: number): string |
   );
   if (!match) return null;
   parts[index] = `${match[1]}${formatCanvasCoordinate(width)}${match[3]}`;
+  return `[${parts.join(",")}]`;
+}
+
+export function isCanvasFontSize(value: unknown): value is CanvasFontSize {
+  return typeof value === "string" && CANVAS_FONT_SIZES.some((size) => size === value);
+}
+
+/** size だけを変更し、省略されていた場合だけ末尾へ追加する。 */
+export function canvasFontSizeReplacement(options: string, size: CanvasFontSize): string | null {
+  if (!isCanvasFontSize(size) || !options.startsWith("[") || !options.endsWith("]")) return null;
+  const parts = options.slice(1, -1).split(",");
+  const indices = parts.flatMap((part, index) => (/^\s*size\s*=/.test(part) ? [index] : []));
+  if (indices.length > 1) return null;
+  const index = indices[0];
+  if (index === undefined) return `${options.slice(0, -1)},size=${size}]`;
+  const match = /^(\s*size\s*=\s*)([^\s,]+)(\s*)$/.exec(parts[index] ?? "");
+  if (!match) return null;
+  parts[index] = `${match[1]}${size}${match[3]}`;
   return `[${parts.join(",")}]`;
 }

@@ -168,7 +168,8 @@ function mountCanvasPreview(deck: RenderedDeck = CANVAS_DECK) {
   document.body.append(container);
   const moveCanvasElement = vi.fn();
   const resizeCanvasElement = vi.fn();
-  const host = { ...fakeHost(), moveCanvasElement, resizeCanvasElement };
+  const setCanvasFontSize = vi.fn();
+  const host = { ...fakeHost(), moveCanvasElement, resizeCanvasElement, setCanvasFontSize };
   act(() => {
     mountPreview(container, host);
   });
@@ -200,6 +201,7 @@ function mountCanvasPreview(deck: RenderedDeck = CANVAS_DECK) {
     host,
     moveCanvasElement,
     resizeCanvasElement,
+    setCanvasFontSize,
     noneditable,
     releasePointerCapture,
     scale,
@@ -1765,4 +1767,42 @@ it("resizes text width without changing its contents, size or anchor", () => {
   firePointer(scale, "pointerup", 220, 90);
   expect(resizeCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.2);
   expect(moveCanvasElement).not.toHaveBeenCalled();
+});
+
+it("offers only allowed text sizes and changes size without starting a drag", () => {
+  const deck = structuredClone(CANVAS_DECK);
+  const frame = deck.frames[0];
+  const text = frame?.canvasElements?.[0];
+  if (!frame || !text) throw new Error("fixture missing");
+  text.kind = "text";
+  text.fontSize = "small";
+  frame.html = frame.html.replace(
+    '<img class="canvas-item" data-canvas-element-id="canvas-image-0" data-canvas-element-kind="image" style="left:10%;top:20%;width:30%">',
+    '<div class="canvas-item canvas-text" data-canvas-element-id="canvas-image-0" data-canvas-element-kind="text" style="left:10%;top:20%;width:30%">Text</div>',
+  );
+  const { container, editable, moveCanvasElement, resizeCanvasElement, setCanvasFontSize } =
+    mountCanvasPreview(deck);
+  firePointer(editable, "pointerdown", 150, 100);
+  firePointer(editable, "pointerup", 150, 100);
+  const select = container.querySelector<HTMLSelectElement>(".canvas-font-size");
+  if (!select) throw new Error("size select missing");
+  expect(select.value).toBe("small");
+  expect([...select.options].map((option) => option.value)).toEqual([
+    "tiny",
+    "scriptsize",
+    "footnotesize",
+    "small",
+    "normal",
+    "large",
+    "Large",
+  ]);
+  firePointer(select, "pointerdown", 140, 80);
+  firePointer(select, "pointerup", 140, 80);
+  act(() => {
+    select.value = "Large";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(setCanvasFontSize).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, "Large");
+  expect(moveCanvasElement).not.toHaveBeenCalled();
+  expect(resizeCanvasElement).not.toHaveBeenCalled();
 });
