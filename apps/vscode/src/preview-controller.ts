@@ -1,4 +1,8 @@
-import { clampCanvasPosition, mapExpandedRangeToSourceExact } from "@beamer-editor/core";
+import {
+  clampCanvasPosition,
+  clampCanvasWidth,
+  mapExpandedRangeToSourceExact,
+} from "@beamer-editor/core";
 import { DEFAULT_THEME } from "@beamer-editor/renderer";
 import type { ExtensionToWebview } from "@beamer-editor/ui";
 import { parseWebviewToExtension } from "@beamer-editor/ui";
@@ -94,6 +98,15 @@ export interface PreviewControllerOptions {
    */
   resolveResource?: (path: string) => string;
   /** 有効な canvas image の source update。VS Code host の結果を返す。 */
+  resizeCanvasElement?: (move: {
+    frameIndex: number;
+    elementId: string;
+    version: number;
+    width: number;
+    sourceSpan: { start: number; end: number };
+    document: PreviewDocument;
+    expectedOptions: string;
+  }) => Promise<CanvasEditResult>;
   moveCanvasElement?: (move: {
     frameIndex: number;
     elementId: string;
@@ -202,6 +215,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly navigate: (offset: number) => void;
   private readonly undoRedo: (kind: "undo" | "redo") => void | Promise<void>;
   private readonly resolveResource: ((path: string) => string) | undefined;
+  private readonly resizeCanvasElement: PreviewControllerOptions["resizeCanvasElement"];
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
   private readonly detachToCanvas: PreviewControllerOptions["detachToCanvas"];
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -248,6 +262,7 @@ export class PreviewController implements vscode.Disposable {
     this.navigate = options.navigate ?? (() => {});
     this.undoRedo = options.undoRedo ?? (() => {});
     this.resolveResource = options.resolveResource;
+    this.resizeCanvasElement = options.resizeCanvasElement;
     this.moveCanvasElement = options.moveCanvasElement;
     this.detachToCanvas = options.detachToCanvas;
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
@@ -309,6 +324,8 @@ export class PreviewController implements vscode.Disposable {
       this.sendDeck();
     } else if (msg.type === "jumpToSource") {
       this.handleJump(msg.frameIndex, msg.version);
+    } else if (msg.type === "resizeCanvasElement") {
+      void this.handleResize(msg);
     } else if (msg.type === "moveCanvasElement") {
       void this.handleMove(msg);
     } else if (msg.type === "detachToCanvas") {
@@ -323,6 +340,81 @@ export class PreviewController implements vscode.Disposable {
       }
     }
     // activeFrameChanged はソース側カーソル追従(VS-5 以降)で使う予定(現状 no-op)。
+  }
+
+  private async handleResize(move: {
+    frameIndex: number;
+    elementId: string;
+    version: number;
+    width: number;
+  }): Promise<void> {
+    if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
+    const latest = this.latest;
+    const frame = latest?.deck.frames[move.frameIndex];
+    const element = frame?.canvasElements?.find(
+      (candidate) =>
+        candidate.id === move.elementId && candidate.editable && candidate.kind === "image",
+    );
+    if (
+      !latest ||
+      this.latestDocument !== this.document ||
+      move.version !== this.document.version ||
+      latest.version !== this.document.version ||
+      !frame ||
+      !element ||
+      !Number.isFinite(move.width) ||
+      move.width <= 0
+    ) {
+      this.sendDeck();
+      return;
+    }
+    const width = clampCanvasWidth(element.position.x, move.width);
+    if (width === null || element.position.width === width) {
+      this.sendDeck();
+      return;
+    }
+    const { frameIndex, elementId, version } = move;
+    const document = this.document;
+    const expectedOptions = document
+      .getText()
+      .slice(element.sourceSpan.start, element.sourceSpan.end);
+    this.editApplyPending = true;
+    try {
+      const result = await this.resizeCanvasElement?.({
+        frameIndex,
+        elementId,
+        version,
+        width,
+        sourceSpan: element.sourceSpan,
+        document,
+        expectedOptions,
+      });
+      this.editApplyPending = false;
+      if (this.disposed) return;
+      if (result === "applied") {
+        this.editAwaitingVersion = version;
+        // applyEdit の変更イベントが Promise 解決より先に届いていた場合も、
+        // 更新後の descriptor で確実にロックを解除する。
+        if (this.document.version !== version) this.sendDeck();
+        return;
+      }
+      if (result === "unchanged") {
+        this.sendDeck();
+        return;
+      }
+      if (result === "cancelled") {
+        this.onWarning("Canvas element width was not updated. Try dragging it again.");
+        this.sendDeck();
+        return;
+      }
+    } catch {
+      this.editApplyPending = false;
+      if (this.disposed) return;
+    }
+    if (!this.disposed) {
+      this.onError("failed to update canvas element width.");
+      this.sendDeck();
+    }
   }
 
   private async handleMove(move: {

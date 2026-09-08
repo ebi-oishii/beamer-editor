@@ -167,7 +167,8 @@ function mountCanvasPreview(deck: RenderedDeck = CANVAS_DECK) {
   const container = document.createElement("div");
   document.body.append(container);
   const moveCanvasElement = vi.fn();
-  const host = { ...fakeHost(), moveCanvasElement };
+  const resizeCanvasElement = vi.fn();
+  const host = { ...fakeHost(), moveCanvasElement, resizeCanvasElement };
   act(() => {
     mountPreview(container, host);
   });
@@ -198,6 +199,7 @@ function mountCanvasPreview(deck: RenderedDeck = CANVAS_DECK) {
     editable,
     host,
     moveCanvasElement,
+    resizeCanvasElement,
     noneditable,
     releasePointerCapture,
     scale,
@@ -1696,5 +1698,43 @@ describe("mountPreview", () => {
     expect(editable.classList.contains("canvas-dragging")).toBe(false);
     expect(editable.classList.contains("canvas-selected")).toBe(false);
     expect(releasePointerCapture).toHaveBeenCalledWith(9);
+  });
+});
+
+describe("canvas image resizing", () => {
+  it("previews width only and commits once on pointer-up", () => {
+    const { container, editable, scale, resizeCanvasElement, moveCanvasElement } =
+      mountCanvasPreview();
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(editable, "pointerup", 150, 100);
+    const handle = container.querySelector<HTMLElement>(".canvas-resize-handle");
+    if (!handle) throw new Error("resize handle missing");
+    firePointer(handle, "pointerdown", 260, 90);
+    firePointer(scale, "pointermove", 340, 90);
+    expect(editable.style.width).toBe("50%");
+    expect(editable.style.left).toBe("10%");
+    expect(editable.style.top).toBe("20%");
+    expect(editable.style.height).toBe("");
+    expect(resizeCanvasElement).not.toHaveBeenCalled();
+    firePointer(scale, "pointerup", 340, 90);
+    expect(resizeCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.5);
+    expect(moveCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it.each(["escape", "pointercancel", "version"])("cancels resize on %s", (reason) => {
+    const { container, editable, scale, host, resizeCanvasElement } = mountCanvasPreview();
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(editable, "pointerup", 150, 100);
+    const handle = container.querySelector<HTMLElement>(".canvas-resize-handle");
+    if (!handle) throw new Error("resize handle missing");
+    firePointer(handle, "pointerdown", 260, 90);
+    firePointer(scale, "pointermove", 340, 90);
+    if (reason === "escape")
+      act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    else if (reason === "pointercancel") firePointer(scale, "pointercancel", 340, 90);
+    else act(() => host.push(CANVAS_DECK, 2));
+    firePointer(scale, "pointerup", 340, 90);
+    expect(resizeCanvasElement).not.toHaveBeenCalled();
+    expect(editable.style.width).toBe("30%");
   });
 });

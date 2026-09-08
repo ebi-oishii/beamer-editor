@@ -236,6 +236,12 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         onSelect={(i) => dispatch({ type: "goto", index: i })}
         onJump={(i) => host.jumpToSource(i, version)}
         onScrollActive={(i) => dispatch({ type: "goto", index: i })}
+        onResizeCanvasElement={
+          host.resizeCanvasElement
+            ? (frameIndex, elementId, width) =>
+                host.resizeCanvasElement?.(frameIndex, elementId, version, width)
+            : undefined
+        }
         onMoveCanvasElement={(frameIndex, elementId, x, y) =>
           host.moveCanvasElement?.(frameIndex, elementId, version, x, y)
         }
