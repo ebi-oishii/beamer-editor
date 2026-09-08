@@ -473,3 +473,33 @@ describe("renderDeck: styled.slide.tex(スタイル語彙)", () => {
     expect(plain.frames[0]?.html).not.toContain("deck-footer");
   });
 });
+
+describe("decktext display math", () => {
+  it.each([
+    "equation",
+    "equation*",
+    "align",
+    "align*",
+    "bracket",
+  ])("renders %s as KaTeX and offers flow math for detachment", (kind) => {
+    const expression =
+      kind === "bracket" ? String.raw`\[x=1\]` : `\\begin{${kind}}x=1\\end{${kind}}`;
+    const source = `\\begin{frame}[label=math]\n${expression}\n\\begin{deckcanvas}\n\\begin{decktext}[x=0,y=0,w=.5]\n${expression}\n\\end{decktext}\n\\end{deckcanvas}\n\\end{frame}`;
+    const html = renderDeck(parseDeck(source)).frames[0]?.html ?? "";
+    expect(html.match(/class="display-math"/g)).toHaveLength(2);
+    expect(html.match(/class="katex"/g)).toHaveLength(2);
+    expect(html.match(/data-flow-block="displayMath"/g)).toHaveLength(1);
+    expect(html).not.toContain("data-detach-blocked");
+    expect(html).not.toContain("math-error");
+  });
+});
+
+it("renders trailing comments in canvas align without swallowing the closing environment", () => {
+  const html =
+    renderDeck(
+      parseDeck(String.raw`\begin{frame}[label=math]\begin{deckcanvas}\begin{decktext}[x=0,y=0,w=.5]\begin{align*}a &= b % keep comment
+\end{align*}\end{decktext}\end{deckcanvas}\end{frame}`),
+    ).frames[0]?.html ?? "";
+  expect(html).toContain('class="katex"');
+  expect(html).not.toContain("katex-error");
+});

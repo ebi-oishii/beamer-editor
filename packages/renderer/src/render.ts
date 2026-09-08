@@ -529,8 +529,8 @@ class FrameRenderer {
         // align 系は KaTeX では aligned 環境として描画する(& と \\ を解釈させる)
         const tex =
           block.kind === "align" || block.kind === "align*"
-            ? `\\begin{aligned}${block.tex}\\end{aligned}`
-            : block.tex;
+            ? `\\begin{aligned}${block.tex}\n\\end{aligned}`
+            : `${block.tex}\n`;
         return `<div class="display-math"${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}>${math(tex, true)}</div>`;
       }
       case "pause":
