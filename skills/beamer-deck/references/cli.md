@@ -6,6 +6,7 @@ CLI 0.0.1 の実装済みコマンド（実際のヘルプから生成）:
 ```text
 使い方: deck <command> ...
 
+  deck init [directory] [--json]       空のディレクトリに新規デッキを生成
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示

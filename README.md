@@ -69,3 +69,7 @@ pnpm --dir packages/cli deck check talk.slide.tex --tectonic /path/to/tectonic -
 ### デッキ編集スキルの生成
 
 `pnpm build:skills` は仕様・AIプロトコル・実装のCLIヘルプから `skills/beamer-deck/` とリポジトリ用 `.claude/skills/beamer-deck/` を生成します。生成物は直接編集せず、元文書を更新して再生成します。`pnpm check:skills` は更新漏れを検出し、CIでも実行します。CLIの版は生成SKILLのmetadataに記録され、`deck lint` / `deck check` は入力デッキから親方向に最寄りの `.claude/skills/beamer-deck/SKILL.md` を探して版ずれをL010で警告します。スキル未同梱の既存デッキは警告しません。
+
+### 新規デッキ
+
+`pnpm --filter @beamer-editor/cli deck init /path/to/my-talk` で `main.slide.tex`、空の `assets/`、`.claude/skills/beamer-deck/` を生成します。`deck init` の出力先省略時はカレントディレクトリです。新規または空のディレクトリだけを受け付け、既存データは上書きしません。`--json` で生成ファイル一覧を取得できます。プリアンブルはデッキへ埋め込むためリポジトリのfixtureに依存せず、PDF出力にはTectonicが必要です。初期本文は英語です。日本語を使う場合は `deck fonts fetch` でフォントを用意し、style領域へ `\deckfont{main}{Noto Sans CJK JP}` を指定します。

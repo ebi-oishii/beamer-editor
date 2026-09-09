@@ -148,7 +148,7 @@ Electron(旧 5c)はここでは作らない(「後続」参照)。
 
 [ai-protocol.md](ai-protocol.md) の実装フェーズ。Phase 7 とは独立。
 
-- `deck lint` / `deck format` / `deck outline` / `deck export` / `deck check`（各 `--json`対応）は実装済み。残りの CLI は `deck snapshot` / `deck init`（check / snapshot は Phase 6 の機構を使う）。`check` は lint と1回の Tectonic 実コンパイルを統合し、Overfull と savepos 実測のキャンバス診断をフレームアドレスへ割り付ける。
+- `deck lint` / `deck format` / `deck outline` / `deck export` / `deck check`（各 `--json`対応）は実装済み。`deck init`（管理プリアンブルとスキルを同梱）も実装済み。残りの CLI は `deck snapshot`（check / snapshot は Phase 6 の機構を使う）。`check` は lint と1回の Tectonic 実コンパイルを統合し、Overfull と savepos 実測のキャンバス診断をフレームアドレスへ割り付ける。
 - 実装済み: `pnpm build:skills` / `pnpm check:skills` で SKILL.md と `references/subset-cheatsheet.md` を `docs/subset-spec.md` から**ビルドで生成**する仕組み。`deck init` が新規デッキプロジェクトに `.claude/skills/beamer-deck/` として同梱する(版ずれは L010 で警告)。
 - 指示パターン集(examples/prompts.md)。このリポジトリ自身にもスキルを配置し、資料作成で運用検証する。
 - 完了条件: AI に「アウトライン提案 → 合意 → 生成 → lint/check 通過」の流れで新規デッキを作らせ、人間がエディタで微調整して PDF 書き出しまでの一連が実演できる。
