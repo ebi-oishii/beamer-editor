@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   buildFragmentDocument,
@@ -42,6 +44,31 @@ describe("buildFragmentDocument", () => {
     expect(doc).not.toContain("setbeamercolor");
     expect(doc).not.toContain("\\logo");
     expect(doc).not.toContain("usebackgroundtemplate");
+  });
+
+  it("テンプレートのテーマ .sty の usepackage は落とす(fixtures/templated.slide.tex の preamble-extra)", () => {
+    const tex = readFileSync(
+      fileURLToPath(new URL("../../../fixtures/templated.slide.tex", import.meta.url)),
+      "utf8",
+    );
+    const extra = /%% preamble-extra:begin\r?\n([\s\S]*?)\r?\n%% preamble-extra:end/.exec(tex)?.[1];
+    expect(extra).toContain("beamerthemecorporate");
+    const doc = buildFragmentDocument(
+      "\\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture}",
+      extra ?? "",
+    );
+    expect(doc).not.toContain("beamertheme");
+    expect(doc).not.toContain("usepackage{templates");
+    expect(doc).toContain("\\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture}");
+  });
+
+  it("同じ usepackage 行にテーマと他のパッケージが混ざっていればテーマだけ落とす", () => {
+    const doc = buildFragmentDocument(
+      "x",
+      "\\usepackage{tikz,templates/corporate/beamerthemecorporate,xcolor}",
+    );
+    expect(doc).toContain("\\usepackage{tikz,xcolor}");
+    expect(doc).not.toContain("beamertheme");
   });
 });
 

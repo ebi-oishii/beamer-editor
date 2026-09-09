@@ -35,6 +35,23 @@ export class RawImageStore {
     return this.states.get(key);
   }
 
+  /** 今の描画に含まれない key の画像を捨てる(中間 key の data URL が溜まり続けない)。 */
+  retain(keys: ReadonlySet<string>): void {
+    for (const key of this.states.keys()) {
+      if (keys.has(key)) continue;
+      this.states.delete(key);
+      this.generations.delete(key);
+    }
+  }
+
+  /** 部分コンパイルを切ったときなど、差し込み済みの画像を全部捨てる。 */
+  clear(): void {
+    if (this.states.size === 0 && this.generations.size === 0) return;
+    this.states.clear();
+    this.generations.clear();
+    for (const listener of this.listeners) listener();
+  }
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => {
@@ -89,16 +106,39 @@ export class RawImageStore {
   }
 }
 
+/** ready や failed の印を外し、ラベルの span を戻す。状態が無いとき・失敗へ戻すときに使う。 */
+function restorePlaceholder(element: HTMLElement): void {
+  if (!element.dataset.rawStatus) return;
+  const label =
+    element.querySelector(".placeholder-label")?.textContent ??
+    element.querySelector("img.raw-image")?.getAttribute("alt") ??
+    "";
+  if (!element.querySelector(".placeholder-label")) {
+    const span = element.ownerDocument.createElement("span");
+    span.className = "placeholder-label";
+    span.textContent = label;
+    element.replaceChildren(span);
+  }
+  element.classList.remove("compiled", "failed");
+  delete element.dataset.rawStatus;
+  delete element.dataset.rawError;
+  element.title = element.title.replace(/^コンパイルに失敗しました: [^\n]*\n\n/, "");
+}
+
 /**
  * root 配下のプレースホルダに、ストアにある画像をはめ込む。ready なら中身を <img> にし、
- * failed なら箱を残して失敗の印とメッセージ(title)を付ける。何度呼んでも同じ結果になる。
+ * failed なら箱を残して失敗の印とメッセージ(title)を付ける。状態が無ければ差し込みを戻す。
+ * 何度呼んでも同じ結果になる。
  */
 export function applyRawImages(root: ParentNode, store: RawImageStore): void {
   for (const element of root.querySelectorAll<HTMLElement>("[data-raw-key]")) {
     const key = element.dataset.rawKey;
     if (!key) continue;
     const state = store.get(key);
-    if (!state || state.status === "pending") continue;
+    if (!state || state.status === "pending") {
+      if (!state) restorePlaceholder(element);
+      continue;
+    }
     if (state.status === "ready") {
       if (element.dataset.rawStatus === "ready") continue;
       const label = element.querySelector(".placeholder-label")?.textContent ?? "";
@@ -111,7 +151,9 @@ export function applyRawImages(root: ParentNode, store: RawImageStore): void {
       element.classList.remove("failed");
       element.classList.add("compiled");
       element.dataset.rawStatus = "ready";
-    } else if (element.dataset.rawStatus !== "failed") {
+    } else {
+      if (element.dataset.rawStatus === "failed") continue;
+      restorePlaceholder(element);
       element.classList.add("failed");
       element.dataset.rawStatus = "failed";
       element.dataset.rawError = state.message;

@@ -46,6 +46,10 @@ export interface ShellHost {
    */
   onRawBlockImage?(listener: (key: string, result: RawBlockImageResult) => void): () => void;
   /**
+   * ホスト → ui: 差し込み済みの部分コンパイル画像を捨てる(#81)。設定で無効化したとき。
+   */
+  onRawImagesCleared?(listener: () => void): () => void;
+  /**
    * PDF のバイト列を画像にする(pdf.js などホスト固有の実装)。無いホストでは箱のまま残す。
    */
   rasterizePdf?(pdf: Uint8Array): Promise<RasterImage>;
@@ -136,6 +140,11 @@ export function createMessageShellHost(
       return transport.subscribe((msg) => {
         if (msg.type === "rawBlockReady") listener(msg.key, { pdfBase64: msg.pdfBase64 });
         else if (msg.type === "rawBlockFailed") listener(msg.key, { error: msg.message });
+      });
+    },
+    onRawImagesCleared(listener) {
+      return transport.subscribe((msg) => {
+        if (msg.type === "rawImagesCleared") listener();
       });
     },
     jumpToSource(frameIndex, version) {

@@ -143,4 +143,20 @@ describe("createMessageShellHost", () => {
     handler?.({ type: "error", message: "x" });
     expect(seen).toEqual([[2, 5]]);
   });
+
+  it("onRawImagesCleared は rawImagesCleared だけを listener へ渡す", () => {
+    let handler: ((msg: unknown) => void) | undefined;
+    const host = createMessageShellHost({
+      post: () => {},
+      subscribe: (cb) => {
+        handler = cb as (msg: unknown) => void;
+        return () => {};
+      },
+    });
+    const cleared = vi.fn();
+    host.onRawImagesCleared?.(cleared);
+    handler?.({ type: "rawImagesCleared" });
+    handler?.({ type: "error", message: "x" });
+    expect(cleared).toHaveBeenCalledTimes(1);
+  });
 });

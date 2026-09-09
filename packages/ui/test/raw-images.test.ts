@@ -112,6 +112,53 @@ describe("RawImageStore / applyRawImages", () => {
     expect(rasterize).not.toHaveBeenCalled();
   });
 
+  it("ready から failed へ戻すときは画像を外してプレースホルダのラベルを戻す", async () => {
+    const store = new RawImageStore(async () => ({
+      dataUrl: "data:image/png;base64,AAAA",
+      width: 400,
+      height: 300,
+    }));
+    store.receive("k1", { pdfBase64: PDF_B64 });
+    await vi.waitFor(() => expect(store.get("k1")?.status).toBe("ready"));
+    const root = placeholderRoot("k1");
+    applyRawImages(root, store);
+    expect(root.querySelector("img")).not.toBeNull();
+    store.receive("k1", { error: "missing figure.png" });
+    applyRawImages(root, store);
+    const box = root.querySelector<HTMLElement>("[data-raw-key]");
+    expect(box?.querySelector("img")).toBeNull();
+    expect(box?.classList.contains("compiled")).toBe(false);
+    expect(box?.classList.contains("failed")).toBe(true);
+    expect(box?.querySelector(".placeholder-label")?.textContent).toBe("tikzpicture");
+    expect(box?.title).toContain("missing figure.png");
+    expect(box?.title).toContain("\\begin{tikzpicture}");
+  });
+
+  it("retain は指定した key 以外の状態を捨て、clear は全部捨てる", async () => {
+    const store = new RawImageStore(async () => ({
+      dataUrl: "data:image/png;base64,AAAA",
+      width: 1,
+      height: 1,
+    }));
+    store.receive("keep", { pdfBase64: PDF_B64 });
+    store.receive("drop", { pdfBase64: PDF_B64 });
+    await vi.waitFor(() => expect(store.get("keep")?.status).toBe("ready"));
+    store.retain(new Set(["keep"]));
+    expect(store.get("keep")?.status).toBe("ready");
+    expect(store.get("drop")).toBeUndefined();
+    const root = placeholderRoot("keep");
+    applyRawImages(root, store);
+    expect(root.querySelector("img")).not.toBeNull();
+    store.clear();
+    expect(store.get("keep")).toBeUndefined();
+    applyRawImages(root, store);
+    expect(root.querySelector("img")).toBeNull();
+    expect(root.querySelector(".placeholder-label")?.textContent).toBe("tikzpicture");
+    expect(root.querySelector<HTMLElement>("[data-raw-key]")?.classList.contains("compiled")).toBe(
+      false,
+    );
+  });
+
   it("decodeBase64 はバイト列を復元する", () => {
     const bytes = `${String.fromCharCode(0, 255)}%PDF`;
     expect(Array.from(decodeBase64(btoa(bytes)))).toEqual([0, 255, 37, 80, 68, 70]);

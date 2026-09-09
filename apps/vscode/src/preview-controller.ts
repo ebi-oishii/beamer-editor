@@ -88,6 +88,10 @@ export interface PreviewControllerOptions {
   /** 描画が成功するたびに呼ぶ(生ブロックの部分コンパイルの起点。#81)。 */
   onRendered?: (outcome: RenderOutcome) => void;
   /**
+   * Webview が (再)生成されて ready を送ったとき。差し込み済み画像の再送のために done を捨てる。
+   */
+  onWebviewReady?: () => void;
+  /**
    * Webview からの取り消し / やり直し要求(Cmd/Ctrl+Z。#103)。エディタ操作は vscode API が要るため
    * extension.ts が注入する。既定は何もしない。
    */
@@ -210,6 +214,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly undoRedo: (kind: "undo" | "redo") => void | Promise<void>;
   private readonly resolveResource: ((path: string) => string) | undefined;
   private readonly onRendered: (outcome: RenderOutcome) => void;
+  private readonly onWebviewReady: () => void;
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
   private readonly detachToCanvas: PreviewControllerOptions["detachToCanvas"];
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -257,6 +262,7 @@ export class PreviewController implements vscode.Disposable {
     this.undoRedo = options.undoRedo ?? (() => {});
     this.resolveResource = options.resolveResource;
     this.onRendered = options.onRendered ?? (() => {});
+    this.onWebviewReady = options.onWebviewReady ?? (() => {});
     this.moveCanvasElement = options.moveCanvasElement;
     this.detachToCanvas = options.detachToCanvas;
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
@@ -315,6 +321,7 @@ export class PreviewController implements vscode.Disposable {
     const msg = parseWebviewToExtension(raw);
     if (!msg) return;
     if (msg.type === "ready") {
+      this.onWebviewReady();
       this.sendDeck();
     } else if (msg.type === "jumpToSource") {
       this.handleJump(msg.frameIndex, msg.version);
@@ -576,6 +583,13 @@ export class PreviewController implements vscode.Disposable {
     if (this.disposed) return;
     const msg: ExtensionToWebview = { type: "rawBlockFailed", key, message };
     void this.panel.webview.postMessage(msg);
+  }
+
+  /** 部分コンパイルを切ったとき、Webview 側の差し込み済み画像を捨てる。 */
+  postRawImagesCleared(): void {
+    if (this.disposed) return;
+    const message: ExtensionToWebview = { type: "rawImagesCleared" };
+    void this.panel.webview.postMessage(message);
   }
 
   /**

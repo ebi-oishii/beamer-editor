@@ -399,6 +399,159 @@ describe("RawBlockCompiler", () => {
     expect(compile).toHaveBeenCalledTimes(2);
   });
 
+  it("forgetDelivered の後はキャッシュから送り直し、コンパイルはしない", async () => {
+    const { fs } = memoryFs();
+    const compile = vi.fn(async () => new Uint8Array([1]));
+    const onReady = vi.fn();
+    const compiler = new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile,
+      buildDocument: (tex) => tex,
+      onReady,
+      onFailed: vi.fn(),
+    });
+    const blocks = [{ key: "k1", tex: "x", environment: null }];
+    compiler.request(blocks, "");
+    await flush();
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(onReady).toHaveBeenCalledTimes(1);
+    // Webview が作り直された: done を捨ててキャッシュから送り直す。
+    compiler.forgetDelivered();
+    compiler.request(blocks, "");
+    await flush();
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(onReady).toHaveBeenCalledTimes(2);
+    expect(onReady).toHaveBeenLastCalledWith("k1", new Uint8Array([1]));
+  });
+
+  it("reset の後は届け済みでもキャッシュから送り直す", async () => {
+    const { fs } = memoryFs();
+    const compile = vi.fn(async () => new Uint8Array([1]));
+    const onReady = vi.fn();
+    const compiler = new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile,
+      buildDocument: (tex) => tex,
+      onReady,
+      onFailed: vi.fn(),
+    });
+    const blocks = [{ key: "k1", tex: "x", environment: null }];
+    compiler.request(blocks, "");
+    await flush();
+    compiler.reset();
+    compiler.request(blocks, "");
+    await flush();
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(onReady).toHaveBeenCalledTimes(2);
+  });
+
+  it("forgetDelivered は実行中のコンパイルを止めない", async () => {
+    const { fs } = memoryFs();
+    const pending: { resolve: (pdf: Uint8Array) => void; signal: AbortSignal }[] = [];
+    const compile = vi.fn(
+      (_document: string, signal: AbortSignal) =>
+        new Promise<Uint8Array>((resolve) => {
+          pending.push({ resolve, signal });
+        }),
+    );
+    const onReady = vi.fn();
+    const compiler = new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile,
+      buildDocument: (tex) => tex,
+      onReady,
+      onFailed: vi.fn(),
+    });
+    const blocks = [{ key: "k1", tex: "x", environment: null }];
+    compiler.request(blocks, "");
+    await flush();
+    compiler.forgetDelivered();
+    expect(pending[0]?.signal.aborted).toBe(false);
+    pending[0]?.resolve(new Uint8Array([1]));
+    await flush();
+    await flush();
+    expect(onReady).toHaveBeenCalledExactlyOnceWith("k1", new Uint8Array([1]));
+  });
+
+  it("最新描画に無い key は待ち行列から落とし、実行中なら中止して結果を届けない", async () => {
+    const { fs } = memoryFs();
+    const pending: { resolve: (pdf: Uint8Array) => void; signal: AbortSignal }[] = [];
+    const compile = vi.fn(
+      (_document: string, signal: AbortSignal) =>
+        new Promise<Uint8Array>((resolve) => {
+          pending.push({ resolve, signal });
+        }),
+    );
+    const onReady = vi.fn();
+    const compiler = new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile,
+      buildDocument: (tex) => tex,
+      onReady,
+      onFailed: vi.fn(),
+    });
+    compiler.request(
+      [
+        { key: "k1", tex: "a", environment: null },
+        { key: "k2", tex: "b", environment: null },
+      ],
+      "",
+    );
+    await flush();
+    expect(pending).toHaveLength(1);
+    // 本文が変わって key が差し替わった。k2 はまだ動いていないので捨て、k1 は中止する。
+    compiler.request([{ key: "k3", tex: "c", environment: null }], "");
+    expect(pending[0]?.signal.aborted).toBe(true);
+    pending[0]?.resolve(new Uint8Array([1]));
+    await flush();
+    await flush();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(pending).toHaveLength(2);
+    pending[1]?.resolve(new Uint8Array([3]));
+    await flush();
+    await flush();
+    expect(onReady).toHaveBeenCalledExactlyOnceWith("k3", new Uint8Array([3]));
+  });
+
+  it("キャッシュ確認の待ち中に reset したら tectonic を起動しない", async () => {
+    const compile = vi.fn(async () => new Uint8Array([1]));
+    let releaseExists: ((exists: boolean) => void) | undefined;
+    const fs: RawBlockCompilerFileSystem = {
+      readFile: async () => {
+        throw new Error("unused");
+      },
+      writeFile: async () => {},
+      mkdir: async () => {},
+      exists: () =>
+        new Promise((resolve) => {
+          releaseExists = resolve;
+        }),
+      rename: async () => {},
+    };
+    const onReady = vi.fn();
+    const compiler = new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile,
+      buildDocument: (tex) => tex,
+      onReady,
+      onFailed: vi.fn(),
+    });
+    compiler.request([{ key: "k1", tex: "x", environment: null }], "");
+    await flush();
+    compiler.reset();
+    releaseExists?.(false);
+    await flush();
+    await flush();
+    expect(compile).not.toHaveBeenCalled();
+    expect(onReady).not.toHaveBeenCalled();
+  });
+
   it("affectsRawBlockCompile は Tectonic の場所と有効/無効の設定だけを見る", () => {
     expect(affectsRawBlockCompile((section) => section === "beamerEditor.tectonicPath")).toBe(true);
     expect(

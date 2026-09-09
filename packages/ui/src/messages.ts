@@ -15,6 +15,8 @@ export type ExtensionToWebview =
   /** 生ブロックの部分コンパイル結果(#81)。key はプレースホルダの data-raw-key。pdfBase64 は standalone の PDF。 */
   | { type: "rawBlockReady"; key: string; pdfBase64: string }
   | { type: "rawBlockFailed"; key: string; message: string }
+  /** 部分コンパイルを切ったとき、差し込み済みの画像を捨ててプレースホルダへ戻す。 */
+  | { type: "rawImagesCleared" }
   | { type: "error"; message: string };
 
 export type WebviewToExtension =
@@ -89,6 +91,8 @@ export function parseExtensionToWebview(raw: unknown): ExtensionToWebview | null
         return { type: "rawBlockFailed", key: raw.key, message: raw.message };
       }
       return null;
+    case "rawImagesCleared":
+      return { type: "rawImagesCleared" };
     case "error":
       if (typeof raw.message === "string") {
         return { type: "error", message: raw.message };

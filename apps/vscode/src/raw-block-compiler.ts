@@ -1,7 +1,8 @@
 /**
  * 生ブロックの部分コンパイル(#81)のキューとキャッシュ。`vscode` API には依存しない(注入)。
  *
- * - 描画のたびに RenderedDeck.rawBlocks を受け取り、まだ画像の無いものだけをキューに入れる
+ * - 描画のたびに RenderedDeck.rawBlocks を受け取り、まだ画像の無いものだけをキューに入れる。
+ *   最新の描画に含まれない key は待ち行列から落とす(編集中に古い本文のコンパイルが積まれない)
  * - コンパイルは 1 本ずつ(UI を塞がない・tectonic を並列に起動しない)
  * - 成功した PDF は cacheDir/<key>[-<依存の指紋>].pdf に置き、次回はコンパイルせずに読む。
  *   書き込みは一時ファイル + rename で、途中の状態を別のプレビューに読まれない
@@ -11,7 +12,9 @@
  * - Tectonic が見つからない(isUnavailable)ときは、ブロックごとに失敗にせず、一度だけ onUnavailable を
  *   出してキューを止める。箱はプレースホルダのまま残る。設定が変わって reset() されたら判定し直す
  * - reset() は実行中のコンパイルも中止し、reset 前に始まった処理の結果(成功・失敗・キャッシュ読み)は
- *   世代で見分けて捨てる。新しい設定でのジョブを古い結果で潰さない
+ *   世代で見分けて捨てる。届け済みの記録(done)も消すので、設定を戻したときや Webview 再生成時に
+ *   キャッシュから送り直せる。新しい設定でのジョブを古い結果で潰さない
+ * - forgetDelivered() は done だけ消す。実行中は止めない。Webview が作り直されたときにキャッシュから再送する
  */
 
 import type { RawBlockRef } from "@beamer-editor/renderer";
@@ -51,6 +54,8 @@ interface Job {
 export class RawBlockCompiler {
   private readonly queue: Job[] = [];
   private readonly queued = new Set<string>();
+  /** 直近の描画に含まれている key。含まれないジョブは待ち行列から落とし、結果も届けない。 */
+  private readonly wanted = new Set<string>();
   /** 画像を届け終えたキャッシュ名(key + 依存の指紋)。 */
   private readonly done = new Set<string>();
   /** 失敗したキャッシュ名。 */
@@ -62,14 +67,29 @@ export class RawBlockCompiler {
   /** reset() ごとに進む世代。処理の途中で変わっていたら、その処理の結果は捨てる。 */
   private generation = 0;
   private controller: AbortController | undefined;
+  /** 今 process しているジョブの key。同じ世代の同じ key を待ち行列に二重に入れない。 */
+  private currentKey: string | undefined;
+  /** currentKey が属している世代。reset 後は同じ key でも新しいジョブを入れる。 */
+  private currentGeneration: number | undefined;
 
   constructor(private readonly options: RawBlockCompilerOptions) {}
 
-  /** 描画結果の生ブロック一覧。キューに無いものを入れ、処理を進める(済んだものは処理時に指紋で見分ける)。 */
+  /** 描画結果の生ブロック一覧。最新に無い key は待ち行列から落とし、まだ無いものだけを入れる。 */
   request(blocks: readonly RawBlockRef[], preamble: string): void {
     if (this.disposed || this.unavailable) return;
+    this.wanted.clear();
+    for (const block of blocks) this.wanted.add(block.key);
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      const job = this.queue[i];
+      if (job && this.wanted.has(job.key)) continue;
+      if (job) this.queued.delete(job.key);
+      this.queue.splice(i, 1);
+    }
+    if (this.currentKey && !this.wanted.has(this.currentKey)) this.controller?.abort();
     for (const block of blocks) {
-      if (this.queued.has(block.key)) continue;
+      const inFlightSameGeneration =
+        this.currentKey === block.key && this.currentGeneration === this.generation;
+      if (this.queued.has(block.key) || inFlightSameGeneration) continue;
       this.queued.add(block.key);
       this.queue.push({ key: block.key, tex: block.tex, preamble });
     }
@@ -82,14 +102,25 @@ export class RawBlockCompiler {
   }
 
   /**
-   * エンジンの判定と失敗の記録を消し、待ち行列を捨て、実行中のコンパイルを中止する。Tectonic の場所や
-   * 有効/無効の設定が変わったときに呼び、次の描画で判定し直す(プレビューを開き直さなくてよい)。
-   * 中止が効かずに旧ジョブが完了しても、世代が違うのでその結果は届けず、done / failed にも入れない。
+   * 届け済みの記録だけ消す。実行中のコンパイルは止めない。Webview が作り直されたときに呼び、
+   * 次の描画でキャッシュから画像を送り直す(パネル非表示中に捨てられた postMessage の穴埋め)。
+   */
+  forgetDelivered(): void {
+    this.done.clear();
+  }
+
+  /**
+   * エンジンの判定と失敗・届け済みの記録を消し、待ち行列を捨て、実行中のコンパイルを中止する。
+   * Tectonic の場所や有効/無効の設定が変わったときに呼び、次の描画で判定し直す
+   * (プレビューを開き直さなくてよい)。中止が効かずに旧ジョブが完了しても、世代が違うのでその結果は
+   * 届けず、done / failed にも入れない。done を消すので、設定を戻したときはキャッシュから送り直す。
    */
   reset(): void {
     this.generation += 1;
     this.unavailable = false;
     this.failed.clear();
+    this.done.clear();
+    this.wanted.clear();
     this.queue.length = 0;
     this.queued.clear();
     this.controller?.abort();
@@ -99,6 +130,7 @@ export class RawBlockCompiler {
     this.disposed = true;
     this.queue.length = 0;
     this.queued.clear();
+    this.wanted.clear();
     this.controller?.abort();
   }
 
@@ -120,61 +152,71 @@ export class RawBlockCompiler {
   private async process(job: Job): Promise<void> {
     const { fs, cacheDir } = this.options;
     const generation = this.generation;
-    /** dispose されたか、途中で reset() された(この処理の結果はもう要らない)。 */
-    const stale = () => this.disposed || generation !== this.generation;
-    let fingerprint = "";
+    this.currentKey = job.key;
+    this.currentGeneration = generation;
+    /** dispose / reset されたか、最新の描画にこの key がもう無い。 */
+    const drop = () => this.disposed || generation !== this.generation || !this.wanted.has(job.key);
     try {
-      fingerprint = (await this.options.fingerprint?.(job.tex, job.preamble)) ?? "";
-    } catch {
-      // 指紋が取れなければ依存なしとして扱う。
-    }
-    if (stale()) return;
-    const cacheName = fingerprint === "" ? job.key : `${job.key}-${fingerprint}`;
-    if (this.done.has(cacheName) || this.failed.has(cacheName)) return;
-    const cachePath = `${cacheDir}/${cacheName}.pdf`;
-    try {
-      if (await fs.exists(cachePath)) {
-        const pdf = await fs.readFile(cachePath);
-        if (stale()) return;
-        this.done.add(cacheName);
-        this.options.onReady(job.key, pdf);
-        return;
-      }
-    } catch {
-      // キャッシュが読めなければコンパイルし直す。
-    }
-    this.controller = new AbortController();
-    try {
-      const pdf = await this.options.compile(
-        this.options.buildDocument(job.tex, job.preamble),
-        this.controller.signal,
-      );
-      if (stale()) return;
-      this.done.add(cacheName);
+      let fingerprint = "";
       try {
-        await fs.mkdir(cacheDir);
-        const temporary = `${cachePath}.${Math.random().toString(36).slice(2)}.tmp`;
-        await fs.writeFile(temporary, pdf);
-        await fs.rename(temporary, cachePath);
+        fingerprint = (await this.options.fingerprint?.(job.tex, job.preamble)) ?? "";
       } catch {
-        // キャッシュに書けなくても画像は出す。
+        // 指紋が取れなければ依存なしとして扱う。
       }
-      this.options.onReady(job.key, pdf);
-    } catch (error) {
-      if (stale()) return;
-      const message = error instanceof Error ? error.message : String(error);
-      if (this.options.isUnavailable?.(error)) {
-        // ブロックごとの赤枠にはせず、箱はそのまま残して一度だけ知らせる。残りも試さない。
-        this.unavailable = true;
-        this.queue.length = 0;
-        this.queued.clear();
-        this.options.onUnavailable?.(message);
-        return;
+      if (drop()) return;
+      const cacheName = fingerprint === "" ? job.key : `${job.key}-${fingerprint}`;
+      if (this.done.has(cacheName) || this.failed.has(cacheName)) return;
+      const cachePath = `${cacheDir}/${cacheName}.pdf`;
+      try {
+        if (await fs.exists(cachePath)) {
+          const pdf = await fs.readFile(cachePath);
+          if (drop()) return;
+          this.done.add(cacheName);
+          this.options.onReady(job.key, pdf);
+          return;
+        }
+      } catch {
+        // キャッシュが読めなければコンパイルし直す。
       }
-      this.failed.add(cacheName);
-      this.options.onFailed(job.key, message);
+      // exists / readFile の待ちのあいだに reset / 間引きが走ると controller がまだ無い。
+      // その直後に tectonic を起動しないよう、AbortController を作る直前にもう一度見る。
+      if (drop()) return;
+      this.controller = new AbortController();
+      try {
+        const pdf = await this.options.compile(
+          this.options.buildDocument(job.tex, job.preamble),
+          this.controller.signal,
+        );
+        if (drop()) return;
+        this.done.add(cacheName);
+        try {
+          await fs.mkdir(cacheDir);
+          const temporary = `${cachePath}.${Math.random().toString(36).slice(2)}.tmp`;
+          await fs.writeFile(temporary, pdf);
+          await fs.rename(temporary, cachePath);
+        } catch {
+          // キャッシュに書けなくても画像は出す。
+        }
+        this.options.onReady(job.key, pdf);
+      } catch (error) {
+        if (drop()) return;
+        const message = error instanceof Error ? error.message : String(error);
+        if (this.options.isUnavailable?.(error)) {
+          // ブロックごとの赤枠にはせず、箱はそのまま残して一度だけ知らせる。残りも試さない。
+          this.unavailable = true;
+          this.queue.length = 0;
+          this.queued.clear();
+          this.options.onUnavailable?.(message);
+          return;
+        }
+        this.failed.add(cacheName);
+        this.options.onFailed(job.key, message);
+      } finally {
+        this.controller = undefined;
+      }
     } finally {
-      this.controller = undefined;
+      this.currentKey = undefined;
+      this.currentGeneration = undefined;
     }
   }
 }

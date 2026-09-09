@@ -669,6 +669,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
             outcome.deck.fragmentPreamble ?? "",
           );
         },
+        onWebviewReady: () => rawBlockCompiler.forgetDelivered(),
         onError: (message) => {
           void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
         },
@@ -761,6 +762,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       if (!affectsRawBlockCompile((section) => event.affectsConfiguration(section, document.uri)))
         return;
       rawBlockCompiler.reset();
+      if (!rawBlocksEnabled()) controller.postRawImagesCleared();
       controller.refresh();
     });
     context.subscriptions.push(templateWatcher, rawBlockSettings);

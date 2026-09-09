@@ -171,13 +171,16 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     () => host.onRawBlockImage?.((key, result) => rawImages.receive(key, result)),
     [host, rawImages],
   );
+  useEffect(() => host.onRawImagesCleared?.(() => rawImages.clear()), [host, rawImages]);
   useEffect(
     () => rawImages.subscribe(() => setRawImagesVersion((current) => current + 1)),
     [rawImages],
   );
   // renderer の HTML が差し替わるたび(deck 更新)と、画像が増えるたびにはめ込み直す。
+  // 最新の描画に無い key の画像は捨てる。
   // biome-ignore lint/correctness/useExhaustiveDependencies: deck の更新で DOM が作り直されるので deck を依存に含める
   useEffect(() => {
+    if (deck.rawBlocks) rawImages.retain(new Set(deck.rawBlocks.map((block) => block.key)));
     const preview = previewRef.current;
     if (preview) applyRawImages(preview, rawImages);
   }, [deck, rawImages, rawImagesVersion]);

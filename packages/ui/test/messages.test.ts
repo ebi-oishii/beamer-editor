@@ -53,6 +53,12 @@ describe("parseExtensionToWebview: rawBlock*", () => {
     });
     expect(parseExtensionToWebview({ type: "rawBlockFailed", key: 1, message: "boom" })).toBeNull();
   });
+
+  it("rawImagesCleared を受理する", () => {
+    expect(parseExtensionToWebview({ type: "rawImagesCleared" })).toEqual({
+      type: "rawImagesCleared",
+    });
+  });
 });
 
 describe("parseWebviewToExtension", () => {

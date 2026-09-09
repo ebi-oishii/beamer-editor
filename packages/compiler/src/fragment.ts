@@ -6,6 +6,34 @@
 const BEAMER_ONLY_LINE =
   /^\s*\\(usetheme|usecolortheme|usefonttheme|useinnertheme|useoutertheme|setbeamercolor\*?|setbeamerfont\*?|setbeamertemplate|setbeamercovered|setbeamersize|logo|usebackgroundtemplate|titlegraphic|institute|beamertemplatenavigationsymbolsempty)\b/;
 
+/** `\usepackage{templates/corporate/beamerthemecorporate}` のようなテーマ .sty のファイル名。 */
+const BEAMER_THEME_STY = /^beamer(?:color|font|inner|outer)?theme/i;
+const USE_PACKAGE_LINE =
+  /^(\s*\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{)([^}]*)(\}.*)$/;
+
+function isBeamerThemePackage(name: string): boolean {
+  const base = name.replaceAll("\\", "/").split("/").pop() ?? name;
+  return BEAMER_THEME_STY.test(base);
+}
+
+/**
+ * standalone では未定義になる beamer 専用の行と、テーマ .sty の `\\usepackage` を除く。
+ * 同じ行に tikz などが混ざっていれば、テーマだけ落として残す。
+ */
+function keepPreambleLine(line: string): string | null {
+  if (BEAMER_ONLY_LINE.test(line)) return null;
+  const match = line.match(USE_PACKAGE_LINE);
+  if (!match) return line;
+  const original = (match[2] ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name !== "");
+  const kept = original.filter((name) => !isBeamerThemePackage(name));
+  if (kept.length === 0) return null;
+  if (kept.length === original.length) return line;
+  return `${match[1]}${kept.join(",")}${match[3]}`;
+}
+
 /**
  * standalone(preview)の文書。beamer が暗黙に読み込むパッケージのうち生ブロックが頼りがちなもの
  * (amsmath / amssymb / graphicx / xcolor)と、beamer 既定のサンセリフ本文を前置し、
@@ -14,7 +42,8 @@ const BEAMER_ONLY_LINE =
 export function buildFragmentDocument(body: string, preamble: string): string {
   const kept = preamble
     .split(/\r?\n/)
-    .filter((line) => !BEAMER_ONLY_LINE.test(line))
+    .map(keepPreambleLine)
+    .filter((line): line is string => line !== null)
     .join("\n")
     .trim();
   return [
@@ -35,7 +64,7 @@ export function buildFragmentDocument(body: string, preamble: string): string {
  * standalone 文書の組み立て方の版。buildFragmentDocument の前置きを変えたら上げる。
  * 画像キャッシュの置き場に入り、古い組み立て方で作った PDF を使い続けない。
  */
-export const FRAGMENT_DOCUMENT_VERSION = 1;
+export const FRAGMENT_DOCUMENT_VERSION = 2;
 
 const FILE_ARGUMENT =
   /\\(?:includegraphics|includepdf|includesvg|includestandalone|input|include|InputIfFileExists|lstinputlisting|verbatiminput|pgfplotstableread)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;
