@@ -47,6 +47,7 @@ export interface ShellHost {
    * 取り消し / やり直しを実行する(#103)。実装しないホストではキーを奪わない。
    */
   undoRedo?(kind: "undo" | "redo"): void;
+  resizeCanvasElement?(frameIndex: number, elementId: string, version: number, width: number): void;
   moveCanvasElement?(
     frameIndex: number,
     elementId: string,
@@ -122,6 +123,9 @@ export function createMessageShellHost(
     },
     undoRedo(kind) {
       transport.post({ type: "undoRedo", kind });
+    },
+    resizeCanvasElement(frameIndex, elementId, version, width) {
+      transport.post({ type: "resizeCanvasElement", frameIndex, elementId, version, width });
     },
     moveCanvasElement(frameIndex, elementId, version, x, y) {
       transport.post({ type: "moveCanvasElement", frameIndex, elementId, version, x, y });

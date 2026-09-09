@@ -1079,3 +1079,40 @@ describe("PreviewController", () => {
     expect(controller.latestOutcome?.version).toBe(7);
   });
 });
+
+describe("canvas image width edits", () => {
+  it("validates version and element identity, clamps width, and locks pending edits", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    doc.edit(
+      String.raw`\documentclass[aspectratio=169]{beamer}\begin{document}\begin{frame}[label=c]\begin{deckcanvas}\deckimage[x=.1,y=.2,w=.3]{image.png}\end{deckcanvas}\end{frame}\end{document}`,
+    );
+    const resizeCanvasElement = vi.fn(async (_request: unknown) => "applied" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      resizeCanvasElement,
+    });
+    fire({ type: "ready" });
+    const request = {
+      type: "resizeCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: doc.version,
+      width: 2,
+    };
+    fire({ ...request, version: doc.version - 1 });
+    fire({ ...request, elementId: "missing" });
+    fire({ ...request, width: NaN });
+    expect(resizeCanvasElement).not.toHaveBeenCalled();
+    fire(request);
+    fire(request);
+    await Promise.resolve();
+    expect(resizeCanvasElement).toHaveBeenCalledOnce();
+    expect(resizeCanvasElement.mock.calls[0]?.[0]).toMatchObject({
+      width: 0.9,
+      expectedOptions: "[x=.1,y=.2,w=.3]",
+      document: doc,
+    });
+    controller.dispose();
+  });
+});

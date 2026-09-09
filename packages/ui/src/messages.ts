@@ -15,6 +15,13 @@ export type ExtensionToWebview =
   | { type: "error"; message: string };
 
 export type WebviewToExtension =
+  | {
+      type: "resizeCanvasElement";
+      frameIndex: number;
+      elementId: string;
+      version: number;
+      width: number;
+    }
   | { type: "ready" }
   /** version はプレビューが表示中の deck の document version(古い版からのジャンプ検出に使う)。 */
   | { type: "jumpToSource"; frameIndex: number; version: number }
@@ -104,6 +111,24 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
       return null;
     case "undoRedo":
       if (raw.kind === "undo" || raw.kind === "redo") return { type: "undoRedo", kind: raw.kind };
+      return null;
+    case "resizeCanvasElement":
+      if (
+        isNonNegativeInteger(raw.frameIndex) &&
+        typeof raw.elementId === "string" &&
+        raw.elementId.length > 0 &&
+        isNonNegativeInteger(raw.version) &&
+        typeof raw.width === "number" &&
+        Number.isFinite(raw.width) &&
+        raw.width > 0
+      )
+        return {
+          type: "resizeCanvasElement",
+          frameIndex: raw.frameIndex,
+          elementId: raw.elementId,
+          version: raw.version,
+          width: raw.width,
+        };
       return null;
     case "moveCanvasElement":
       if (
