@@ -1738,3 +1738,31 @@ describe("canvas image resizing", () => {
     expect(editable.style.width).toBe("30%");
   });
 });
+
+it("resizes text width without changing its contents, size or anchor", () => {
+  const deck = structuredClone(CANVAS_DECK);
+  const frame = deck.frames[0];
+  const text = frame?.canvasElements?.[0];
+  if (!frame || !text) throw new Error("fixture missing");
+  text.kind = "text";
+  frame.html = frame.html.replace(
+    '<img class="canvas-item" data-canvas-element-id="canvas-image-0" data-canvas-element-kind="image" style="left:10%;top:20%;width:30%">',
+    '<div class="canvas-item canvas-text" data-canvas-element-id="canvas-image-0" data-canvas-element-kind="text" style="left:10%;top:20%;width:30%;font-size:11pt">Text wraps at the new width</div>',
+  );
+  const { container, editable, scale, resizeCanvasElement, moveCanvasElement } =
+    mountCanvasPreview(deck);
+  firePointer(editable, "pointerdown", 150, 100);
+  firePointer(editable, "pointerup", 150, 100);
+  const handle = container.querySelector<HTMLElement>('[aria-label="テキストの幅を変更"]');
+  if (!handle) throw new Error("text handle missing");
+  firePointer(handle, "pointerdown", 260, 90);
+  firePointer(scale, "pointermove", 220, 90);
+  expect(editable.style.width).toBe("20%");
+  expect(editable.textContent).toBe("Text wraps at the new width");
+  expect(editable.style.fontSize).toBe("11pt");
+  expect(editable.style.left).toBe("10%");
+  expect(editable.style.top).toBe("20%");
+  firePointer(scale, "pointerup", 220, 90);
+  expect(resizeCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.2);
+  expect(moveCanvasElement).not.toHaveBeenCalled();
+});

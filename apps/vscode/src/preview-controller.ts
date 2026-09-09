@@ -352,8 +352,7 @@ export class PreviewController implements vscode.Disposable {
     const latest = this.latest;
     const frame = latest?.deck.frames[move.frameIndex];
     const element = frame?.canvasElements?.find(
-      (candidate) =>
-        candidate.id === move.elementId && candidate.editable && candidate.kind === "image",
+      (candidate) => candidate.id === move.elementId && candidate.editable,
     );
     if (
       !latest ||
