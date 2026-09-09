@@ -1,3 +1,4 @@
+import { CANVAS_FONT_SIZES, type CanvasFontSize, isCanvasFontSize } from "@beamer-editor/core";
 /**
  * 1 フレームの描画ステージ。renderer が escape 済みの html を .slide-scale へ流し込み、
  * 親(SlideScroll)が決めた倍率で transform: scale し、オーバーレイ(step に応じた covered
@@ -80,6 +81,7 @@ export function Stage({
   scale,
   slideSize,
   version,
+  onSetCanvasFontSize,
   onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
@@ -89,6 +91,7 @@ export function Stage({
   scale: number;
   slideSize: SlideSize;
   version: number;
+  onSetCanvasFontSize?: ((elementId: string, size: CanvasFontSize) => void) | undefined;
   onResizeCanvasElement?: ((elementId: string, width: number) => void) | undefined;
   onMoveCanvasElement: (elementId: string, x: number, y: number) => void;
   /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
@@ -176,6 +179,40 @@ export function Stage({
     canvas.append(handle);
     return () => handle.remove();
   }, [frame, selected, onResizeCanvasElement]);
+
+  useEffect(() => {
+    const descriptor = frame.canvasElements?.find(
+      (item) => item.id === selected && item.editable && item.kind === "text",
+    );
+    const element = scaleRef.current?.querySelector<HTMLElement>(
+      `[data-canvas-element-id="${selected}"]`,
+    );
+    const canvas = element?.closest<HTMLElement>(".canvas");
+    if (!descriptor || !canvas || !onSetCanvasFontSize) return;
+    const select = document.createElement("select");
+    select.className = "canvas-font-size";
+    select.setAttribute("aria-label", "テキストの文字サイズ");
+    select.style.left = `${descriptor.position.x * 100}%`;
+    select.style.top = `${descriptor.position.y * 100}%`;
+    for (const size of CANVAS_FONT_SIZES) {
+      const option = document.createElement("option");
+      option.value = size;
+      option.textContent = size;
+      select.append(option);
+    }
+    select.value = descriptor.fontSize ?? "normal";
+    for (const event of ["pointerdown", "click", "dblclick"])
+      select.addEventListener(event, (event) => event.stopPropagation());
+    select.addEventListener("keydown", (event) => {
+      if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Enter", " "].includes(event.key))
+        event.stopPropagation();
+    });
+    select.addEventListener("change", () => {
+      if (isCanvasFontSize(select.value)) onSetCanvasFontSize(descriptor.id, select.value);
+    });
+    canvas.append(select);
+    return () => select.remove();
+  }, [frame, selected, onSetCanvasFontSize]);
 
   // メニュー外の pointerdown / Escape で閉じる。
   useEffect(() => {

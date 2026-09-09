@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { CANVAS_FONT_SIZES } from "../src/ast.js";
 import {
   CANVAS_MIN_WIDTH,
+  canvasFontSizeReplacement,
   canvasPositionReplacement,
   canvasWidthReplacement,
   clampCanvasPlacement,
@@ -165,5 +167,20 @@ describe("canvas width", () => {
       expect(width).not.toBeNull();
       expect(x + (width ?? 0)).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+describe("canvas font size", () => {
+  it.each(CANVAS_FONT_SIZES)("writes only the permitted size %s", (size) => {
+    expect(canvasFontSizeReplacement("[x=.1,size = small ,y=.2,w=.3]", size)).toBe(
+      `[x=.1,size = ${size} ,y=.2,w=.3]`,
+    );
+    expect(canvasFontSizeReplacement("[x=.1,y=.2,w=.3]", size)).toBe(
+      `[x=.1,y=.2,w=.3,size=${size}]`,
+    );
+  });
+  it("rejects unknown sizes and duplicate declarations", () => {
+    expect(canvasFontSizeReplacement("[x=0,y=0,w=.3]", "Huge" as never)).toBeNull();
+    expect(canvasFontSizeReplacement("[size=normal,size=small]", "Large")).toBeNull();
   });
 });
