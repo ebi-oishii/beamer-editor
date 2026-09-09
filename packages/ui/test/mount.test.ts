@@ -9,15 +9,18 @@ import type { NavState, ShellHost } from "../src/shell-host.js";
 
 class TestPointerEvent extends MouseEvent {
   readonly pointerId: number;
+  readonly pointerType: string;
 
   constructor(
     type: string,
     init: MouseEventInit & {
       pointerId: number;
+      pointerType?: string;
     },
   ) {
     super(type, init);
     this.pointerId = init.pointerId;
+    this.pointerType = init.pointerType ?? "mouse";
   }
 }
 
@@ -143,6 +146,7 @@ function firePointer(
   clientX: number,
   clientY: number,
   pointerId = 7,
+  init: PointerEventInit = {},
 ): void {
   const event = new TestPointerEvent(type, {
     bubbles: true,
@@ -150,6 +154,9 @@ function firePointer(
     clientX,
     clientY,
     pointerId,
+    // 実ブラウザと同じく、押している間の pointerdown / pointermove は主ボタンが buttons に立っている。
+    buttons: type === "pointerdown" || type === "pointermove" ? 1 : 0,
+    ...init,
   });
   act(() => {
     target.dispatchEvent(event);
@@ -429,7 +436,7 @@ describe("mountPreview", () => {
     ).toBe(true);
   });
 
-  it("Ctrl/Cmd+wheel だけを rAF ごとに一段階ズームし、通常 wheel は妨げない", () => {
+  it("Ctrl/Cmd+wheel は 1 フレーム分の delta を畳んで比例した倍率にし、通常 wheel は妨げない", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const saved: unknown[] = [];
@@ -458,17 +465,18 @@ describe("mountPreview", () => {
     expect(normal.defaultPrevented).toBe(false);
     expect(callbacks).toHaveLength(0);
 
+    // 2 イベント分(合計 -100px = マウス 1 ノッチ相当)を 1 フレームに畳む。
     const zoomIn = new WheelEvent("wheel", {
       bubbles: true,
       cancelable: true,
       ctrlKey: true,
-      deltaY: -1,
+      deltaY: -50,
     });
     const zoomInAgain = new WheelEvent("wheel", {
       bubbles: true,
       cancelable: true,
       ctrlKey: true,
-      deltaY: -1,
+      deltaY: -50,
     });
     act(() => {
       preview.dispatchEvent(zoomIn);
@@ -478,18 +486,71 @@ describe("mountPreview", () => {
     expect(zoomInAgain.defaultPrevented).toBe(true);
     expect(callbacks).toHaveLength(1);
     act(() => callbacks[0]?.(0));
-    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.1 });
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.105 });
 
     const zoomOut = new WheelEvent("wheel", {
       bubbles: true,
       cancelable: true,
       metaKey: true,
-      deltaY: 1,
+      deltaY: 100,
     });
     act(() => preview.dispatchEvent(zoomOut));
     expect(zoomOut.defaultPrevented).toBe(true);
     act(() => callbacks[1]?.(16));
     expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1 });
+
+    // ピンチのような小さな delta でも 3 桁の丸めで消えずに効く。
+    const pinch = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      deltaY: -5,
+    });
+    act(() => preview.dispatchEvent(pinch));
+    act(() => callbacks[2]?.(32));
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 1.005 });
+  });
+
+  it("小さな delta が別々のフレームに届いても積み重なり、保存値は 3 桁に丸める", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: { zoom: unknown }[] = [];
+    const callbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: 1 as const }),
+      saveNavState: (state: { zoom: unknown }) => saved.push(state),
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    if (!preview) throw new Error("preview fixture missing");
+    const wheel = (deltaY: number) => {
+      act(() =>
+        preview.dispatchEvent(
+          new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY }),
+        ),
+      );
+      act(() => callbacks.pop()?.(0));
+    };
+
+    // 1 フレーム 0.4px(3 桁の丸めでは消える大きさ)を 5 回。合計 2px 分の倍率になる。
+    for (let i = 0; i < 5; i++) wheel(-0.4);
+    expect(saved.at(-1)?.zoom).toBe(1.002);
+    // 同じ 2px を 1 回で送っても同じ倍率。
+    wheel(2);
+    expect(saved.at(-1)?.zoom).toBe(1);
+    wheel(-2);
+    expect(saved.at(-1)?.zoom).toBe(1.002);
   });
 
   it("wheel の倍率変更は現在のスクロール位置を戻さない", () => {
@@ -565,7 +626,7 @@ describe("mountPreview", () => {
     if (!preview || !scroll) throw new Error("preview fixture missing");
     act(() =>
       preview.dispatchEvent(
-        new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -1 }),
+        new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100 }),
       ),
     );
     Object.defineProperties(scroll, {
@@ -575,8 +636,71 @@ describe("mountPreview", () => {
     act(() => resizeCallbacks[0]?.([], {} as ResizeObserver));
     expect(cancelAnimationFrame).not.toHaveBeenCalled();
     act(() => animationCallbacks[0]?.(0));
-    // (500 - (12 + 4) * 2) / 607 = 0.771... を基準に一段階上げる。
-    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 0.87 });
+    // (500 - (12 + 4) * 2) / 607 = 0.771... を基準に、1 ノッチ(100px)ぶん = 約 10% 上げる。
+    expect(saved.at(-1)).toEqual({ current: 0, step: 1, zoom: 0.852 });
+  });
+
+  it("fit が下限より小さいときに作った手動倍率は、保存して再表示しても fit に戻らない", () => {
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    const animationCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      animationCallbacks.push(callback);
+      return animationCallbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const container = document.createElement("div");
+    document.body.append(container);
+    const saved: { zoom: unknown }[] = [];
+    const host = {
+      ...fakeHost(),
+      loadNavState: () => ({ current: 0, step: 1, zoom: "fit" as const }),
+      saveNavState: (state: { zoom: unknown }) => saved.push(state),
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    const scroll = container.querySelector<HTMLElement>(".slide-scroll");
+    if (!preview || !scroll) throw new Error("preview fixture missing");
+    // (93 - (12 + 4) * 2) / 607 = 0.1005 で、fit が下限 0.25 より小さい。
+    Object.defineProperties(scroll, {
+      clientWidth: { configurable: true, value: 93 },
+      clientHeight: { configurable: true, value: 400 },
+    });
+    act(() => resizeCallbacks[0]?.([], {} as ResizeObserver));
+    act(() =>
+      preview.dispatchEvent(
+        new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100 }),
+      ),
+    );
+    act(() => animationCallbacks[0]?.(0));
+    // 1 ノッチぶん拡大した 0.111 が保存される(0.25 へ飛ばない)。
+    expect(saved.at(-1)?.zoom).toBe(0.111);
+
+    // 保存した状態から再表示しても、fit に戻らず同じ倍率で始まる。
+    const restored: { zoom: unknown }[] = [];
+    const again = document.createElement("div");
+    document.body.append(again);
+    act(() => {
+      mountPreview(again, {
+        ...fakeHost(),
+        loadNavState: () => saved.at(-1) as { current: number; step: number; zoom: "fit" | number },
+        saveNavState: (state: { zoom: unknown }) => restored.push(state),
+      });
+    });
+    expect(restored.at(-1)?.zoom).toBe(0.111);
   });
 
   it("resize 後も内側は論理サイズのまま、幅合わせの外側だけを再計算する", () => {
@@ -1328,6 +1452,103 @@ describe("mountPreview", () => {
     expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, 0.7, 0.2);
   });
 
+  it("右クリックはドラッグを始めず、その後のマウス移動で箱が追従しない(#108)", () => {
+    const { editable, moveCanvasElement, scale, setPointerCapture } = mountCanvasPreview();
+    const left = editable.style.left;
+    const top = editable.style.top;
+
+    firePointer(editable, "pointerdown", 150, 100, 7, { button: 2, buttons: 2 });
+    expect(editable.classList.contains("canvas-dragging")).toBe(false);
+    expect(setPointerCapture).not.toHaveBeenCalled();
+    act(() => {
+      editable.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    });
+    // メニュー操作の後にマウスを動かしても、箱は動かず move も送らない。
+    firePointer(scale, "pointermove", 300, 250);
+    firePointer(scale, "pointermove", 320, 260);
+    expect(editable.style.left).toBe(left);
+    expect(editable.style.top).toBe(top);
+    firePointer(scale, "pointerup", 320, 260);
+    expect(moveCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("touch/pen の長押し contextmenu はドラッグを取り消さず、pointerup で一度だけcommitする(#108)", () => {
+    for (const pointerType of ["touch", "pen"]) {
+      const { editable, moveCanvasElement, scale } = mountCanvasPreview();
+      firePointer(editable, "pointerdown", 150, 100, 7, { pointerType });
+      // touch/pen は buttons が 0 でも mouse の chord 検出を適用しない。
+      firePointer(scale, "pointermove", 200, 150, 7, { pointerType, buttons: 0 });
+      act(() => {
+        editable.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      });
+      expect(editable.classList.contains("canvas-dragging")).toBe(true);
+      firePointer(scale, "pointerup", 200, 150, 7, { pointerType });
+      expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(
+        0,
+        "canvas-image-0",
+        1,
+        0.225,
+        0.45,
+      );
+    }
+  });
+
+  it("ドラッグ中に右クリックされたらドラッグを取り消して元の位置に戻す(#108)", () => {
+    const { editable, moveCanvasElement, releasePointerCapture, scale } = mountCanvasPreview();
+    const left = editable.style.left;
+    const top = editable.style.top;
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(scale, "pointermove", 200, 150);
+    expect(editable.style.left).not.toBe(left);
+    act(() => {
+      editable.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    });
+    expect(editable.classList.contains("canvas-dragging")).toBe(false);
+    expect(editable.style.left).toBe(left);
+    expect(editable.style.top).toBe(top);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    firePointer(scale, "pointermove", 260, 200);
+    expect(editable.style.left).toBe(left);
+    firePointer(scale, "pointerup", 260, 200);
+    expect(moveCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("ドラッグ中に右・中ボタンが加わった pointermove は contextmenu を待たずにその場で取り消す(#108)", () => {
+    const { editable, moveCanvasElement, releasePointerCapture, scale } = mountCanvasPreview();
+    const left = editable.style.left;
+    const top = editable.style.top;
+    firePointer(editable, "pointerdown", 150, 100, 7, { button: 0, buttons: 1 });
+    firePointer(scale, "pointermove", 200, 150, 7, { buttons: 1 });
+    expect(editable.style.left).not.toBe(left);
+    // 左を押したまま右を押すと、実ブラウザでは pointerdown ではなく button=2 / buttons=3 の pointermove が
+    // 来る。contextmenu が出ない操作(Firefox の Shift+右クリックなど)でも、この時点で取り消し済みになる。
+    firePointer(scale, "pointermove", 200, 150, 7, { button: 2, buttons: 3 });
+    expect(editable.classList.contains("canvas-dragging")).toBe(false);
+    expect(editable.style.left).toBe(left);
+    expect(editable.style.top).toBe(top);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    // 以後のマウス移動に追従せず、離しても move を送らない。
+    firePointer(scale, "pointermove", 260, 200, 7, { buttons: 3 });
+    firePointer(scale, "pointermove", 280, 220, 7, { buttons: 1 });
+    expect(editable.style.left).toBe(left);
+    firePointer(scale, "pointerup", 280, 220);
+    expect(moveCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("主ボタンが離れているのに pointermove が来たら(pointerup が吸われた)ドラッグを取り消す(#108)", () => {
+    const { editable, moveCanvasElement, releasePointerCapture, scale } = mountCanvasPreview();
+    const left = editable.style.left;
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(scale, "pointermove", 200, 150);
+    firePointer(scale, "pointermove", 220, 160, 7, { buttons: 0 });
+    expect(editable.classList.contains("canvas-dragging")).toBe(false);
+    expect(editable.style.left).toBe(left);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    firePointer(scale, "pointermove", 260, 200);
+    expect(editable.style.left).toBe(left);
+    expect(moveCanvasElement).not.toHaveBeenCalled();
+  });
+
   it("canvas image の clickだけではmoveを送らない", () => {
     const { editable, moveCanvasElement, scale } = mountCanvasPreview();
 
@@ -1425,6 +1646,24 @@ describe("mountPreview", () => {
     expect(editable.style.top).toBe("20%");
     expect(moveCanvasElement).not.toHaveBeenCalled();
     expect(releasePointerCapture).toHaveBeenCalledTimes(2);
+  });
+
+  it("右/中クリックは背景・編集不能要素では選択解除し、編集可能な箱では選択を維持する(#108)", () => {
+    const { editable, noneditable, scale } = mountCanvasPreview();
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(scale, "pointercancel", 150, 100);
+    expect(editable.classList.contains("canvas-selected")).toBe(true);
+
+    firePointer(editable, "pointerdown", 150, 100, 7, { button: 2, buttons: 2 });
+    expect(editable.classList.contains("canvas-selected")).toBe(true);
+
+    firePointer(scale, "pointerdown", 0, 0, 7, { button: 2, buttons: 2 });
+    expect(editable.classList.contains("canvas-selected")).toBe(false);
+
+    firePointer(editable, "pointerdown", 150, 100);
+    firePointer(scale, "pointercancel", 150, 100);
+    firePointer(noneditable, "pointerdown", 0, 0, 7, { button: 1, buttons: 4 });
+    expect(editable.classList.contains("canvas-selected")).toBe(false);
   });
 
   it("背景・編集不能画像で選択解除し、deck更新中のdragをcancelする", () => {
