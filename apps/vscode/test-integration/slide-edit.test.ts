@@ -105,10 +105,48 @@ suite("#85: slide list source edits", () => {
     assert.ok(extension);
     const api = (await extension.activate()) as TestApi;
     await waitFor(() => api._slideItemsForTest().length === 0, "empty outline");
-    assert.equal(await vscode.commands.executeCommand("beamerEditor.slides.insert"), true);
+    assert.equal(
+      await vscode.commands.executeCommand("beamerEditor.slides.append", {
+        $treeViewId: "beamerEditor.slides",
+      }),
+      true,
+    );
     assert.ok(document.getText().includes("label=slide-1"));
     await vscode.window.showTextDocument(document);
     await vscode.commands.executeCommand("undo");
     await waitFor(() => document.getText() === source, "empty deck restored");
+  });
+});
+
+suite("#85: append ignores the focused item", () => {
+  test("view title add appends even if a tree item is supplied", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "beamer-slide-append-"));
+    try {
+      const file = path.join(dir, "deck.slide.tex");
+      await writeFile(file, SOURCE);
+      const document = await vscode.workspace.openTextDocument(file);
+      await vscode.window.showTextDocument(document);
+      const extension = vscode.extensions.getExtension("ebi-oishii.beamer-editor");
+      assert.ok(extension);
+      const api = (await extension.activate()) as TestApi;
+      await waitFor(
+        () => (api._slideItemsForTest()[0] as Item | undefined)?.entry.document === document,
+        "outline ready",
+      );
+      assert.equal(
+        await vscode.commands.executeCommand(
+          "beamerEditor.slides.append",
+          api._slideItemsForTest()[0],
+        ),
+        true,
+      );
+      assert.ok(document.getText().indexOf("label=slide-1") > document.getText().indexOf("B body"));
+      await vscode.window.showTextDocument(document);
+      await vscode.commands.executeCommand("undo");
+      await waitFor(() => document.getText() === SOURCE, "append undone");
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

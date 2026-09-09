@@ -5,7 +5,6 @@ import {
   type LintDiagnostic,
   type LintSeverity,
   parseDeck,
-  type SlideEditAction,
 } from "@beamer-editor/core";
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
@@ -360,6 +359,12 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       void vscode.window.showWarningMessage(message);
     },
   });
+  // View title actions may receive the focused tree item. Appending must ignore it.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("beamerEditor.slides.append", () =>
+      slideEdits.execute("insert"),
+    ),
+  );
   for (const action of ["moveUp", "moveDown", "duplicate", "delete", "insert"] as const) {
     context.subscriptions.push(
       vscode.commands.registerCommand(`beamerEditor.slides.${action}`, async (item: unknown) => {
@@ -377,7 +382,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           if (!chosen) return false;
           entry = chosen.entry;
         }
-        return slideEdits.execute(action satisfies SlideEditAction, entry);
+        return slideEdits.execute(action, entry);
       }),
     );
   }

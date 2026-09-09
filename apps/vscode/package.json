@@ -67,6 +67,11 @@
         "command": "beamerEditor.slides.insert",
         "title": "Beamer Editor: Insert New Slide",
         "icon": "$(add)"
+      },
+      {
+        "command": "beamerEditor.slides.append",
+        "title": "Beamer Editor: Add Slide at End",
+        "icon": "$(add)"
       }
     ],
     "configuration": {
@@ -166,6 +171,10 @@
         {
           "command": "beamerEditor.slides.insert",
           "when": "beamerEditor.hasSlideOutlineDocument"
+        },
+        {
+          "command": "beamerEditor.slides.append",
+          "when": "beamerEditor.hasSlideOutlineDocument"
         }
       ],
       "webview/title": [
@@ -204,7 +213,7 @@
       ],
       "view/title": [
         {
-          "command": "beamerEditor.slides.insert",
+          "command": "beamerEditor.slides.append",
           "when": "view == beamerEditor.slides && beamerEditor.hasSlideOutlineDocument",
           "group": "navigation"
         }
