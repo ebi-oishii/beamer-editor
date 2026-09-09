@@ -246,6 +246,7 @@ describe("deck lint", () => {
         "  deck outline <file> [--json]        フレーム一覧を表示\n" +
         "  deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査\n" +
         "  deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]\n" +
+        "  deck export <file> --format html [-o <directory>] [--json]\n" +
         "  deck fonts status [--json]          フォントカタログ全 family の解決状態\n" +
         '  deck fonts fetch [family] [--json]  family(既定 "Noto Sans CJK JP")を取得・配置\n',
     );
@@ -666,7 +667,7 @@ describe("deck format", () => {
 });
 
 describe("deck export", () => {
-  it("parses the required PDF format, output aliases, and usage failures without changing other command parsing", () => {
+  it("parses PDF and HTML formats, output aliases, and usage failures", () => {
     expect(
       parseExportArgs(["talk.slide.tex", "--format", "pdf", "-o", "out.pdf", "--overwrite"]),
     ).toMatchObject({
@@ -679,13 +680,13 @@ describe("deck export", () => {
     for (const argv of [
       ["talk.tex"],
       ["--format", "pdf"],
-      ["talk.tex", "--format", "html"],
       ["talk.tex", "--format", "pdf", "--format", "pdf"],
       ["talk.tex", "--format", "pdf", "--output"],
       ["talk.tex", "--format", "pdf", "--unknown"],
     ]) {
       expect(parseExportArgs(argv).error).toBeDefined();
     }
+    expect(parseExportArgs(["talk.tex", "--format", "html"])).toMatchObject({ error: undefined });
     expect(parseExportArgs(["talk.tex", "--format", "--json"])).toMatchObject({
       json: true,
       error: "オプションには値が必要です: --format",
@@ -721,6 +722,26 @@ describe("deck export", () => {
         engine: { name: "tectonic", version: "0.16.0" },
       });
       expect(stderr).not.toHaveBeenCalled();
+      stdout.mockClear();
+      const html = async () => ({
+        format: "html" as const,
+        inputPath: "/tmp/talk.slide.tex",
+        outputPath: "/tmp/talk-html",
+        indexPath: "/tmp/talk-html/index.html",
+      });
+      expect(
+        await run(["export", "talk.slide.tex", "--format", "html", "--json"], { exportHtml: html }),
+      ).toBe(0);
+      expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({
+        format: "html",
+        output: "/tmp/talk-html",
+        index: "/tmp/talk-html/index.html",
+      });
+      expect(
+        await run(["export", "talk.slide.tex", "--format", "html", "--overwrite"], {
+          exportHtml: html,
+        }),
+      ).toBe(3);
     } finally {
       stdout.mockRestore();
       stderr.mockRestore();

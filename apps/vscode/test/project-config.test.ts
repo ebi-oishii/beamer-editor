@@ -102,7 +102,7 @@ describe("VS Code extension project configuration", () => {
     });
     expect(contributes.menus["editor/title"]).toContainEqual({
       command: "beamerEditor.export",
-      when: "resourceScheme == file && resourceExtname == .tex && isWorkspaceTrusted",
+      when: "resourceScheme == file && resourceExtname == .tex",
       group: "navigation",
     });
   });
@@ -189,13 +189,13 @@ describe("VS Code extension project configuration", () => {
     ).toMatchObject({ default: 300, minimum: 5, maximum: 1800, scope: "resource" });
   });
 
-  it("keeps export trusted, reachable from previews, and out of the webview bundle contract", () => {
+  it("keeps export reachable from previews and out of the webview bundle contract", () => {
     const contributes = packageJson.contributes as {
       menus: { "webview/title": Array<{ command: string; when?: string; group?: string }> };
     };
     expect(contributes.menus["webview/title"]).toContainEqual({
       command: "beamerEditor.export",
-      when: "webviewId == beamerEditor.preview && isWorkspaceTrusted",
+      when: "webviewId == beamerEditor.preview",
       group: "navigation",
     });
     expect(packageJson.activationEvents as string[]).toContain("onCommand:beamerEditor.export");

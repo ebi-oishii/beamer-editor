@@ -1,4 +1,5 @@
 import { PdfExportError } from "@beamer-editor/compiler";
+import { HtmlExportError } from "@beamer-editor/html-export";
 import { describe, expect, it, vi } from "vitest";
 import {
   ExportController,
@@ -19,11 +20,21 @@ const output: ExportUri = {
   fsPath: "/deck/talk.pdf",
   toString: () => "file:///deck/talk.pdf",
 };
+const htmlOutput: ExportUri = {
+  scheme: "file",
+  fsPath: "/deck/talk-html",
+  toString: () => "file:///deck/talk-html",
+};
+const htmlIndex: ExportUri = {
+  scheme: "file",
+  fsPath: "/deck/talk-html/index.html",
+  toString: () => "file:///deck/talk-html/index.html",
+};
 
 function createHost(overrides: Partial<ExportHost> = {}): ExportHost {
   return {
     isWorkspaceTrusted: true,
-    chooseFormat: vi.fn<() => Promise<"pdf" | undefined>>(async () => "pdf"),
+    chooseFormat: vi.fn<() => Promise<"pdf" | "html" | undefined>>(async () => "pdf"),
     chooseOutput: vi.fn(async () => output),
     outputExists: vi.fn(async () => false),
     withProgress: vi.fn(async (task) =>
@@ -33,6 +44,7 @@ function createHost(overrides: Partial<ExportHost> = {}): ExportHost {
     showError: vi.fn(async () => undefined),
     showWarning: vi.fn(async () => undefined),
     openPdf: vi.fn(async () => undefined),
+    openHtml: vi.fn(async () => undefined),
     revealInFileManager: vi.fn(async () => undefined),
     openTectonicSettings: vi.fn(async () => undefined),
     showExportDetails: vi.fn(),
@@ -102,6 +114,63 @@ describe("ExportController", () => {
     expect(host.openPdf).toHaveBeenCalledWith(output);
   });
 
+  it("exports HTML in an untrusted workspace and opens the generated index", async () => {
+    const host = createHost({
+      isWorkspaceTrusted: false,
+      chooseFormat: vi.fn(async () => "html" as const),
+      chooseOutput: vi.fn(async () => htmlOutput),
+      showInformation: vi.fn(async () => "HTMLを開く"),
+      uriForFile: vi.fn((path) => (path.endsWith("index.html") ? htmlIndex : htmlOutput)),
+    });
+    const html = vi.fn(async () => ({
+      format: "html" as const,
+      inputPath: input.fsPath,
+      outputPath: htmlOutput.fsPath,
+      indexPath: htmlIndex.fsPath,
+    }));
+    await new ExportController(host, {
+      exportHtml: html,
+      htmlKatexAssetsPath: "/extension/media/html-export/katex",
+    }).export(createDocument());
+    expect(html).toHaveBeenCalledWith({
+      inputPath: input.fsPath,
+      outputPath: htmlOutput.fsPath,
+      signal: expect.any(AbortSignal),
+      katexAssetsPath: "/extension/media/html-export/katex",
+    });
+    expect(host.outputExists).not.toHaveBeenCalled();
+    expect(host.openHtml).toHaveBeenCalledWith(htmlIndex);
+    expect(host.showWarning).not.toHaveBeenCalled();
+  });
+
+  it("reveals the HTML output folder and reports typed HTML failures", async () => {
+    const host = createHost({
+      chooseFormat: vi.fn(async () => "html" as const),
+      chooseOutput: vi.fn(async () => htmlOutput),
+      showInformation: vi.fn(async () => "フォルダーで表示"),
+    });
+    await new ExportController(host, {
+      exportHtml: async () => ({
+        format: "html",
+        inputPath: input.fsPath,
+        outputPath: htmlOutput.fsPath,
+        indexPath: htmlIndex.fsPath,
+      }),
+    }).export(createDocument());
+    expect(host.revealInFileManager).toHaveBeenCalledWith(htmlOutput);
+
+    const failed = createHost({
+      chooseFormat: vi.fn(async () => "html" as const),
+      chooseOutput: vi.fn(async () => htmlOutput),
+    });
+    await new ExportController(failed, {
+      exportHtml: async () => {
+        throw new HtmlExportError("E_ASSET", "missing image");
+      },
+    }).export(createDocument());
+    expect(failed.showError).toHaveBeenCalledWith("HTML の書き出しに失敗しました: missing image");
+  });
+
   it("does not compile after picker or output cancellation", async () => {
     for (const [host, document] of [
       [
@@ -127,7 +196,7 @@ describe("ExportController", () => {
     );
     expect(compile).not.toHaveBeenCalled();
     expect(host.showWarning).toHaveBeenCalledWith(
-      "編集中のファイルを保存できなかったため、PDFを書き出しませんでした。",
+      "編集中のファイルを保存できなかったため、書き出しませんでした。",
     );
   });
 
@@ -237,7 +306,7 @@ describe("ExportController", () => {
     const first = controller.export(createDocument());
     await Promise.resolve();
     await controller.export(createDocument());
-    expect(host.showWarning).toHaveBeenCalledWith("この文書は既に PDF を書き出しています。");
+    expect(host.showWarning).toHaveBeenCalledWith("この文書は既に書き出しています。");
     release();
     await first;
     expect(compile).toHaveBeenCalledWith(expect.objectContaining({ overwrite: true }));
@@ -318,7 +387,7 @@ describe("ExportController", () => {
     }).export(createDocument());
     expect(host.showError).not.toHaveBeenCalled();
     expect(host.showWarning).toHaveBeenCalledWith(
-      "PDF は書き出されましたが、表示操作に失敗しました。",
+      "書き出しは完了しましたが、表示操作に失敗しました。",
     );
   });
 });

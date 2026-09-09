@@ -50,6 +50,8 @@ LaTeX Workshop が入っている環境で managed file を初めて開くと、
 
 コマンドパレット、`.tex` エディター、または対応するプレビューのタイトルから **Beamer Editor: Export...** を実行すると、保存先を選んで PDF を書き出せます。実行には [Tectonic](https://tectonic-typesetting.github.io/) が必要です。PATH にない場合は `beamerEditor.tectonicPath` で実行ファイルを指定してください。
 
-編集中の内容は先に保存され、コンパイルは既定で300秒後に停止します（`beamerEditor.pdfExport.timeoutSeconds` で5〜1800秒に変更可）。失敗時は通知の「詳細を表示」からTectonicのエラーを確認できます。既存PDFはコンパイルが成功するまで置換されません。外部プログラムを起動するため、Restricted Modeではコマンドとボタンが無効になります。
+編集中の内容は先に保存され、コンパイルは既定で300秒後に停止します（`beamerEditor.pdfExport.timeoutSeconds` で5〜1800秒に変更可）。失敗時は通知の「詳細を表示」からTectonicのエラーを確認できます。既存PDFはコンパイルが成功するまで置換されません。PDF は外部プログラムを起動するため、Restricted Modeでは形式選択後に実行を拒否します。
+
+Export の形式で **HTML（プレビュー相当）** を選ぶと、保存済みの内容から `index.html` を含むフォルダーを作成します。これは `file:` で直接開ける高速プレビューの固定スナップショットであり、正式な TeX 出力ではありません。PDF 画像と raw TeX はプレースホルダーのまま、外部 URL の画像は開いたブラウザーでネットワークを必要とします。HTML は外部プロセスを使わないため Restricted Mode でも利用できます。
 
 このリポジトリで LaTeX Workshop を併用する場合の、混在 workspace と専用 workspace の設定方針は[エディタセットアップ](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/editor-setup.md)を参照してください。

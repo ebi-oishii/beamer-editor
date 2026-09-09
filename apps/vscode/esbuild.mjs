@@ -1,6 +1,10 @@
+import { cp, mkdir, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import * as esbuild from "esbuild";
 
 const watch = process.argv.includes("--watch");
+const require = createRequire(import.meta.url);
 
 const extensionOptions = {
   bundle: true,
@@ -34,6 +38,12 @@ const webviewOptions = {
 
 async function build() {
   await Promise.all([esbuild.build(extensionOptions), esbuild.build(webviewOptions)]);
+  const katexDist = dirname(require.resolve("katex/dist/katex.min.css"));
+  const katexTarget = "media/html-export/katex";
+  await rm(katexTarget, { recursive: true, force: true });
+  await mkdir(join(katexTarget, "fonts"), { recursive: true });
+  await cp(join(katexDist, "katex.min.css"), join(katexTarget, "katex.min.css"));
+  await cp(join(katexDist, "fonts"), join(katexTarget, "fonts"), { recursive: true });
 }
 
 if (watch) {
