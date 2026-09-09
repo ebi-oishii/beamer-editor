@@ -241,6 +241,7 @@ describe("deck lint", () => {
     expect(result.stderr).toBe(
       "不明なコマンド: unknown-command\n" +
         "使い方: deck <command> ...\n\n" +
+        "  deck init [directory] [--json]       空のディレクトリに新規デッキを生成\n" +
         "  deck lint <file> [--json]           デッキを検査\n" +
         "  deck format <file> [--write] [--json]  デッキを正規化\n" +
         "  deck outline <file> [--json]        フレーム一覧を表示\n" +

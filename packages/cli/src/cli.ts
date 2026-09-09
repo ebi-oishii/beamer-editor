@@ -50,6 +50,7 @@ import {
   resolveFont,
 } from "./fonts.ts";
 
+import { InitError, initDeck } from "./init.ts";
 import { skillLintOptions } from "./skill.ts";
 
 /** 既定で取得する標準フォント(theme-design.md §4)。 */
@@ -215,6 +216,7 @@ async function runFontsFetch(family: string, json: boolean): Promise<number> {
 
 export const USAGE = `使い方: deck <command> ...
 
+  deck init [directory] [--json]       空のディレクトリに新規デッキを生成
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示
@@ -741,6 +743,23 @@ export async function run(
   if (argv[0] === "check") return runCheck(parseCheckArgs(argv.slice(1)), dependencies);
   const { command, sub, family, json, write, unknownOptions } = parseArgs(argv);
   if (unknownOptions.length > 0) return usageError(`不明なオプション: ${unknownOptions[0]}`, json);
+  if (command === "init") {
+    if (write || family !== undefined)
+      return usageError("init にはディレクトリを1つまで指定してください（--write 非対応）", json);
+    try {
+      const result = await initDeck(sub ?? ".");
+      process.stdout.write(
+        json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : `${result.directory}: 新規デッキを生成しました\n${result.files.join("\n")}\n`,
+      );
+      return EXIT_CODE.success;
+    } catch (error) {
+      const code = error instanceof InitError ? error.code : "E_IO";
+      writeError(code, errorMessage(error), json);
+      return exitCodeForError(code);
+    }
+  }
   if (command === "lint") {
     if (write) return usageError("lint は --write をサポートしません", json);
     if (sub === undefined || family !== undefined)
