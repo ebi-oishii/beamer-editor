@@ -50,6 +50,8 @@ import {
   resolveFont,
 } from "./fonts.ts";
 
+import { skillLintOptions } from "./skill.ts";
+
 /** 既定で取得する標準フォント(theme-design.md §4)。 */
 const DEFAULT_FAMILY = "Noto Sans CJK JP";
 
@@ -211,7 +213,7 @@ async function runFontsFetch(family: string, json: boolean): Promise<number> {
   return EXIT_CODE.success;
 }
 
-const USAGE = `使い方: deck <command> ...
+export const USAGE = `使い方: deck <command> ...
 
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
@@ -273,7 +275,7 @@ async function runLint(file: string, json: boolean): Promise<number> {
     return exitCodeForError("E_IO");
   }
   const probes = createNodeFileProbes(dirname(resolve(file)));
-  const diagnostics = lintSource(source, probes);
+  const diagnostics = lintSource(source, { ...probes, ...(await skillLintOptions(file)) });
   const result = lintJson(file, source, diagnostics);
   if (json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else if (diagnostics.length === 0) process.stdout.write(`${file}: OK\n`);
@@ -493,7 +495,10 @@ async function runCheck(parsed: ParsedCheckArgs, dependencies: CliDependencies):
     writeError("E_IO", `読み込みに失敗しました: ${input}: ${errorMessage(error)}`, parsed.json);
     return exitCodeForError("E_IO");
   }
-  const lintDiagnostics = lintSource(source, createNodeFileProbes(dirname(resolve(input))));
+  const lintDiagnostics = lintSource(source, {
+    ...createNodeFileProbes(dirname(resolve(input))),
+    ...(await skillLintOptions(input)),
+  });
   let compiled: DeckFramesResult;
   try {
     compiled = await (dependencies.compileDeckFrames ?? compileDeckFrames)({

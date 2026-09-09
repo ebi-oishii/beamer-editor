@@ -71,7 +71,7 @@
 
 ### Phase 2: core — フォーマッタ + リンター(M)
 
-キャンバス正規形フォーマッタ、canonical fixture 全体の冪等性・semantic round-trip property tests、AST ベースのリンター基盤を備える。残りは正規形の全域化(キャンバス以外)と L003/L006/L008/L010 の整備である。
+キャンバス正規形フォーマッタ、canonical fixture 全体の冪等性・semantic round-trip property tests、AST ベースのリンター基盤を備える。残りは正規形の全域化(キャンバス以外)と L003/L006/L008 の整備である。
 
 - 正規形の実装(キャンバスの座標 3 桁固定・key 順序の正規化を含む)。冪等性テスト(`format(format(x)) == format(x)`)、コメント保持テスト。
 - リント規則 L001〜L020。L004 / L015 は環境非依存にするため、ファイルアクセスと画像寸法プローブ(PNG/JPEG ヘッダ・PDF MediaBox)を注入可能にする(C-5)。
@@ -149,7 +149,7 @@ Electron(旧 5c)はここでは作らない(「後続」参照)。
 [ai-protocol.md](ai-protocol.md) の実装フェーズ。Phase 7 とは独立。
 
 - `deck lint` / `deck format` / `deck outline` / `deck export` / `deck check`（各 `--json`対応）は実装済み。残りの CLI は `deck snapshot` / `deck init`（check / snapshot は Phase 6 の機構を使う）。`check` は lint と1回の Tectonic 実コンパイルを統合し、Overfull と savepos 実測のキャンバス診断をフレームアドレスへ割り付ける。
-- SKILL.md と `references/subset-cheatsheet.md` を `docs/subset-spec.md` から**ビルドで生成**する仕組み。`deck init` が新規デッキプロジェクトに `.claude/skills/beamer-deck/` として同梱する(版ずれは L010 で警告)。
+- 実装済み: `pnpm build:skills` / `pnpm check:skills` で SKILL.md と `references/subset-cheatsheet.md` を `docs/subset-spec.md` から**ビルドで生成**する仕組み。`deck init` が新規デッキプロジェクトに `.claude/skills/beamer-deck/` として同梱する(版ずれは L010 で警告)。
 - 指示パターン集(examples/prompts.md)。このリポジトリ自身にもスキルを配置し、資料作成で運用検証する。
 - 完了条件: AI に「アウトライン提案 → 合意 → 生成 → lint/check 通過」の流れで新規デッキを作らせ、人間がエディタで微調整して PDF 書き出しまでの一連が実演できる。
 
@@ -215,7 +215,7 @@ Electron は次が VS Code 版で安定してから着手する(追加要件 §6
 
 ## 現在の次手
 
-1. [#123](https://github.com/ebi-oishii/beamer-editor/issues/123) で Phase 2 の正規形をキャンバス外へ広げ、L003/L006/L008/L010を実装する。
+1. [#123](https://github.com/ebi-oishii/beamer-editor/issues/123) で Phase 2 の正規形をキャンバス外へ広げ、L003/L006/L008を実装する。
 2. [#125](https://github.com/ebi-oishii/beamer-editor/issues/125) のフレーム別警告を実装する。
 3. [#126](https://github.com/ebi-oishii/beamer-editor/issues/126) のキャンバス実測検査を実装する。
 4. [#88 `deck check`](https://github.com/ebi-oishii/beamer-editor/issues/88) で #125 と #126 の検査を CLI として統合する。
