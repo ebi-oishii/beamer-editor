@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readdirSync, rmSync, symlinkSync } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -540,6 +540,64 @@ describe("deck snapshot", () => {
       expect(JSON.parse(stderr).error.code).toBe("E_IO");
       await expect(stat(output)).rejects.toThrow();
     }
+  });
+
+  it("allows a symlink to a directory as the output parent", async () => {
+    const directory = await temporaryDirectory();
+    const parent = `${directory}/output-parent`;
+    await symlink(directory, parent);
+    const output = `${parent}/snapshots`;
+    const { code, stderr } = await snapshot(
+      ["talk.tex", "-o", output],
+      snapshotCompiled(snapshotFrame(1, "intro", [1])),
+    );
+    expect(code).toBe(EXIT_CODE.success);
+    expect(stderr).toBe("");
+    expect((await stat(output)).isDirectory()).toBe(true);
+    expect((await lstat(parent)).isSymbolicLink()).toBe(true);
+  });
+
+  it("cleans up its reserved directory after its parent symlink is retargeted", async () => {
+    const directory = await temporaryDirectory();
+    const firstParent = `${directory}/first`;
+    const secondParent = `${directory}/second`;
+    const parent = `${directory}/output-parent`;
+    await mkdir(firstParent);
+    await mkdir(secondParent);
+    await mkdir(`${secondParent}/snapshots`);
+    await writeFile(`${secondParent}/snapshots/keep.txt`, "keep\n", "utf8");
+    await symlink(firstParent, parent);
+    const output = `${parent}/snapshots`;
+    let retargeted = false;
+    const image = (page: number) => ({
+      page,
+      width: 1,
+      height: 1,
+      get png() {
+        if (!retargeted) {
+          rmSync(parent);
+          symlinkSync(secondParent, parent);
+          retargeted = true;
+        }
+        return new Uint8Array([page]);
+      },
+    });
+    const { code, stderr } = await snapshot(["talk.tex", "-o", output, "--json"], {
+      engineVersion: "1.0",
+      warnings: [],
+      layoutDiagnostics: [],
+      frames: [
+        {
+          address: { number: 1, label: "intro" },
+          span: { start: 0, end: 1 },
+          images: [image(1), image(1)],
+        },
+      ],
+    } as never);
+    expect(code).toBe(EXIT_CODE.operationalFailure);
+    expect(JSON.parse(stderr).error.code).toBe("E_IO");
+    await expect(stat(`${firstParent}/snapshots`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(`${secondParent}/snapshots/keep.txt`, "utf8")).resolves.toBe("keep\n");
   });
 
   it("removes the directory it created when a PNG write fails", async () => {

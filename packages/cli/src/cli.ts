@@ -17,8 +17,8 @@
  * | 3 | 操作失敗 (E_USAGE / E_IO / E_INTERNAL / 取得不能な font など) |
  */
 
-import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, extname, join, resolve } from "node:path";
+import { lstat, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   type CanvasGeometry,
@@ -781,16 +781,19 @@ async function runSnapshot(
     writeError("E_OUTPUT_EXISTS", `出力先は既に存在します: ${output}`, parsed.json);
     return 3;
   }
+  let filesystemOutput: string;
   try {
-    const parent = await lstat(dirname(output));
-    if (!parent.isDirectory() || parent.isSymbolicLink())
-      throw new Error("出力先の親は通常のディレクトリである必要があります");
+    const parent = await realpath(dirname(output));
+    const parentInfo = await stat(parent);
+    if (!parentInfo.isDirectory()) throw new Error("出力先の親はディレクトリである必要があります");
+    filesystemOutput = join(parent, basename(output));
   } catch (error) {
     writeError("E_IO", `出力先を作成できません: ${errorMessage(error)}`, parsed.json);
     return 3;
   }
-  // Only a successful mkdir makes this process the owner of `output`, and only an owner may
-  // remove it on failure.
+  // Only a successful mkdir makes this process the owner of `filesystemOutput`, and only an owner
+  // may remove it on failure. Its parent is canonicalized above so a retargeted symlink cannot
+  // redirect writes or cleanup after the reservation.
   let reserved = false;
   try {
     const compiler =
@@ -818,7 +821,7 @@ async function runSnapshot(
     // mkdir is atomic and never replaces an existing directory, so it doubles as the publication
     // reservation: a concurrent creator wins and we leave their entry untouched.
     try {
-      await mkdir(output);
+      await mkdir(filesystemOutput);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST")
         throw Object.assign(new Error(`出力先は既に存在します: ${output}`), {
@@ -832,13 +835,13 @@ async function runSnapshot(
     // The completion marker exists for the whole write. Its removal is what publishes the
     // directory, so a reader that sees it must treat the directory as unfinished.
     await writeFile(
-      join(output, INCOMPLETE_MARKER),
+      join(filesystemOutput, INCOMPLETE_MARKER),
       "deck snapshot はこのディレクトリへの書き込み中です。完了時にこのファイルは削除されます。\n",
       { flag: "wx" },
     );
     for (const item of outputs)
-      await writeFile(join(output, item.file), item.image.png, { flag: "wx" });
-    await rm(join(output, INCOMPLETE_MARKER));
+      await writeFile(join(filesystemOutput, item.file), item.image.png, { flag: "wx" });
+    await rm(join(filesystemOutput, INCOMPLETE_MARKER));
     if (parsed.json)
       process.stdout.write(
         `${JSON.stringify(
@@ -871,7 +874,7 @@ async function runSnapshot(
   } catch (error) {
     if (reserved)
       try {
-        await rm(output, { recursive: true, force: true });
+        await rm(filesystemOutput, { recursive: true, force: true });
       } catch {
         // Cleanup must not mask the failure that triggered it. The reserved directory stays
         // behind with its marker, and the original E_* classification below still reaches stderr.
