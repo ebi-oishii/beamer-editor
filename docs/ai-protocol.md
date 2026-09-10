@@ -22,7 +22,7 @@
 5. deck lint <file>             エラー 0 になるまで修正
 6. deck check <file>            内容量・レイアウトを変えた場合は実コンパイル検証
    (Overfull 警告・コンパイルエラーがフレームアドレス付きで返る)
-7. deck snapshot --frame <addr> 見た目に確信が持てないときは画像で目視(vision)
+7. deck snapshot <file> -o <new-directory> --frame <addr> 見た目に確信が持てないときは画像で目視(vision)
 8. 報告                          変更フレームのアドレス + 一行説明 + lint/check 結果
 ```
 
@@ -50,11 +50,13 @@
 | `deck lint <file>` | 語彙・規則の検証(L001〜) | ソース位置付き指摘(text / `--json`) |
 | `deck format <file> --write` | 正規形化 | 差分の有無 |
 | `deck check <file> [--tectonic <path>] [--json]` | 実コンパイルによる検証 | lint、Overfull、キャンバスのはみ出し・重なりをフレームアドレスに割り付けて報告。入力・出力は変更しない |
-| `deck snapshot <file> --frame <addr> -o <png>` | フレームの見た目の自己確認 | 実コンパイル画像 |
+| `deck snapshot <file> -o <directory> [--frame <N\|LABEL\|label:LABEL>]` | フレームの見た目の自己確認 | 実コンパイル PNG。出力先は新規ディレクトリ |
 | `deck export <file> -o <pdf>` | 最終出力 | PDF |
 | `deck init` | 新規デッキプロジェクトの雛形生成(スキル同梱。§8) | 生成ファイル一覧 |
 
 `deck check` はキャンバスフレーム([subset-spec.md](subset-spec.md) §2.8)について、savepos 実測による本文領域外へのはみ出し・オブジェクト重なりの検出も報告する(絶対配置は Overfull 警告が出ないため)。
+
+`snapshot` の出力先は新規ディレクトリのみを受け付ける。既存のパス(ディレクトリ・通常ファイル・壊れたシンボリックリンクを含む)は `E_OUTPUT_EXISTS` で拒否し、その中身には一切触れない。書き込み中の出力ディレクトリには `.deck-snapshot-incomplete` が置かれ、全 PNG を書き終えた時点で削除される(このファイルが残っているディレクトリは未完成として扱う)。失敗した場合は自分が作成した出力ディレクトリだけを削除するので、既存のディレクトリが消えることはない。
 
 `check` と `snapshot` は tectonic を使うため数秒かかるが、エージェントの検証は対話的操作ではないので許容する(人間のプレビューは常に即時の HTML 側)。`check` は診断なし（または情報のみ）を 0、警告を 1、lint エラーを 2、Tectonic・入出力・使用法などの操作失敗を 3 で終了する。`--json` の操作失敗は stderr に出る。
 
@@ -176,7 +178,7 @@ references/subset-cheatsheet.md を参照。範囲外の LaTeX も書けるが�
 2. 編集する
 3. `deck format <file> --write` → `deck lint <file>` をエラー 0 まで
 4. 内容量やレイアウトを変えたら `deck check <file>`(溢れ検出)
-5. 見た目に確信がなければ `deck snapshot --frame <addr>` で画像確認
+5. 見た目に確信がなければ `deck snapshot <file> -o <new-directory> --frame <addr>` で画像確認
 6. 変更フレームのアドレス + 一行説明 + lint/check 結果を報告
 
 ## 規約
