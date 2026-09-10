@@ -39,6 +39,8 @@ else console.log("universal: Tectonic は同梱しない(PATH の tectonic を�
 
 const args = ["package", "--no-dependencies", "-o", out];
 if (target !== "universal") args.push("--target", target);
-execFileSync("vsce", args, { cwd: root, stdio: "inherit", shell: process.platform === "win32" });
-if (!existsSync(join(root, out))) throw new Error(`${out} が作られていない`);
+// .cmd シムやシェルを介さず、Windows でも空白・特殊文字を含む引数をそのまま渡す。
+const vsce = fileURLToPath(import.meta.resolve("@vscode/vsce/vsce"));
+execFileSync(process.execPath, [vsce, ...args], { cwd: root, stdio: "inherit" });
+if (!existsSync(resolve(root, out))) throw new Error(`${out} が作られていない`);
 console.log(`${out} (${target})`);

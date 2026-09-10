@@ -5,18 +5,18 @@
  *
  * 版・対象・アーカイブ名・sha256 は tectonic.json に固定してある。アーカイブは .tectonic-cache/ に置いて
  * 再利用し、sha256 が合わなければ失敗する。対象を省くと今の環境(process.platform / arch)向け。
- * 展開には tar(.tar.gz)と unzip(.zip)を使う。
+ * 展開には tar(.tar.gz)と unzip(.zip)を使う。Windows の ZIP は標準の tar で展開する。
  */
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -79,15 +79,18 @@ export async function fetchTectonic(target, outDir = join(root, "bin"), manifest
   }
   const work = mkdtempSync(join(tmpdir(), "beamer-editor-tectonic-"));
   try {
-    if (entry.asset.endsWith(".zip"))
-      execFileSync("unzip", ["-oq", archive, entry.binary, "-d", work]);
-    else execFileSync("tar", ["-xzf", archive, "-C", work, entry.binary]);
+    if (entry.asset.endsWith(".zip")) {
+      if (process.platform === "win32")
+        execFileSync("tar", ["-xf", archive, "-C", work, entry.binary]);
+      else execFileSync("unzip", ["-oq", archive, entry.binary, "-d", work]);
+    } else execFileSync("tar", ["-xzf", archive, "-C", work, entry.binary]);
     const extracted = join(work, entry.binary);
     if (!existsSync(extracted)) throw new Error(`${entry.asset} に ${entry.binary} が無い`);
     mkdirSync(outDir, { recursive: true });
     const destination = join(outDir, entry.binary);
     rmSync(destination, { force: true });
-    renameSync(extracted, destination);
+    // OS の一時ディレクトリと出力先が別ファイルシステムでも配置できるようコピーする。
+    copyFileSync(extracted, destination);
     if (!entry.binary.endsWith(".exe")) chmodSync(destination, 0o755);
     return destination;
   } finally {
