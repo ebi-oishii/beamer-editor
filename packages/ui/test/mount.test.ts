@@ -1288,6 +1288,131 @@ describe("mountPreview", () => {
     expect(detachToCanvas).not.toHaveBeenCalled();
   });
 
+  it("部分コンパイル画像が届くと、その key の箱の中身が画像になる(#81)", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    let deliver:
+      | ((key: string, result: { pdfBase64: string } | { error: string }) => void)
+      | undefined;
+    const host = {
+      ...fakeHost(),
+      onRawBlockImage(listener: typeof deliver) {
+        deliver = listener;
+        return () => {};
+      },
+      rasterizePdf: async () => ({
+        dataUrl: "data:image/png;base64,BBBB",
+        width: 200,
+        height: 100,
+      }),
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    const deck: RenderedDeck = {
+      ...DECK,
+      frames: [
+        {
+          ...(DECK.frames[0] as RenderedDeck["frames"][number]),
+          html: '<div class="slide"><div class="slide-body"><div class="raw-block placeholder" data-raw-key="abc" style="width:60.0%;aspect-ratio:4 / 3" title="src"><span class="placeholder-label">tikzpicture</span></div></div></div>',
+        },
+      ],
+    };
+    act(() => {
+      host.push(deck);
+    });
+    expect(container.querySelector("[data-raw-key] img")).toBeNull();
+    act(() => {
+      deliver?.("abc", { pdfBase64: btoa("%PDF") });
+    });
+    await vi.waitFor(() => {
+      expect(container.querySelector("[data-raw-key] img")?.getAttribute("src")).toBe(
+        "data:image/png;base64,BBBB",
+      );
+    });
+    expect(container.querySelector<HTMLElement>("[data-raw-key]")?.style.aspectRatio).toBe(
+      "200 / 100",
+    );
+    // deck が更新されて HTML が作り直されても、同じ key の箱は再びはめ込まれる。
+    act(() => {
+      host.push({ ...deck, title: "again" }, 2);
+    });
+    await vi.waitFor(() => {
+      expect(container.querySelector("[data-raw-key] img")).not.toBeNull();
+    });
+  });
+
+  it("部分コンパイル画像の破棄でプレースホルダへ戻り、deck に無い key の画像は捨てる", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    let deliver:
+      | ((key: string, result: { pdfBase64: string } | { error: string }) => void)
+      | undefined;
+    let clearImages: (() => void) | undefined;
+    const host = {
+      ...fakeHost(),
+      onRawBlockImage(listener: typeof deliver) {
+        deliver = listener;
+        return () => {};
+      },
+      onRawImagesCleared(listener: () => void) {
+        clearImages = listener;
+        return () => {};
+      },
+      rasterizePdf: async () => ({
+        dataUrl: "data:image/png;base64,BBBB",
+        width: 200,
+        height: 100,
+      }),
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    const box = (key: string) =>
+      `<div class="raw-block placeholder" data-raw-key="${key}" style="width:60.0%;aspect-ratio:4 / 3" title="src"><span class="placeholder-label">tikzpicture</span></div>`;
+    const deckOf = (keys: string[], version: number): [RenderedDeck, number] => [
+      {
+        ...DECK,
+        rawBlocks: keys.map((key) => ({
+          key,
+          tex: "\\begin{tikzpicture}",
+          environment: "tikzpicture",
+        })),
+        frames: [
+          {
+            ...(DECK.frames[0] as RenderedDeck["frames"][number]),
+            html: `<div class="slide"><div class="slide-body">${keys.map(box).join("")}</div></div>`,
+          },
+        ],
+      },
+      version,
+    ];
+    act(() => {
+      host.push(...deckOf(["keep", "drop"], 1));
+    });
+    act(() => {
+      deliver?.("keep", { pdfBase64: btoa("%PDF") });
+      deliver?.("drop", { pdfBase64: btoa("%PDF") });
+    });
+    await vi.waitFor(() => {
+      expect(container.querySelectorAll("[data-raw-key] img")).toHaveLength(2);
+    });
+    act(() => {
+      host.push(...deckOf(["keep"], 2));
+    });
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-raw-key="keep"] img')).not.toBeNull();
+    });
+    expect(container.querySelector('[data-raw-key="drop"]')).toBeNull();
+    act(() => {
+      clearImages?.();
+    });
+    await vi.waitFor(() => {
+      expect(container.querySelector("[data-raw-key] img")).toBeNull();
+    });
+    expect(container.querySelector(".placeholder-label")?.textContent).toBe("tikzpicture");
+  });
+
   it("プレビュー内の Cmd/Ctrl+Z はホストの undoRedo へ送り、Shift や Ctrl+Y はやり直しにする", () => {
     const container = document.createElement("div");
     document.body.append(container);
