@@ -14,7 +14,8 @@
  * - reset() は実行中のコンパイルも中止し、reset 前に始まった処理の結果(成功・失敗・キャッシュ読み)は
  *   世代で見分けて捨てる。届け済みの記録(done)も消すので、設定を戻したときや Webview 再生成時に
  *   キャッシュから送り直せる。新しい設定でのジョブを古い結果で潰さない
- * - forgetDelivered() は done だけ消す。実行中は止めない。Webview が作り直されたときにキャッシュから再送する
+ * - forgetDelivered() は done / failed の配信記録を消す。実行中は止めない。Webview が作り直されたときに
+ *   成功はキャッシュから再送し、失敗は再コンパイルして通知する
  */
 
 import type { RawBlockRef } from "@beamer-editor/renderer";
@@ -49,6 +50,9 @@ interface Job {
   key: string;
   tex: string;
   preamble: string;
+  /** 一度 cancel されたジョブは、同じ key が再度 wanted になっても復活させない。 */
+  cancelled: boolean;
+  controller: AbortController | undefined;
 }
 
 export class RawBlockCompiler {
@@ -57,20 +61,17 @@ export class RawBlockCompiler {
   /** 直近の描画に含まれている key。含まれないジョブは待ち行列から落とし、結果も届けない。 */
   private readonly wanted = new Set<string>();
   /** 画像を届け終えたキャッシュ名(key + 依存の指紋)。 */
-  private readonly done = new Set<string>();
+  private readonly done = new Map<string, string>();
   /** 失敗したキャッシュ名。 */
-  private readonly failed = new Set<string>();
+  private readonly failed = new Map<string, string>();
   private running = false;
   private disposed = false;
   /** エンジンが使えないと分かった後は、reset() まで何もしない。 */
   private unavailable = false;
   /** reset() ごとに進む世代。処理の途中で変わっていたら、その処理の結果は捨てる。 */
   private generation = 0;
-  private controller: AbortController | undefined;
-  /** 今 process しているジョブの key。同じ世代の同じ key を待ち行列に二重に入れない。 */
-  private currentKey: string | undefined;
-  /** currentKey が属している世代。reset 後は同じ key でも新しいジョブを入れる。 */
-  private currentGeneration: number | undefined;
+  /** 今 process しているジョブ。同じ世代の未キャンセル job とだけ重複を抑止する。 */
+  private current: Job | undefined;
 
   constructor(private readonly options: RawBlockCompilerOptions) {}
 
@@ -79,19 +80,28 @@ export class RawBlockCompiler {
     if (this.disposed || this.unavailable) return;
     this.wanted.clear();
     for (const block of blocks) this.wanted.add(block.key);
+    for (const [cacheName, key] of this.done)
+      if (!this.wanted.has(key)) this.done.delete(cacheName);
+    for (const [cacheName, key] of this.failed)
+      if (!this.wanted.has(key)) this.failed.delete(cacheName);
     for (let i = this.queue.length - 1; i >= 0; i--) {
       const job = this.queue[i];
       if (job && this.wanted.has(job.key)) continue;
       if (job) this.queued.delete(job.key);
       this.queue.splice(i, 1);
     }
-    if (this.currentKey && !this.wanted.has(this.currentKey)) this.controller?.abort();
+    if (this.current && !this.wanted.has(this.current.key)) this.cancel(this.current);
     for (const block of blocks) {
-      const inFlightSameGeneration =
-        this.currentKey === block.key && this.currentGeneration === this.generation;
+      const inFlightSameGeneration = this.current?.key === block.key && !this.current.cancelled;
       if (this.queued.has(block.key) || inFlightSameGeneration) continue;
       this.queued.add(block.key);
-      this.queue.push({ key: block.key, tex: block.tex, preamble });
+      this.queue.push({
+        key: block.key,
+        tex: block.tex,
+        preamble,
+        cancelled: false,
+        controller: undefined,
+      });
     }
     void this.pump();
   }
@@ -102,11 +112,12 @@ export class RawBlockCompiler {
   }
 
   /**
-   * 届け済みの記録だけ消す。実行中のコンパイルは止めない。Webview が作り直されたときに呼び、
-   * 次の描画でキャッシュから画像を送り直す(パネル非表示中に捨てられた postMessage の穴埋め)。
+   * 成功・失敗の配信記録を消す。実行中のコンパイルは止めない。Webview が作り直されたときに呼び、
+   * 成功はキャッシュから画像を送り直し、失敗は再コンパイルして通知する。
    */
   forgetDelivered(): void {
     this.done.clear();
+    this.failed.clear();
   }
 
   /**
@@ -123,7 +134,7 @@ export class RawBlockCompiler {
     this.wanted.clear();
     this.queue.length = 0;
     this.queued.clear();
-    this.controller?.abort();
+    if (this.current) this.cancel(this.current);
   }
 
   dispose(): void {
@@ -131,7 +142,7 @@ export class RawBlockCompiler {
     this.queue.length = 0;
     this.queued.clear();
     this.wanted.clear();
-    this.controller?.abort();
+    if (this.current) this.cancel(this.current);
   }
 
   private async pump(): Promise<void> {
@@ -152,10 +163,10 @@ export class RawBlockCompiler {
   private async process(job: Job): Promise<void> {
     const { fs, cacheDir } = this.options;
     const generation = this.generation;
-    this.currentKey = job.key;
-    this.currentGeneration = generation;
+    this.current = job;
     /** dispose / reset されたか、最新の描画にこの key がもう無い。 */
-    const drop = () => this.disposed || generation !== this.generation || !this.wanted.has(job.key);
+    const drop = () =>
+      job.cancelled || this.disposed || generation !== this.generation || !this.wanted.has(job.key);
     try {
       let fingerprint = "";
       try {
@@ -171,7 +182,7 @@ export class RawBlockCompiler {
         if (await fs.exists(cachePath)) {
           const pdf = await fs.readFile(cachePath);
           if (drop()) return;
-          this.done.add(cacheName);
+          this.done.set(cacheName, job.key);
           this.options.onReady(job.key, pdf);
           return;
         }
@@ -181,14 +192,13 @@ export class RawBlockCompiler {
       // exists / readFile の待ちのあいだに reset / 間引きが走ると controller がまだ無い。
       // その直後に tectonic を起動しないよう、AbortController を作る直前にもう一度見る。
       if (drop()) return;
-      this.controller = new AbortController();
+      job.controller = new AbortController();
       try {
         const pdf = await this.options.compile(
           this.options.buildDocument(job.tex, job.preamble),
-          this.controller.signal,
+          job.controller.signal,
         );
         if (drop()) return;
-        this.done.add(cacheName);
         try {
           await fs.mkdir(cacheDir);
           const temporary = `${cachePath}.${Math.random().toString(36).slice(2)}.tmp`;
@@ -197,6 +207,8 @@ export class RawBlockCompiler {
         } catch {
           // キャッシュに書けなくても画像は出す。
         }
+        if (drop()) return;
+        this.done.set(cacheName, job.key);
         this.options.onReady(job.key, pdf);
       } catch (error) {
         if (drop()) return;
@@ -209,15 +221,19 @@ export class RawBlockCompiler {
           this.options.onUnavailable?.(message);
           return;
         }
-        this.failed.add(cacheName);
+        this.failed.set(cacheName, job.key);
         this.options.onFailed(job.key, message);
       } finally {
-        this.controller = undefined;
+        job.controller = undefined;
       }
     } finally {
-      this.currentKey = undefined;
-      this.currentGeneration = undefined;
+      if (this.current === job) this.current = undefined;
     }
+  }
+
+  private cancel(job: Job): void {
+    job.cancelled = true;
+    job.controller?.abort();
   }
 }
 

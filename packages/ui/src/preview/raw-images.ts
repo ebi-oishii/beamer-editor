@@ -24,8 +24,8 @@ export function decodeBase64(text: string): Uint8Array {
 export class RawImageStore {
   private readonly states = new Map<string, RawImageState>();
   private readonly listeners = new Set<() => void>();
-  /** key ごとの受信世代。依存の更新や再試行で同じ key に複数の PDF が届くので、最新の結果だけを反映する。 */
-  private readonly generations = new Map<string, number>();
+  /** key ごとの受信トークン。削除後の同じ key への再受信でも古い非同期結果を無効にする。 */
+  private readonly generations = new Map<string, object>();
 
   constructor(
     private readonly rasterize: ((pdf: Uint8Array) => Promise<RasterImage>) | undefined,
@@ -61,7 +61,7 @@ export class RawImageStore {
 
   /** ホストからの結果を受け取る。PDF はラスタライズが終わってから ready になる。 */
   receive(key: string, result: RawBlockImageResult): void {
-    const generation = (this.generations.get(key) ?? 0) + 1;
+    const generation = {};
     this.generations.set(key, generation);
     const latest = () => this.generations.get(key) === generation;
     if ("error" in result) {

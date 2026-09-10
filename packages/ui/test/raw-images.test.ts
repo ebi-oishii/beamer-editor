@@ -100,6 +100,42 @@ describe("RawImageStore / applyRawImages", () => {
     expect(failing.get("k")?.status).toBe("ready");
   });
 
+  it("retain または clear 後に同じ key を受信すると、古い pending の完了を無効にする", async () => {
+    const pending = new Map<
+      string,
+      (image: { dataUrl: string; width: number; height: number }) => void
+    >();
+    const store = new RawImageStore(
+      (pdf) =>
+        new Promise((resolve) => {
+          pending.set(new TextDecoder().decode(pdf), resolve);
+        }),
+    );
+    store.receive("k", { pdfBase64: btoa("retain-old") });
+    store.retain(new Set());
+    store.receive("k", { pdfBase64: btoa("retain-new") });
+    pending.get("retain-new")?.({ dataUrl: "data:retain-new", width: 2, height: 2 });
+    await vi.waitFor(() => expect(store.get("k")?.status).toBe("ready"));
+    pending.get("retain-old")?.({ dataUrl: "data:retain-old", width: 1, height: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.get("k")).toEqual({
+      status: "ready",
+      image: { dataUrl: "data:retain-new", width: 2, height: 2 },
+    });
+
+    store.receive("k", { pdfBase64: btoa("clear-old") });
+    store.clear();
+    store.receive("k", { pdfBase64: btoa("clear-new") });
+    pending.get("clear-new")?.({ dataUrl: "data:clear-new", width: 4, height: 4 });
+    await vi.waitFor(() => expect(store.get("k")?.status).toBe("ready"));
+    pending.get("clear-old")?.({ dataUrl: "data:clear-old", width: 3, height: 3 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.get("k")).toEqual({
+      status: "ready",
+      image: { dataUrl: "data:clear-new", width: 4, height: 4 },
+    });
+  });
+
   it("上限を超える PDF は復号もラスタライズもせずに失敗にする", () => {
     const rasterize = vi.fn();
     const store = new RawImageStore(rasterize);
