@@ -982,7 +982,10 @@ class Parser {
         }
         const contentStart = optClose === null ? optOpen : optClose + 1;
         const children = this.parseBlocks(contentStart, envEnd).map((b) =>
-          b.type === "paragraph" || b.type === "list" || b.type === "rawBlock"
+          b.type === "paragraph" ||
+          b.type === "displayMath" ||
+          b.type === "list" ||
+          b.type === "rawBlock"
             ? b
             : this.rawBlock(b.span.start, b.span.end, null, "canvas-unsupported-content"),
         );
