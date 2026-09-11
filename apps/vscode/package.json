@@ -42,6 +42,36 @@
         "command": "beamerEditor.export",
         "title": "Beamer Editor: Export...",
         "icon": "$(export)"
+      },
+      {
+        "command": "beamerEditor.slides.moveUp",
+        "title": "Beamer Editor: Move Slide Up",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "beamerEditor.slides.moveDown",
+        "title": "Beamer Editor: Move Slide Down",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "beamerEditor.slides.duplicate",
+        "title": "Beamer Editor: Duplicate Slide",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "beamerEditor.slides.delete",
+        "title": "Beamer Editor: Delete Slide",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "beamerEditor.slides.insert",
+        "title": "Beamer Editor: Insert New Slide",
+        "icon": "$(add)"
+      },
+      {
+        "command": "beamerEditor.slides.append",
+        "title": "Beamer Editor: Add Slide at End",
+        "icon": "$(add)"
       }
     ],
     "configuration": {
@@ -127,12 +157,70 @@
         {
           "command": "beamerEditor.export",
           "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "beamerEditor.slides.moveUp",
+          "when": "beamerEditor.hasSlideOutlineDocument"
+        },
+        {
+          "command": "beamerEditor.slides.moveDown",
+          "when": "beamerEditor.hasSlideOutlineDocument"
+        },
+        {
+          "command": "beamerEditor.slides.duplicate",
+          "when": "beamerEditor.hasSlideOutlineDocument"
+        },
+        {
+          "command": "beamerEditor.slides.delete",
+          "when": "beamerEditor.hasSlideOutlineDocument"
+        },
+        {
+          "command": "beamerEditor.slides.insert",
+          "when": "beamerEditor.hasSlideOutlineDocument"
+        },
+        {
+          "command": "beamerEditor.slides.append",
+          "when": "beamerEditor.hasSlideOutlineDocument"
         }
       ],
       "webview/title": [
         {
           "command": "beamerEditor.export",
           "when": "webviewId == beamerEditor.preview && isWorkspaceTrusted",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "beamerEditor.slides.moveUp",
+          "when": "view == beamerEditor.slides && viewItem == beamerSlide",
+          "group": "slides@1"
+        },
+        {
+          "command": "beamerEditor.slides.moveDown",
+          "when": "view == beamerEditor.slides && viewItem == beamerSlide",
+          "group": "slides@2"
+        },
+        {
+          "command": "beamerEditor.slides.duplicate",
+          "when": "view == beamerEditor.slides && viewItem == beamerSlide",
+          "group": "slides@3"
+        },
+        {
+          "command": "beamerEditor.slides.delete",
+          "when": "view == beamerEditor.slides && viewItem == beamerSlide",
+          "group": "slides@4"
+        },
+        {
+          "command": "beamerEditor.slides.insert",
+          "when": "view == beamerEditor.slides && viewItem == beamerSlide",
+          "group": "slides@5"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "beamerEditor.slides.append",
+          "when": "view == beamerEditor.slides && beamerEditor.hasSlideOutlineDocument",
           "group": "navigation"
         }
       ]
