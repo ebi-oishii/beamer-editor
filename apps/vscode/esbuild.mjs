@@ -36,8 +36,22 @@ const webviewOptions = {
   assetNames: "[name]",
 };
 
+// pdf.js の worker(部分コンパイル画像のラスタライズ。#81)。Webview から別ファイルとして読むので media へ出す。
+const pdfWorkerOptions = {
+  bundle: true,
+  entryPoints: ["node_modules/pdfjs-dist/build/pdf.worker.min.mjs"],
+  format: "esm",
+  outfile: "media/pdf.worker.mjs",
+  platform: "browser",
+  target: "es2022",
+};
+
 async function build() {
-  await Promise.all([esbuild.build(extensionOptions), esbuild.build(webviewOptions)]);
+  await Promise.all([
+    esbuild.build(extensionOptions),
+    esbuild.build(webviewOptions),
+    esbuild.build(pdfWorkerOptions),
+  ]);
   const katexDist = dirname(require.resolve("katex/dist/katex.min.css"));
   const katexTarget = "media/html-export/katex";
   await rm(katexTarget, { recursive: true, force: true });

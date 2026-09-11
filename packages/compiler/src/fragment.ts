@@ -1,0 +1,123 @@
+/**
+ * 生ブロックを standalone 文書として組み立てる(#81)。TeX 文字列の生成だけで、プロセスは起動しない。
+ */
+
+/** beamer 専用で standalone では未定義になる前置き(テーマ・色・テンプレート・ロゴ)。行単位で落とす。 */
+const BEAMER_ONLY_LINE =
+  /^\s*\\(usetheme|usecolortheme|usefonttheme|useinnertheme|useoutertheme|setbeamercolor\*?|setbeamerfont\*?|setbeamertemplate|setbeamercovered|setbeamersize|logo|usebackgroundtemplate|titlegraphic|institute|beamertemplatenavigationsymbolsempty)\b/;
+
+/** `\usepackage{templates/corporate/beamerthemecorporate}` のようなテーマ .sty のファイル名。 */
+const BEAMER_THEME_STY = /^beamer(?:color|font|inner|outer)?theme/i;
+const USE_PACKAGE_LINE =
+  /^(\s*\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{)([^}]*)(\}.*)$/;
+
+function isBeamerThemePackage(name: string): boolean {
+  const base = name.replaceAll("\\", "/").split("/").pop() ?? name;
+  return BEAMER_THEME_STY.test(base);
+}
+
+/**
+ * standalone では未定義になる beamer 専用の行と、テーマ .sty の `\\usepackage` を除く。
+ * 同じ行に tikz などが混ざっていれば、テーマだけ落として残す。
+ */
+function keepPreambleLine(line: string): string | null {
+  if (BEAMER_ONLY_LINE.test(line)) return null;
+  const match = line.match(USE_PACKAGE_LINE);
+  if (!match) return line;
+  const original = (match[2] ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name !== "");
+  const kept = original.filter((name) => !isBeamerThemePackage(name));
+  if (kept.length === 0) return null;
+  if (kept.length === original.length) return line;
+  return `${match[1]}${kept.join(",")}${match[3]}`;
+}
+
+/**
+ * standalone(preview)の文書。beamer が暗黙に読み込むパッケージのうち生ブロックが頼りがちなもの
+ * (amsmath / amssymb / graphicx / xcolor)と、beamer 既定のサンセリフ本文を前置し、
+ * その後に preamble-extra とマクロ定義(beamer 専用の行は除く)、最後に生ブロック本文を置く。
+ */
+export function buildFragmentDocument(body: string, preamble: string): string {
+  const kept = preamble
+    .split(/\r?\n/)
+    .map(keepPreambleLine)
+    .filter((line): line is string => line !== null)
+    .join("\n")
+    .trim();
+  return [
+    "\\documentclass[preview,border=2pt]{standalone}",
+    "\\usepackage{amsmath,amssymb,graphicx,xcolor}",
+    "\\renewcommand{\\familydefault}{\\sfdefault}",
+    kept,
+    "\\begin{document}",
+    body.trim(),
+    "\\end{document}",
+    "",
+  ]
+    .filter((line, index, all) => line !== "" || index === all.length - 1)
+    .join("\n");
+}
+
+/**
+ * standalone 文書の組み立て方の版。buildFragmentDocument の前置きを変えたら上げる。
+ * 画像キャッシュの置き場に入り、古い組み立て方で作った PDF を使い続けない。
+ */
+export const FRAGMENT_DOCUMENT_VERSION = 2;
+
+const FILE_ARGUMENT =
+  /\\(?:includegraphics|includepdf|includesvg|includestandalone|input|include|InputIfFileExists|lstinputlisting|verbatiminput|pgfplotstableread)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;
+const PLOT_TABLE = /\\addplot\s*(?:\[[^\]]*\])?\s*table\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;
+const PACKAGES = /\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;
+
+/**
+ * 生ブロック(と前置き)が参照する外部ファイルの候補(原文のまま、出現順、重複なし)。
+ * 画像・入力ファイル・データ表・ローカルの .sty を拾う。実在するか・拡張子の補完は呼び出し側が決める。
+ * コメントの中は見ない。中身がファイル名に見えないもの(改行や `\\` を含む、`\\addplot table {…}` の
+ * インラインデータなど)は拾わない。
+ */
+/** 行コメント(`\\%` は残す)を除く。 */
+function withoutComments(tex: string): string {
+  return tex.replace(/(^|[^\\])%[^\n]*/g, "$1");
+}
+
+const GRAPHICS_PATH = /\\graphicspath\s*\{((?:\s*\{[^{}]*\}\s*)+)\}/g;
+
+/**
+ * `\\graphicspath{{images/}{figs/}}` の探索ディレクトリ(出現順、重複なし)。`\\includegraphics{foo}` の
+ * 実体はこの下にもあり得るので、依存ファイルの指紋を取るときはここも探す。
+ */
+export function fragmentGraphicsPaths(tex: string): string[] {
+  const found = new Set<string>();
+  for (const match of withoutComments(tex).matchAll(GRAPHICS_PATH)) {
+    for (const entry of (match[1] ?? "").matchAll(/\{([^{}]*)\}/g)) {
+      const directory = (entry[1] ?? "").trim();
+      if (directory !== "" && !/[\\\n%]/.test(directory)) found.add(directory);
+    }
+  }
+  return [...found];
+}
+
+export function fragmentDependencies(tex: string): string[] {
+  const code = withoutComments(tex);
+  const hits: { index: number; name: string }[] = [];
+  const collect = (pattern: RegExp, expand: (value: string) => string[]) => {
+    for (const match of code.matchAll(pattern)) {
+      for (const name of expand(match[1] ?? "")) hits.push({ index: match.index ?? 0, name });
+    }
+  };
+  collect(FILE_ARGUMENT, (value) => [value.trim()]);
+  collect(PLOT_TABLE, (value) => [value.trim()]);
+  collect(PACKAGES, (value) =>
+    value
+      .split(",")
+      .map((name) => name.trim())
+      .filter((name) => name !== "")
+      .map((name) => `${name}.sty`),
+  );
+  hits.sort((a, b) => a.index - b.index);
+  const found = new Set<string>();
+  for (const { name } of hits) if (name !== "" && !/[\\\n%]/.test(name)) found.add(name);
+  return [...found];
+}
