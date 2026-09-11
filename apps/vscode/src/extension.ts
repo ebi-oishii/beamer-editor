@@ -184,69 +184,98 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       );
     },
   });
-  const exportOutput = vscode.window.createOutputChannel("Beamer Editor: PDF Export");
+  const exportOutput = vscode.window.createOutputChannel("Beamer Editor: Export");
   context.subscriptions.push(lineFlash, foldingRangesChanged, exportOutput);
 
-  const exportController = new ExportController({
-    get isWorkspaceTrusted() {
-      return vscode.workspace.isTrusted;
+  const exportController = new ExportController(
+    {
+      get isWorkspaceTrusted() {
+        return vscode.workspace.isTrusted;
+      },
+      chooseFormat: async () => {
+        const selection = await vscode.window.showQuickPick(["PDF", "HTML（プレビュー相当）"], {
+          title: "Beamer Editor: Export",
+        });
+        return selection === "PDF"
+          ? "pdf"
+          : selection === "HTML（プレビュー相当）"
+            ? "html"
+            : undefined;
+      },
+      chooseOutput: (defaultUri, format) =>
+        format === "html"
+          ? vscode.window
+              .showOpenDialog({
+                defaultUri: vscode.Uri.file(path.dirname(defaultUri.fsPath)),
+                canSelectFiles: false,
+                canSelectFolders: true,
+                canSelectMany: false,
+                title: "HTML 出力先の親フォルダーを選択",
+              })
+              .then((uris) =>
+                uris?.[0]
+                  ? (vscode.Uri.joinPath(uris[0], path.basename(defaultUri.fsPath)) as ExportUri)
+                  : undefined,
+              )
+          : (vscode.window.showSaveDialog({
+              defaultUri: defaultUri as vscode.Uri,
+              filters: { PDF: ["pdf"] },
+              title: "Export PDF",
+            }) as Thenable<ExportUri | undefined>),
+      outputExists: async (uri) => {
+        try {
+          await vscode.workspace.fs.stat(uri as vscode.Uri);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      withProgress: (task) =>
+        vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: "Beamer Editor: 書き出し中",
+            cancellable: true,
+          },
+          (_progress, token) => task(token),
+        ),
+      showInformation: (message, ...actions) =>
+        vscode.window.showInformationMessage(message, ...actions),
+      showError: (message, ...actions) => vscode.window.showErrorMessage(message, ...actions),
+      showWarning: (message) => vscode.window.showWarningMessage(message),
+      openPdf: (uri) => vscode.env.openExternal(uri as vscode.Uri),
+      openHtml: (uri) => vscode.env.openExternal(uri as vscode.Uri),
+      revealInFileManager: (uri) =>
+        vscode.commands.executeCommand("revealFileInOS", uri as vscode.Uri),
+      openTectonicSettings: () =>
+        vscode.commands.executeCommand(
+          "workbench.action.openSettings",
+          "beamerEditor.tectonicPath",
+        ),
+      showExportDetails: (detail) => {
+        exportOutput.clear();
+        exportOutput.appendLine(detail);
+        exportOutput.show(true);
+      },
+      uriForFile: (path) => vscode.Uri.file(path) as ExportUri,
+      tectonicPath: (document) => {
+        const value = vscode.workspace
+          .getConfiguration("beamerEditor", document.uri as vscode.Uri)
+          .get<unknown>("tectonicPath");
+        return normalizeTectonicPath(value);
+      },
+      timeoutMs: (document) => {
+        const seconds = vscode.workspace
+          .getConfiguration("beamerEditor", document.uri as vscode.Uri)
+          .get<number>("pdfExport.timeoutSeconds", 300);
+        const normalized = Number.isFinite(seconds) ? Math.trunc(seconds) : 300;
+        return Math.max(5, Math.min(1800, normalized)) * 1000;
+      },
     },
-    chooseFormat: async () =>
-      (await vscode.window.showQuickPick(["PDF"], { title: "Beamer Editor: Export" })) === "PDF"
-        ? "pdf"
-        : undefined,
-    chooseOutput: (defaultUri) =>
-      vscode.window.showSaveDialog({
-        defaultUri: defaultUri as vscode.Uri,
-        filters: { PDF: ["pdf"] },
-        title: "Export PDF",
-      }) as Thenable<ExportUri | undefined>,
-    outputExists: async (uri) => {
-      try {
-        await vscode.workspace.fs.stat(uri as vscode.Uri);
-        return true;
-      } catch {
-        return false;
-      }
+    {
+      htmlKatexAssetsPath: path.join(context.extensionPath, "media", "html-export", "katex"),
     },
-    withProgress: (task) =>
-      vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: "Beamer Editor: PDFを書き出し中",
-          cancellable: true,
-        },
-        (_progress, token) => task(token),
-      ),
-    showInformation: (message, ...actions) =>
-      vscode.window.showInformationMessage(message, ...actions),
-    showError: (message, ...actions) => vscode.window.showErrorMessage(message, ...actions),
-    showWarning: (message) => vscode.window.showWarningMessage(message),
-    openPdf: (uri) => vscode.env.openExternal(uri as vscode.Uri),
-    revealInFileManager: (uri) =>
-      vscode.commands.executeCommand("revealFileInOS", uri as vscode.Uri),
-    openTectonicSettings: () =>
-      vscode.commands.executeCommand("workbench.action.openSettings", "beamerEditor.tectonicPath"),
-    showExportDetails: (detail) => {
-      exportOutput.clear();
-      exportOutput.appendLine(detail);
-      exportOutput.show(true);
-    },
-    uriForFile: (path) => vscode.Uri.file(path) as ExportUri,
-    tectonicPath: (document) => {
-      const value = vscode.workspace
-        .getConfiguration("beamerEditor", document.uri as vscode.Uri)
-        .get<unknown>("tectonicPath");
-      return normalizeTectonicPath(value);
-    },
-    timeoutMs: (document) => {
-      const seconds = vscode.workspace
-        .getConfiguration("beamerEditor", document.uri as vscode.Uri)
-        .get<number>("pdfExport.timeoutSeconds", 300);
-      const normalized = Number.isFinite(seconds) ? Math.trunc(seconds) : 300;
-      return Math.max(5, Math.min(1800, normalized)) * 1000;
-    },
-  });
+  );
   context.subscriptions.push(exportController);
 
   const slideOutlineState = new SlideOutlineState<vscode.TextDocument>();
