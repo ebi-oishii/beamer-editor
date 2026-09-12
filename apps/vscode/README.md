@@ -48,11 +48,13 @@ LaTeX Workshop が入っている環境で managed file を初めて開くと、
 
 ## 生ブロックの部分コンパイル
 
-TikZ などサブセット外のブロックは、プレビューではまず環境名だけの箱(プレースホルダ)で場所を確保し、裏で Tectonic により standalone 文書としてコンパイルして、できた画像を箱に差し込みます。結果は内容とプリアンブル(preamble-extra とマクロ定義)のハッシュでキャッシュされるので、変えていないブロックは再コンパイルされません。キャッシュはデッキのディレクトリごとに分かれ、ブロックが参照する画像や .sty(`\graphicspath` の下も含む)が更新されると作り直します。Tectonic が見つからないときは箱をそのまま残して通知を 1 回出し、「設定を開く」から `beamerEditor.tectonicPath` を直せばプレビューを開き直さずに再試行します。失敗したブロックは赤い枠の箱として残り、ホバーで Tectonic のエラーを確認できます(生成 PDF が 8 MB を超えるものや、極端に大きなページも箱のまま失敗扱いになります)。Tectonic の場所は `beamerEditor.tectonicPath`、無効にするには `beamerEditor.preview.compileRawBlocks` を false にします。Restricted Mode では動きません。
+TikZ などサブセット外のブロックは、プレビューではまず環境名だけの箱(プレースホルダ)で場所を確保し、裏で Tectonic により standalone 文書としてコンパイルして、できた画像を箱に差し込みます。結果は内容とプリアンブル(preamble-extra とマクロ定義)のハッシュでキャッシュされるので、変えていないブロックは再コンパイルされません。キャッシュはデッキのディレクトリごとに分かれ、ブロックが参照する画像や .sty(`\graphicspath` の下も含む)が更新されると作り直します。Tectonic が見つからないときは箱をそのまま残して通知を 1 回出し、「設定を開く」から `beamerEditor.tectonicPath` を直せばプレビューを開き直さずに再試行します。失敗したブロックは赤い枠の箱として残り、ホバーで Tectonic のエラーを確認できます(生成 PDF が 8 MB を超えるものや、極端に大きなページも箱のまま失敗扱いになります)。Tectonic は書き出しと同じく「`beamerEditor.tectonicPath` の設定 > 拡張に同梱したもの > PATH の `tectonic`」の順で決めるので、設定が空でも同梱の Tectonic で部分コンパイルできます。無効にするには `beamerEditor.preview.compileRawBlocks` を false にします。Restricted Mode では動きません。
 
 ## PDF 書き出し
 
 コマンドパレット、`.tex` エディター、または対応するプレビューのタイトルから **Beamer Editor: Export...** を実行すると、保存先を選んで PDF を書き出せます。コンパイルには [Tectonic](https://tectonic-typesetting.github.io/) を使います。Tectonic は拡張に同梱されているので(macOS arm64 / x86_64、Linux x64 / arm64、Windows x64)、別途インストールする必要はありません。初回のコンパイル時に TeX のパッケージを Tectonic が必要な分だけダウンロードします。対象外の環境や別の版を使いたいときは `beamerEditor.tectonicPath` で実行ファイルを指定してください(同梱の無い環境では PATH の `tectonic` を使います)。
+
+同梱している Tectonic は公式リリースのバイナリそのままで、MIT ライセンスです。ライセンス全文と、同梱した版・対象・取得元・sha256 は拡張ディレクトリの `bin/tectonic-LICENSE.txt` と `bin/tectonic-NOTICE.md` にあります。
 
 編集中の内容は先に保存され、コンパイルは既定で300秒後に停止します（`beamerEditor.pdfExport.timeoutSeconds` で5〜1800秒に変更可）。失敗時は通知の「詳細を表示」からTectonicのエラーを確認できます。既存PDFはコンパイルが成功するまで置換されません。外部プログラムを起動するため、Restricted Modeではコマンドとボタンが無効になります。
 

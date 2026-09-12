@@ -61,15 +61,21 @@ jobs:
         run: pnpm --dir apps/vscode exec vitest run test/packaging-scripts.test.ts
       # 絶対パス・空白を含む出力先を全ターゲットで使う。
       - run: pnpm --dir apps/vscode package -- --target ${{ matrix.target }} --out "${{ runner.temp }}/beamer-editor-${{ matrix.target }} build.vsix"
-      - name: 同梱した Tectonic が VSIX に入っていることを確かめる
+      - name: 同梱した Tectonic と再配布用の LICENSE / NOTICE が VSIX に入っていることを確かめる
         if: matrix.target != 'universal' && runner.os != 'Windows'
-        run: unzip -l "${{ runner.temp }}/beamer-editor-${{ matrix.target }} build.vsix" | grep -E 'extension/bin/tectonic(\.exe)?$'
-      - name: Windows の VSIX に Tectonic が入っていることを確かめる
+        run: |
+          entries=$(unzip -l "${{ runner.temp }}/beamer-editor-${{ matrix.target }} build.vsix")
+          for name in 'extension/bin/tectonic$' 'extension/bin/tectonic-LICENSE\.txt$' 'extension/bin/tectonic-NOTICE\.md$'; do
+            echo "$entries" | grep -E "$name" || { echo "$name が VSIX に無い"; exit 1; }
+          done
+      - name: Windows の VSIX に Tectonic と LICENSE / NOTICE が入っていることを確かめる
         if: runner.os == 'Windows'
         run: |
           $entries = tar -tf "${{ runner.temp }}/beamer-editor-${{ matrix.target }} build.vsix"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ($entries -notcontains 'extension/bin/tectonic.exe') { throw 'tectonic.exe が VSIX に無い' }
+          foreach ($name in 'extension/bin/tectonic.exe', 'extension/bin/tectonic-LICENSE.txt', 'extension/bin/tectonic-NOTICE.md') {
+            if ($entries -notcontains $name) { throw "$name が VSIX に無い" }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: beamer-editor-vsix-${{ matrix.target }}

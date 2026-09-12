@@ -89,9 +89,19 @@ fs.writeFileSync(args[args.indexOf("-o") + 1], JSON.stringify(args));
       writeFileSync(join(work, binary), contents);
       execFileSync("tar", ["-czf", archive, "-C", work, binary]);
     }
+    // 上流の LICENSE も同梱物として配る。取得はキャッシュ済みとして扱い、ネットワークには出ない。
+    const licenseText = "MIT License (fixture)\n";
+    writeFileSync(join(cache, "tectonic-LICENSE.txt"), licenseText);
     writeFileSync(
       join(extension, "tectonic.json"),
       JSON.stringify({
+        version: "9.9.9",
+        releaseUrl: "https://example.invalid/{version}/{asset}",
+        license: {
+          sourceUrl: "https://example.invalid/{version}/LICENSE",
+          sha256: createHash("sha256").update(licenseText).digest("hex"),
+          file: "tectonic-LICENSE.txt",
+        },
         targets: {
           fixture: {
             asset,
@@ -125,6 +135,12 @@ require("node:module").syncBuiltinESMExports();
       { cwd: work },
     );
     expect(readFileSync(join(out, binary), "utf8")).toBe(contents);
+    // 再配布に必要な LICENSE と、何をどこから同梱したかの NOTICE がバイナリと一緒に置かれる。
+    expect(readFileSync(join(out, "tectonic-LICENSE.txt"), "utf8")).toBe(licenseText);
+    const notice = readFileSync(join(out, "tectonic-NOTICE.md"), "utf8");
+    expect(notice).toContain("9.9.9");
+    expect(notice).toContain("https://example.invalid/9.9.9/fixture.");
+    expect(notice).toContain("tectonic-LICENSE.txt");
     if (format === "tar.gz" && process.platform !== "win32") {
       expect(statSync(join(out, binary)).mode & 0o777).toBe(0o755);
     }

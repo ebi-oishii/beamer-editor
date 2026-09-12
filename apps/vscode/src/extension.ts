@@ -23,7 +23,6 @@ import {
   ExportController,
   type ExportDocument,
   type ExportUri,
-  normalizeTectonicPath,
   resolveExportDocument,
 } from "./export-controller";
 import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
@@ -54,7 +53,7 @@ import {
   SlideOutlineState,
 } from "./slide-outline";
 import { resolveSourceViewColumn } from "./source-navigation";
-import { detectBundledTectonic, resolveTectonicPath } from "./tectonic";
+import { detectBundledTectonic, tectonicPathFromConfig } from "./tectonic";
 import { baseStyleOf, nodeTemplateFileSystem, templateStatuses } from "./templates";
 import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 
@@ -240,7 +239,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       const value = vscode.workspace
         .getConfiguration("beamerEditor", document.uri as vscode.Uri)
         .get<unknown>("tectonicPath");
-      return resolveTectonicPath(normalizeTectonicPath(value), bundledTectonic);
+      return tectonicPathFromConfig(value, bundledTectonic);
     },
     timeoutMs: (document) => {
       const seconds = vscode.workspace
@@ -623,7 +622,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         const config = vscode.workspace.getConfiguration("beamerEditor", document.uri);
         const seconds = config.get<number>("pdfExport.timeoutSeconds", 300);
         const normalized = Number.isFinite(seconds) ? Math.trunc(seconds) : 300;
-        const tectonicPath = normalizeTectonicPath(config.get<unknown>("tectonicPath"));
+        // 部分コンパイルも書き出しと同じ「設定 > 同梱 > PATH」で解決する(#130)。
+        const tectonicPath = tectonicPathFromConfig(
+          config.get<unknown>("tectonicPath"),
+          bundledTectonic,
+        );
         const result = await compileFragment({
           document: fragment,
           cwd: documentDir.fsPath,

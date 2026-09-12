@@ -7,6 +7,7 @@
 
 import { accessSync, chmodSync, constants, existsSync } from "node:fs";
 import { join } from "node:path";
+import { normalizeTectonicPath } from "./export-controller";
 
 export interface BundledTectonicHost {
   platform: NodeJS.Platform;
@@ -58,4 +59,15 @@ export function resolveTectonicPath(
   bundled: string | undefined,
 ): string | undefined {
   return configured ?? bundled;
+}
+
+/**
+ * VS Code の設定値(生)から実行に使う Tectonic を決める。PDF 書き出しも生ブロックの部分コンパイル(#112)も
+ * 必ずここを通し、「設定 > 同梱 > PATH」を両方で揃える。
+ */
+export function tectonicPathFromConfig(
+  value: unknown,
+  bundled: string | undefined,
+): string | undefined {
+  return resolveTectonicPath(normalizeTectonicPath(value), bundled);
 }

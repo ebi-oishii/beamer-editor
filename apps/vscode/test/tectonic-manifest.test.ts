@@ -1,11 +1,18 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { assetUrl, MANIFEST, targetForPlatform } from "../scripts/fetch-tectonic.mjs";
+import {
+  assetUrl,
+  licenseUrl,
+  MANIFEST,
+  noticeText,
+  targetForPlatform,
+} from "../scripts/fetch-tectonic.mjs";
 
 describe("同梱する Tectonic の一覧(tectonic.json)", () => {
   const manifest = JSON.parse(readFileSync(join(__dirname, "../tectonic.json"), "utf8")) as {
     version: string;
+    license: { sourceUrl: string; sha256: string; file: string };
     targets: Record<string, { asset: string; sha256: string; binary: string }>;
   };
 
@@ -40,5 +47,23 @@ describe("同梱する Tectonic の一覧(tectonic.json)", () => {
     expect(targetForPlatform("win32", "x64")).toBe("win32-x64");
     expect(targetForPlatform("win32", "arm64")).toBeNull();
     expect(targetForPlatform("freebsd", "x64")).toBeNull();
+  });
+
+  it("再配布する Tectonic の LICENSE を、同じ版のタグから sha256 付きで取る", () => {
+    expect(manifest.license.file).toBe("tectonic-LICENSE.txt");
+    expect(manifest.license.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(licenseUrl()).toBe(
+      `https://raw.githubusercontent.com/tectonic-typesetting/tectonic/tectonic%40${manifest.version}/LICENSE`,
+    );
+  });
+
+  it("NOTICE には同梱した版・対象・取得元・LICENSE の場所が入る", () => {
+    const notice = noticeText("linux-x64");
+    expect(notice).toContain(manifest.version);
+    expect(notice).toContain("linux-x64");
+    expect(notice).toContain(assetUrl("linux-x64"));
+    expect(notice).toContain(manifest.targets["linux-x64"]?.sha256 ?? "");
+    expect(notice).toContain(manifest.license.file);
+    expect(() => noticeText("plan9-mips")).toThrow();
   });
 });

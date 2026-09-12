@@ -1,6 +1,11 @@
 {
   "version": "0.17.0",
   "releaseUrl": "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40{version}/{asset}",
+  "license": {
+    "sourceUrl": "https://raw.githubusercontent.com/tectonic-typesetting/tectonic/tectonic%40{version}/LICENSE",
+    "sha256": "814a258f76e420b25cb3c07172eb2b3956f34cefbf0a650413b78e65c425f306",
+    "file": "tectonic-LICENSE.txt"
+  },
   "targets": {
     "darwin-arm64": {
       "asset": "tectonic-0.17.0-aarch64-apple-darwin.tar.gz",

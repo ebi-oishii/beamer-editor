@@ -1,10 +1,12 @@
-import { constants } from "node:fs";
+import { constants, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   type BundledTectonicHost,
   bundledTectonicPath,
   detectBundledTectonic,
   resolveTectonicPath,
+  tectonicPathFromConfig,
 } from "../src/tectonic";
 
 function host(overrides: Partial<BundledTectonicHost> = {}): BundledTectonicHost {
@@ -57,5 +59,26 @@ describe("同梱 Tectonic の検出", () => {
     expect(resolveTectonicPath("/opt/tectonic", "/ext/bin/tectonic")).toBe("/opt/tectonic");
     expect(resolveTectonicPath(undefined, "/ext/bin/tectonic")).toBe("/ext/bin/tectonic");
     expect(resolveTectonicPath(undefined, undefined)).toBeUndefined();
+  });
+
+  it("設定値は空白だけなら無いものとして扱い、同梱にフォールバックする", () => {
+    expect(tectonicPathFromConfig("/opt/tectonic", "/ext/bin/tectonic")).toBe("/opt/tectonic");
+    expect(tectonicPathFromConfig("  /opt/tectonic  ", "/ext/bin/tectonic")).toBe("/opt/tectonic");
+    // 既定値の空文字・空白・文字列でない値は「指定なし」。同梱があればそれを使う。
+    expect(tectonicPathFromConfig("", "/ext/bin/tectonic")).toBe("/ext/bin/tectonic");
+    expect(tectonicPathFromConfig("   ", "/ext/bin/tectonic")).toBe("/ext/bin/tectonic");
+    expect(tectonicPathFromConfig(undefined, "/ext/bin/tectonic")).toBe("/ext/bin/tectonic");
+    expect(tectonicPathFromConfig(42, "/ext/bin/tectonic")).toBe("/ext/bin/tectonic");
+    // 同梱の無い汎用 VSIX では従来どおり PATH の tectonic に任せる。
+    expect(tectonicPathFromConfig("", undefined)).toBeUndefined();
+  });
+
+  it("設定を読むのは書き出しと部分コンパイルの 2 か所で、どちらも同じ解決を通す(#112 との配線)", () => {
+    // 部分コンパイルが設定値を直接 compiler へ渡すと、既定値が空のとき同梱を無視して
+    // E_TECTONIC_NOT_FOUND になる。読み出し口が解決関数の外へ増えないことをここで押さえる。
+    const source = readFileSync(join(__dirname, "../src/extension.ts"), "utf8");
+    expect(source.match(/get<unknown>\("tectonicPath"\)/g)).toHaveLength(2);
+    expect(source.match(/tectonicPathFromConfig\(/g)).toHaveLength(2);
+    expect(source).not.toMatch(/normalizeTectonicPath\(/);
   });
 });
