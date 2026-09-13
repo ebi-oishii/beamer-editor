@@ -11,7 +11,8 @@ pnpm --dir packages/core test # 単一パッケージ
 pnpm --dir apps/web dev       # renderer 動作確認用 dev ビューア
 pnpm --dir apps/vscode build  # 拡張バンドル。開発は VS Code で F5
 pnpm --dir apps/vscode test:integration  # 実 VS Code での統合テスト(CI では xvfb で実行)
-pnpm --dir apps/vscode package  # 開発用配布物 beamer-editor.vsix を生成(CI が artifact 化)
+pnpm --dir apps/vscode package  # 今の環境向けの beamer-editor.vsix を生成(Tectonic 同梱。CI はターゲット別に artifact 化)
+pnpm --dir apps/vscode package -- --target linux-x64 --out x.vsix  # 別ターゲット。--target universal は Tectonic 非同梱
 ```
 
 ## 構成と依存方向

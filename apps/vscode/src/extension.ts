@@ -54,6 +54,7 @@ import {
   SlideOutlineState,
 } from "./slide-outline";
 import { resolveSourceViewColumn } from "./source-navigation";
+import { detectBundledTectonic, resolveTectonicPath } from "./tectonic";
 import { baseStyleOf, nodeTemplateFileSystem, templateStatuses } from "./templates";
 import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 
@@ -151,6 +152,15 @@ export interface TestApi {
 }
 
 export function activate(context: vscode.ExtensionContext): TestApi {
+  // プラットフォーム別 VSIX に同梱した Tectonic(#130)。設定で上書きされない限りこれを使う。
+  const bundledTectonic = detectBundledTectonic(context.extensionPath);
+  // 書き出しと部分コンパイルは、同じ設定スコープ・優先順位で実行ファイルを選ぶ。
+  const tectonicPathFor = (uri: vscode.Uri) => {
+    const value = vscode.workspace
+      .getConfiguration("beamerEditor", uri)
+      .get<unknown>("tectonicPath");
+    return resolveTectonicPath(normalizeTectonicPath(value), bundledTectonic);
+  };
   const managedPatternCache = new Map<string, readonly string[]>();
   const frameFoldCache = new FrameFoldCache();
   const foldingRangesChanged = new vscode.EventEmitter<void>();
@@ -233,12 +243,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       exportOutput.show(true);
     },
     uriForFile: (path) => vscode.Uri.file(path) as ExportUri,
-    tectonicPath: (document) => {
-      const value = vscode.workspace
-        .getConfiguration("beamerEditor", document.uri as vscode.Uri)
-        .get<unknown>("tectonicPath");
-      return normalizeTectonicPath(value);
-    },
+    tectonicPath: (document) => tectonicPathFor(document.uri as vscode.Uri),
     timeoutMs: (document) => {
       const seconds = vscode.workspace
         .getConfiguration("beamerEditor", document.uri as vscode.Uri)
@@ -620,7 +625,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         const config = vscode.workspace.getConfiguration("beamerEditor", document.uri);
         const seconds = config.get<number>("pdfExport.timeoutSeconds", 300);
         const normalized = Number.isFinite(seconds) ? Math.trunc(seconds) : 300;
-        const tectonicPath = normalizeTectonicPath(config.get<unknown>("tectonicPath"));
+        const tectonicPath = tectonicPathFor(document.uri);
         const result = await compileFragment({
           document: fragment,
           cwd: documentDir.fsPath,

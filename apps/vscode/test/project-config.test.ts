@@ -181,7 +181,7 @@ describe("VS Code extension project configuration", () => {
       scope: "resource",
     });
     expect(contributes.configuration.properties["beamerEditor.tectonicPath"]).toMatchObject({
-      default: "tectonic",
+      default: "",
       scope: "resource",
     });
     expect(
