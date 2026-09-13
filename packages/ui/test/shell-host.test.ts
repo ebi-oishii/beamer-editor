@@ -61,9 +61,17 @@ describe("createMessageShellHost", () => {
     expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
     stored = { current: 2, step: 3, zoom: "invalid" };
     expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
+    // fit が 0.25 より小さいときの手動倍率(fit の下限 0.1 まで)は保存値もそのまま受ける。
     stored = { current: 2, step: 3, zoom: 0.24 };
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: 0.24 });
+    stored = { current: 2, step: 3, zoom: 0.1 };
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: 0.1 });
+    // 操作で作れない値(fit の下限未満・MAX_ZOOM 超)は壊れた state として fit に戻す。
+    stored = { current: 2, step: 3, zoom: 0.099 };
     expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
     stored = { current: 2, step: 3, zoom: 3.01 };
+    expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
+    stored = { current: 2, step: 3, zoom: 0 };
     expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
     stored = { current: 2, step: 3, zoom: Number.POSITIVE_INFINITY };
     expect(host.loadNavState?.()).toEqual({ current: 2, step: 3, zoom: "fit" });
@@ -142,5 +150,21 @@ describe("createMessageShellHost", () => {
     handler?.({ type: "activeFrameChanged", frameIndex: 2, version: 5 });
     handler?.({ type: "error", message: "x" });
     expect(seen).toEqual([[2, 5]]);
+  });
+
+  it("onRawImagesCleared は rawImagesCleared だけを listener へ渡す", () => {
+    let handler: ((msg: unknown) => void) | undefined;
+    const host = createMessageShellHost({
+      post: () => {},
+      subscribe: (cb) => {
+        handler = cb as (msg: unknown) => void;
+        return () => {};
+      },
+    });
+    const cleared = vi.fn();
+    host.onRawImagesCleared?.(cleared);
+    handler?.({ type: "rawImagesCleared" });
+    handler?.({ type: "error", message: "x" });
+    expect(cleared).toHaveBeenCalledTimes(1);
   });
 });

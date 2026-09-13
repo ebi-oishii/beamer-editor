@@ -199,6 +199,26 @@ describe("PreviewController", () => {
     expect(message.activeFrame).toBe(0);
   });
 
+  it("ready では onWebviewReady を描画より先に呼ぶ", () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const order: string[] = [];
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      onWebviewReady: () => order.push("ready"),
+      onRendered: () => order.push("rendered"),
+    });
+    fire({ type: "ready" });
+    expect(order).toEqual(["ready", "rendered"]);
+  });
+
+  it("postRawImagesCleared は rawImagesCleared を送る", () => {
+    const { panel, posted } = makePanel();
+    const { events } = makeEvents();
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn());
+    controller.postRawImagesCleared();
+    expect(posted).toEqual([{ type: "rawImagesCleared" }]);
+  });
+
   it("Webview HTML に CSP(default-src 'none' + nonce)とアセット参照が入る", () => {
     const { panel } = makePanel();
     const { events } = makeEvents();
