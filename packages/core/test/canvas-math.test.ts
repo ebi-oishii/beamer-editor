@@ -84,4 +84,36 @@ describe("decktext display math", () => {
     if (!first) throw new Error("math missing");
     expect(detachBlockToCanvas(source, first.span, { x: 0, y: 0, width: 0.5 })).toBeNull();
   });
+
+  it.each([
+    "\n",
+    "\r\n",
+  ])("keeps an unclosed bracket display math as raw syntax with %s line endings", (eol) => {
+    const source = deck(
+      [
+        "\\begin{deckcanvas}",
+        "\\begin{decktext}[x=0,y=0,w=1]",
+        "\\[x = 1",
+        "\\end{decktext}",
+        "\\end{deckcanvas}",
+      ].join(eol),
+    );
+    const document = parseDeck(source);
+    const frame = document.body.find((node) => node.type === "frame");
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    const canvas = frame.body.find((node) => node.type === "canvas");
+    const text = canvas?.type === "canvas" ? canvas.items[0] : undefined;
+    if (text?.type !== "canvasText") throw new Error("canvas text missing");
+
+    expect(text.children).toEqual([
+      expect.objectContaining({
+        type: "rawBlock",
+        span: { start: source.indexOf("\\[x = 1"), end: source.indexOf("\\end{decktext}") },
+      }),
+    ]);
+    expect(text.children.some((node) => node.type === "displayMath")).toBe(false);
+    expect(lintSource(source).map(({ code }) => code)).toEqual(
+      expect.arrayContaining(["L001", "L014"]),
+    );
+  });
 });
