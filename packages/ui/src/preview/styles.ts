@@ -303,6 +303,18 @@ export const PREVIEW_CSS = `
   border-top: 0.5pt solid #000;
 }
 
+.canvas-resize-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 1px solid var(--vscode-focusBorder, #007acc);
+  background: var(--vscode-editor-background, white);
+  transform: translate(-50%, -50%);
+  cursor: ew-resize;
+  z-index: 10;
+  touch-action: none;
+}
 .slide .display-math {
   text-align: center;
   margin: 4pt 0 8pt;

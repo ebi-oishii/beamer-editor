@@ -145,3 +145,33 @@ export function updateCanvasPosition(
     ? null
     : `${source.slice(0, optionsSpan.start)}${replacement}${source.slice(optionsSpan.end)}`;
 }
+
+/** 位置を保ったまま、幅だけを最小幅と右端の間へ収める。 */
+export function clampCanvasWidth(x: number, width: number): number | null {
+  if (!Number.isFinite(x) || !Number.isFinite(width) || x < 0 || x >= 1) return null;
+  let maximum = Math.floor((1 - x) * 1000 + Number.EPSILON * 1000) / 1000;
+  if (x + maximum > 1) maximum = Math.max(0, maximum - 0.001);
+  if (maximum <= 0) return null;
+  return Math.min(
+    maximum,
+    Math.max(Math.min(CANVAS_MIN_WIDTH, maximum), roundCanvasCoordinate(width)),
+  );
+}
+
+/** options 内の w だけを置換する。位置・画像パス・他の宣言は原文のまま保つ。 */
+export function canvasWidthReplacement(options: string, width: number): string | null {
+  if (!Number.isFinite(width) || width <= 0 || !options.startsWith("[") || !options.endsWith("]"))
+    return null;
+  if (roundCanvasCoordinate(width) <= 0) return null;
+  const parts = options.slice(1, -1).split(",");
+  const indices = parts.flatMap((part, index) => (/^\s*w\s*=/.test(part) ? [index] : []));
+  if (indices.length !== 1) return null;
+  const index = indices[0];
+  if (index === undefined) return null;
+  const match = /^(\s*w\s*=\s*)([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)(\s*)$/.exec(
+    parts[index] ?? "",
+  );
+  if (!match) return null;
+  parts[index] = `${match[1]}${formatCanvasCoordinate(width)}${match[3]}`;
+  return `[${parts.join(",")}]`;
+}
