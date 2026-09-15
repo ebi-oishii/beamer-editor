@@ -1,0 +1,1739 @@
+Tectonic 0.17.0 — source-file copyright and license notices
+Source commit: 8c0126a9653239a2e6e0a5274af9b8510f643030
+Original leading notices from the engine and bridge source files, grouped only when identical.
+This file does not cover external Rust/native dependencies; see THIRD_PARTY_NOTICES.md.
+
+==============================================================================
+Files:
+crates/engine_xdvipdfmx/build.rs
+crates/engine_xdvipdfmx/src/lib.rs
+crates/pdf_io/build.rs
+crates/pdf_io/src/lib.rs
+crates/engine_xetex/build.rs
+
+// Copyright 2021 the Tectonic Project
+// Licensed under the MIT License.
+
+==============================================================================
+Files:
+crates/engine_xdvipdfmx/xdvipdfmx/dvipdfmx.c
+crates/pdf_io/pdf_io/dpx-dvipdfmx.c
+
+/* This is (x)dvipdfmx, an extended version of...
+
+    DVIPDFMx, an eXtended version of DVIPDFM by Mark A. Wicks.
+
+    Copyright (C) 2002-2020 by Jin-Hwan Cho, Matthias Franz, Shunsaku Hirata,
+    the DVIPDFMx project team.
+
+    Copyright (c) 2006 SIL. (xdvipdfmx extensions for XeTeX support)
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-agl.c
+crates/pdf_io/pdf_io/dpx-agl.h
+crates/pdf_io/pdf_io/dpx-epdf.c
+crates/pdf_io/pdf_io/dpx-mpost.c
+crates/pdf_io/pdf_io/dpx-pdfdoc.h
+crates/pdf_io/pdf_io/dpx-pdfencoding.h
+crates/pdf_io/pdf_io/dpx-pdfximage.h
+crates/pdf_io/pdf_io/dpx-spc_util.c
+crates/pdf_io/pdf_io/dpx-specials.h
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2007-2018 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-bmpimage.c
+crates/pdf_io/pdf_io/dpx-cmap_read.c
+crates/pdf_io/pdf_io/dpx-jpegimage.c
+crates/pdf_io/pdf_io/dpx-pngimage.c
+crates/pdf_io/pdf_io/dpx-tfm.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2002-2018 by Jin-Hwan Cho and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-bmpimage.h
+crates/pdf_io/pdf_io/dpx-cmap_read.h
+crates/pdf_io/pdf_io/dpx-cmap_write.h
+crates/pdf_io/pdf_io/dpx-dvicodes.h
+crates/pdf_io/pdf_io/dpx-epdf.h
+crates/pdf_io/pdf_io/dpx-error.h
+crates/pdf_io/pdf_io/dpx-jpegimage.h
+crates/pdf_io/pdf_io/dpx-mem.c
+crates/pdf_io/pdf_io/dpx-pdfdraw.h
+crates/pdf_io/pdf_io/dpx-pdfnames.c
+crates/pdf_io/pdf_io/dpx-pdfnames.h
+crates/pdf_io/pdf_io/dpx-pdfparse.c
+crates/pdf_io/pdf_io/dpx-pdfparse.h
+crates/pdf_io/pdf_io/dpx-pdfresource.c
+crates/pdf_io/pdf_io/dpx-pdfresource.h
+crates/pdf_io/pdf_io/dpx-pkfont.h
+crates/pdf_io/pdf_io/dpx-pngimage.h
+crates/pdf_io/pdf_io/dpx-pst.c
+crates/pdf_io/pdf_io/dpx-pst.h
+crates/pdf_io/pdf_io/dpx-pst_obj.c
+crates/pdf_io/pdf_io/dpx-pst_obj.h
+crates/pdf_io/pdf_io/dpx-spc_color.c
+crates/pdf_io/pdf_io/dpx-spc_color.h
+crates/pdf_io/pdf_io/dpx-spc_dvips.h
+crates/pdf_io/pdf_io/dpx-spc_html.h
+crates/pdf_io/pdf_io/dpx-spc_misc.h
+crates/pdf_io/pdf_io/dpx-spc_tpic.h
+crates/pdf_io/pdf_io/dpx-truetype.h
+crates/pdf_io/pdf_io/dpx-type1.h
+crates/pdf_io/pdf_io/dpx-type1c.h
+crates/pdf_io/pdf_io/dpx-unicode.h
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2002-2016 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-cff.c
+crates/pdf_io/pdf_io/dpx-cff.h
+crates/pdf_io/pdf_io/dpx-sfnt.c
+crates/pdf_io/pdf_io/dpx-sfnt.h
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2002-2016 by Jin-Hwan Cho and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-cff_dict.c
+crates/pdf_io/pdf_io/dpx-cff_limits.h
+crates/pdf_io/pdf_io/dpx-cff_stdstr.h
+crates/pdf_io/pdf_io/dpx-cff_types.h
+crates/pdf_io/pdf_io/dpx-cid_basefont.h
+crates/pdf_io/pdf_io/dpx-cs_type2.c
+crates/pdf_io/pdf_io/dpx-cs_type2.h
+crates/pdf_io/pdf_io/dpx-otl_opt.c
+crates/pdf_io/pdf_io/dpx-otl_opt.h
+crates/pdf_io/pdf_io/dpx-spc_dvipdfmx.c
+crates/pdf_io/pdf_io/dpx-spc_dvipdfmx.h
+crates/pdf_io/pdf_io/dpx-tt_glyf.c
+crates/pdf_io/pdf_io/dpx-tt_glyf.h
+crates/pdf_io/pdf_io/dpx-tt_post.h
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2002-2016 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-cff_dict.h
+crates/pdf_io/pdf_io/dpx-tt_table.h
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2007-2016 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-cid.c
+crates/pdf_io/pdf_io/dpx-cid.h
+crates/pdf_io/pdf_io/dpx-cidtype0.h
+crates/pdf_io/pdf_io/dpx-cidtype2.h
+crates/pdf_io/pdf_io/dpx-cmap.h
+crates/pdf_io/pdf_io/dpx-cmap_p.h
+crates/pdf_io/pdf_io/dpx-pdfencrypt.c
+crates/pdf_io/pdf_io/dpx-subfont.h
+crates/pdf_io/pdf_io/dpx-tt_aux.c
+crates/pdf_io/pdf_io/dpx-tt_aux.h
+crates/pdf_io/pdf_io/dpx-tt_cmap.h
+crates/pdf_io/pdf_io/dpx-type0.c
+crates/pdf_io/pdf_io/dpx-type0.h
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2002-2018 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-cidtype0.c
+crates/pdf_io/pdf_io/dpx-truetype.c
+crates/pdf_io/pdf_io/dpx-tt_cmap.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2007-2019 by Jin-Hwan Cho and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-cidtype2.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2002-2019 by Jin-Hwan Cho and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-cmap.c
+crates/pdf_io/pdf_io/dpx-subfont.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2002-2018 by Jin-Hwan Cho and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-cmap_write.c
+crates/pdf_io/pdf_io/dpx-tt_gsub.c
+crates/pdf_io/pdf_io/dpx-tt_gsub.h
+crates/pdf_io/pdf_io/dpx-tt_post.c
+crates/pdf_io/pdf_io/dpx-tt_table.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2002-2019 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-dpxconf.c
+crates/pdf_io/pdf_io/dpx-dpxconf.h
+
+/* This is DVIPDFMx, an eXtended version of DVIPDFM by Mark A. Wicks.
+
+    Copyright (C) 2002-2018 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-dpxcrypt.c
+crates/pdf_io/pdf_io/dpx-dpxcrypt.h
+
+/* This is DVIPDFMx, an eXtended version of DVIPDFM by Mark A. Wicks.
+
+    Copyright (C) 2003-2016 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-dpxfile.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+   Copyright (C) 2007-2019 by Jin-Hwan Cho and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-dpxfile.h
+crates/pdf_io/pdf_io/dpx-dpxutil.h
+crates/pdf_io/pdf_io/dpx-dvi.h
+crates/pdf_io/pdf_io/dpx-fontmap.h
+crates/pdf_io/pdf_io/dpx-mpost.h
+crates/pdf_io/pdf_io/dpx-numbers.c
+crates/pdf_io/pdf_io/dpx-numbers.h
+crates/pdf_io/pdf_io/dpx-pdfcolor.h
+crates/pdf_io/pdf_io/dpx-pdfdraw.c
+crates/pdf_io/pdf_io/dpx-pdffont.h
+crates/pdf_io/pdf_io/dpx-pdflimits.h
+crates/pdf_io/pdf_io/dpx-spc_pdfm.h
+crates/pdf_io/pdf_io/dpx-spc_tpic.c
+crates/pdf_io/pdf_io/dpx-spc_util.h
+crates/pdf_io/pdf_io/dpx-t1_char.c
+crates/pdf_io/pdf_io/dpx-tfm.h
+crates/pdf_io/pdf_io/dpx-vf.h
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2002-2018 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-dpxutil.c
+crates/pdf_io/pdf_io/dpx-mem.h
+crates/pdf_io/pdf_io/dpx-mfileio.h
+crates/pdf_io/pdf_io/dpx-pdfcolor.c
+crates/pdf_io/pdf_io/dpx-pdfdev.c
+crates/pdf_io/pdf_io/dpx-pdfdev.h
+crates/pdf_io/pdf_io/dpx-specials.c
+crates/pdf_io/pdf_io/dpx-system.h
+crates/pdf_io/pdf_io/dpx-unicode.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2002-2019 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-dvi.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2002-2020 by Jin-Hwan Cho and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   Copyright (C) 2012-2015 by Khaled Hosny <khaledhosny@eglug.org>
+
+   Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-dvipdfmx.h
+
+/*  DVIPDFMx, an eXtended version of DVIPDFM by Mark A. Wicks.
+
+    Copyright (C) 2002-2018 by Jin-Hwan Cho, Matthias Franz, and Shunsaku Hirata,
+    the DVIPDFMx project team.
+
+    Copyright (c) 2006 SIL. (xdvipdfmx extensions for XeTeX support)
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-error.c
+crates/pdf_io/pdf_io/dpx-mfileio.c
+crates/pdf_io/pdf_io/dpx-spc_misc.c
+crates/pdf_io/pdf_io/dpx-t1_load.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2002-2016 by Jin-Hwan Cho and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-fontmap.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2002-2017 by Jin-Hwan Cho and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-jp2image.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2002-2018 by Jin-Hwan Cho and Matthias Franz,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-jp2image.h
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2002-2016 by Jin-Hwan Cho and Matthias Franz,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-mt19937ar.c
+
+/*
+   A C-program for MT19937, with initialization improved 2002/1/26.
+   Coded by Takuji Nishimura and Makoto Matsumoto.
+
+   Before using, initialize the state by using init_genrand(seed)
+   or init_by_array(init_key, key_length).
+
+   Copyright (C) 1997 - 2002, Makoto Matsumoto and Takuji Nishimura,
+   All rights reserved.
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+
+     1. Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+
+     2. Redistributions in binary form must reproduce the above copyright
+        notice, this list of conditions and the following disclaimer in the
+        documentation and/or other materials provided with the distribution.
+
+     3. The names of its contributors may not be used to endorse or promote
+        products derived from this software without specific prior written
+        permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+   Any feedback is very welcome.
+   http://www.math.sci.hiroshima-u.ac.jp/~m-mat/MT/emt.html
+   email: m-mat @ math.sci.hiroshima-u.ac.jp (remove space)
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-pdfdoc.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2008-2019 by Jin-Hwan Cho, Matthias Franz, and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-pdfencoding.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2008-2019 by Jin-Hwan Cho, Matthias Franz, and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-pdfencrypt.h
+
+/*
+
+    This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2007-2018 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-pdffont.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2008-2018 by Jin-Hwan Cho, Matthias Franz, and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-pdfobj.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2007-2020 by Jin-Hwan Cho and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-pdfobj.h
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2007-2019 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-pdfximage.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2007-2019 by Jin-Hwan Cho and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-pkfont.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2007-2016 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-spc_dvips.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2002-2019 by Jin-Hwan Cho and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-spc_html.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2002-2017 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-spc_pdfm.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2007-2020 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-spc_xtx.c
+
+/*  This is xdvipdfmx, an extended version of dvipdfmx,
+    an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2013-2019 by the dvipdfmx project team.
+
+    Copyright (c) 2006 SIL International
+    Originally written by Jonathan Kew
+
+    This file based on spc_pdfm.c, part of the dvipdfmx project:
+
+    Copyright (C) 2002 by Jin-Hwan Cho and Shunsaku Hirata.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-spc_xtx.h
+
+/*  This is xdvipdfmx, an extended version of dvipdfmx,
+    an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2013-2016 by the dvipdfmx project team.
+
+    Copyright (c) 2006 SIL International
+    Originally written by Jonathan Kew
+
+    Copyright (C) 2002 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-t1_load.h
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+    Copyright (C) 2002-2016 by Jin-Hwan Cho and Shunsaku Hirata,
+    the dvipdfmx project team.
+
+    Copyright (C) 2012-2015 by Khaled Hosny <khaledhosny@eglug.org>
+
+    Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-type1.c
+crates/pdf_io/pdf_io/dpx-type1c.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2008-2018 by Jin-Hwan Cho, Matthias Franz, and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/pdf_io/pdf_io/dpx-vf.c
+
+/* This is dvipdfmx, an eXtended version of dvipdfm by Mark A. Wicks.
+
+   Copyright (C) 2007-2018 by Jin-Hwan Cho and Shunsaku Hirata,
+   the dvipdfmx project team.
+
+   Copyright (C) 1998, 1999 by Mark A. Wicks <mwicks@kettering.edu>
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/src/lib.rs
+crates/engine_spx2html/src/fontfile.rs
+crates/engine_spx2html/src/html.rs
+
+// Copyright 2021-2022 the Tectonic Project
+// Licensed under the MIT License.
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/teckit-Common.h
+
+/*------------------------------------------------------------------------
+Copyright (C) 2002-2016 SIL International. All rights reserved.
+
+Distributable under the terms of either the Common Public License or the
+GNU Lesser General Public License, as specified in the LICENSING.txt file.
+
+File: TECkit_Common.h
+Responsibility: Jonathan Kew
+Last reviewed: Not yet.
+
+Description:
+    Public definitions used by TECkit engine and compiler
+-------------------------------------------------------------------------*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/teckit-Engine.cpp
+
+/*------------------------------------------------------------------------
+Copyright (C) 2002-2016 SIL International. All rights reserved.
+
+Distributable under the terms of either the Common Public License or the
+GNU Lesser General Public License, as specified in the LICENSING.txt file.
+
+File: Engine.cp
+Responsibility: Jonathan Kew
+Last reviewed: Not yet.
+
+Description:
+    Implements the TECkit conversion engine.
+-------------------------------------------------------------------------*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/teckit-Format.h
+
+/*------------------------------------------------------------------------
+Copyright (C) 2002-2016 SIL International. All rights reserved.
+
+Distributable under the terms of either the Common Public License or the
+GNU Lesser General Public License, as specified in the LICENSING.txt file.
+
+File: TECkit_Format.h
+Responsibility: Jonathan Kew
+Last reviewed: Not yet.
+
+Description:
+    Definitions used in the TECkit binary table format
+
+	2006-06-02	jk	added support for extended string rules (>255 per initial char)
+-------------------------------------------------------------------------*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/teckit-c-Engine.h
+
+/*------------------------------------------------------------------------
+Copyright (C) 2002-2014 SIL International. All rights reserved.
+
+Distributable under the terms of either the Common Public License or the
+GNU Lesser General Public License, as specified in the LICENSING.txt file.
+
+File: TECkit_Engine.h
+Responsibility: Jonathan Kew
+Last reviewed: Not yet.
+
+Description:
+    Public API to the TECkit conversion engine.
+-------------------------------------------------------------------------*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/teckit-cxx-Engine.h
+
+/*------------------------------------------------------------------------
+Copyright (C) 2002-2016 SIL International. All rights reserved.
+
+Distributable under the terms of either the Common Public License or the
+GNU Lesser General Public License, as specified in the LICENSING.txt file.
+
+File: Engine.h
+Responsibility: Jonathan Kew
+Last reviewed: Not yet.
+
+Description:
+	internal header for the TECkit mapping engine
+-------------------------------------------------------------------------*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-XeTeXOTMath.cpp
+
+/****************************************************************************\
+ Part of the XeTeX typesetting system
+ Copyright (c) 1994-2008 by SIL International
+ Copyright (c) 2009 by Jonathan Kew
+ Copyright (c) 2012-2015 by Khaled Hosny
+
+ SIL Author(s): Jonathan Kew
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE
+FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of the copyright holders
+shall not be used in advertising or otherwise to promote the sale,
+use or other dealings in this Software without prior written
+authorization from the copyright holders.
+\****************************************************************************/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-XeTeXOTMath.h
+crates/engine_xetex/xetex/xetex-pic.c
+crates/engine_xetex/xetex/xetex-swap.h
+
+/****************************************************************************\
+ Part of the XeTeX typesetting system
+ Copyright (c) 1994-2008 by SIL International
+ Copyright (c) 2009 by Jonathan Kew
+
+ SIL Author(s): Jonathan Kew
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE
+FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of the copyright holders
+shall not be used in advertising or otherwise to promote the sale,
+use or other dealings in this Software without prior written
+authorization from the copyright holders.
+\****************************************************************************/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-constants.h
+
+/* tectonic/xetex-constants.h: symbolic constants from the WEB code
+   Copyright 2017-2022 the Tectonic Project
+   Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-core.h
+
+/* tectonic/xetex-core.h: core XeTeX types and #includes.
+   Copyright 2016-2020 the Tectonic Project
+   Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-engine-interface.c
+
+/* engine-interface.c: programmatic interface to control the engine behavior
+   Copyright 2016-2018 The Tectonic Project
+   Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-errors.c
+
+/* tectonic/errors.c -- error handling
+ * Copyright 2016 the Tectonic Project
+ * Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-ext.c
+
+/****************************************************************************\
+ Part of the XeTeX typesetting system
+ Copyright (c) 1994-2008 by SIL International
+ Copyright (c) 2009, 2011 by Jonathan Kew
+ Copyright (c) 2012-2015 by Khaled Hosny
+ Copyright (c) 2012, 2013 by Jiang Jiang
+
+ SIL Author(s): Jonathan Kew
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE
+FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of the copyright holders
+shall not be used in advertising or otherwise to promote the sale,
+use or other dealings in this Software without prior written
+authorization from the copyright holders.
+\****************************************************************************/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-ext.h
+
+/****************************************************************************\
+ Part of the XeTeX typesetting system
+ Copyright (c) 1994-2008 by SIL International
+ Copyright (c) 2009, 2011 by Jonathan Kew
+ Copyright (c) 2012, 2013 by Jiang Jiang
+ Copyright (c) 2012-2015 by Khaled Hosny
+
+ SIL Author(s): Jonathan Kew
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE
+FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of the copyright holders
+shall not be used in advertising or otherwise to promote the sale,
+use or other dealings in this Software without prior written
+authorization from the copyright holders.
+\****************************************************************************/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-ini.c
+
+/* xetex-ini.c: WEB initialization code translated to C
+   Copyright 2016-2022 The Tectonic Project
+   Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-io.c
+
+/* tectonic/xetex-io.c: low-level input/output functions tied to the XeTeX engine
+   Copyright 2016-2019 The Tectonic Project
+   Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-io.h
+
+/* tectonic/xetex-io.h: XeTeX-specific low-level I/O routines
+   Copyright 2016-2018 the Tectonic Project
+   Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-linebreak.c
+crates/engine_xetex/xetex/xetex-math.c
+crates/engine_xetex/xetex/xetex-shipout.c
+
+/* Copyright 2016-2018 The Tectonic Project
+ * Licensed under the MIT License.
+ */
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-macos.c
+
+/****************************************************************************\
+ Part of the XeTeX typesetting system
+ Copyright (c) 1994-2008 by SIL International
+ Copyright (c) 2009 by Jonathan Kew
+ Copyright (c) 2012, 2013 by Jiang Jiang
+ Copyright (c) 2012-2015 by Khaled Hosny
+
+ SIL Author(s): Jonathan Kew
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE
+FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of the copyright holders
+shall not be used in advertising or otherwise to promote the sale,
+use or other dealings in this Software without prior written
+authorization from the copyright holders.
+\****************************************************************************/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-output.c
+
+/* tectonic/output.c -- functions related to outputting messages
+ * Copyright 2016 the Tectonic Project
+ * Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-pagebuilder.c
+
+/* tectonic/xetex-pagebuilder.c: the page builder
+   Copyright 2017-2018 The Tectonic Project
+   Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-scaledmath.c
+
+/* tectonic/xetex-scaledmath.c: low-level math functions
+   Copyright 2017 The Tectonic Project
+   Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-stringpool.c
+
+/* tectonic/xetex-stringpool.c: preloaded "string pool" constants
+   Copyright 2017-2018 the Tectonic Project
+   Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-stringpool.h
+
+/* tectonic/xetex-stringpool.h: preloaded "string pool" constants
+   Copyright 2017 the Tectonic Project
+   Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-synctex.c
+
+/* Summary of original C code; see end of file for full comments:
+ * Copyright (c) 2008-2017 jerome DOT laurens AT u-bourgogne DOT fr
+ * MIT License.
+ */
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-synctex.h
+
+/* synctex.h
+
+Copyright (c) 2008, 2009 jerome DOT laurens AT u-bourgogne DOT fr
+
+This file is part of the SyncTeX package.
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE
+
+Acknowledgments:
+----------------
+The author received useful remarks from the pdfTeX developers, especially Hahn The Thanh,
+and significant help from XeTeX developer Jonathan Kew
+
+Nota Bene:
+----------
+If you include or use a significant part of the synctex package into a software,
+I would appreciate to be listed as contributor and see "SyncTeX" highlighted.
+
+Version 1
+Latest Revision: Wed Jul  1 08:17:50 UTC 2009
+
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-texmfmp.c
+
+/* texmfmp.c: Hand-coded routines for TeX or Metafont in C.  Originally
+   written by Tim Morgan, drawing from other Unix ports of TeX.  This is
+   a collection of miscellany, everything that's easier (or only
+   possible) to do in C.
+
+   This file is public domain.  */
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-xetex0.c
+
+/* xetex-xetex0.c: bulk of the WEB code translated to C
+   Copyright 2016-2022 The Tectonic Project
+   Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_xetex/xetex/xetex-xetexd.h
+
+/* tectonic/xetex-xetexd.h -- many, many XeTeX symbol definitions
+   Copyright 2016-2018 The Tectonic Project
+   Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/engine_bibtex/src/lib.rs
+crates/bridge_core/build.rs
+crates/xetex_layout/src/lib.rs
+
+// Copyright 2020-2021 the Tectonic Project
+// Licensed under the MIT License.
+
+==============================================================================
+Files:
+crates/engine_spx2html/src/assets.rs
+crates/engine_spx2html/src/fonts.rs
+
+// Copyright 2022 the Tectonic Project
+// Licensed under the MIT License.
+
+==============================================================================
+Files:
+crates/engine_spx2html/src/emission.rs
+crates/engine_spx2html/src/finalization.rs
+crates/engine_spx2html/src/initialization.rs
+crates/engine_spx2html/src/lib.rs
+crates/engine_spx2html/src/specials.rs
+crates/engine_spx2html/src/templating.rs
+
+// Copyright 2018-2022 the Tectonic Project
+// Licensed under the MIT License.
+
+==============================================================================
+Files:
+crates/bridge_core/src/lib.rs
+
+// Copyright 2016-2022 the Tectonic Project
+// Licensed under the MIT License.
+
+==============================================================================
+Files:
+crates/bridge_core/support/support.c
+
+/* Copyright 2017-2021 the Tectonic Project
+ * Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/bridge_core/support/tectonic_bridge_core.h
+
+/* Copyright 2016-2020 the Tectonic Project
+ * Licensed under the MIT License.
+*/
+
+==============================================================================
+Files:
+crates/xetex_layout/build.rs
+
+// Copyright 2020 the Tectonic Project
+// Licensed under the MIT License.
