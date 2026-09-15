@@ -28,6 +28,7 @@ import {
   resolveExportDocument,
 } from "./export-controller";
 import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
+import { ImagePasteEditProvider } from "./image-paste-provider";
 import {
   appendUniqueIgnorePatterns,
   chooseLatexWorkshopTarget,
@@ -150,6 +151,7 @@ async function jumpToOffset(
 /** 統合テストからの観測用 API(activate の戻り値)。製品コードから参照しない。 */
 export interface TestApi {
   _previewControllerForTest(): PreviewController | undefined;
+  _imagePasteProviderForTest(): ImagePasteEditProvider;
 }
 
 export function activate(context: vscode.ExtensionContext): TestApi {
@@ -396,6 +398,28 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         },
       },
       { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] },
+    ),
+  );
+
+  // Cmd/Ctrl+V の画像(#153)。managed な文書だけで、他の provider と同じ絞り方。
+  const imagePaste = new ImagePasteEditProvider();
+  context.subscriptions.push(
+    vscode.languages.registerDocumentPasteEditProvider(
+      { scheme: "file", language: "latex" },
+      {
+        provideDocumentPasteEdits(document, ranges, dataTransfer, pasteContext, token) {
+          return isManaged(document)
+            ? imagePaste.provideDocumentPasteEdits(
+                document,
+                ranges,
+                dataTransfer,
+                pasteContext,
+                token,
+              )
+            : undefined;
+        },
+      },
+      ImagePasteEditProvider.metadata,
     ),
   );
 
@@ -1001,7 +1025,10 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     ),
   );
 
-  return { _previewControllerForTest: () => previewController };
+  return {
+    _previewControllerForTest: () => previewController,
+    _imagePasteProviderForTest: () => imagePaste,
+  };
 }
 
 export function deactivate(): void {
