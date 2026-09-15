@@ -236,6 +236,12 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         onSelect={(i) => dispatch({ type: "goto", index: i })}
         onJump={(i) => host.jumpToSource(i, version)}
         onScrollActive={(i) => dispatch({ type: "goto", index: i })}
+        onSetCanvasFontSize={
+          host.setCanvasFontSize
+            ? (frameIndex, elementId, size) =>
+                host.setCanvasFontSize?.(frameIndex, elementId, version, size)
+            : undefined
+        }
         onResizeCanvasElement={
           host.resizeCanvasElement
             ? (frameIndex, elementId, width) =>

@@ -303,6 +303,15 @@ export const PREVIEW_CSS = `
   border-top: 0.5pt solid #000;
 }
 
+.canvas-font-size {
+  position: absolute;
+  transform: translateY(-100%);
+  z-index: 11;
+  font: 12px sans-serif;
+  color: var(--vscode-dropdown-foreground, #222);
+  background: var(--vscode-dropdown-background, white);
+  border: 1px solid var(--vscode-focusBorder, #007acc);
+}
 .canvas-resize-handle {
   position: absolute;
   width: 12px;

@@ -1,3 +1,4 @@
+import type { CanvasFontSize } from "@beamer-editor/core";
 /**
  * 環境非依存の ShellHost 契約と、Webview 向けの汎用実装。
  *
@@ -47,6 +48,12 @@ export interface ShellHost {
    * 取り消し / やり直しを実行する(#103)。実装しないホストではキーを奪わない。
    */
   undoRedo?(kind: "undo" | "redo"): void;
+  setCanvasFontSize?(
+    frameIndex: number,
+    elementId: string,
+    version: number,
+    size: CanvasFontSize,
+  ): void;
   resizeCanvasElement?(frameIndex: number, elementId: string, version: number, width: number): void;
   moveCanvasElement?(
     frameIndex: number,
@@ -123,6 +130,9 @@ export function createMessageShellHost(
     },
     undoRedo(kind) {
       transport.post({ type: "undoRedo", kind });
+    },
+    setCanvasFontSize(frameIndex, elementId, version, size) {
+      transport.post({ type: "setCanvasFontSize", frameIndex, elementId, version, size });
     },
     resizeCanvasElement(frameIndex, elementId, version, width) {
       transport.post({ type: "resizeCanvasElement", frameIndex, elementId, version, width });

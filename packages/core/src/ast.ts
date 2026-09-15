@@ -356,14 +356,16 @@ export interface CanvasPosition {
   span: SourceSpan;
 }
 
-export type CanvasFontSize =
-  | "tiny"
-  | "scriptsize"
-  | "footnotesize"
-  | "small"
-  | "normal"
-  | "large"
-  | "Large";
+export const CANVAS_FONT_SIZES = [
+  "tiny",
+  "scriptsize",
+  "footnotesize",
+  "small",
+  "normal",
+  "large",
+  "Large",
+] as const;
+export type CanvasFontSize = (typeof CANVAS_FONT_SIZES)[number];
 
 /** `decktext` に書かれた許可外の文字サイズ。L013 の診断と原文保持に使う。 */
 export interface InvalidCanvasFontSize {

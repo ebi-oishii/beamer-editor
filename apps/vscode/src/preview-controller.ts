@@ -1,6 +1,8 @@
 import {
+  type CanvasFontSize,
   clampCanvasPosition,
   clampCanvasWidth,
+  isCanvasFontSize,
   mapExpandedRangeToSourceExact,
 } from "@beamer-editor/core";
 import { DEFAULT_THEME } from "@beamer-editor/renderer";
@@ -97,7 +99,16 @@ export interface PreviewControllerOptions {
    * (asWebviewUri。extension.ts が注入)。未指定なら書き換えない。
    */
   resolveResource?: (path: string) => string;
-  /** 有効な canvas image の source update。VS Code host の結果を返す。 */
+  /** 最新の編集可能なキャンバス要素を更新し、VS Code host の適用結果を返す。 */
+  setCanvasFontSize?: (move: {
+    frameIndex: number;
+    elementId: string;
+    version: number;
+    size: CanvasFontSize;
+    sourceSpan: { start: number; end: number };
+    document: PreviewDocument;
+    expectedOptions: string;
+  }) => Promise<CanvasEditResult>;
   resizeCanvasElement?: (move: {
     frameIndex: number;
     elementId: string;
@@ -215,6 +226,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly navigate: (offset: number) => void;
   private readonly undoRedo: (kind: "undo" | "redo") => void | Promise<void>;
   private readonly resolveResource: ((path: string) => string) | undefined;
+  private readonly setCanvasFontSize: PreviewControllerOptions["setCanvasFontSize"];
   private readonly resizeCanvasElement: PreviewControllerOptions["resizeCanvasElement"];
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
   private readonly detachToCanvas: PreviewControllerOptions["detachToCanvas"];
@@ -262,6 +274,7 @@ export class PreviewController implements vscode.Disposable {
     this.navigate = options.navigate ?? (() => {});
     this.undoRedo = options.undoRedo ?? (() => {});
     this.resolveResource = options.resolveResource;
+    this.setCanvasFontSize = options.setCanvasFontSize;
     this.resizeCanvasElement = options.resizeCanvasElement;
     this.moveCanvasElement = options.moveCanvasElement;
     this.detachToCanvas = options.detachToCanvas;
@@ -324,8 +337,8 @@ export class PreviewController implements vscode.Disposable {
       this.sendDeck();
     } else if (msg.type === "jumpToSource") {
       this.handleJump(msg.frameIndex, msg.version);
-    } else if (msg.type === "resizeCanvasElement") {
-      void this.handleResize(msg);
+    } else if (msg.type === "resizeCanvasElement" || msg.type === "setCanvasFontSize") {
+      void this.handleCanvasStyle(msg);
     } else if (msg.type === "moveCanvasElement") {
       void this.handleMove(msg);
     } else if (msg.type === "detachToCanvas") {
@@ -342,12 +355,13 @@ export class PreviewController implements vscode.Disposable {
     // activeFrameChanged はソース側カーソル追従(VS-5 以降)で使う予定(現状 no-op)。
   }
 
-  private async handleResize(move: {
-    frameIndex: number;
-    elementId: string;
-    version: number;
-    width: number;
-  }): Promise<void> {
+  private async handleCanvasStyle(
+    move: {
+      frameIndex: number;
+      elementId: string;
+      version: number;
+    } & ({ width: number } | { size: CanvasFontSize }),
+  ): Promise<void> {
     if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
     const latest = this.latest;
     const frame = latest?.deck.frames[move.frameIndex];
@@ -361,14 +375,19 @@ export class PreviewController implements vscode.Disposable {
       latest.version !== this.document.version ||
       !frame ||
       !element ||
-      !Number.isFinite(move.width) ||
-      move.width <= 0
+      ("width" in move
+        ? !Number.isFinite(move.width) || move.width <= 0
+        : element.kind !== "text" || !isCanvasFontSize(move.size))
     ) {
       this.sendDeck();
       return;
     }
-    const width = clampCanvasWidth(element.position.x, move.width);
-    if (width === null || element.position.width === width) {
+    const width = "width" in move ? clampCanvasWidth(element.position.x, move.width) : null;
+    if (
+      "width" in move
+        ? width === null || element.position.width === width
+        : element.fontSize === move.size
+    ) {
       this.sendDeck();
       return;
     }
@@ -379,15 +398,20 @@ export class PreviewController implements vscode.Disposable {
       .slice(element.sourceSpan.start, element.sourceSpan.end);
     this.editApplyPending = true;
     try {
-      const result = await this.resizeCanvasElement?.({
+      const request = {
         frameIndex,
         elementId,
         version,
-        width,
         sourceSpan: element.sourceSpan,
         document,
         expectedOptions,
-      });
+      };
+      const result =
+        "width" in move && width !== null
+          ? await this.resizeCanvasElement?.({ ...request, width })
+          : "size" in move
+            ? await this.setCanvasFontSize?.({ ...request, size: move.size })
+            : "failed";
       this.editApplyPending = false;
       if (this.disposed) return;
       if (result === "applied") {
@@ -402,7 +426,7 @@ export class PreviewController implements vscode.Disposable {
         return;
       }
       if (result === "cancelled") {
-        this.onWarning("Canvas element width was not updated. Try dragging it again.");
+        this.onWarning("Canvas element style was not updated. Try dragging it again.");
         this.sendDeck();
         return;
       }
@@ -411,7 +435,7 @@ export class PreviewController implements vscode.Disposable {
       if (this.disposed) return;
     }
     if (!this.disposed) {
-      this.onError("failed to update canvas element width.");
+      this.onError("failed to update canvas element style.");
       this.sendDeck();
     }
   }
