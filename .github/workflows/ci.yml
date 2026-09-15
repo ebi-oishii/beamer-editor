@@ -38,6 +38,8 @@ jobs:
 
   # 開発用配布物(.vsix)を生成し、Actions の artifact としてダウンロード可能にする(VS-8)。
   # プラットフォーム別に Tectonic の公式バイナリを同梱する(#130)。universal は同梱なし(対象外の環境向け)。
+  # 同梱ターゲットは生成と中身の確認まで行い、artifact には上げない。再配布監査(docs/tectonic-redistribution-audit.md)が
+  # 完了するまで、配るのは universal だけ。
   vsix:
     name: vsix (${{ matrix.target }})
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
@@ -70,7 +72,9 @@ jobs:
           $entries = tar -tf "${{ runner.temp }}/beamer-editor-${{ matrix.target }} build.vsix"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ($entries -notcontains 'extension/bin/tectonic.exe') { throw 'tectonic.exe が VSIX に無い' }
-      - uses: actions/upload-artifact@v4
+      - name: 監査完了まで artifact に上げるのは universal だけ
+        if: matrix.target == 'universal'
+        uses: actions/upload-artifact@v4
         with:
           name: beamer-editor-vsix-${{ matrix.target }}
           path: ${{ runner.temp }}/beamer-editor-${{ matrix.target }} build.vsix

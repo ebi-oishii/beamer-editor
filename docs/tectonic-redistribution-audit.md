@@ -49,6 +49,7 @@ Linux musl ビルドは [Cross.toml](https://github.com/tectonic-typesetting/tec
 
 `apps/vscode/third-party/tectonic/` に、原文の MIT LICENSE、確認済みエンジンソースの著作権・ライセンス通知、GPL 2.0 と LGPL 2.1 の全文を保存した。
 この追加だけでは2件目のレビュー指摘を解決済みにしない。
+監査が完了するまで、CI は同梱ターゲットの VSIX を生成して中身を確認するだけにし、artifact として配るのは非同梱の universal だけにしている。
 
 残作業は、Rust・ネイティブ依存の通知原文の照合、正確な対応ソースとビルド用パッチの確保、ソース提供方法の確定、配布物との対応確認である。
 [GNU の FAQ](https://www.gnu.org/licenses/gpl-faq.en.html#SourceAndBinaryOnDifferentSites) は、ソースを上流のサイトへ案内するだけで常に足りるとはしていない。GPL の版と提供方法によって条件が異なるため、URL の追加だけを完了条件にしない。
