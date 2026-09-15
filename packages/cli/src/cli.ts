@@ -39,6 +39,11 @@ import {
   lintSource,
   parseDeck,
 } from "@beamer-editor/core";
+import {
+  exportHtml,
+  type HtmlExportErrorCode,
+  type HtmlExportResult,
+} from "@beamer-editor/html-export";
 import { createNodeFileProbes } from "./file-probes.ts";
 import {
   defaultFontPaths,
@@ -60,7 +65,7 @@ export const EXIT_CODE = {
   operationalFailure: 3,
 } as const;
 
-type CliErrorCode = "E_USAGE" | "E_IO" | "E_INTERNAL" | PdfExportErrorCode;
+type CliErrorCode = "E_USAGE" | "E_IO" | "E_INTERNAL" | PdfExportErrorCode | HtmlExportErrorCode;
 const ERROR_EXIT_CODE: Record<CliErrorCode, number> = {
   E_USAGE: EXIT_CODE.operationalFailure,
   E_IO: EXIT_CODE.operationalFailure,
@@ -73,6 +78,7 @@ const ERROR_EXIT_CODE: Record<CliErrorCode, number> = {
   E_RASTERIZE: EXIT_CODE.operationalFailure,
   E_LIMIT: EXIT_CODE.operationalFailure,
   E_CANCELLED: EXIT_CODE.operationalFailure,
+  E_ASSET: EXIT_CODE.operationalFailure,
 };
 
 /** E_* は payload の種類にかかわらず、呼び出し側の操作失敗として同じ終了コードにする。 */
@@ -218,6 +224,7 @@ const USAGE = `使い方: deck <command> ...
   deck outline <file> [--json]        フレーム一覧を表示
   deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査
   deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]
+  deck export <file> --format html [-o <directory>] [--json]
   deck fonts status [--json]          フォントカタログ全 family の解決状態
   deck fonts fetch [family] [--json]  family(既定 "${DEFAULT_FAMILY}")を取得・配置
 `;
@@ -651,8 +658,9 @@ export function parseExportArgs(argv: readonly string[]): ParsedExportArgs {
     }
   }
   if (!error && input === undefined) error = "export には入力ファイルを指定してください";
-  if (!error && format === undefined) error = "export には --format pdf を指定してください";
-  if (!error && format !== "pdf") error = `未対応の出力形式: ${format}`;
+  if (!error && format === undefined)
+    error = "export には --format pdf または html を指定してください";
+  if (!error && format !== "pdf" && format !== "html") error = `未対応の出力形式: ${format}`;
   return { input, format, output, overwrite, tectonic, json, error };
 }
 
@@ -668,6 +676,7 @@ export interface CliDependencies {
     overwrite?: boolean;
     tectonicPath?: string;
   }) => Promise<PdfExportResult>;
+  exportHtml?: (request: { inputPath: string; outputPath?: string }) => Promise<HtmlExportResult>;
 }
 
 function defaultPdfOutputForDisplay(input: string): string {
@@ -681,6 +690,22 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
   // parseExportArgs has validated these conditions above.
   const input = parsed.input as string;
   try {
+    if (parsed.format === "html") {
+      if (parsed.overwrite)
+        return usageError("HTML export は --overwrite をサポートしません", parsed.json);
+      if (parsed.tectonic !== undefined)
+        return usageError("HTML export は --tectonic をサポートしません", parsed.json);
+      const result = await (dependencies.exportHtml ?? exportHtml)({
+        inputPath: input,
+        ...(parsed.output === undefined ? {} : { outputPath: parsed.output }),
+      });
+      if (parsed.json) {
+        process.stdout.write(
+          `${JSON.stringify({ format: "html", input, output: result.outputPath, index: result.indexPath }, null, 2)}\n`,
+        );
+      } else process.stdout.write(`${input} -> ${result.indexPath}\n`);
+      return EXIT_CODE.success;
+    }
     const result = await (dependencies.exportPdf ?? exportPdf)({
       inputPath: input,
       ...(parsed.output === undefined ? {} : { outputPath: parsed.output }),

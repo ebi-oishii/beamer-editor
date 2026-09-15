@@ -45,6 +45,10 @@ pnpm --dir apps/vscode build  # VS Code 拡張のバンドル(開発は F5)
 
 ローカルに [Tectonic](https://tectonic-typesetting.github.io/) を用意すると、入力ソースを変更せずに PDF を書き出せる。
 
+### HTML スナップショット
+
+`deck export talk.slide.tex --format html` は `talk-html/index.html` に、現在のプレビュー相当の静的な HTML を書き出します。`file:` で直接開けますが、正式な TeX 出力ではありません。PDF 画像と raw TeX はプレビューと同じプレースホルダーになり、外部 URL の画像は閲覧時にネットワークを必要とします。正式な組版には PDF 書き出しを使ってください。
+
 ```bash
 pnpm --dir packages/cli deck export talk.slide.tex --format pdf
 # talk.slide.tex -> talk.pdf
