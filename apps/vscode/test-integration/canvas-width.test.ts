@@ -12,7 +12,7 @@ suite("#82 / #83: canvas width", () => {
       const element =
         kind === "image"
           ? String.raw`\deckimage[x=.1,y=.2,w=.3]{image.png}`
-          : String.raw`\begin{decktext}[x=.1,y=.2,w=.3,size=small]Text $x$\end{decktext}`;
+          : String.raw`\begin{decktext}[x=.1,y=.2,size=small]Text $x$\end{decktext}`;
       const source = String.raw`\documentclass[aspectratio=169]{beamer}
 \begin{document}
 \begin{frame}[label=canvas]
@@ -54,7 +54,11 @@ ${element}
           width: 0.5,
         };
         receive(request);
-        await wait(() => doc.getText() === source.replace("w=.3", "w=0.500"));
+        const resized =
+          kind === "image"
+            ? source.replace("w=.3", "w=0.500")
+            : source.replace("size=small]", "size=small,w=0.500]");
+        await wait(() => doc.getText() === resized);
         const moved = doc.getText();
         // A stale request cannot overwrite the new document.
         receive({ ...request, width: 0.7 });
