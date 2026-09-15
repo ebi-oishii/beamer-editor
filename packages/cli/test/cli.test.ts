@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -13,9 +13,10 @@ import {
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { relative, resolve } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  type CliDependencies,
   EXIT_CODE,
   exitCodeForError,
   parseCheckArgs,
@@ -362,11 +363,17 @@ function snapshotCompiled(...frames: SnapshotFrame[]) {
 async function snapshot(
   argv: readonly string[],
   compiled: ReturnType<typeof snapshotCompiled> | (() => Promise<never>),
+  dependencies: Omit<CliDependencies, "compileDeckFrames"> = {},
+  observeStdout?: () => void,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
-  const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => {
+    observeStdout?.();
+    return true;
+  });
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   try {
     const code = await run(["snapshot", ...argv], {
+      ...dependencies,
       compileDeckFrames: typeof compiled === "function" ? compiled : async () => compiled as never,
     });
     const text = (spy: typeof stdout) => spy.mock.calls.map((call) => String(call[0])).join("");
@@ -432,8 +439,9 @@ describe("deck snapshot", () => {
     await expect(readFile(`${output}/frame-000002-page-000003.png`)).resolves.toEqual(
       Buffer.from([2, 3]),
     );
-    // Publication removes the in-progress marker, so a complete directory holds PNGs only.
+    // A persistent marker is the only completion signal; consumers ignore it after checking it.
     expect((await readdir(output)).sort()).toEqual([
+      ".deck-snapshot-complete",
       "frame-000001-page-000001.png",
       "frame-000001-page-000002.png",
       "frame-000002-page-000003.png",
@@ -460,7 +468,22 @@ describe("deck snapshot", () => {
     ]);
   });
 
-  it("keeps the in-progress marker in place until every PNG is written", async () => {
+  it("creates the complete marker before emitting a successful result", async () => {
+    const output = `${await temporaryDirectory()}/snapshots`;
+    let markedWhenReported = false;
+    const { code } = await snapshot(
+      ["talk.tex", "-o", output, "--json"],
+      snapshotCompiled(snapshotFrame(1, "intro", [1])),
+      {},
+      () => {
+        markedWhenReported = existsSync(`${output}/.deck-snapshot-complete`);
+      },
+    );
+    expect(code).toBe(EXIT_CODE.success);
+    expect(markedWhenReported).toBe(true);
+  });
+
+  it("does not publish the complete marker until every PNG is written", async () => {
     const output = `${await temporaryDirectory()}/snapshots`;
     const listings: string[][] = [];
     // Reading `png` is the last thing that happens before each file is written.
@@ -486,11 +509,9 @@ describe("deck snapshot", () => {
       ],
     } as never);
     expect(code).toBe(EXIT_CODE.success);
-    expect(listings).toEqual([
-      [".deck-snapshot-incomplete"],
-      [".deck-snapshot-incomplete", "frame-000001-page-000001.png"],
-    ]);
+    expect(listings).toEqual([[], ["frame-000001-page-000001.png"]]);
     expect((await readdir(output)).sort()).toEqual([
+      ".deck-snapshot-complete",
       "frame-000001-page-000001.png",
       "frame-000001-page-000002.png",
     ]);
@@ -612,6 +633,39 @@ describe("deck snapshot", () => {
     await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("removes the directory it created when publishing the complete marker fails", async () => {
+    const output = `${await temporaryDirectory()}/snapshots`;
+    const { code, stderr } = await snapshot(
+      ["talk.tex", "-o", output, "--json"],
+      snapshotCompiled(snapshotFrame(1, "intro", [1])),
+      {
+        writeSnapshotFile: async (path, data) => {
+          if (basename(path) === ".deck-snapshot-complete")
+            throw Object.assign(new Error("complete marker を作成できません"), { code: "EIO" });
+          await writeFile(path, data, { flag: "wx" });
+        },
+      },
+    );
+    expect(code).toBe(EXIT_CODE.operationalFailure);
+    expect(JSON.parse(stderr).error.code).toBe("E_IO");
+    await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("leaves an unmarked directory behind when cleanup fails without masking the original error", async () => {
+    const output = `${await temporaryDirectory()}/snapshots`;
+    const { code, stderr } = await snapshot(
+      ["talk.tex", "-o", output, "--json"],
+      snapshotCompiled(snapshotFrame(1, "intro", [1, 1])),
+      { cleanupSnapshotDirectory: async () => Promise.reject(new Error("cleanup failed")) },
+    );
+    expect(code).toBe(EXIT_CODE.operationalFailure);
+    expect(JSON.parse(stderr).error.code).toBe("E_IO");
+    expect(await readdir(output)).toEqual(["frame-000001-page-000001.png"]);
+    await expect(stat(`${output}/.deck-snapshot-complete`)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("creates no directory when compilation or rasterization fails", async () => {
     const output = `${await temporaryDirectory()}/snapshots`;
     const { code, stderr } = await snapshot(["talk.tex", "-o", output, "--json"], async () => {
@@ -656,7 +710,7 @@ describe("deck snapshot", () => {
       );
       expect(code).toBe(EXIT_CODE.success);
       expect(stdout).toBe(`talk.tex: ${line} -> ${output}/${file}\n`);
-      expect(await readdir(output)).toEqual([file]);
+      expect((await readdir(output)).sort()).toEqual([".deck-snapshot-complete", file]);
     }
     for (const [frame, message] of [
       ["0", "数字の label は label:<LABEL> で指定してください"],

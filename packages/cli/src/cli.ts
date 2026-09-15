@@ -670,6 +670,13 @@ export interface CliDependencies {
     overwrite?: boolean;
     tectonicPath?: string;
   }) => Promise<PdfExportResult>;
+  /** Test seams for snapshot publication and cleanup failures. */
+  writeSnapshotFile?: (
+    path: string,
+    data: Uint8Array | string,
+    options: { flag: "wx" },
+  ) => Promise<void>;
+  cleanupSnapshotDirectory?: (path: string) => Promise<void>;
 }
 
 export interface ParsedSnapshotArgs {
@@ -725,11 +732,8 @@ export function parseSnapshotArgs(argv: readonly string[]): ParsedSnapshotArgs {
   return { input, output, frame, tectonic, json, error };
 }
 
-/**
- * Present only while `deck snapshot` is writing into its output directory. Removing it is the
- * publication step, so its absence means the directory is complete.
- */
-const INCOMPLETE_MARKER = ".deck-snapshot-incomplete";
+/** A snapshot directory is published only after this marker has been created. */
+const COMPLETE_MARKER = ".deck-snapshot-complete";
 
 function snapshotFileName(frame: number, page: number): string {
   return `frame-${String(frame).padStart(6, "0")}-page-${String(page).padStart(6, "0")}.png`;
@@ -796,6 +800,7 @@ async function runSnapshot(
   // redirect writes or cleanup after the reservation.
   let reserved = false;
   try {
+    const writeSnapshotFile = dependencies.writeSnapshotFile ?? writeFile;
     const compiler =
       dependencies.compileDeckFrames ??
       ((request: { inputPath: string; tectonicPath?: string; includeImages: boolean }) =>
@@ -832,16 +837,11 @@ async function runSnapshot(
       });
     }
     reserved = true;
-    // The completion marker exists for the whole write. Its removal is what publishes the
-    // directory, so a reader that sees it must treat the directory as unfinished.
-    await writeFile(
-      join(filesystemOutput, INCOMPLETE_MARKER),
-      "deck snapshot はこのディレクトリへの書き込み中です。完了時にこのファイルは削除されます。\n",
-      { flag: "wx" },
-    );
     for (const item of outputs)
-      await writeFile(join(filesystemOutput, item.file), item.image.png, { flag: "wx" });
-    await rm(join(filesystemOutput, INCOMPLETE_MARKER));
+      await writeSnapshotFile(join(filesystemOutput, item.file), item.image.png, { flag: "wx" });
+    // Absence is deliberately not a completion signal: a crashed or failed cleanup can leave
+    // a partial directory behind. Publish only after every PNG is durably present.
+    await writeSnapshotFile(join(filesystemOutput, COMPLETE_MARKER), "", { flag: "wx" });
     if (parsed.json)
       process.stdout.write(
         `${JSON.stringify(
@@ -874,7 +874,10 @@ async function runSnapshot(
   } catch (error) {
     if (reserved)
       try {
-        await rm(filesystemOutput, { recursive: true, force: true });
+        await (
+          dependencies.cleanupSnapshotDirectory ??
+          ((path: string) => rm(path, { recursive: true, force: true }))
+        )(filesystemOutput);
       } catch {
         // Cleanup must not mask the failure that triggered it. The reserved directory stays
         // behind with its marker, and the original E_* classification below still reaches stderr.
