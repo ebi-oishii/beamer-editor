@@ -39,7 +39,8 @@ function listFitsDecktext(list: ListNode, depth: number): boolean {
     (item) =>
       item.overlay === null &&
       item.children.every((child) => {
-        if (child.type === "paragraph" || child.type === "pause") return true;
+        if (child.type === "paragraph" || child.type === "displayMath" || child.type === "pause")
+          return true;
         if (child.type === "list") return depth < 2 && listFitsDecktext(child, depth + 1);
         return false;
       }),
@@ -59,6 +60,7 @@ function listHasPause(list: ListNode): boolean {
 export function isDetachableBlock(block: BlockNode): boolean {
   switch (block.type) {
     case "paragraph":
+    case "displayMath":
     case "image":
       return true;
     case "list":
