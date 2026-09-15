@@ -23,6 +23,7 @@ interface FakeConfig {
 /** A pdfjs / canvas double recording the lifecycle calls the adapter must make. */
 function createFake(config: FakeConfig = {}) {
   const events: string[] = [];
+  let documentOptions: Record<string, unknown> | undefined;
   const viewport = (scale: number): Viewport =>
     config.viewport?.(scale) ?? { width: 100 * scale, height: 50 * scale };
   const createCanvas = (width: number, height: number) => {
@@ -69,17 +70,24 @@ function createFake(config: FakeConfig = {}) {
     if (config.loadError !== undefined) throw config.loadError;
     return {
       pdfjs: {
-        getDocument: () => ({
-          promise: Promise.resolve(pdf),
-          destroy: async () => {
-            events.push("loadingTask.destroy");
-          },
-        }),
+        getDocument: (options: Record<string, unknown>) => {
+          documentOptions = options;
+          return {
+            promise: Promise.resolve(pdf),
+            destroy: async () => {
+              events.push("loadingTask.destroy");
+            },
+          };
+        },
       },
       createCanvas,
     };
   };
-  return { events, rasterizer: createNodePdfRasterizer(load as never) };
+  return {
+    events,
+    documentOptions: () => documentOptions,
+    rasterizer: createNodePdfRasterizer(load as never),
+  };
 }
 
 const limits = {
@@ -91,7 +99,7 @@ const limits = {
 
 describe("createNodePdfRasterizer", () => {
   it("renders every page and always tears the PDF down", async () => {
-    const { events, rasterizer } = createFake({ numPages: 2, pngBytes: 3 });
+    const { events, documentOptions, rasterizer } = createFake({ numPages: 2, pngBytes: 3 });
 
     await expect(rasterizer.rasterize("deck.pdf", limits)).resolves.toEqual([
       { page: 1, png: new Uint8Array(3), width: 1600, height: 800 },
@@ -109,6 +117,27 @@ describe("createNodePdfRasterizer", () => {
       "pdf.destroy",
       "loadingTask.destroy",
     ]);
+    expect(documentOptions()).toMatchObject({
+      cMapPacked: true,
+      useWorkerFetch: false,
+      verbosity: 0,
+    });
+    expect(documentOptions()?.cMapUrl).toMatch(/cmaps\/$/);
+    expect(documentOptions()?.standardFontDataUrl).toMatch(/standard_fonts\/$/);
+  });
+
+  it("renders only requested pages and rejects invalid page selections", async () => {
+    const { events, rasterizer } = createFake({ numPages: 201 });
+    await expect(
+      rasterizer.rasterize("deck.pdf", { ...limits, pageNumbers: [201] }),
+    ).resolves.toHaveLength(1);
+    expect(events).toContain("getPage 201");
+    expect(events).not.toContain("getPage 1");
+    for (const pageNumbers of [[0], [202], [1, 1]]) {
+      await expect(
+        rasterizer.rasterize("deck.pdf", { ...limits, pageNumbers }),
+      ).rejects.toMatchObject({ code: "E_RASTERIZE" });
+    }
   });
 
   it("reports E_RASTERIZE when the modules cannot be loaded", async () => {

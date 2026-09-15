@@ -559,6 +559,8 @@ export interface CanvasLayoutDiagnostic {
   overlappingGeometry?: CanvasGeometry;
 }
 
+export type FrameSelector = { kind: "number"; value: number } | { kind: "label"; value: string };
+
 export interface CompileDeckFramesRequest {
   inputPath: string;
   tectonicPath?: string;
@@ -566,6 +568,7 @@ export interface CompileDeckFramesRequest {
   timeoutMs?: number;
   /** Whether to render physical PDF pages as PNGs. Defaults to true. */
   includeImages?: boolean;
+  frameSelectors?: readonly FrameSelector[];
   /** Maximum physical PDF pages accepted. Defaults to 200. */
   maxPages?: number;
   /** Maximum compiled PDF size. Defaults to 64 MiB. */
@@ -593,6 +596,7 @@ export interface DeckFrameRasterizer {
       maxPngBytes: number;
       maxPixelsPerPage: number;
       maxImageDimension: number;
+      pageNumbers?: readonly number[];
     },
   ): Promise<readonly FrameImage[]>;
 }
@@ -661,7 +665,7 @@ function frameLabel(options: string | undefined): string | null {
 /** Parse frame boundaries from source without changing any original offsets. */
 export function findDeckFrames(source: string): readonly CompiledFrame[] {
   const masked = withoutComments(source);
-  const begin = /\\begin\s*\{\s*frame\s*\}(?:<[^>\r\n]*>)?\s*(?:\[([^\]\r\n]*)\])?/g;
+  const begin = /\\begin\s*\{\s*frame\s*\}(?:<[^>\r\n]*>)?\s*(?:\[([^\]]*)\])?/g;
   const end = /\\end\s*\{\s*frame\s*\}/g;
   const frames: CompiledFrame[] = [];
   for (let match = begin.exec(masked); match; match = begin.exec(masked)) {
@@ -677,6 +681,30 @@ export function findDeckFrames(source: string): readonly CompiledFrame[] {
     begin.lastIndex = end.lastIndex;
   }
   return frames;
+}
+
+function selectedFrameNumbers(
+  selectors: readonly FrameSelector[] | undefined,
+  frames: readonly Pick<CompiledFrame, "address">[],
+): ReadonlySet<number> | undefined {
+  if (selectors === undefined) return undefined;
+  const selected = new Set<number>();
+  for (const selector of selectors) {
+    const matches =
+      selector.kind === "number"
+        ? Number.isSafeInteger(selector.value) && selector.value > 0
+          ? frames.filter((frame) => frame.address.number === selector.value)
+          : []
+        : frames.filter((frame) => frame.address.label === selector.value);
+    const matched = matches[0];
+    if (!matched || matches.length !== 1 || selected.has(matched.address.number))
+      throw new PdfExportError(
+        "E_INPUT",
+        `指定された frame selector が不正です: ${selector.value}`,
+      );
+    selected.add(matched.address.number);
+  }
+  return selected;
 }
 
 /** Add same-line markers so original source line numbers remain valid. */
@@ -1072,6 +1100,7 @@ export async function compileDeckFrames(
     throw new PdfExportError("E_INPUT", "入力 TeX に frame 環境がありません");
   if (frames.length > 999_999)
     throw new PdfExportError("E_LIMIT", "frame 数が marker の上限を超えています");
+  const selectedNumbers = selectedFrameNumbers(request.frameSelectors, frames);
 
   const tectonic = request.tectonicPath ?? "tectonic";
   let versionResult: ProcessResult;
@@ -1165,7 +1194,15 @@ export async function compileDeckFrames(
       join(temporaryDirectory, compiledLogName(inputPath)),
       maxLogBytes,
     );
-    const groups = groupFramePages(log, frames, maxPages);
+    const groups = groupFramePages(log, frames);
+    if (selectedNumbers === undefined) {
+      const totalPages = Array.from(groups.values()).reduce(
+        (total, pages) => total + pages.length,
+        0,
+      );
+      if (totalPages > maxPages)
+        throw new PdfExportError("E_LIMIT", `PDF page 数が上限 ${maxPages} を超えています`);
+    }
     const warnings = parseOverfullWarnings(log, frames);
     const layoutDiagnostics = analyzeCanvasGeometry(log, frames);
     if (signal?.aborted)
@@ -1188,13 +1225,34 @@ export async function compileDeckFrames(
         "E_RASTERIZE",
         "frame PNG を生成する rasterizer が設定されていません",
       );
+    const pageNumbers =
+      selectedNumbers === undefined
+        ? undefined
+        : Array.from(groups.entries())
+            .filter(([number]) => selectedNumbers.has(number))
+            .flatMap(([, pages]) => pages);
+    if (pageNumbers !== undefined && pageNumbers.length > maxPages)
+      throw new PdfExportError("E_LIMIT", `PDF page 数が上限 ${maxPages} を超えています`);
     let images: readonly FrameImage[];
     try {
       images = await rasterizer.rasterize(
         pdfPath,
         signal === undefined
-          ? { maxPages, maxPngBytes, maxPixelsPerPage, maxImageDimension }
-          : { signal, maxPages, maxPngBytes, maxPixelsPerPage, maxImageDimension },
+          ? {
+              maxPages,
+              maxPngBytes,
+              maxPixelsPerPage,
+              maxImageDimension,
+              ...(pageNumbers === undefined ? {} : { pageNumbers }),
+            }
+          : {
+              signal,
+              maxPages,
+              maxPngBytes,
+              maxPixelsPerPage,
+              maxImageDimension,
+              ...(pageNumbers === undefined ? {} : { pageNumbers }),
+            },
       );
     } catch (error) {
       if (error instanceof PdfExportError) throw error;
@@ -1234,7 +1292,8 @@ export async function compileDeckFrames(
       imageByPage.set(image.page, image);
     }
     let expectedPageCount = 0;
-    for (const pages of groups.values()) {
+    for (const [number, pages] of groups) {
+      if (selectedNumbers !== undefined && !selectedNumbers.has(number)) continue;
       expectedPageCount += pages.length;
       if (pages.some((page) => !imageByPage.has(page)))
         throw new PdfExportError(
@@ -1253,8 +1312,9 @@ export async function compileDeckFrames(
         address: frame.address,
         span: frame.span,
         images:
-          groups.get(frame.address.number)?.map((page) => imageByPage.get(page) as FrameImage) ??
-          [],
+          (selectedNumbers === undefined || selectedNumbers.has(frame.address.number)
+            ? groups.get(frame.address.number)?.map((page) => imageByPage.get(page) as FrameImage)
+            : []) ?? [],
       })),
       warnings,
       layoutDiagnostics,

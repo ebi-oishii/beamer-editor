@@ -1,3 +1,5 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { type DeckFrameRasterizer, type FrameImage, PdfExportError } from "@beamer-editor/compiler";
 
 type Modules = {
@@ -21,6 +23,11 @@ function isCanvasExtent(value: number): boolean {
   return Number.isSafeInteger(value) && value > 0;
 }
 
+function packageResource(directory: string): string {
+  const packagePath = fileURLToPath(import.meta.resolve("pdfjs-dist/package.json"));
+  return `${pathToFileURL(join(dirname(packagePath), directory)).href}/`;
+}
+
 /** Node-only adapter; imports occur only when snapshot needs PNG rendering. */
 export function createNodePdfRasterizer(
   load: () => Promise<Modules> = loadModules,
@@ -37,18 +44,36 @@ export function createNodePdfRasterizer(
           : new PdfExportError("E_RASTERIZE", "PDF rasterizer を読み込めません", error);
       }
       const { pdfjs, createCanvas } = modules;
-      const loadingTask = pdfjs.getDocument({ url: pdfPath, useWorkerFetch: false });
+      const loadingTask = pdfjs.getDocument({
+        url: pdfPath,
+        cMapUrl: packageResource("cmaps"),
+        cMapPacked: true,
+        standardFontDataUrl: packageResource("standard_fonts"),
+        useWorkerFetch: false,
+        verbosity: pdfjs.VerbosityLevel?.ERRORS ?? 0,
+      });
       try {
         const pdf = await loadingTask.promise;
         try {
-          if (pdf.numPages > options.maxPages)
+          const pageNumbers =
+            options.pageNumbers ?? Array.from({ length: pdf.numPages }, (_, index) => index + 1);
+          if (pageNumbers.length > options.maxPages)
             throw new PdfExportError(
               "E_LIMIT",
               `PDF page 数が上限 ${options.maxPages} を超えています`,
             );
           const images: FrameImage[] = [];
           let total = 0;
-          for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+          const seen = new Set<number>();
+          for (const pageNumber of pageNumbers) {
+            if (
+              !Number.isSafeInteger(pageNumber) ||
+              pageNumber < 1 ||
+              pageNumber > pdf.numPages ||
+              seen.has(pageNumber)
+            )
+              throw new PdfExportError("E_RASTERIZE", "rasterize 対象の PDF page が不正です");
+            seen.add(pageNumber);
             if (options.signal?.aborted)
               throw new PdfExportError("E_CANCELLED", "rasterize はキャンセルされました");
             const page = await pdf.getPage(pageNumber);

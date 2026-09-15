@@ -23,10 +23,12 @@ import { pathToFileURL } from "node:url";
 import {
   type CanvasGeometry,
   type CanvasLayoutDiagnostic,
+  type CompileDeckFramesRequest,
   type CompileWarning,
   compileDeckFrames,
   type DeckFramesResult,
   exportPdf,
+  findDeckFrames,
   type PdfExportErrorCode,
   type PdfExportResult,
 } from "@beamer-editor/compiler";
@@ -300,9 +302,10 @@ async function runOutline(file: string, json: boolean): Promise<number> {
     writeError("E_IO", `読み込みに失敗しました: ${file}: ${errorMessage(error)}`, json);
     return exitCodeForError("E_IO");
   }
+  const compiledFrames = findDeckFrames(source);
   const frames = framesOf(parseDeck(source)).map((frame, index) => ({
     number: index + 1,
-    label: frameLabel(frame),
+    label: compiledFrames[index]?.address.label ?? frameLabel(frame),
     title: frameTitleText(frame, index + 1),
   }));
   if (json) process.stdout.write(`${JSON.stringify({ file, frames }, null, 2)}\n`);
@@ -659,11 +662,7 @@ export function parseExportArgs(argv: readonly string[]): ParsedExportArgs {
 }
 
 export interface CliDependencies {
-  compileDeckFrames?: (request: {
-    inputPath: string;
-    tectonicPath?: string;
-    includeImages: boolean;
-  }) => Promise<DeckFramesResult>;
+  compileDeckFrames?: (request: CompileDeckFramesRequest) => Promise<DeckFramesResult>;
   exportPdf?: (request: {
     inputPath: string;
     outputPath?: string;
@@ -799,16 +798,28 @@ async function runSnapshot(
   // may remove it on failure. Its parent is canonicalized above so a retargeted symlink cannot
   // redirect writes or cleanup after the reservation.
   let reserved = false;
+  let published = false;
   try {
     const writeSnapshotFile = dependencies.writeSnapshotFile ?? writeFile;
     const compiler =
       dependencies.compileDeckFrames ??
-      ((request: { inputPath: string; tectonicPath?: string; includeImages: boolean }) =>
+      ((request: CompileDeckFramesRequest) =>
         compileDeckFrames(request, { rasterizer: nodePdfRasterizer }));
     const compiled = await compiler({
       inputPath: input,
       ...(parsed.tectonic ? { tectonicPath: parsed.tectonic } : {}),
       includeImages: true,
+      ...(parsed.frame === undefined
+        ? {}
+        : {
+            frameSelectors: [
+              parsed.frame.startsWith("label:")
+                ? { kind: "label", value: parsed.frame.slice(6) }
+                : /^\d+$/.test(parsed.frame)
+                  ? { kind: "number", value: Number(parsed.frame) }
+                  : { kind: "label", value: parsed.frame },
+            ],
+          }),
     });
     const frames = selectedFrame(parsed.frame, compiled.frames);
     const outputs = frames.flatMap((item) =>
@@ -842,6 +853,7 @@ async function runSnapshot(
     // Absence is deliberately not a completion signal: a crashed or failed cleanup can leave
     // a partial directory behind. Publish only after every PNG is durably present.
     await writeSnapshotFile(join(filesystemOutput, COMPLETE_MARKER), "", { flag: "wx" });
+    published = true;
     if (parsed.json)
       process.stdout.write(
         `${JSON.stringify(
@@ -872,21 +884,25 @@ async function runSnapshot(
         );
     return 0;
   } catch (error) {
-    if (reserved)
+    if (reserved && !published)
       try {
         await (
           dependencies.cleanupSnapshotDirectory ??
           ((path: string) => rm(path, { recursive: true, force: true }))
         )(filesystemOutput);
       } catch {
-        // Cleanup must not mask the failure that triggered it. The reserved directory stays
-        // behind with its marker, and the original E_* classification below still reaches stderr.
+        // cleanup 失敗時は marker なしの未完成 directory が残り得る。
       }
-    const candidate =
+    const candidate: unknown =
       error && typeof error === "object" && "code" in error && typeof error.code === "string"
         ? error.code
-        : "E_RASTERIZE";
-    const code: CliErrorCode = candidate in ERROR_EXIT_CODE ? (candidate as CliErrorCode) : "E_IO";
+        : undefined;
+    const code: CliErrorCode =
+      typeof candidate === "string" && Object.hasOwn(ERROR_EXIT_CODE, candidate)
+        ? (candidate as CliErrorCode)
+        : typeof candidate === "string"
+          ? "E_IO"
+          : "E_INTERNAL";
     writeError(code, errorMessage(error), parsed.json);
     return 3;
   }

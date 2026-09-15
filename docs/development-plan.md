@@ -219,4 +219,6 @@ Electron は次が VS Code 版で安定してから着手する(追加要件 §6
 2. [#125](https://github.com/ebi-oishii/beamer-editor/issues/125) のフレーム別警告を実装する。
 3. [#126](https://github.com/ebi-oishii/beamer-editor/issues/126) のキャンバス実測検査を実装する。
 4. [#88 `deck check`](https://github.com/ebi-oishii/beamer-editor/issues/88) で #125 と #126 の検査を CLI として統合する。
-5. [#89 `deck snapshot`](https://github.com/ebi-oishii/beamer-editor/issues/89) で検査対象の見た目を確認できるようにする。
+5. `deck init` でデッキ雛形を生成する。
+6. `deck init` に SKILL.md と references を同梱する。
+7. `deck init` に prompt examples を同梱する。

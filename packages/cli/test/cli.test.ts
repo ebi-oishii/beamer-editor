@@ -14,6 +14,7 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, relative, resolve } from "node:path";
+import type { CompileDeckFramesRequest } from "@beamer-editor/compiler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type CliDependencies,
@@ -362,7 +363,9 @@ function snapshotCompiled(...frames: SnapshotFrame[]) {
 /** Runs `deck snapshot` in-process and returns its exit code together with both streams. */
 async function snapshot(
   argv: readonly string[],
-  compiled: ReturnType<typeof snapshotCompiled> | (() => Promise<never>),
+  compiled:
+    | ReturnType<typeof snapshotCompiled>
+    | ((request: CompileDeckFramesRequest) => Promise<never>),
   dependencies: Omit<CliDependencies, "compileDeckFrames"> = {},
   observeStdout?: () => void,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -660,7 +663,7 @@ describe("deck snapshot", () => {
     );
     expect(code).toBe(EXIT_CODE.operationalFailure);
     expect(JSON.parse(stderr).error.code).toBe("E_IO");
-    expect(await readdir(output)).toEqual(["frame-000001-page-000001.png"]);
+    expect((await readdir(output)).sort()).toEqual(["frame-000001-page-000001.png"]);
     await expect(stat(`${output}/.deck-snapshot-complete`)).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -688,6 +691,38 @@ describe("deck snapshot", () => {
     expect(code).toBe(EXIT_CODE.operationalFailure);
     expect(JSON.parse(stderr).error.code).toBe("E_COMPILE");
     await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("uses a label selector for a multiline frame label and reports unknown failures as E_INTERNAL", async () => {
+    const output = `${await temporaryDirectory()}/snapshots`;
+    let request: CompileDeckFramesRequest | undefined;
+    const { code, stderr } = await snapshot(
+      ["talk.tex", "-o", output, "--frame", "multi-line", "--json"],
+      async (value) => {
+        request = value;
+        throw new Error("unexpected");
+      },
+    );
+    expect(code).toBe(EXIT_CODE.operationalFailure);
+    expect(JSON.parse(stderr)).toMatchObject({ error: { code: "E_INTERNAL" } });
+    expect(request?.frameSelectors).toEqual([{ kind: "label", value: "multi-line" }]);
+  });
+
+  it("keeps published PNGs and marker when stdout reporting throws", async () => {
+    const output = `${await temporaryDirectory()}/snapshots`;
+    const { code } = await snapshot(
+      ["talk.tex", "-o", output, "--json"],
+      snapshotCompiled(snapshotFrame(1, "intro", [1])),
+      {},
+      () => {
+        throw new Error("stdout failed");
+      },
+    );
+    expect(code).toBe(EXIT_CODE.operationalFailure);
+    expect((await readdir(output)).sort()).toEqual([
+      ".deck-snapshot-complete",
+      "frame-000001-page-000001.png",
+    ]);
   });
 
   it("resolves every selector form and rejects ambiguous ones with E_INPUT", async () => {
