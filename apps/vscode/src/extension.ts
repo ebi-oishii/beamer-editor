@@ -39,7 +39,7 @@ import {
   needsLatexWorkshopIgnorePrompt,
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
-import { PreviewHistory } from "./preview-history";
+import { executeHistoryCommand, PreviewHistory } from "./preview-history";
 import {
   affectsRawBlockCompile,
   dependencyFingerprint,
@@ -145,21 +145,6 @@ async function jumpToOffset(
   lineFlash.flash(editor, range);
 }
 
-/** 文書の変更イベントを timeout(ms)まで待つ。変更があれば true。 */
-function waitForDocumentChange(document: vscode.TextDocument, timeoutMs: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const finish = (changed: boolean) => {
-      clearTimeout(timer);
-      subscription.dispose();
-      resolve(changed);
-    };
-    const subscription = vscode.workspace.onDidChangeTextDocument((event) => {
-      if (event.document === document) finish(true);
-    });
-    const timer = setTimeout(() => finish(false), timeoutMs);
-  });
-}
-
 /** 統合テストからの観測用 API(activate の戻り値)。製品コードから参照しない。 */
 export interface TestApi {
   _previewControllerForTest(): PreviewController | undefined;
@@ -187,26 +172,29 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         vscode.workspace.textDocuments.find(
           (candidate) => candidate.uri.toString() === target.uri.toString(),
         ) ?? (await vscode.workspace.openTextDocument(target.uri));
-      // undo / redo はキーボードフォーカスのあるエディタに効く。Webview からフォーカスを戻した直後は、
-      // エディタが表示されていてもフォーカスがまだ移っていないことがある(Linux の CI で再現)。
-      // エディタグループへ明示的にフォーカスを移してから実行し、文書が変わらなければ変更イベントを
-      // 少し待ち、それでも変わらないときだけやり直す。コマンドの完了より文書の version の更新が遅れて
-      // 見えることがあるので、待っている間に変わったらそこで終える(1 回の操作で履歴を 2 件消費しない)。
-      // 取り消すものが無いときも同じ経路で(短い待ちの後に)終わる。
-      const before = document.version;
-      const changed = () => document.version !== before;
-      for (let attempt = 0; attempt < HISTORY_ATTEMPTS; attempt++) {
-        await vscode.window.showTextDocument(document, {
-          preserveFocus: false,
-          preview: false,
-          ...(target.viewColumn !== undefined ? { viewColumn: target.viewColumn } : {}),
-        });
-        await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
-        await vscode.commands.executeCommand(kind);
-        if (changed()) return;
-        if (await waitForDocumentChange(document, HISTORY_RETRY_DELAY_MS)) return;
-        if (changed()) return;
-      }
+      // フォーカスの移動とやり直しの判断は executeHistoryCommand(preview-history.ts)にある。
+      await executeHistoryCommand(
+        kind,
+        {
+          focusEditor: async () => {
+            await vscode.window.showTextDocument(document, {
+              preserveFocus: false,
+              preview: false,
+              ...(target.viewColumn !== undefined ? { viewColumn: target.viewColumn } : {}),
+            });
+            await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
+          },
+          execute: async (command) => {
+            await vscode.commands.executeCommand(command);
+          },
+          version: () => document.version,
+          onDidChange: (listener) =>
+            vscode.workspace.onDidChangeTextDocument((event) => {
+              if (event.document === document) listener();
+            }),
+        },
+        { attempts: HISTORY_ATTEMPTS, retryDelayMs: HISTORY_RETRY_DELAY_MS },
+      );
     },
     isOpen: (panel) => previewSources.has(panel),
     reveal: (panel) => panel.reveal(undefined, false),
