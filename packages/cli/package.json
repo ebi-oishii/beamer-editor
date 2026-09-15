@@ -6,7 +6,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "deck": "tsx src/cli.ts"
+    "deck": "tsx src/cli.ts",
+    "build:skills": "tsx scripts/build-skills.ts"
   },
   "dependencies": {
     "@beamer-editor/compiler": "workspace:*",

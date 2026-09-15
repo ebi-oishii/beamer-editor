@@ -21,6 +21,7 @@ export type LintCode =
   | "L005"
   | "L007"
   | "L009"
+  | "L010"
   | "L011"
   | "L012"
   | "L013"
@@ -45,6 +46,9 @@ export interface LintDiagnostic {
 }
 
 export interface LintOptions {
+  /** undefined: no bundled skill; null: present but missing version metadata. */
+  skillVersion?: string | null;
+  expectedSkillVersion?: string;
   /** 対応する `%% deck-source-version`。 */
   expectedSourceVersion?: number;
   /** Optional external dependency; core itself never accesses the filesystem. */
@@ -918,6 +922,18 @@ function lintTemplates(statuses: readonly TemplateStatus[] | undefined): LintDia
 export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiagnostic[] {
   const expectedSourceVersion = options.expectedSourceVersion ?? CURRENT_DECK_SOURCE_VERSION;
   const diagnostics = [
+    ...(options.skillVersion !== undefined &&
+    options.expectedSkillVersion !== undefined &&
+    options.skillVersion !== options.expectedSkillVersion
+      ? [
+          diagnostic(
+            "L010",
+            "warning",
+            `同梱スキルの版(${options.skillVersion ?? "不明"})がCLIの版(${options.expectedSkillVersion})と一致しません。スキルを再生成してください`,
+            { start: 0, end: 0 },
+          ),
+        ]
+      : []),
     ...lintRawSyntax(doc),
     ...lintMacros(doc),
     ...lintOverlays(doc),
