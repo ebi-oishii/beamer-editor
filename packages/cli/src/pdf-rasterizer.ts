@@ -117,7 +117,9 @@ export function createNodePdfRasterizer(
           }
           return images;
         } finally {
-          await pdf.destroy();
+          // PDF.js 6 releases the document through loadingTask.destroy(); retain cleanup for
+          // older PDF.js document proxies that expose destroy().
+          await (pdf as typeof pdf & { destroy?: () => Promise<void> }).destroy?.();
         }
       } finally {
         await loadingTask.destroy();

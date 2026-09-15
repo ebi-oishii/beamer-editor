@@ -4,7 +4,7 @@
  * トグル)とキャンバス画像のドラッグを適用する。倍率の計算は持たない。
  */
 
-import { clampCanvasPosition, roundCanvasCoordinate } from "@beamer-editor/core";
+import { clampCanvasPosition, clampCanvasWidth, roundCanvasCoordinate } from "@beamer-editor/core";
 import type { RenderedFrame } from "@beamer-editor/renderer";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { canvasPointFromPointer } from "./canvas-drag.js";
@@ -44,6 +44,9 @@ function releasePointerCapture(element: HTMLElement, pointerId: number): void {
 
 interface DragState {
   element: HTMLElement;
+  resize: boolean;
+  startClientX: number;
+  originalWidth: string;
   id: string;
   x: number;
   y: number;
@@ -62,6 +65,11 @@ interface DragState {
 function cancelDrag(drag: DragState): void {
   drag.element.style.left = `${drag.x * 100}%`;
   drag.element.style.top = `${drag.y * 100}%`;
+  drag.element.style.width = drag.originalWidth;
+  const handle = drag.element
+    .closest(".canvas")
+    ?.querySelector<HTMLElement>(".canvas-resize-handle");
+  if (handle) handle.style.left = `${(drag.x + drag.width) * 100}%`;
   drag.element.classList.remove("canvas-dragging");
   releasePointerCapture(drag.element, drag.pointerId);
 }
@@ -72,6 +80,7 @@ export function Stage({
   scale,
   slideSize,
   version,
+  onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
 }: {
@@ -80,6 +89,7 @@ export function Stage({
   scale: number;
   slideSize: SlideSize;
   version: number;
+  onResizeCanvasElement?: ((elementId: string, width: number) => void) | undefined;
   onMoveCanvasElement: (elementId: string, x: number, y: number) => void;
   /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
   onDetachToCanvas?: ((request: DetachRequest) => void) | undefined;
@@ -131,6 +141,40 @@ export function Stage({
     scale.addEventListener("contextmenu", onContextMenu);
     return () => scale.removeEventListener("contextmenu", onContextMenu);
   }, [onDetachToCanvas, highlight]);
+
+  // A sibling control also works for <img>, which cannot contain a handle.
+  useEffect(() => {
+    const descriptor = frame.canvasElements?.find(
+      (item) => item.id === selected && item.editable && item.kind === "image",
+    );
+    const element = scaleRef.current?.querySelector<HTMLElement>(
+      `[data-canvas-element-id="${selected}"]`,
+    );
+    const canvas = element?.closest<HTMLElement>(".canvas");
+    if (!descriptor || !canvas || !onResizeCanvasElement) return;
+    const handle = document.createElement("button");
+    handle.type = "button";
+    handle.className = "canvas-resize-handle";
+    handle.dataset.resizeElementId = descriptor.id;
+    handle.setAttribute("aria-label", "画像の幅を変更");
+    handle.addEventListener("dblclick", (event) => event.stopPropagation());
+    handle.title = "ドラッグで拡大縮小（左右キーでも変更）";
+    handle.style.left = `${(descriptor.position.x + descriptor.position.width) * 100}%`;
+    handle.style.top = `${descriptor.position.y * 100}%`;
+    handle.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      event.stopPropagation();
+      const width = clampCanvasWidth(
+        descriptor.position.x,
+        descriptor.position.width + (event.key === "ArrowRight" ? 0.01 : -0.01),
+      );
+      if (width !== null && width !== descriptor.position.width)
+        onResizeCanvasElement(descriptor.id, width);
+    });
+    canvas.append(handle);
+    return () => handle.remove();
+  }, [frame, selected, onResizeCanvasElement]);
 
   // メニュー外の pointerdown / Escape で閉じる。
   useEffect(() => {
@@ -199,7 +243,11 @@ export function Stage({
         ?.classList.remove("canvas-selected");
       setSelected(null);
     };
-    const element = (event.target as HTMLElement).closest<HTMLElement>("[data-canvas-element-id]");
+    const handleId = (event.target as HTMLElement).closest<HTMLElement>("[data-resize-element-id]")
+      ?.dataset.resizeElementId;
+    const element = handleId
+      ? scaleRef.current?.querySelector<HTMLElement>(`[data-canvas-element-id="${handleId}"]`)
+      : (event.target as HTMLElement).closest<HTMLElement>("[data-canvas-element-id]");
     const id = element?.dataset.canvasElementId;
     const descriptor = frame.canvasElements?.find(
       (candidate) => candidate.id === id && candidate.editable,
@@ -230,6 +278,7 @@ export function Stage({
       clearSelection();
       return;
     }
+    if (handleId && (!onResizeCanvasElement || descriptor.kind !== "image")) return;
     if (selected) {
       scaleRef.current
         ?.querySelector(`[data-canvas-element-id="${selected}"]`)
@@ -238,6 +287,9 @@ export function Stage({
     const bounds = element.getBoundingClientRect();
     const canvasBounds = canvas.getBoundingClientRect();
     dragRef.current = {
+      resize: Boolean(handleId),
+      startClientX: event.clientX,
+      originalWidth: element.style.width,
       element,
       id,
       x: descriptor.position.x,
@@ -259,6 +311,15 @@ export function Stage({
     setSelected(id);
     event.preventDefault();
   };
+  const resizeWidth = (drag: DragState, event: PointerEvent): number | null => {
+    const canvas = drag.element.closest<HTMLElement>(".canvas");
+    const bounds = canvas?.getBoundingClientRect();
+    if (!bounds || !Number.isFinite(bounds.width) || bounds.width <= 0) return null;
+    return clampCanvasWidth(
+      drag.x,
+      drag.width + (event.clientX - drag.startClientX) / bounds.width,
+    );
+  };
   const move = (event: PointerEvent) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
@@ -268,6 +329,17 @@ export function Stage({
     if (drag.pointerType === "mouse" && event.buttons !== 1) {
       cancelDrag(drag);
       dragRef.current = undefined;
+      return;
+    }
+    if (drag.resize) {
+      const width = resizeWidth(drag, event);
+      if (width !== null) {
+        drag.element.style.width = `${width * 100}%`;
+        const handle = drag.element
+          .closest(".canvas")
+          ?.querySelector<HTMLElement>(".canvas-resize-handle");
+        if (handle) handle.style.left = `${(drag.x + width) * 100}%`;
+      }
       return;
     }
     const canvas = drag.element.closest<HTMLElement>(".canvas");
@@ -288,6 +360,14 @@ export function Stage({
   const finish = (event: PointerEvent, commit: boolean) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    if (drag.resize) {
+      const width = resizeWidth(drag, event);
+      cancelDrag(drag);
+      dragRef.current = undefined;
+      if (commit && width !== null && event.clientX !== drag.startClientX && width !== drag.width)
+        onResizeCanvasElement?.(drag.id, width);
+      return;
+    }
     const canvas = drag.element.closest<HTMLElement>(".canvas");
     const raw =
       canvas &&
@@ -347,7 +427,7 @@ export function Stage({
       scale.removeEventListener("pointercancel", pointerCancel);
       scale.removeEventListener("contextmenu", cancelOnContextMenu);
     };
-  }, [frame, selected, version, onMoveCanvasElement]);
+  }, [frame, selected, version, onMoveCanvasElement, onResizeCanvasElement]);
 
   const choose = (candidate: DetachCandidate) => {
     const slide = scaleRef.current?.querySelector<HTMLElement>(".slide");

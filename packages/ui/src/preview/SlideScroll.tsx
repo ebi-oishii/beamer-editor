@@ -59,6 +59,7 @@ function SlideCard({
   version,
   onSelect,
   onJump,
+  onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
 }: {
@@ -71,6 +72,9 @@ function SlideCard({
   version: number;
   onSelect: (index: number) => void;
   onJump: (index: number) => void;
+  onResizeCanvasElement?:
+    | ((frameIndex: number, elementId: string, width: number) => void)
+    | undefined;
   onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
   onDetachToCanvas: ((frameIndex: number, request: DetachRequest) => void) | undefined;
 }): JSX.Element {
@@ -101,6 +105,11 @@ function SlideCard({
         scale={scale}
         slideSize={slideSize}
         version={version}
+        onResizeCanvasElement={
+          onResizeCanvasElement
+            ? (elementId, width) => onResizeCanvasElement(index, elementId, width)
+            : undefined
+        }
         onMoveCanvasElement={(elementId, x, y) => onMoveCanvasElement(index, elementId, x, y)}
         onDetachToCanvas={
           onDetachToCanvas ? (request) => onDetachToCanvas(index, request) : undefined
@@ -125,6 +134,7 @@ export function SlideScroll({
   onSelect,
   onJump,
   onScrollActive,
+  onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
   onFitScaleChange,
@@ -139,6 +149,9 @@ export function SlideScroll({
   onJump: (index: number) => void;
   /** スクロールで表示領域の上端に来たフレームが変わった通知。 */
   onScrollActive: (index: number) => void;
+  onResizeCanvasElement?:
+    | ((frameIndex: number, elementId: string, width: number) => void)
+    | undefined;
   onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
   /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
   onDetachToCanvas?: ((frameIndex: number, request: DetachRequest) => void) | undefined;
@@ -328,6 +341,7 @@ export function SlideScroll({
           version={version}
           onSelect={onSelect}
           onJump={onJump}
+          onResizeCanvasElement={onResizeCanvasElement}
           onMoveCanvasElement={onMoveCanvasElement}
           onDetachToCanvas={onDetachToCanvas}
         />

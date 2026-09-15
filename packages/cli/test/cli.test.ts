@@ -490,7 +490,7 @@ describe("deck snapshot", () => {
       [".deck-snapshot-incomplete"],
       [".deck-snapshot-incomplete", "frame-000001-page-000001.png"],
     ]);
-    expect(await readdir(output)).toEqual([
+    expect((await readdir(output)).sort()).toEqual([
       "frame-000001-page-000001.png",
       "frame-000001-page-000002.png",
     ]);

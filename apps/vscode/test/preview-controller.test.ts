@@ -199,6 +199,26 @@ describe("PreviewController", () => {
     expect(message.activeFrame).toBe(0);
   });
 
+  it("ready では onWebviewReady を描画より先に呼ぶ", () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const order: string[] = [];
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      onWebviewReady: () => order.push("ready"),
+      onRendered: () => order.push("rendered"),
+    });
+    fire({ type: "ready" });
+    expect(order).toEqual(["ready", "rendered"]);
+  });
+
+  it("postRawImagesCleared は rawImagesCleared を送る", () => {
+    const { panel, posted } = makePanel();
+    const { events } = makeEvents();
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn());
+    controller.postRawImagesCleared();
+    expect(posted).toEqual([{ type: "rawImagesCleared" }]);
+  });
+
   it("Webview HTML に CSP(default-src 'none' + nonce)とアセット参照が入る", () => {
     const { panel } = makePanel();
     const { events } = makeEvents();
@@ -1077,5 +1097,42 @@ describe("PreviewController", () => {
     // 最後に成功した結果は失敗で上書きされない(VS-4/VS-5 の参照先)。
     expect(controller.latestOutcome).toBe(goodOutcome);
     expect(controller.latestOutcome?.version).toBe(7);
+  });
+});
+
+describe("canvas image width edits", () => {
+  it("validates version and element identity, clamps width, and locks pending edits", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    doc.edit(
+      String.raw`\documentclass[aspectratio=169]{beamer}\begin{document}\begin{frame}[label=c]\begin{deckcanvas}\deckimage[x=.1,y=.2,w=.3]{image.png}\end{deckcanvas}\end{frame}\end{document}`,
+    );
+    const resizeCanvasElement = vi.fn(async (_request: unknown) => "applied" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      resizeCanvasElement,
+    });
+    fire({ type: "ready" });
+    const request = {
+      type: "resizeCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: doc.version,
+      width: 2,
+    };
+    fire({ ...request, version: doc.version - 1 });
+    fire({ ...request, elementId: "missing" });
+    fire({ ...request, width: NaN });
+    expect(resizeCanvasElement).not.toHaveBeenCalled();
+    fire(request);
+    fire(request);
+    await Promise.resolve();
+    expect(resizeCanvasElement).toHaveBeenCalledOnce();
+    expect(resizeCanvasElement.mock.calls[0]?.[0]).toMatchObject({
+      width: 0.9,
+      expectedOptions: "[x=.1,y=.2,w=.3]",
+      document: doc,
+    });
+    controller.dispose();
   });
 });

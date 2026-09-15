@@ -23,6 +23,15 @@ export interface NavState {
   zoom: ZoomState;
 }
 
+export type RawBlockImageResult = { pdfBase64: string } | { error: string };
+
+/** ラスタライズした画像。width / height はピクセル(縦横比の計算に使う)。 */
+export interface RasterImage {
+  dataUrl: string;
+  width: number;
+  height: number;
+}
+
 export interface ShellHost {
   /** ホストからの deck 更新を購読する。unsubscribe を返す。 */
   subscribe(listener: (deck: RenderedDeck, version: number) => void): () => void;
@@ -31,6 +40,19 @@ export interface ShellHost {
    * version は要求の基になった deck の document version。表示中の版と違えば ui は無視する。
    */
   onRevealFrame?(listener: (frameIndex: number, version: number) => void): () => void;
+  /**
+   * ホスト → ui: 生ブロックの部分コンパイル結果(#81)。key はプレースホルダの data-raw-key。
+   * 成功なら PDF(base64)、失敗ならメッセージ。
+   */
+  onRawBlockImage?(listener: (key: string, result: RawBlockImageResult) => void): () => void;
+  /**
+   * ホスト → ui: 差し込み済みの部分コンパイル画像を捨てる(#81)。設定で無効化したとき。
+   */
+  onRawImagesCleared?(listener: () => void): () => void;
+  /**
+   * PDF のバイト列を画像にする(pdf.js などホスト固有の実装)。無いホストでは箱のまま残す。
+   */
+  rasterizePdf?(pdf: Uint8Array): Promise<RasterImage>;
   /** 前回のナビ状態(パネル再表示時の復元用)。無ければ undefined。 */
   loadNavState?(): NavState | undefined;
   /** ナビ状態の保存。current / step 以外を渡さない。 */
@@ -47,6 +69,7 @@ export interface ShellHost {
    * 取り消し / やり直しを実行する(#103)。実装しないホストではキーを奪わない。
    */
   undoRedo?(kind: "undo" | "redo"): void;
+  resizeCanvasElement?(frameIndex: number, elementId: string, version: number, width: number): void;
   moveCanvasElement?(
     frameIndex: number,
     elementId: string,
@@ -114,6 +137,17 @@ export function createMessageShellHost(
         if (msg.type === "activeFrameChanged") listener(msg.frameIndex, msg.version);
       });
     },
+    onRawBlockImage(listener) {
+      return transport.subscribe((msg) => {
+        if (msg.type === "rawBlockReady") listener(msg.key, { pdfBase64: msg.pdfBase64 });
+        else if (msg.type === "rawBlockFailed") listener(msg.key, { error: msg.message });
+      });
+    },
+    onRawImagesCleared(listener) {
+      return transport.subscribe((msg) => {
+        if (msg.type === "rawImagesCleared") listener();
+      });
+    },
     jumpToSource(frameIndex, version) {
       transport.post({ type: "jumpToSource", frameIndex, version });
     },
@@ -122,6 +156,9 @@ export function createMessageShellHost(
     },
     undoRedo(kind) {
       transport.post({ type: "undoRedo", kind });
+    },
+    resizeCanvasElement(frameIndex, elementId, version, width) {
+      transport.post({ type: "resizeCanvasElement", frameIndex, elementId, version, width });
     },
     moveCanvasElement(frameIndex, elementId, version, x, y) {
       transport.post({ type: "moveCanvasElement", frameIndex, elementId, version, x, y });

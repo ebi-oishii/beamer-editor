@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   CANVAS_MIN_WIDTH,
   canvasPositionReplacement,
+  canvasWidthReplacement,
   clampCanvasPlacement,
   clampCanvasPosition,
+  clampCanvasWidth,
   updateCanvasPosition,
 } from "../src/canvas-edit.js";
 
@@ -142,6 +144,26 @@ describe("clamp の結果はそのまま lint L012 を通る", () => {
       expect(placed.y).toBeLessThanOrEqual(1);
       expect(placed.width).toBeGreaterThan(0);
       expect(placed.x + placed.width).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+describe("canvas width", () => {
+  it("changes only w and rejects ambiguous or invalid options", () => {
+    expect(canvasWidthReplacement("[y=.2, w = .30 ,x=.1]", 0.4567)).toBe("[y=.2, w = 0.457 ,x=.1]");
+    for (const options of ["[x=0,y=0]", "[w=.2,w=.3]", "[w=.3junk]", "[w=NaN]"])
+      expect(canvasWidthReplacement(options, 0.4)).toBeNull();
+    expect(canvasWidthReplacement("[w=.3]", NaN)).toBeNull();
+  });
+  it("keeps the fixed anchor and width within the right edge at three-decimal precision", () => {
+    expect(clampCanvasWidth(0.1, 2)).toBe(0.9);
+    expect(clampCanvasWidth(0.1, 0)).toBe(0.05);
+    expect(clampCanvasWidth(0.999, 1)).toBe(0.001);
+    expect(clampCanvasWidth(-0.1, 0.3)).toBeNull();
+    for (const x of [0.1, 0.333, 0.666, 0.0001, 0.12345]) {
+      const width = clampCanvasWidth(x, 2);
+      expect(width).not.toBeNull();
+      expect(x + (width ?? 0)).toBeLessThanOrEqual(1);
     }
   });
 });
