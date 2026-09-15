@@ -234,8 +234,15 @@ textpos 系の絶対配置は縦にはみ出しても Overfull 警告が出な�
 
 ```
 DECKBODY left=<pt> top=<pt> width=<pt> height=<pt>   (文書冒頭に 1 回)
-DECKGEOM frame=<番号> kind=<text|image> x=<pt> y=<pt> w=<pt> h=<pt>
+DECKGEOM frame=<番号> page=<物理ページ番号> kind=<text|image> x=<pt> y=<pt> w=<pt> h=<pt>
 ```
+
+`DECKGEOM` は `zref-savepos` による前 pass の実測値を使う。未解決の最初の
+pass では推測値を出力しないため、最終 pass で有効なレコードを得られないコンパイルは
+検査対象外ではなくコンパイル失敗として扱う。
+
+オーバーレイ・`allowframebreaks` では同じ論理 frame が複数の物理ページへ展開される。
+はみ出し・重なりは `frame` と `page` が同じオブジェクトだけで判定する。
 
 - 本文領域外へのはみ出し: warning
 - オブジェクト同士の重なり: info(意図的な場合があるため、静的 lint では扱わず check の実測レポートのみ)

@@ -15,12 +15,13 @@
 % 各オブジェクトの配置時に、絶対座標と実測寸法(ボックスの幅・高さ)を
 % コンパイルログへ出力する。deck check(Phase 6)がこれを解析して
 % 本文領域外へのはみ出し(warning)とオブジェクト重なり(info)を機械検出する。
-%   書式: DECKGEOM frame=<フレーム番号> kind=<text|image> x=<pt> y=<pt> w=<pt> h=<pt>
+%   書式: DECKGEOM frame=<フレーム番号> page=<物理ページ番号> kind=<text|image> x=<pt> y=<pt> w=<pt> h=<pt>
 %   本文領域: DECKBODY left=<pt> top=<pt> width=<pt> height=<pt>(文書冒頭に 1 回)
 % 高さはボックス実測なので、テキストのリフロー結果を正しく反映する。
 % (絶対配置は Overfull 警告を出さないため、この機構が check の安全網になる)
 \usepackage[absolute,overlay]{textpos}
 \usepackage{keyval}
+\usepackage{zref-savepos}
 \makeatletter
 % ---- 本文領域の定数 ----
 \newdimen\deck@body@left   \deck@body@left=28.45pt
@@ -54,13 +55,27 @@
   \advance\deck@abs@y by \deck@body@top
   \deck@abs@w=\deck@pos@w\deck@body@width}
 \newsavebox\deck@contentbox
+\newcounter{deck@geometry}
 \newcommand\deck@geomlog[1]{%
-  \typeout{DECKGEOM frame=\insertframenumber\space kind=#1 x=\the\deck@abs@x\space y=\the\deck@abs@y\space w=\the\wd\deck@contentbox\space h=\the\dimexpr\ht\deck@contentbox+\dp\deck@contentbox\relax}}
+  % savepos is resolved from the previous pass.  Do not emit a guessed zero
+  % coordinate on the first pass: the compiler will either make a final pass
+  % with valid geometry or leave an explicit unresolved sentinel.
+  \stepcounter{deck@geometry}%
+  \edef\deck@geometry@label{deckgeom-\insertframenumber-\the\value{deck@geometry}}%
+  \zsavepos{\deck@geometry@label}%
+  \zref@ifrefundefined{\deck@geometry@label}{%
+    \typeout{DECKGEOMERROR reason=unresolved}%
+  }{%
+    \dimen@=\zposx{\deck@geometry@label}sp\relax
+    \@tempdima=\paperheight\relax
+    \advance\@tempdima by -\zposy{\deck@geometry@label}sp\relax
+    \typeout{DECKGEOM frame=\insertframenumber\space page=\the\c@page\space kind=#1 x=\the\dimen@\space y=\the\@tempdima\space w=\the\wd\deck@contentbox\space h=\the\dimexpr\ht\deck@contentbox+\dp\deck@contentbox\relax}%
+  }}
 \newcommand\deck@place[1]{%
   \begin{textblock*}{\deck@abs@w}(\deck@abs@x,\deck@abs@y)%
+    \deck@geomlog{#1}%
     \usebox\deck@contentbox
-  \end{textblock*}%
-  \deck@geomlog{#1}}
+  \end{textblock*}}
 % ---- 公開契約 ----
 \newenvironment{deckcanvas}{\ignorespaces}{\ignorespacesafterend}
 \newenvironment{decktext}[1][]{%

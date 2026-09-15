@@ -8,9 +8,10 @@
 import type { RenderedDeck } from "@beamer-editor/renderer";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ShellHost } from "../shell-host.js";
+import { applyRawImages, RawImageStore } from "./raw-images.js";
 import { type RevealRequest, SlideScroll } from "./SlideScroll.js";
 import { type PreviewAction, type PreviewState, previewReducer } from "./state.js";
-import { stepZoom, type ZoomState } from "./zoom.js";
+import { roundZoom, stepZoom, wheelDeltaPixels, wheelZoom, type ZoomState } from "./zoom.js";
 
 const EMPTY_DECK: RenderedDeck = { title: "", frames: [], css: "" };
 const INITIAL_STATE: PreviewState = { current: 0, step: 1 };
@@ -20,12 +21,15 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   // 表示中 deck の document version。jumpToSource に添えて古い版からのジャンプを検出させる。
   const [version, setVersion] = useState(Number.NEGATIVE_INFINITY);
   const [restoredNav] = useState(() => host.loadNavState?.());
+  // 生ブロックの部分コンパイル画像(#81)。ホストから届いた PDF を画像にして箱にはめ込む。
+  const [rawImages] = useState(() => new RawImageStore(host.rasterizePdf?.bind(host)));
+  const [rawImagesVersion, setRawImagesVersion] = useState(0);
   const [zoom, setZoom] = useState<ZoomState>(() => restoredNav?.zoom ?? "fit");
   const [fitScale, setFitScale] = useState(1);
   const fitScaleRef = useRef(fitScale);
   fitScaleRef.current = fitScale;
   const previewRef = useRef<HTMLElement>(null);
-  const pendingWheelDirection = useRef<1 | -1 | undefined>();
+  const pendingWheelDelta = useRef(0);
   const wheelAnimationFrame = useRef<number | undefined>();
 
   // frameCount を reducer へ渡すため ref に写す（reducer の同一性を保つ）。
@@ -50,9 +54,11 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   }, []);
 
   // ナビ状態を保存する(VS-7: current / step / zoom のみ。ソース本文や AST は保存しない)。
+  // 倍率は内部では丸めずに持ち(小さな delta を積み重ねるため)、保存では 3 桁にする。
+  const persistedZoom = zoom === "fit" ? zoom : roundZoom(zoom);
   useEffect(() => {
-    host.saveNavState?.({ current: state.current, step: state.step, zoom });
-  }, [host, state.current, state.step, zoom]);
+    host.saveNavState?.({ current: state.current, step: state.step, zoom: persistedZoom });
+  }, [host, state.current, state.step, persistedZoom]);
 
   // ホストからの deck 更新を購読する。version は同期的に読めるよう ref にも写す。
   const versionRef = useRef(Number.NEGATIVE_INFINITY);
@@ -124,8 +130,9 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     }
   }, [frame, state.step]);
 
-  // wheel は React の passive 設定に依存せず native listener で扱う。高精度ホイールの
-  // 多数のイベントは一描画フレームにつき一段階へ畳み、通常スクロールは一切妨げない。
+  // wheel は React の passive 設定に依存せず native listener で扱う。高精度ホイールやピンチの
+  // 多数のイベントは一描画フレーム分の delta に畳み、delta に比例して倍率を変える(#102)。
+  // 通常スクロールは一切妨げない。
   useEffect(() => {
     const preview = previewRef.current;
     if (!preview) return;
@@ -133,13 +140,13 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
       if (!event.ctrlKey && !event.metaKey) return;
       if (event.deltaY === 0) return;
       event.preventDefault();
-      pendingWheelDirection.current = event.deltaY > 0 ? -1 : 1;
+      pendingWheelDelta.current += wheelDeltaPixels(event.deltaY, event.deltaMode);
       if (wheelAnimationFrame.current !== undefined) return;
       wheelAnimationFrame.current = requestAnimationFrame(() => {
         wheelAnimationFrame.current = undefined;
-        const direction = pendingWheelDirection.current;
-        pendingWheelDirection.current = undefined;
-        if (direction) setZoom((current) => stepZoom(current, fitScaleRef.current, direction));
+        const delta = pendingWheelDelta.current;
+        pendingWheelDelta.current = 0;
+        if (delta !== 0) setZoom((current) => wheelZoom(current, fitScaleRef.current, delta));
       });
     };
     preview.addEventListener("wheel", onWheel, { passive: false });
@@ -162,6 +169,24 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   moveRef.current = move;
   const hostRef = useRef(host);
   hostRef.current = host;
+
+  useEffect(
+    () => host.onRawBlockImage?.((key, result) => rawImages.receive(key, result)),
+    [host, rawImages],
+  );
+  useEffect(() => host.onRawImagesCleared?.(() => rawImages.clear()), [host, rawImages]);
+  useEffect(
+    () => rawImages.subscribe(() => setRawImagesVersion((current) => current + 1)),
+    [rawImages],
+  );
+  // renderer の HTML が差し替わるたび(deck 更新)と、画像が増えるたびにはめ込み直す。
+  // 最新の描画に無い key の画像は捨てる。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deck の更新で DOM が作り直されるので deck を依存に含める
+  useEffect(() => {
+    if (deck.rawBlocks) rawImages.retain(new Set(deck.rawBlocks.map((block) => block.key)));
+    const preview = previewRef.current;
+    if (preview) applyRawImages(preview, rawImages);
+  }, [deck, rawImages, rawImagesVersion]);
 
   // Webview が開かれた直後にも動くよう、フォーカスを強制せず ownerDocument で扱う。
   // プレビュー内か document 自身に発生したキーだけを受け、他の UI の入力を奪わない。

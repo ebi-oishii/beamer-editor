@@ -1,8 +1,10 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  analyzeCanvasGeometry,
   compileDeckFrames,
   type DeckFrameRasterizer,
   findDeckFrames,
@@ -14,6 +16,9 @@ import {
 } from "../src/index.ts";
 
 const directories: string[] = [];
+const canvasPreamblePath = fileURLToPath(
+  new URL("../../../fixtures/deck-canvas-preamble.tex", import.meta.url),
+);
 
 async function directory(): Promise<string> {
   const value = await mkdtemp(join(tmpdir(), "beamer-editor-frames-test-"));
@@ -87,6 +92,15 @@ describe("frame measurement helpers", () => {
     expect(groups.get(2)).toEqual([3]);
   });
 
+  it("recognizes Tectonic page starts even when shipout chatter precedes the closing bracket", () => {
+    const groups = groupFramePages(
+      "BEAMER_EDITOR_FRAME:000001 [1\n<shipout resource chatter>\n] [2]\nBEAMER_EDITOR_FRAME:000002 [3\n<more chatter>\n]",
+      findDeckFrames(deck),
+    );
+    expect(groups.get(1)).toEqual([1, 2]);
+    expect(groups.get(2)).toEqual([3]);
+  });
+
   it("does not guess when page/marker output is inconsistent", () => {
     expect(() => groupFramePages("[1] BEAMER_EDITOR_FRAME:000001", findDeckFrames(deck))).toThrow(
       PdfExportError,
@@ -102,6 +116,156 @@ describe("frame measurement helpers", () => {
     expect.assertions(1);
     try {
       groupFramePages(log, frames, 1);
+    } catch (error) {
+      expect(error).toMatchObject({ code: "E_LIMIT" });
+    }
+  });
+});
+
+describe("analyzeCanvasGeometry", () => {
+  const frames = [
+    { address: { number: 1, label: "one" } },
+    { address: { number: 2, label: "two" } },
+  ] as const;
+  const body = "DECKBODY left=10pt top=20pt width=100pt height=50pt";
+
+  it("uses the preceding source marker, accepts wrapped records, and ignores printed frame ownership", () => {
+    const diagnostics = analyzeCanvasGeometry(
+      `${body}\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=999 page=1 kind=text x=10pt y=20pt w=20pt\n h=10pt\nBEAMER_EDITOR_FRAME:000002\nDECKGEOM frame=1 page=2 kind=image x=105pt y=20pt w=10pt h=10pt`,
+      frames,
+    );
+    expect(diagnostics).toMatchObject([
+      {
+        kind: "canvas-overflow",
+        severity: "warning",
+        frame: { number: 2, label: "two" },
+        geometry: { kind: "image", x: 105, width: 10 },
+      },
+    ]);
+  });
+
+  it("reports real overlap but not edge contact, with the documented epsilon", () => {
+    const diagnostics = analyzeCanvasGeometry(
+      `${body}\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=1 page=1 kind=text x=10pt y=20pt w=20pt h=20pt\nDECKGEOM frame=1 page=1 kind=image x=30pt y=20pt w=10pt h=20pt\nDECKGEOM frame=1 page=1 kind=image x=29.98pt y=20pt w=10pt h=20pt`,
+      frames,
+    );
+    const overlaps = diagnostics.filter((diagnostic) => diagnostic.kind === "canvas-overlap");
+    expect(overlaps).toHaveLength(2);
+    expect(overlaps).toContainEqual(
+      expect.objectContaining({
+        geometry: expect.objectContaining({ x: 10 }),
+        overlappingGeometry: expect.objectContaining({ x: 29.98 }),
+      }),
+    );
+    expect(overlaps).not.toContainEqual(
+      expect.objectContaining({
+        geometry: expect.objectContaining({ x: 10 }),
+        overlappingGeometry: expect.objectContaining({ x: 30 }),
+      }),
+    );
+    expect(overlaps[0]).toMatchObject({
+      kind: "canvas-overlap",
+      geometry: { x: 10 },
+      overlappingGeometry: { x: 29.98 },
+    });
+    expect(
+      analyzeCanvasGeometry(
+        `${body}\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=1 page=1 kind=text x=9.995pt y=20pt w=1pt h=1pt`,
+        frames,
+      ),
+    ).toEqual([]);
+  });
+
+  it("compares geometry only within the same logical frame and physical page", () => {
+    const diagnostics = analyzeCanvasGeometry(
+      `${body}\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=1 page=1 kind=text x=10pt y=20pt w=20pt h=20pt\nDECKGEOM frame=1 page=2 kind=text x=10pt y=20pt w=20pt h=20pt\nDECKGEOM frame=1 page=1 kind=image x=15pt y=25pt w=10pt h=10pt`,
+      frames,
+    );
+    expect(diagnostics).toMatchObject([
+      {
+        kind: "canvas-overlap",
+        geometry: { page: 1, kind: "text" },
+        overlappingGeometry: { page: 1, kind: "image" },
+      },
+    ]);
+    expect(diagnostics).toHaveLength(1);
+  });
+
+  it("accepts Tectonic line folds inside dimensions without accepting spaces", () => {
+    const diagnostics = analyzeCanvasGeometry(
+      "DECKBODY left=1\n0pt top=2\r\n0pt width=100\npt height=2\n00pt\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=1 page=1 kind=text x=10\r\npt y=2\n0pt w=37.\n2959pt h=1\n19.50685p\r\nt",
+      frames,
+    );
+    expect(diagnostics).toEqual([]);
+    for (const invalidX of ["1 0pt", "10 pt", "10\tpt"]) {
+      expect(() =>
+        analyzeCanvasGeometry(
+          `DECKBODY left=10pt top=20pt width=100pt height=50pt\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=1 page=1 kind=text x=${invalidX} y=20pt w=1pt h=1pt`,
+          frames,
+        ),
+      ).toThrow(PdfExportError);
+    }
+  });
+
+  it("returns no diagnostics for logs without geometry and rejects broken managed records", () => {
+    expect(analyzeCanvasGeometry("ordinary Tectonic output", frames)).toEqual([]);
+    expect(analyzeCanvasGeometry(body, frames)).toEqual([]);
+    for (const log of [
+      "DECKGEOM frame=1 page=1 kind=text x=0pt y=0pt w=1pt h=1pt",
+      "DECKBODY left=0pt top=0pt width=1pt height=1pt\nDECKBODY left=0pt top=0pt width=1pt height=1pt",
+      "DECKBODY left=0pt top=0pt width=0pt height=1pt\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=1 kind=text x=0pt y=0pt w=1pt h=1pt",
+      "DECKBODY left=0pt top=0pt width=1pt height=1pt\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=1 page=1 kind=text x=0pt y=0pt w=-1pt h=1pt",
+      "DECKBODY left=0pt top=0pt width=1pt height=1pt\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=1 kind=text x=0pt y=0pt w=1pt h=1pt",
+      "DECKBODY left=0pt top=0pt width=1pt height=1pt\nBEAMER_EDITOR_FRAME:000001\nDECKGEOMERROR reason=unresolved",
+      "DECKBODY left=0pt top=0pt width=1pt height=1ptBAD",
+      "DECKBODY left=0pt top=0pt width=1pt height=1pt\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=1 page=1 kind=text x=0pt y=0pt w=1pt h=1pt extra=value",
+      "DECKGEOMERROR reason=unresolved extra=value",
+    ]) {
+      try {
+        analyzeCanvasGeometry(log, frames);
+        expect.unreachable("broken managed log should throw");
+      } catch (error) {
+        expect(error).toMatchObject({ code: "E_COMPILE" });
+      }
+    }
+  });
+
+  it("ignores ordinary mentions but rejects a garbage-prefixed managed record", () => {
+    expect(
+      analyzeCanvasGeometry(
+        "ordinary log mentions DECKBODY and DECKGEOM without emitting either record",
+        frames,
+      ),
+    ).toEqual([]);
+    expect(() =>
+      analyzeCanvasGeometry(
+        "DECKBODY left=10pt top=20pt width=100pt height=50pt\nBEAMER_EDITOR_FRAME:000001\nXDECKGEOM frame=1 page=1 kind=text x=10pt y=20pt w=1pt h=1pt",
+        frames,
+      ),
+    ).toThrow(PdfExportError);
+  });
+
+  it("bounds overlap reporting instead of performing an unbounded pair scan", () => {
+    const records = Array.from(
+      { length: 143 },
+      () => `DECKGEOM frame=1 page=1 kind=text x=10pt y=20pt w=10pt h=10pt`,
+    ).join("\n");
+    try {
+      analyzeCanvasGeometry(`${body}\nBEAMER_EDITOR_FRAME:000001\n${records}`, frames);
+      expect.unreachable("too many overlaps should throw");
+    } catch (error) {
+      expect(error).toMatchObject({ code: "E_LIMIT" });
+    }
+  });
+
+  it("also bounds x-overlapping objects that are vertically disjoint", () => {
+    const records = Array.from(
+      { length: 400 },
+      (_, index) => `DECKGEOM frame=1 page=1 kind=text x=10pt y=${index * 20}pt w=10pt h=1pt`,
+    ).join("\n");
+    try {
+      analyzeCanvasGeometry(`${body}\nBEAMER_EDITOR_FRAME:000001\n${records}`, frames);
+      expect.unreachable("comparison work must be bounded even when there are no overlaps");
     } catch (error) {
       expect(error).toMatchObject({ code: "E_LIMIT" });
     }
@@ -132,7 +296,7 @@ describe("compileDeckFrames", () => {
         await writeFile(join(outdir, basename(measuredInput).replace(/\.tex$/, ".pdf")), "%PDF");
         await writeFile(
           join(outdir, basename(measuredInput).replace(/\.tex$/, ".log")),
-          "BEAMER_EDITOR_FRAME:000001 [1] Overfull \\hbox (2.5pt too wide) in paragraph at lines 3--4\nBEAMER_EDITOR_FRAME:000002 [2] [3] Overfull \\vbox (1pt too high) detected at line 99\nOverfull \\vbox (3pt too high) has occurred while \\output is active",
+          "DECKBODY left=0pt top=0pt width=100pt height=100pt\nBEAMER_EDITOR_FRAME:000001 DECKGEOM frame=1 page=1 kind=text x=0pt y=0pt w=1pt h=1pt\n[1] Overfull \\hbox (2.5pt too wide) in paragraph at lines 3--4\nBEAMER_EDITOR_FRAME:000002 DECKGEOM frame=2 page=2 kind=image x=2pt y=2pt w=1pt h=1pt\n[2] [3] Overfull \\vbox (1pt too high) detected at line 99\nOverfull \\vbox (3pt too high) has occurred while \\output is active",
         );
         return result({ stdout: "compiler output is deliberately not parsed" });
       },
@@ -160,10 +324,11 @@ describe("compileDeckFrames", () => {
       { kind: "overfull-vbox", excessPt: 1, frame: null, sourceLines: { start: 99, end: 99 } },
       { kind: "overfull-vbox", excessPt: 3, frame: null, sourceLines: null },
     ]);
-
     const analysisOnly = await compileDeckFrames({ inputPath, includeImages: false }, { runner });
     expect(analysisOnly.frames.map((frame) => frame.images)).toEqual([[], []]);
     expect(analysisOnly.warnings).toEqual(value.warnings);
+    expect(value.layoutDiagnostics).toEqual([]);
+    expect(analysisOnly.layoutDiagnostics).toEqual([]);
   });
 
   it("rejects page and PNG limits", async () => {
@@ -378,4 +543,36 @@ describe("compileDeckFrames", () => {
       ),
     ).rejects.toMatchObject({ code: "E_CANCELLED" });
   });
+
+  it.runIf(process.env.TECTONIC_INTEGRATION === "1")(
+    "uses resolved zref-savepos geometry from the final Tectonic pass for canvas overflow",
+    async () => {
+      const preamble = await readFile(canvasPreamblePath, "utf8");
+      const inputPath = await source(String.raw`\documentclass[aspectratio=169]{beamer}
+${preamble}
+\begin{document}
+\begin{frame}[label=canvas]{Canvas}
+\begin{deckcanvas}
+\begin{decktext}[x=-.1,y=0,w=.2]Measured text\end{decktext}
+\end{deckcanvas}
+\end{frame}
+\end{document}
+`);
+      const value = await compileDeckFrames({
+        inputPath,
+        timeoutMs: 120_000,
+        includeImages: false,
+      });
+      expect(value.frames).toHaveLength(1);
+      expect(value.layoutDiagnostics).toMatchObject([
+        {
+          kind: "canvas-overflow",
+          severity: "warning",
+          frame: { number: 1, label: "canvas" },
+          geometry: { kind: "text", x: expect.any(Number) },
+        },
+      ]);
+    },
+    180_000,
+  );
 });

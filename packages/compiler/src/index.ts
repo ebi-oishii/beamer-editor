@@ -301,6 +301,50 @@ function processDetail(result: ProcessResult): string {
   return detail ? `: ${detail}` : "";
 }
 
+/** `tectonic --version` で実行できることを確かめ、バージョン文字列を返す(exportPdf / compileFragment 共通)。 */
+async function ensureTectonic(
+  runner: ProcessRunner,
+  tectonic: string,
+  cwd: string,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  let versionResult: ProcessResult;
+  try {
+    versionResult = await runner.run(
+      tectonic,
+      ["--version"],
+      runnerOptions(cwd, signal, VERSION_TIMEOUT_MS),
+    );
+  } catch (error) {
+    if (isAbort(error, signal))
+      throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました", error);
+    if (error instanceof ProcessNotFoundError || isNotFound(error))
+      throw new PdfExportError("E_TECTONIC_NOT_FOUND", errorMessage(error), error);
+    throw new PdfExportError(
+      "E_TECTONIC_VERSION",
+      `Tectonic のバージョンを取得できません: ${String(error)}`,
+      error,
+    );
+  }
+  if (versionResult.cancelled || signal?.aborted)
+    throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました");
+  if (versionResult.timedOut)
+    throw new PdfExportError(
+      "E_TECTONIC_VERSION",
+      `Tectonic のバージョン確認が ${VERSION_TIMEOUT_MS / 1000} 秒でタイムアウトしました`,
+    );
+  const engineVersion =
+    versionResult.exitCode === 0
+      ? versionFrom(`${versionResult.stdout}\n${versionResult.stderr}`)
+      : undefined;
+  if (!engineVersion)
+    throw new PdfExportError(
+      "E_TECTONIC_VERSION",
+      `Tectonic のバージョンを確認できません${processDetail(versionResult)}`,
+    );
+  return engineVersion;
+}
+
 /**
  * Compile the untouched input source through Tectonic, staging all compiler
  * output under the OS temp directory. The destination is replaced only after a
@@ -345,40 +389,7 @@ export async function exportPdf(
   }
   throwIfCancelled(signal);
 
-  let versionResult: ProcessResult;
-  try {
-    versionResult = await runner.run(
-      tectonic,
-      ["--version"],
-      runnerOptions(dirname(inputPath), signal, VERSION_TIMEOUT_MS),
-    );
-  } catch (error) {
-    if (isAbort(error, signal))
-      throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました", error);
-    if (error instanceof ProcessNotFoundError || isNotFound(error))
-      throw new PdfExportError("E_TECTONIC_NOT_FOUND", errorMessage(error), error);
-    throw new PdfExportError(
-      "E_TECTONIC_VERSION",
-      `Tectonic のバージョンを取得できません: ${String(error)}`,
-      error,
-    );
-  }
-  if (versionResult.cancelled || signal?.aborted)
-    throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました");
-  if (versionResult.timedOut)
-    throw new PdfExportError(
-      "E_TECTONIC_VERSION",
-      `Tectonic のバージョン確認が ${VERSION_TIMEOUT_MS / 1000} 秒でタイムアウトしました`,
-    );
-  const engineVersion =
-    versionResult.exitCode === 0
-      ? versionFrom(`${versionResult.stdout}\n${versionResult.stderr}`)
-      : undefined;
-  if (!engineVersion)
-    throw new PdfExportError(
-      "E_TECTONIC_VERSION",
-      `Tectonic のバージョンを確認できません${processDetail(versionResult)}`,
-    );
+  const engineVersion = await ensureTectonic(runner, tectonic, dirname(inputPath), signal);
 
   const makeTemp =
     dependencies.temporaryDirectory ?? ((prefix: string) => mkdtemp(join(tmpdir(), prefix)));
@@ -521,6 +532,31 @@ export interface DeckFramesResult {
   engineVersion: string;
   frames: readonly CompiledFrame[];
   warnings: readonly CompileWarning[];
+  /** Canvas object positions measured by the tool-managed TeX preamble. */
+  layoutDiagnostics: readonly CanvasLayoutDiagnostic[];
+}
+
+export interface CanvasGeometry {
+  /** The source frame that most recently emitted a frame marker. */
+  frame: FrameAddress;
+  /** Physical PDF page on which Tectonic measured this object. */
+  page: number;
+  kind: "text" | "image";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface CanvasLayoutDiagnostic {
+  kind: "canvas-overflow" | "canvas-overlap";
+  severity: "warning" | "info";
+  frame: FrameAddress;
+  message: string;
+  /** The object outside the body, or the first object in an overlap pair. */
+  geometry: CanvasGeometry;
+  /** Present only for an overlap diagnostic. */
+  overlappingGeometry?: CanvasGeometry;
 }
 
 export interface CompileDeckFramesRequest {
@@ -675,7 +711,10 @@ interface LogEvent {
 }
 
 function* logEvents(output: string): IterableIterator<LogEvent> {
-  const expression = new RegExp(`${FRAME_MARKER_PREFIX}(\\d+)|\\[(\\d+)\\]`, "g");
+  // Tectonic can put shipout resource chatter between the opening page number
+  // and its closing bracket (`[1\n...\n]`). The opening bracket + positive
+  // integer is the stable page-start signal; requiring `]` loses real pages.
+  const expression = new RegExp(`${FRAME_MARKER_PREFIX}(\\d+)|\\[(\\d+)(?=\\s|\\])`, "g");
   for (let match = expression.exec(output); match; match = expression.exec(output)) {
     const value = Number(match[1] ?? match[2]);
     if (Number.isSafeInteger(value) && value > 0)
@@ -745,6 +784,209 @@ function parseOverfullWarnings(
     });
   }
   return warnings;
+}
+
+const CANVAS_EPSILON_PT = 0.01;
+const MAX_CANVAS_LAYOUT_DIAGNOSTICS = 10_000;
+const MAX_CANVAS_OVERLAP_COMPARISONS = 100_000;
+// Tectonic physically folds long `\typeout` lines, including in the middle of
+// a dimension token. Only a CRLF/LF is accepted inside a numeric token; plain
+// spaces remain invalid so this does not broaden the managed-log grammar.
+const LOG_FOLD = "(?:\\r?\\n)?";
+const FOLDED_DIGITS = `\\d(?:${LOG_FOLD}\\d)*`;
+const PT_NUMBER = `[-+]?(?:${FOLDED_DIGITS}(?:${LOG_FOLD}\\.${LOG_FOLD}${FOLDED_DIGITS})?|${LOG_FOLD}\\.${LOG_FOLD}${FOLDED_DIGITS})(?:[eE][-+]?${FOLDED_DIGITS})?`;
+const PT_UNIT = `p${LOG_FOLD}t`;
+// Each managed record is emitted by a separate \typeout, and therefore starts
+// at a physical log-line boundary. Tectonic may fold a long record onto later
+// physical lines, which LOG_FOLD continues to accept inside its fields.
+const MANAGED_RECORD_BOUNDARY = "(?=\\r?\\n|$)";
+const DECK_BODY_RECORD = new RegExp(
+  `^DECKBODY\\s+left=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+top=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+width=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+height=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}${MANAGED_RECORD_BOUNDARY}`,
+);
+const DECK_GEOMETRY_RECORD = new RegExp(
+  `^DECKGEOM\\s+frame=(\\d+)\\s+page=(\\d+)\\s+kind=(text|image)\\s+x=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+y=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+w=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+h=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}${MANAGED_RECORD_BOUNDARY}`,
+);
+const DECK_GEOMETRY_ERROR_RECORD = new RegExp(
+  `^DECKGEOMERROR\\s+reason=unresolved${MANAGED_RECORD_BOUNDARY}`,
+);
+
+interface CanvasBody {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+function canvasCompileError(message: string): PdfExportError {
+  return new PdfExportError("E_COMPILE", `DECKBODY/DECKGEOM log が不正です: ${message}`);
+}
+
+function finitePt(
+  value: string,
+  name: string,
+  constraint: "any" | "nonnegative" | "positive" = "any",
+): number {
+  const number = Number(value.replace(/\r?\n/g, ""));
+  if (
+    !Number.isFinite(number) ||
+    (constraint === "positive" && number <= 0) ||
+    (constraint === "nonnegative" && number < 0)
+  )
+    throw canvasCompileError(
+      `${name} は${constraint === "positive" ? "正" : constraint === "nonnegative" ? "非負" : "有限"}の pt 値にしてください`,
+    );
+  return number;
+}
+
+function addCanvasDiagnostic(
+  diagnostics: CanvasLayoutDiagnostic[],
+  diagnostic: CanvasLayoutDiagnostic,
+): void {
+  if (diagnostics.length >= MAX_CANVAS_LAYOUT_DIAGNOSTICS)
+    throw new PdfExportError(
+      "E_LIMIT",
+      `canvas layout 診断が上限 ${MAX_CANVAS_LAYOUT_DIAGNOSTICS} 件を超えています`,
+    );
+  diagnostics.push(diagnostic);
+}
+
+function consumeCanvasOverlapComparison(count: number): number {
+  if (count >= MAX_CANVAS_OVERLAP_COMPARISONS)
+    throw new PdfExportError(
+      "E_LIMIT",
+      `canvas overlap 比較が上限 ${MAX_CANVAS_OVERLAP_COMPARISONS} 回を超えています`,
+    );
+  return count + 1;
+}
+
+/**
+ * Parse the tool-managed canvas log records and report measured layout issues.
+ * A DECKGEOM's printed frame is retained as TeX-side metadata only: ownership
+ * is always the source ordinal from the most recent injected frame marker.
+ */
+export function analyzeCanvasGeometry(
+  log: string,
+  frames: readonly { address: FrameAddress }[],
+): readonly CanvasLayoutDiagnostic[] {
+  let body: CanvasBody | undefined;
+  let active: FrameAddress | undefined;
+  let expectedMarker = 1;
+  const geometries: CanvasGeometry[] = [];
+  const records = /(?:^|\r?\n)(BEAMER_EDITOR_FRAME:(\d+)|DECKBODY\b|DECKGEOMERROR\b|DECKGEOM\b)/g;
+  const invalidManagedPrefix = /(?:^|\r?\n)\S+(?:DECKBODY\b|DECKGEOMERROR\b|DECKGEOM\b)/.exec(log);
+  if (invalidManagedPrefix) throw canvasCompileError("管理 record の先頭に不正な文字列があります");
+
+  for (let marker = records.exec(log); marker; marker = records.exec(log)) {
+    const recordName = marker[1] as string;
+    if (marker[2] !== undefined) {
+      const number = Number(marker[2]);
+      if (number !== expectedMarker || frames[number - 1] === undefined)
+        throw canvasCompileError("frame marker とソース frame の対応を確認できません");
+      active = frames[number - 1]?.address;
+      expectedMarker += 1;
+      continue;
+    }
+
+    const record = log.slice(marker.index + marker[0].length - recordName.length);
+    if (recordName === "DECKBODY") {
+      const parsed = DECK_BODY_RECORD.exec(record);
+      if (!parsed) throw canvasCompileError("DECKBODY のフィールド順または pt 値を読み取れません");
+      if (body) throw canvasCompileError("DECKBODY は 1 回だけ出力してください");
+      body = {
+        left: finitePt(parsed[1] as string, "DECKBODY left"),
+        top: finitePt(parsed[2] as string, "DECKBODY top"),
+        width: finitePt(parsed[3] as string, "DECKBODY width", "positive"),
+        height: finitePt(parsed[4] as string, "DECKBODY height", "positive"),
+      };
+      continue;
+    }
+
+    if (recordName === "DECKGEOMERROR") {
+      if (!DECK_GEOMETRY_ERROR_RECORD.test(record))
+        throw canvasCompileError("DECKGEOMERROR を読み取れません");
+      throw canvasCompileError("canvas object の savepos が最終 pass で解決していません");
+    }
+    const parsed = DECK_GEOMETRY_RECORD.exec(record);
+    if (!parsed) throw canvasCompileError("DECKGEOM のフィールド順または pt 値を読み取れません");
+    if (!active) throw canvasCompileError("DECKGEOM の前に frame marker がありません");
+    // Validate this field even though allocation intentionally uses `active`.
+    if (!Number.isSafeInteger(Number(parsed[1])) || Number(parsed[1]) < 1)
+      throw canvasCompileError("DECKGEOM frame が不正です");
+    if (!Number.isSafeInteger(Number(parsed[2])) || Number(parsed[2]) < 1)
+      throw canvasCompileError("DECKGEOM page が不正です");
+    geometries.push({
+      frame: active,
+      page: Number(parsed[2]),
+      kind: parsed[3] as CanvasGeometry["kind"],
+      x: finitePt(parsed[4] as string, "DECKGEOM x"),
+      y: finitePt(parsed[5] as string, "DECKGEOM y"),
+      width: finitePt(parsed[6] as string, "DECKGEOM w", "nonnegative"),
+      height: finitePt(parsed[7] as string, "DECKGEOM h", "nonnegative"),
+    });
+  }
+
+  if (geometries.length === 0) return [];
+  if (!body) throw canvasCompileError("DECKGEOM がある場合は DECKBODY がちょうど 1 回必要です");
+
+  const diagnostics: CanvasLayoutDiagnostic[] = [];
+  const byPage = new Map<string, Array<{ geometry: CanvasGeometry; index: number }>>();
+  for (const [index, geometry] of geometries.entries()) {
+    if (
+      geometry.x < body.left - CANVAS_EPSILON_PT ||
+      geometry.y < body.top - CANVAS_EPSILON_PT ||
+      geometry.x + geometry.width > body.left + body.width + CANVAS_EPSILON_PT ||
+      geometry.y + geometry.height > body.top + body.height + CANVAS_EPSILON_PT
+    )
+      addCanvasDiagnostic(diagnostics, {
+        kind: "canvas-overflow",
+        severity: "warning",
+        frame: geometry.frame,
+        geometry,
+        message: "canvas object が本文領域からはみ出しています",
+      });
+    const key = `${geometry.frame.number}:${geometry.page}`;
+    const values = byPage.get(key) ?? [];
+    values.push({ geometry, index });
+    byPage.set(key, values);
+  }
+
+  // Sweep on x. Active entries are discarded by right edge; therefore the
+  // pair loop has a hard work limit as well as a diagnostic limit. This keeps
+  // a stack of x-overlapping but y-disjoint objects from becoming O(n²).
+  let overlapComparisons = 0;
+  for (const entries of byPage.values()) {
+    const ordered = [...entries].sort(
+      (first, second) => first.geometry.x - second.geometry.x || first.index - second.index,
+    );
+    const activeEntries: Array<{ geometry: CanvasGeometry; index: number }> = [];
+    for (const current of ordered) {
+      const nextActive = activeEntries.filter((other) => {
+        overlapComparisons = consumeCanvasOverlapComparison(overlapComparisons);
+        return other.geometry.x + other.geometry.width > current.geometry.x + CANVAS_EPSILON_PT;
+      });
+      activeEntries.length = 0;
+      activeEntries.push(...nextActive);
+      for (const other of activeEntries) {
+        overlapComparisons = consumeCanvasOverlapComparison(overlapComparisons);
+        const top = Math.max(other.geometry.y, current.geometry.y);
+        const bottom = Math.min(
+          other.geometry.y + other.geometry.height,
+          current.geometry.y + current.geometry.height,
+        );
+        if (bottom <= top + CANVAS_EPSILON_PT) continue;
+        addCanvasDiagnostic(diagnostics, {
+          kind: "canvas-overlap",
+          severity: "info",
+          frame: current.geometry.frame,
+          geometry: other.geometry,
+          overlappingGeometry: current.geometry,
+          message: "canvas object 同士が重なっています",
+        });
+      }
+      activeEntries.push(current);
+    }
+  }
+  return diagnostics;
 }
 
 function positiveLimit(value: number | undefined, fallback: number, name: string): number {
@@ -915,6 +1157,7 @@ export async function compileDeckFrames(
     );
     const groups = groupFramePages(log, frames, maxPages);
     const warnings = parseOverfullWarnings(log, frames);
+    const layoutDiagnostics = analyzeCanvasGeometry(log, frames);
     if (signal?.aborted)
       throw new PdfExportError("E_CANCELLED", "コンパイルはキャンセルされました");
     if (!includeImages) {
@@ -926,6 +1169,7 @@ export async function compileDeckFrames(
           images: [],
         })),
         warnings,
+        layoutDiagnostics,
       };
     }
     // Kept as a local guard for TypeScript after the analysis-only early return.
@@ -1003,6 +1247,7 @@ export async function compileDeckFrames(
           [],
       })),
       warnings,
+      layoutDiagnostics,
     };
   } catch (error) {
     if (error instanceof PdfExportError) throw error;
@@ -1014,3 +1259,104 @@ export async function compileDeckFrames(
       await rm(temporaryDirectory, { recursive: true, force: true }).catch(() => undefined);
   }
 }
+
+export interface FragmentCompileRequest {
+  /** buildFragmentDocument で組み立てた standalone 文書の全文。 */
+  document: string;
+  tectonicPath?: string;
+  /** \\includegraphics などの相対パスを解く作業ディレクトリ(デッキのディレクトリ)。無ければ一時ディレクトリ。 */
+  cwd?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  /** 生成 PDF のバイト数の上限。超えたら読み込まずに E_COMPILE にする(巨大な出力でメモリを使い切らない)。 */
+  maxOutputBytes?: number;
+}
+
+export interface FragmentCompileResult {
+  pdf: Uint8Array;
+  engineVersion: string;
+}
+
+/**
+ * 生ブロックの standalone 文書を一時ディレクトリでコンパイルし、PDF のバイト列を返す(#81)。
+ * ファイルは残さない(キャッシュは呼び出し側が持つ)。失敗は exportPdf と同じ PdfExportError。
+ */
+export async function compileFragment(
+  request: FragmentCompileRequest,
+  dependencies: PdfExportDependencies = {},
+): Promise<FragmentCompileResult> {
+  const runner = dependencies.runner ?? nodeProcessRunner;
+  const tectonic = request.tectonicPath ?? "tectonic";
+  const signal = request.signal;
+  const timeoutMs =
+    request.timeoutMs && request.timeoutMs > 0 ? request.timeoutMs : DEFAULT_COMPILE_TIMEOUT_MS;
+  throwIfCancelled(signal);
+  const makeTemp =
+    dependencies.temporaryDirectory ?? ((prefix: string) => mkdtemp(join(tmpdir(), prefix)));
+  let tempDirectory: string | undefined;
+  try {
+    tempDirectory = await makeTemp("beamer-editor-fragment-");
+    const engineVersion = await ensureTectonic(runner, tectonic, tempDirectory, signal);
+    const inputPath = join(tempDirectory, "fragment.tex");
+    await writeFile(inputPath, request.document, "utf8");
+    throwIfCancelled(signal);
+    let compileResult: ProcessResult;
+    try {
+      compileResult = await runner.run(
+        tectonic,
+        ["-X", "compile", "--outdir", tempDirectory, inputPath],
+        runnerOptions(request.cwd ?? tempDirectory, signal, timeoutMs),
+      );
+    } catch (error) {
+      if (isAbort(error, signal))
+        throw new PdfExportError("E_CANCELLED", "部分コンパイルはキャンセルされました", error);
+      if (error instanceof ProcessNotFoundError || isNotFound(error))
+        throw new PdfExportError("E_TECTONIC_NOT_FOUND", errorMessage(error), error);
+      throw new PdfExportError(
+        "E_COMPILE",
+        `Tectonic の実行に失敗しました: ${String(error)}`,
+        error,
+      );
+    }
+    if (compileResult.cancelled || signal?.aborted)
+      throw new PdfExportError("E_CANCELLED", "部分コンパイルはキャンセルされました");
+    if (compileResult.timedOut)
+      throw new PdfExportError(
+        "E_COMPILE",
+        `部分コンパイルが ${timeoutMs / 1000} 秒でタイムアウトしました${processDetail(compileResult)}`,
+      );
+    const compiledPdf = join(tempDirectory, "fragment.pdf");
+    if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(compiledPdf)))
+      throw new PdfExportError(
+        "E_COMPILE",
+        `部分コンパイルに失敗しました${processDetail(compileResult)}`,
+      );
+    const { size } = await stat(compiledPdf);
+    if (request.maxOutputBytes !== undefined && size > request.maxOutputBytes)
+      throw new PdfExportError(
+        "E_COMPILE",
+        `生成された PDF が大きすぎます(${size} バイト、上限 ${request.maxOutputBytes} バイト)`,
+      );
+    const pdf = new Uint8Array(await readFile(compiledPdf));
+    return { pdf, engineVersion };
+  } catch (error) {
+    if (error instanceof PdfExportError) throw error;
+    if (isAbort(error, signal))
+      throw new PdfExportError("E_CANCELLED", "部分コンパイルはキャンセルされました", error);
+    throw new PdfExportError(
+      "E_IO",
+      `部分コンパイルの入出力に失敗しました: ${String(error)}`,
+      error,
+    );
+  } finally {
+    if (tempDirectory)
+      await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+export {
+  buildFragmentDocument,
+  FRAGMENT_DOCUMENT_VERSION,
+  fragmentDependencies,
+  fragmentGraphicsPaths,
+} from "./fragment.js";

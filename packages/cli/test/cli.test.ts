@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { relative, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EXIT_CODE, exitCodeForError, parseExportArgs, run } from "../src/cli.ts";
+import { EXIT_CODE, exitCodeForError, parseCheckArgs, parseExportArgs, run } from "../src/cli.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const require = createRequire(import.meta.url);
@@ -244,6 +244,7 @@ describe("deck lint", () => {
         "  deck lint <file> [--json]           デッキを検査\n" +
         "  deck format <file> [--write] [--json]  デッキを正規化\n" +
         "  deck outline <file> [--json]        フレーム一覧を表示\n" +
+        "  deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査\n" +
         "  deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]\n" +
         "  deck fonts status [--json]          フォントカタログ全 family の解決状態\n" +
         '  deck fonts fetch [family] [--json]  family(既定 "Noto Sans CJK JP")を取得・配置\n',
@@ -308,6 +309,320 @@ describe("deck outline", () => {
     const missing = runCli("outline", "missing.tex", "--json");
     expect(missing.status).toBe(3);
     expect(JSON.parse(missing.stderr).error.code).toBe("E_IO");
+  });
+});
+
+describe("deck check", () => {
+  it("accepts options in either position and rejects duplicate, missing, extra, and write options", () => {
+    expect(parseCheckArgs(["talk.tex", "--tectonic", "/opt/tectonic", "--json"])).toEqual({
+      input: "talk.tex",
+      tectonic: "/opt/tectonic",
+      json: true,
+      write: false,
+      error: undefined,
+    });
+    expect(parseCheckArgs(["--json", "--tectonic", "/opt/tectonic", "talk.tex"])).toMatchObject({
+      input: "talk.tex",
+      tectonic: "/opt/tectonic",
+      json: true,
+    });
+    for (const argv of [
+      ["talk.tex", "--json", "--json"],
+      ["talk.tex", "--tectonic"],
+      ["talk.tex", "other.tex"],
+      ["talk.tex", "--unknown"],
+      [],
+    ]) {
+      expect(parseCheckArgs(argv).error).toBeDefined();
+    }
+    expect(parseCheckArgs(["talk.tex", "--write"])).toMatchObject({ write: true });
+  });
+
+  it("combines lint, compile, and layout diagnostics without writing the input", async () => {
+    const source = await fixture(
+      "check.tex",
+      deck(String.raw`\begin{frame}[label=canvas]{Canvas}
+\begin{deckcanvas}
+\begin{decktext}[x=0.8,y=1,w=0.3,size=normal]text\end{decktext}
+\end{deckcanvas}
+\end{frame}`),
+    );
+    const original = await readFile(source.path, "utf8");
+    const frameStart = original.indexOf("\\begin{frame}");
+    const frameEnd = original.indexOf("\\end{frame}") + "\\end{frame}".length;
+    const compiler = vi.fn(async () => {
+      return {
+        engineVersion: "0.16.0",
+        frames: [
+          {
+            address: { number: 1, label: "canvas" },
+            span: { start: frameStart, end: frameEnd },
+            images: [],
+          },
+        ],
+        warnings: [
+          {
+            kind: "overfull-hbox" as const,
+            message: "Overfull \\hbox (2pt too wide)",
+            excessPt: 2,
+            frame: { number: 1, label: "canvas" },
+            sourceLines: { start: 5, end: 6 },
+          },
+          {
+            kind: "overfull-vbox" as const,
+            message: "Overfull \\vbox (1pt too high)",
+            excessPt: 1,
+            frame: null,
+            sourceLines: null,
+          },
+        ],
+        layoutDiagnostics: [
+          {
+            kind: "canvas-overflow" as const,
+            severity: "warning" as const,
+            frame: { number: 1, label: "canvas" },
+            message: "本文領域からはみ出しています",
+            geometry: {
+              frame: { number: 1, label: "canvas" },
+              page: 1,
+              kind: "text" as const,
+              x: 1,
+              y: 2,
+              width: 3,
+              height: 4,
+            },
+          },
+          {
+            kind: "canvas-overlap" as const,
+            severity: "info" as const,
+            frame: { number: 1, label: "canvas" },
+            message: "オブジェクトが重なっています",
+            geometry: {
+              frame: { number: 1, label: "canvas" },
+              page: 1,
+              kind: "text" as const,
+              x: 1,
+              y: 2,
+              width: 3,
+              height: 4,
+            },
+            overlappingGeometry: {
+              frame: { number: 1, label: "canvas" },
+              page: 1,
+              kind: "image" as const,
+              x: 2,
+              y: 3,
+              width: 4,
+              height: 5,
+            },
+          },
+        ],
+      };
+    });
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const checkCode = await run(["check", "--json", source.path, "--tectonic", "/opt/tectonic"], {
+        compileDeckFrames: compiler,
+      });
+      expect(checkCode).toBe(EXIT_CODE.lintWarning);
+      expect(compiler).toHaveBeenCalledTimes(1);
+      expect(compiler).toHaveBeenCalledWith({
+        inputPath: source.path,
+        tectonicPath: "/opt/tectonic",
+        includeImages: false,
+      });
+      const result = JSON.parse(String(stdout.mock.calls[0]?.[0]));
+      expect(Object.keys(result)).toEqual(["file", "engine", "diagnostics", "summary"]);
+      expect(Object.keys(result.engine)).toEqual(["name", "version"]);
+      expect(Object.keys(result.summary)).toEqual(["errors", "warnings", "infos"]);
+      expect(result).toMatchObject({
+        file: source.path,
+        engine: { name: "tectonic", version: "0.16.0" },
+        summary: { errors: 0, warnings: 4, infos: 1 },
+      });
+      expect(
+        result.diagnostics.map((diagnostic: { category: string; code: string }) => [
+          diagnostic.category,
+          diagnostic.code,
+        ]),
+      ).toEqual([
+        ["lint", "L012"],
+        ["compile", "overfull-hbox"],
+        ["compile", "overfull-vbox"],
+        ["layout", "canvas-overflow"],
+        ["layout", "canvas-overlap"],
+      ]);
+      expect(
+        result.diagnostics.map((diagnostic: Record<string, unknown>) => Object.keys(diagnostic)),
+      ).toEqual([
+        ["category", "code", "severity", "message", "frame", "location"],
+        ["category", "code", "severity", "message", "frame", "sourceLines"],
+        ["category", "code", "severity", "message", "frame"],
+        ["category", "code", "severity", "message", "frame", "geometry"],
+        ["category", "code", "severity", "message", "frame", "geometry", "overlappingGeometry"],
+      ]);
+      expect(result.diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            category: "lint",
+            code: "L012",
+            frame: { number: 1, label: "canvas" },
+          }),
+          expect.objectContaining({
+            category: "compile",
+            code: "overfull-hbox",
+            sourceLines: { start: 5, end: 6 },
+          }),
+          expect.objectContaining({ category: "compile", code: "overfull-vbox", frame: null }),
+          expect.objectContaining({
+            category: "layout",
+            code: "canvas-overflow",
+            geometry: expect.any(Object),
+          }),
+          expect.objectContaining({
+            category: "layout",
+            code: "canvas-overlap",
+            overlappingGeometry: expect.any(Object),
+          }),
+        ]),
+      );
+      expect(stderr).not.toHaveBeenCalled();
+      expect(await readFile(source.path, "utf8")).toBe(original);
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it("treats an info-only canvas overlap as success", async () => {
+    const source = await fixture(
+      "check-info.tex",
+      deck(String.raw`\begin{frame}[label=canvas]{Canvas}Text\end{frame}`),
+    );
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      expect(
+        await run(["check", source.path, "--json"], {
+          compileDeckFrames: async () => ({
+            engineVersion: "0.16.0",
+            frames: [],
+            warnings: [],
+            layoutDiagnostics: [
+              {
+                kind: "canvas-overlap",
+                severity: "info",
+                frame: { number: 1, label: "canvas" },
+                message: "オブジェクトが重なっています",
+                geometry: {
+                  frame: { number: 1, label: "canvas" },
+                  page: 1,
+                  kind: "text",
+                  x: 1,
+                  y: 2,
+                  width: 3,
+                  height: 4,
+                },
+              },
+            ],
+          }),
+        }),
+      ).toBe(EXIT_CODE.success);
+      expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({
+        summary: { errors: 0, warnings: 0, infos: 1 },
+        diagnostics: [{ category: "layout", code: "canvas-overlap", severity: "info" }],
+      });
+      expect(stderr).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it("uses source positions in text output and maps every compiler E_* error to stderr exit 3", async () => {
+    const source = await fixture("check-clean.tex", deck(""));
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const lintError = await fixture("check-error.tex", deck("¥section{bad}"));
+      expect(
+        await run(["check", lintError.path], {
+          compileDeckFrames: async () => ({
+            engineVersion: "0.16.0",
+            frames: [],
+            warnings: [],
+            layoutDiagnostics: [],
+          }),
+        }),
+      ).toBe(EXIT_CODE.lintWarning);
+      expect(String(stdout.mock.calls[0]?.[0])).toMatch(/check-error\.tex:4:\d+: warning L021:/);
+      stdout.mockClear();
+      const lintFailure = await fixture(
+        "check-lint-error.tex",
+        deck(String.raw`\begin{frame}[label=canvas]{Canvas}
+\begin{deckcanvas}
+\begin{decktext}[x=0,y=0,w=1,size=huge]日本語\end{decktext}
+\end{deckcanvas}
+\end{frame}`),
+      );
+      expect(
+        await run(["check", lintFailure.path], {
+          compileDeckFrames: async () => ({
+            engineVersion: "0.16.0",
+            frames: [],
+            warnings: [],
+            layoutDiagnostics: [],
+          }),
+        }),
+      ).toBe(EXIT_CODE.lintError);
+      stdout.mockClear();
+      expect(
+        await run(["check", source.path], {
+          compileDeckFrames: async () => ({
+            engineVersion: "0.16.0",
+            frames: [],
+            warnings: [],
+            layoutDiagnostics: [],
+          }),
+        }),
+      ).toBe(EXIT_CODE.success);
+      expect(String(stdout.mock.calls[0]?.[0])).toBe(`${source.path}: OK\n`);
+      stdout.mockClear();
+      for (const code of [
+        "E_INPUT",
+        "E_TECTONIC_NOT_FOUND",
+        "E_TECTONIC_VERSION",
+        "E_COMPILE",
+        "E_RASTERIZE",
+        "E_LIMIT",
+        "E_IO",
+        "E_CANCELLED",
+      ]) {
+        stderr.mockClear();
+        const error = Object.assign(new Error(code), { code });
+        expect(
+          await run(["check", source.path, "--json"], {
+            compileDeckFrames: async () => Promise.reject(error),
+          }),
+        ).toBe(EXIT_CODE.operationalFailure);
+        expect(stdout).not.toHaveBeenCalled();
+        expect(JSON.parse(String(stderr.mock.calls[0]?.[0]))).toEqual({
+          error: { code, message: code },
+        });
+      }
+      stderr.mockClear();
+      expect(await run(["check", "missing.tex", "--json"])).toBe(EXIT_CODE.operationalFailure);
+      expect(JSON.parse(String(stderr.mock.calls[0]?.[0])).error.code).toBe("E_IO");
+      stderr.mockClear();
+      expect(await run(["check", source.path, "--write", "--json"])).toBe(3);
+      expect(JSON.parse(String(stderr.mock.calls.at(-1)?.[0]))).toEqual({
+        error: { code: "E_USAGE", message: "check は --write をサポートしません" },
+      });
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
   });
 });
 
