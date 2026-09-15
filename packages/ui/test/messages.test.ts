@@ -36,6 +36,31 @@ describe("parseExtensionToWebview", () => {
   });
 });
 
+describe("parseExtensionToWebview: rawBlock*", () => {
+  it("rawBlockReady / rawBlockFailed は key と本文が揃っているときだけ受ける", () => {
+    expect(parseExtensionToWebview({ type: "rawBlockReady", key: "k", pdfBase64: "AA==" })).toEqual(
+      {
+        type: "rawBlockReady",
+        key: "k",
+        pdfBase64: "AA==",
+      },
+    );
+    expect(parseExtensionToWebview({ type: "rawBlockReady", key: "k" })).toBeNull();
+    expect(parseExtensionToWebview({ type: "rawBlockFailed", key: "k", message: "boom" })).toEqual({
+      type: "rawBlockFailed",
+      key: "k",
+      message: "boom",
+    });
+    expect(parseExtensionToWebview({ type: "rawBlockFailed", key: 1, message: "boom" })).toBeNull();
+  });
+
+  it("rawImagesCleared を受理する", () => {
+    expect(parseExtensionToWebview({ type: "rawImagesCleared" })).toEqual({
+      type: "rawImagesCleared",
+    });
+  });
+});
+
 describe("parseWebviewToExtension", () => {
   it("undoRedo は kind が undo / redo のときだけ受ける", () => {
     expect(parseWebviewToExtension({ type: "undoRedo", kind: "undo" })).toEqual({

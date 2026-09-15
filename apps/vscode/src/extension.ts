@@ -1,11 +1,21 @@
 import * as path from "node:path";
 import {
+  buildFragmentDocument,
+  compileFragment,
+  FRAGMENT_DOCUMENT_VERSION,
+  fragmentDependencies,
+  fragmentGraphicsPaths,
+  PdfExportError,
+} from "@beamer-editor/compiler";
+import {
   canvasPositionReplacement,
   detachBlockToCanvas,
+  fragmentHash,
   type LintDiagnostic,
   type LintSeverity,
   parseDeck,
 } from "@beamer-editor/core";
+import { MAX_RAW_PDF_BYTES } from "@beamer-editor/ui";
 import * as vscode from "vscode";
 import { LintController } from "./diagnostics";
 import { renderDocument } from "./document-controller";
@@ -30,6 +40,11 @@ import {
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
 import { PreviewHistory } from "./preview-history";
+import {
+  affectsRawBlockCompile,
+  dependencyFingerprint,
+  RawBlockCompiler,
+} from "./raw-block-compiler";
 import { frameLensPositions, sourceHasFrameAt } from "./reveal-slide";
 import {
   hasSlideOutlineContentChanges,
@@ -542,15 +557,103 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     const templateWatcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(documentDir, "**/*.{sty,png,jpg,jpeg,pdf}"),
     );
+    // 生ブロックの部分コンパイル(#81)。Workspace Trust が無いときと設定で切ったときは起動しない。
+    // PDF は globalStorage の下に「組み立て方の版 / デッキのディレクトリ」ごとに分けて置く(別プロジェクトの
+    // 同じ TeX が別の画像や .sty を参照していても混ざらない)。Webview へは base64 で渡す(リソース許可を広げない)。
+    const rawCacheDir = vscode.Uri.joinPath(
+      context.globalStorageUri,
+      "raw-blocks",
+      `v${FRAGMENT_DOCUMENT_VERSION}`,
+      fragmentHash(documentDir.fsPath),
+    );
+    const statDependency = async (target: string) => {
+      try {
+        const info = await vscode.workspace.fs.stat(vscode.Uri.file(target));
+        return info.type & vscode.FileType.File ? { mtimeMs: info.mtime, size: info.size } : null;
+      } catch {
+        return null;
+      }
+    };
+    const rawBlockCompiler = new RawBlockCompiler({
+      cacheDir: rawCacheDir.fsPath,
+      fs: {
+        readFile: async (target) => vscode.workspace.fs.readFile(vscode.Uri.file(target)),
+        writeFile: async (target, data) =>
+          vscode.workspace.fs.writeFile(vscode.Uri.file(target), data),
+        mkdir: async (target) => vscode.workspace.fs.createDirectory(vscode.Uri.file(target)),
+        exists: async (target) => (await statDependency(target)) !== null,
+        rename: async (from, to) =>
+          vscode.workspace.fs.rename(vscode.Uri.file(from), vscode.Uri.file(to), {
+            overwrite: true,
+          }),
+      },
+      buildDocument: buildFragmentDocument,
+      // 生ブロックと前置きが参照する画像・.sty などの更新時刻と大きさ。変わればキャッシュを作り直す。
+      fingerprint: (tex, preamble) =>
+        dependencyFingerprint(
+          fragmentDependencies(`${preamble}\n${tex}`),
+          (name) => (path.isAbsolute(name) ? name : path.join(documentDir.fsPath, name)),
+          statDependency,
+          fragmentHash,
+          fragmentGraphicsPaths(`${preamble}\n${tex}`),
+        ),
+      // Tectonic が無い・壊れているときは、ブロックごとに赤枠にせず一度だけ案内する(元 #119)。
+      isUnavailable: (error) =>
+        error instanceof PdfExportError &&
+        (error.code === "E_TECTONIC_NOT_FOUND" || error.code === "E_TECTONIC_VERSION"),
+      onUnavailable: (message) => {
+        void vscode.window
+          .showWarningMessage(
+            `Beamer preview: 生ブロックの部分コンパイルを止めました。${message}`,
+            "設定を開く",
+          )
+          .then((action) => {
+            if (action === "設定を開く")
+              return vscode.commands.executeCommand(
+                "workbench.action.openSettings",
+                "beamerEditor.tectonicPath",
+              );
+            return undefined;
+          });
+      },
+      compile: async (fragment, signal) => {
+        const config = vscode.workspace.getConfiguration("beamerEditor", document.uri);
+        const seconds = config.get<number>("pdfExport.timeoutSeconds", 300);
+        const normalized = Number.isFinite(seconds) ? Math.trunc(seconds) : 300;
+        const tectonicPath = normalizeTectonicPath(config.get<unknown>("tectonicPath"));
+        const result = await compileFragment({
+          document: fragment,
+          cwd: documentDir.fsPath,
+          signal,
+          timeoutMs: Math.max(5, Math.min(1800, normalized)) * 1000,
+          maxOutputBytes: MAX_RAW_PDF_BYTES,
+          ...(tectonicPath ? { tectonicPath } : {}),
+        });
+        return result.pdf;
+      },
+      onReady: (key, pdf) => controller.postRawBlockReady(key, pdf),
+      onFailed: (key, message) => controller.postRawBlockFailed(key, message),
+    });
+    const rawBlocksEnabled = () =>
+      vscode.workspace.isTrusted &&
+      vscode.workspace
+        .getConfiguration("beamerEditor", document.uri)
+        .get<boolean>("preview.compileRawBlocks", true);
     const controller = new PreviewController(
       panel,
-      { scriptUri: mediaUri("webview.js"), styleUri: mediaUri("webview.css") },
+      {
+        scriptUri: mediaUri("webview.js"),
+        styleUri: mediaUri("webview.css"),
+        pdfWorkerUri: mediaUri("pdf.worker.mjs"),
+      },
       document,
       {
         onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
       },
       () => {
         previewSources.delete(panel);
+        rawBlockCompiler.dispose();
+        rawBlockSettings.dispose();
         templateWatcher.dispose();
         viewStateSubscription.dispose();
         if (!previewLifecycle.panelDisposed(document.uri, controller)) return;
@@ -559,6 +662,14 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       {
         render: (text, version) =>
           renderDocument(text, version, { baseStyle: (doc) => baseStyleOf(doc, templateFs) }),
+        onRendered: (outcome) => {
+          if (!rawBlocksEnabled()) return;
+          rawBlockCompiler.request(
+            outcome.deck.rawBlocks ?? [],
+            outcome.deck.fragmentPreamble ?? "",
+          );
+        },
+        onWebviewReady: () => rawBlockCompiler.forgetDelivered(),
         onError: (message) => {
           void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
         },
@@ -637,13 +748,24 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       },
     );
     const refreshTemplates = () => {
+      // 画像や .sty が足されたり直ったりしたときは、失敗していた生ブロックも次の描画で再試行する。
+      rawBlockCompiler.resetFailures();
       controller.refresh();
       lintController.refresh(vscode.workspace.textDocuments);
     };
     templateWatcher.onDidChange(refreshTemplates);
     templateWatcher.onDidCreate(refreshTemplates);
     templateWatcher.onDidDelete(refreshTemplates);
-    context.subscriptions.push(templateWatcher);
+    // Tectonic の場所や部分コンパイルの有効/無効が変わったら、エンジンの判定と失敗を捨てて描画し直す
+    // (プレビューを開き直さずに再試行できる)。
+    const rawBlockSettings = vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!affectsRawBlockCompile((section) => event.affectsConfiguration(section, document.uri)))
+        return;
+      rawBlockCompiler.reset();
+      if (!rawBlocksEnabled()) controller.postRawImagesCleared();
+      controller.refresh();
+    });
+    context.subscriptions.push(templateWatcher, rawBlockSettings);
     previewLifecycle.register(document.uri, controller, document, automatic);
     previewController = controller;
   }
