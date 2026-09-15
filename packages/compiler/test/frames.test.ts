@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -19,6 +19,7 @@ const directories: string[] = [];
 const canvasPreamblePath = fileURLToPath(
   new URL("../../../fixtures/deck-canvas-preamble.tex", import.meta.url),
 );
+const fixturesDirectory = fileURLToPath(new URL("../../../fixtures/", import.meta.url));
 
 async function directory(): Promise<string> {
   const value = await mkdtemp(join(tmpdir(), "beamer-editor-frames-test-"));
@@ -308,6 +309,11 @@ describe("compileDeckFrames", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[1]).toContain("--keep-logs");
+    const searchPathIndex = calls[1].indexOf("-Z");
+    expect(calls[1].slice(searchPathIndex, searchPathIndex + 2)).toEqual([
+      "-Z",
+      `search-path=${dirname(inputPath)}`,
+    ]);
     expect(await readFile(inputPath, "utf8")).toBe(deck);
     expect(measuredSource).toContain("BEAMER_EDITOR_FRAME:000001");
     expect(value.frames.map((frame) => frame.images.map((image) => image.page))).toEqual([
@@ -329,6 +335,39 @@ describe("compileDeckFrames", () => {
     expect(analysisOnly.warnings).toEqual(value.warnings);
     expect(value.layoutDiagnostics).toEqual([]);
     expect(analysisOnly.layoutDiagnostics).toEqual([]);
+  });
+
+  it("keeps the marked input in tmp while Tectonic searches the absolute source directory", async () => {
+    const inputDirectory = join(await directory(), "deck source");
+    await mkdir(inputDirectory);
+    const inputPath = join(inputDirectory, "talk.slide.tex");
+    await writeFile(inputPath, deck);
+    let measuredInput = "";
+    let compileArgs: readonly string[] = [];
+    const runner: ProcessRunner = {
+      async run(_command, args) {
+        if (args[0] === "--version") return result();
+        compileArgs = args;
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        measuredInput = args.at(-1) as string;
+        await writeFile(join(outdir, basename(measuredInput).replace(/\.tex$/, ".pdf")), "%PDF");
+        await writeFile(
+          join(outdir, basename(measuredInput).replace(/\.tex$/, ".log")),
+          "BEAMER_EDITOR_FRAME:000001 [1] BEAMER_EDITOR_FRAME:000002 [2]",
+        );
+        return result();
+      },
+    };
+
+    await compileDeckFrames({ inputPath, includeImages: false }, { runner });
+
+    expect(measuredInput).not.toBe(inputPath);
+    expect(dirname(measuredInput)).not.toBe(dirname(inputPath));
+    const searchPathIndex = compileArgs.indexOf("-Z");
+    expect(compileArgs.slice(searchPathIndex, searchPathIndex + 2)).toEqual([
+      "-Z",
+      `search-path=${dirname(inputPath)}`,
+    ]);
   });
 
   it("rejects page and PNG limits", async () => {
@@ -574,5 +613,23 @@ ${preamble}
       ]);
     },
     180_000,
+  );
+
+  it.runIf(process.env.TECTONIC_INTEGRATION === "1")(
+    "resolves relative fixture dependencies from the original input directory",
+    async () => {
+      for (const file of ["basic.slide.tex", "japanese.slide.tex"]) {
+        const inputPath = join(fixturesDirectory, file);
+        const expectedFrameCount = findDeckFrames(await readFile(inputPath, "utf8")).length;
+        const value = await compileDeckFrames({
+          inputPath,
+          includeImages: false,
+          timeoutMs: 120_000,
+        });
+        expect(value.frames).toHaveLength(expectedFrameCount);
+        expect(value.frames.every((frame) => frame.images.length === 0)).toBe(true);
+      }
+    },
+    300_000,
   );
 });
