@@ -57,3 +57,9 @@ TikZ などサブセット外のブロックは、プレビューではまず環
 編集中の内容は先に保存され、コンパイルは既定で300秒後に停止します（`beamerEditor.pdfExport.timeoutSeconds` で5〜1800秒に変更可）。失敗時は通知の「詳細を表示」からTectonicのエラーを確認できます。既存PDFはコンパイルが成功するまで置換されません。外部プログラムを起動するため、Restricted Modeではコマンドとボタンが無効になります。
 
 このリポジトリで LaTeX Workshop を併用する場合の、混在 workspace と専用 workspace の設定方針は[エディタセットアップ](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/editor-setup.md)を参照してください。
+
+### スライド一覧からの編集
+
+Beamer Slides の項目を右クリックすると、Move Slide Up / Down、Duplicate Slide、Delete Slide、Insert New Slide を使えます。挿入は選択スライドの直後、一覧タイトルの「+」からは末尾です。空のデッキにも挿入できます。各操作は1回のundoで戻り、プレビューとソースへ反映されます。
+
+移動時は直前の連続したコメント行と末尾の行コメントも一緒に移動します。sectionやフレーム間のその他のTeXはその位置に保持するため、section境界を越える移動では所属するsectionが変わります。複製はframe labelを未使用の `slide-N` に変更します。本文の `\label` や安全に解釈できないframeオプションがある場合は参照先を壊さないため複製を拒否し、ソース上での編集を案内します。マクロが生成した仮想フレームは一覧操作の対象外です。
