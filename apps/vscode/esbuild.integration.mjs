@@ -4,6 +4,7 @@ import * as esbuild from "esbuild";
 /** test-integration/ の *.test.ts を out-test/ へ CJS でバンドルする。 */
 const entryPoints = readdirSync("test-integration")
   .filter((name) => name.endsWith(".test.ts"))
+  .sort()
   .map((name) => `test-integration/${name}`);
 
 await esbuild.build({
