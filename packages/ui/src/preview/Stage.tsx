@@ -144,9 +144,7 @@ export function Stage({
 
   // A sibling control also works for <img>, which cannot contain a handle.
   useEffect(() => {
-    const descriptor = frame.canvasElements?.find(
-      (item) => item.id === selected && item.editable && item.kind === "image",
-    );
+    const descriptor = frame.canvasElements?.find((item) => item.id === selected && item.editable);
     const element = scaleRef.current?.querySelector<HTMLElement>(
       `[data-canvas-element-id="${selected}"]`,
     );
@@ -156,9 +154,12 @@ export function Stage({
     handle.type = "button";
     handle.className = "canvas-resize-handle";
     handle.dataset.resizeElementId = descriptor.id;
-    handle.setAttribute("aria-label", "画像の幅を変更");
+    handle.setAttribute(
+      "aria-label",
+      descriptor.kind === "image" ? "画像の幅を変更" : "テキストの幅を変更",
+    );
     handle.addEventListener("dblclick", (event) => event.stopPropagation());
-    handle.title = "ドラッグで拡大縮小（左右キーでも変更）";
+    handle.title = "ドラッグで幅を変更（左右キーでも変更）";
     handle.style.left = `${(descriptor.position.x + descriptor.position.width) * 100}%`;
     handle.style.top = `${descriptor.position.y * 100}%`;
     handle.addEventListener("keydown", (event) => {
@@ -278,7 +279,7 @@ export function Stage({
       clearSelection();
       return;
     }
-    if (handleId && (!onResizeCanvasElement || descriptor.kind !== "image")) return;
+    if (handleId && !onResizeCanvasElement) return;
     if (selected) {
       scaleRef.current
         ?.querySelector(`[data-canvas-element-id="${selected}"]`)
