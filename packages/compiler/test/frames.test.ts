@@ -6,9 +6,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   analyzeCanvasGeometry,
   compileDeckFrames,
-  frameSelectorFromAddress,
   type DeckFrameRasterizer,
   findDeckFrames,
+  frameSelectorFromAddress,
   groupFramePages,
   injectFrameMarkers,
   PdfExportError,

@@ -112,11 +112,7 @@ export function createNodePdfRasterizer(
               await renderTask.promise;
             } catch (error) {
               if (options.signal?.aborted)
-                throw new PdfExportError(
-                  "E_CANCELLED",
-                  "rasterize はキャンセルされました",
-                  error,
-                );
+                throw new PdfExportError("E_CANCELLED", "rasterize はキャンセルされました", error);
               throw new PdfExportError(
                 "E_RASTERIZE",
                 "PDF page の rasterize に失敗しました",

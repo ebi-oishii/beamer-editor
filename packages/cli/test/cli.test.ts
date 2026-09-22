@@ -14,7 +14,7 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, relative, resolve } from "node:path";
-import { findDeckFrames, type CompileDeckFramesRequest } from "@beamer-editor/compiler";
+import { type CompileDeckFramesRequest, findDeckFrames } from "@beamer-editor/compiler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type CliDependencies,
@@ -346,7 +346,9 @@ describe("deck outline", () => {
       [source.argvPath, "-o", output, "--frame", label],
       async (value) => {
         request = value;
-        return snapshotCompiled(snapshotFrame(frame.address.number, frame.address.label, [1])) as never;
+        return snapshotCompiled(
+          snapshotFrame(frame.address.number, frame.address.label, [1]),
+        ) as never;
       },
     );
 

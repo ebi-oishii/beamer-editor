@@ -567,9 +567,7 @@ export type FrameSelector = { kind: "number"; value: number } | { kind: "label";
  */
 export function frameSelectorFromAddress(value: string): FrameSelector {
   if (value.startsWith("label:")) return { kind: "label", value: value.slice("label:".length) };
-  return /^\d+$/.test(value)
-    ? { kind: "number", value: Number(value) }
-    : { kind: "label", value };
+  return /^\d+$/.test(value) ? { kind: "number", value: Number(value) } : { kind: "label", value };
 }
 
 export interface CompileDeckFramesRequest {
@@ -684,11 +682,7 @@ export function findDeckFrames(source: string): readonly CompiledFrame[] {
   const end = /\\end\s*\{\s*frame\s*\}/g;
   const frames: CompiledFrame[] = [];
   begin.lastIndex = bodyStart;
-  for (
-    let match = begin.exec(masked);
-    match && match.index < bodyEnd;
-    match = begin.exec(masked)
-  ) {
+  for (let match = begin.exec(masked); match && match.index < bodyEnd; match = begin.exec(masked)) {
     end.lastIndex = begin.lastIndex;
     const closing = end.exec(masked);
     if (!closing || closing.index >= bodyEnd) break;
