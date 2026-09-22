@@ -402,7 +402,7 @@ export class PreviewController implements vscode.Disposable {
     if (
       "width" in move
         ? width === null || element.position.width === width
-        : element.fontSize === move.size
+        : element.invalidFontSize === undefined && element.fontSize === move.size
     ) {
       this.sendDeck();
       return;
@@ -442,7 +442,11 @@ export class PreviewController implements vscode.Disposable {
         return;
       }
       if (result === "cancelled") {
-        this.onWarning("Canvas element style was not updated. Try dragging it again.");
+        this.onWarning(
+          "size" in move
+            ? "Canvas text size was not updated. Try selecting it again."
+            : "Canvas element width was not updated. Try dragging it again.",
+        );
         this.sendDeck();
         return;
       }

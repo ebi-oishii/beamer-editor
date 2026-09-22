@@ -194,13 +194,21 @@ export function Stage({
     select.setAttribute("aria-label", "テキストの文字サイズ");
     select.style.left = `${descriptor.position.x * 100}%`;
     select.style.top = `${descriptor.position.y * 100}%`;
+    if (descriptor.invalidFontSize !== undefined) {
+      const invalid = document.createElement("option");
+      invalid.value = "";
+      invalid.textContent = descriptor.invalidFontSize;
+      invalid.disabled = true;
+      invalid.selected = true;
+      select.append(invalid);
+    }
     for (const size of CANVAS_FONT_SIZES) {
       const option = document.createElement("option");
       option.value = size;
       option.textContent = size;
       select.append(option);
     }
-    select.value = descriptor.fontSize ?? "normal";
+    if (descriptor.invalidFontSize === undefined) select.value = descriptor.fontSize ?? "normal";
     for (const event of ["pointerdown", "click", "dblclick"])
       select.addEventListener(event, (event) => event.stopPropagation());
     select.addEventListener("keydown", (event) => {
