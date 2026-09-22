@@ -151,9 +151,12 @@ describe("clamp の結果はそのまま lint L012 を通る", () => {
 });
 
 describe("canvas width", () => {
-  it("changes only w and rejects ambiguous or invalid options", () => {
+  it("changes w, or appends it without altering other options", () => {
     expect(canvasWidthReplacement("[y=.2, w = .30 ,x=.1]", 0.4567)).toBe("[y=.2, w = 0.457 ,x=.1]");
-    for (const options of ["[x=0,y=0]", "[w=.2,w=.3]", "[w=.3junk]", "[w=NaN]"])
+    expect(canvasWidthReplacement("[x=0,y=.2,size=small]", 0.5)).toBe(
+      "[x=0,y=.2,size=small,w=0.500]",
+    );
+    for (const options of ["[w=.2,w=.3]", "[w=.3junk]", "[w=NaN]"])
       expect(canvasWidthReplacement(options, 0.4)).toBeNull();
     expect(canvasWidthReplacement("[w=.3]", NaN)).toBeNull();
   });

@@ -158,13 +158,17 @@ export function clampCanvasWidth(x: number, width: number): number | null {
   );
 }
 
-/** options 内の w だけを置換する。位置・画像パス・他の宣言は原文のまま保つ。 */
+/** options 内の w を置換し、未指定なら追加する。位置・画像パス・他の宣言は原文のまま保つ。 */
 export function canvasWidthReplacement(options: string, width: number): string | null {
   if (!Number.isFinite(width) || width <= 0 || !options.startsWith("[") || !options.endsWith("]"))
     return null;
   if (roundCanvasCoordinate(width) <= 0) return null;
   const parts = options.slice(1, -1).split(",");
   const indices = parts.flatMap((part, index) => (/^\s*w\s*=/.test(part) ? [index] : []));
+  if (indices.length === 0)
+    return options === "[]"
+      ? `[w=${formatCanvasCoordinate(width)}]`
+      : `${options.slice(0, -1)},w=${formatCanvasCoordinate(width)}]`;
   if (indices.length !== 1) return null;
   const index = indices[0];
   if (index === undefined) return null;

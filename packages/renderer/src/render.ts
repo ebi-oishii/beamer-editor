@@ -26,7 +26,14 @@ import type {
   RawInlineNode,
   SourceSpan,
 } from "@beamer-editor/core";
-import { type DetachStatus, detachStatusesOf, framesOf, frameTitleText } from "@beamer-editor/core";
+import {
+  type DetachStatus,
+  detachStatusesOf,
+  fragmentPreambleOf,
+  framesOf,
+  frameTitleText,
+  rawFragmentKey,
+} from "@beamer-editor/core";
 import katex from "katex";
 import { DEFAULT_THEME, type Theme } from "./theme.js";
 
@@ -59,6 +66,19 @@ export interface RenderedDeck {
   frames: RenderedFrame[];
   /** `%% style` 領域から生成した CSS(CSS 変数)。ホストが <style> として注入する。 */
   css: string;
+  /**
+   * プレースホルダで描いた生ブロック(#81 の部分コンパイル対象)。key はプレースホルダの
+   * data-raw-key と同じで、ホストはこの一覧からコンパイルし、できた画像を key で差し込む。
+   */
+  rawBlocks?: RawBlockRef[];
+  /** 生ブロックを standalone でコンパイルするときに前置する定義(preamble-extra とマクロ)。 */
+  fragmentPreamble?: string;
+}
+
+export interface RawBlockRef {
+  key: string;
+  tex: string;
+  environment: string | null;
 }
 
 const escapeHtml = (s: string) =>
@@ -291,11 +311,17 @@ class FrameRenderer {
   /** 描画中フレームの各フロー要素が「自由配置にする」候補になれるか(core と同じ判定)。 */
   private detachStatuses: Map<BlockNode, DetachStatus> = new Map();
 
+  /** プレースホルダで描いた生ブロック(key → 参照)。renderDeck が RenderedDeck.rawBlocks に出す。 */
+  readonly rawBlocks = new Map<string, RawBlockRef>();
+  /** 生ブロックの standalone 前置き。キャッシュキーにも入る(定義変更で古い画像が残らない)。 */
+  readonly fragmentPreamble: string;
+
   constructor(
     private readonly doc: DeckDocument,
     private readonly theme: Theme,
     baseStyle?: PreviewStyle,
   ) {
+    this.fragmentPreamble = fragmentPreambleOf(doc);
     // 土台(テンプレート / preamble-extra)を先に置き、%% style 領域で上書きする。
     if (baseStyle?.logo) this.decorations.logo = baseStyle.logo;
     if (baseStyle?.background) this.decorations.background = baseStyle.background.path;
@@ -531,8 +557,8 @@ class FrameRenderer {
         // align 系は KaTeX では aligned 環境として描画する(& と \\ を解釈させる)
         const tex =
           block.kind === "align" || block.kind === "align*"
-            ? `\\begin{aligned}${block.tex}\\end{aligned}`
-            : block.tex;
+            ? `\\begin{aligned}${block.tex}\n\\end{aligned}`
+            : `${block.tex}\n`;
         return `<div class="display-math"${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}>${math(tex, true)}</div>`;
       }
       case "pause":
@@ -552,6 +578,13 @@ class FrameRenderer {
           `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}`,
         );
     }
+  }
+
+  /** 生ブロックを部分コンパイルの対象として登録し、プレースホルダに付ける data-raw-key 属性を返す。 */
+  private rawKeyAttr(tex: string, environment: string | null): string {
+    const key = rawFragmentKey(tex, this.fragmentPreamble);
+    if (!this.rawBlocks.has(key)) this.rawBlocks.set(key, { key, tex, environment });
+    return ` data-raw-key="${key}"`;
   }
 
   /**
@@ -581,7 +614,7 @@ class FrameRenderer {
       environment ?? "生 LaTeX",
       tex,
       placeholderStyle(width, aspectOf(width, this.lengthInLinewidth(size.height))),
-      attrs,
+      `${attrs}${this.rawKeyAttr(tex, environment)}`,
     );
   }
 
@@ -649,7 +682,7 @@ class FrameRenderer {
           environmentOf(item.tex) ?? "生 LaTeX",
           item.tex,
           "width:30%;aspect-ratio:4 / 3",
-          "",
+          this.rawKeyAttr(item.tex, environmentOf(item.tex)),
         );
       }
     }
@@ -784,5 +817,7 @@ export function renderDeck(
     title: doc.metadata.title ? inlineToPlain(doc.metadata.title.value) : "(無題のデッキ)",
     frames,
     css: styleCssOf(doc, options.baseStyle),
+    rawBlocks: [...renderer.rawBlocks.values()],
+    fragmentPreamble: renderer.fragmentPreamble,
   };
 }

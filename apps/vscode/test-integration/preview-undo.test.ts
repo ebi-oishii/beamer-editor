@@ -80,6 +80,39 @@ suite("#103: プレビューからの undo / redo", () => {
     await waitFor(() => document.getText().includes("EDIT body"), "redo で編集が戻る");
   });
 
+  test("undo の履歴が 2 件あっても、1 回の undo で戻るのは 1 件だけ", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "beamer-103-"));
+    tempDirs.push(dir);
+    const file = path.join(dir, "deck.slide.tex");
+    await writeFile(file, SOURCE);
+    const document = await vscode.workspace.openTextDocument(file);
+    await vscode.window.showTextDocument(document);
+
+    const extension = vscode.extensions.getExtension("ebi-oishii.beamer-editor");
+    assert.ok(extension, "拡張が見つかる");
+    const api = (await extension.activate()) as TestApi;
+    await waitFor(() => api._previewControllerForTest() !== undefined, "自動プレビューが開く");
+    const controller = api._previewControllerForTest();
+    assert.ok(controller);
+
+    const first = new vscode.WorkspaceEdit();
+    first.insert(document.uri, new vscode.Position(3, 0), "FIRST ");
+    assert.ok(await vscode.workspace.applyEdit(first));
+    const second = new vscode.WorkspaceEdit();
+    second.insert(document.uri, new vscode.Position(3, 0), "SECOND ");
+    assert.ok(await vscode.workspace.applyEdit(second));
+    assert.ok(document.getText().includes("SECOND FIRST body"));
+
+    const receive = (
+      controller as unknown as { handleMessage(raw: unknown): void }
+    ).handleMessage.bind(controller);
+    // 効かなかったときのやり直しが、version の更新が遅れて見えただけの場合に 2 件目まで戻してはいけない。
+    receive({ type: "undoRedo", kind: "undo" });
+    await waitFor(() => !document.getText().includes("SECOND"), "undo で 2 件目の編集が消える");
+    await sleep(1000);
+    assert.ok(document.getText().includes("FIRST body"), "1 件目の編集は残る");
+  });
+
   test("undo と redo を待たずに連続して送っても、順に実行されて元の編集が残る", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "beamer-103-"));
     tempDirs.push(dir);
