@@ -129,7 +129,9 @@ describe("slide source edits", () => {
   });
   it("recognizes a frame end after a TeX line break", () => {
     const source = deck(frame("A").replace("A body\n", "A body\\\\"));
-    expect(apply(source, "delete", 0)).toBe(deck(""));
+    const next = apply(source, "delete", 0);
+    expect(labels(next)).toEqual([]);
+    expect(next).toContain("\\end{document}");
   });
   it("does not create edits when moving past an edge", () => {
     const source = deck(frame("A"));
