@@ -1,5 +1,6 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { clampMenuPosition } from "../src/preview/detach.js";
+import { candidateLabel, clampMenuPosition } from "../src/preview/detach.js";
 
 describe("clampMenuPosition", () => {
   const size = { width: 220, height: 80 };
@@ -20,5 +21,14 @@ describe("clampMenuPosition", () => {
       y: 4,
     });
     expect(clampMenuPosition(2, 2, size, viewport)).toEqual({ x: 4, y: 4 });
+  });
+});
+
+describe("candidateLabel", () => {
+  it("display math omits KaTeX glyph text from its excerpt", () => {
+    const math = document.createElement("div");
+    math.innerHTML = '<span class="katex"><span>𝑥</span><span>=</span><span>1</span></span>';
+
+    expect(candidateLabel(math, "displayMath")).toBe("数式を自由配置にする");
   });
 });

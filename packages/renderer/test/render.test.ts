@@ -296,6 +296,57 @@ ${body}
     }
   });
 
+  it("生ブロックの箱には部分コンパイル用の data-raw-key を付け、deck.rawBlocks に同じ key で一覧する(#81)", () => {
+    const tikz = "\\begin{tikzpicture}\n\\draw (0,0) -- (1,1);\n\\end{tikzpicture}";
+    const source = `\\documentclass[aspectratio=169]{beamer}
+%% preamble-extra:begin
+\\usepackage{tikz}
+%% preamble-extra:end
+\\begin{document}
+\\begin{frame}{T}
+${tikz}
+\\resizebox{0.5\\textwidth}{!}{${tikz}}
+\\end{frame}
+\\end{document}
+`;
+    const deck = renderDeck(parseDeck(source));
+    const out = deck.frames[0]?.html ?? "";
+    const keys = [...out.matchAll(/data-raw-key="([0-9a-f]{16})"/g)].map((m) => m[1]);
+    expect(keys).toHaveLength(2);
+    // key は包む命令まで含めた原文から作る(\\resizebox の有無で出力が違う)ので、2 つは別。
+    expect(keys[0]).not.toBe(keys[1]);
+    expect(deck.rawBlocks?.map((block) => block.key)).toEqual(keys);
+    expect(deck.rawBlocks?.[0]).toEqual({ key: keys[0], tex: tikz, environment: "tikzpicture" });
+    expect(deck.rawBlocks?.[1]?.tex).toBe(`\\resizebox{0.5\\textwidth}{!}{${tikz}}`);
+    expect(deck.rawBlocks?.[1]?.environment).toBe("tikzpicture");
+    expect(deck.fragmentPreamble).toBe("\\usepackage{tikz}");
+    // 同じ生ブロックが 2 回出ても一覧は 1 つ(キャッシュを共有する)。
+    const twice = renderDeck(
+      parseDeck(source.replace(`\\resizebox{0.5\\textwidth}{!}{${tikz}}`, tikz)),
+    );
+    expect(twice.rawBlocks).toHaveLength(1);
+    expect((twice.frames[0]?.html.match(/data-raw-key=/g) ?? []).length).toBe(2);
+    // 前置き(マクロ定義)が変わると key も変わる。
+    const withMacro = renderDeck(
+      parseDeck(
+        source.replace(
+          "%% preamble-extra:begin",
+          "%% macros:begin\n\\newcommand{\\foo}{x}\n%% macros:end\n%% preamble-extra:begin",
+        ),
+      ),
+    );
+    expect(withMacro.rawBlocks?.[0]?.key).not.toBe(keys[0]);
+    // PDF 画像の箱はコンパイル対象ではないので key を持たない。
+    const pdf = renderDeck(
+      parseDeck(
+        "\\documentclass[aspectratio=169]{beamer}\n\\begin{document}\n\\begin{frame}{T}\n\\includegraphics[width=0.4\\textwidth]{a.pdf}\n\\end{frame}\n\\end{document}\n",
+      ),
+    );
+    expect(pdf.frames[0]?.html).toContain("image-placeholder");
+    expect(pdf.frames[0]?.html).not.toContain("data-raw-key");
+    expect(pdf.rawBlocks).toEqual([]);
+  });
+
   it("\\item の中の図(命令で包んだ環境だけの段落)も、ブロックの段落と同じ判定で箱にする", () => {
     const out = html(
       "\\begin{itemize}\n\\item \\resizebox{0.5\\textwidth}{!}{\\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture}}\n\\item text \\myemph{x}\n\\end{itemize}",
@@ -472,4 +523,34 @@ describe("renderDeck: styled.slide.tex(スタイル語彙)", () => {
     expect(plain.css).toBe("");
     expect(plain.frames[0]?.html).not.toContain("deck-footer");
   });
+});
+
+describe("decktext display math", () => {
+  it.each([
+    "equation",
+    "equation*",
+    "align",
+    "align*",
+    "bracket",
+  ])("renders %s as KaTeX and offers flow math for detachment", (kind) => {
+    const expression =
+      kind === "bracket" ? String.raw`\[x=1\]` : `\\begin{${kind}}x=1\\end{${kind}}`;
+    const source = `\\begin{frame}[label=math]\n${expression}\n\\begin{deckcanvas}\n\\begin{decktext}[x=0,y=0,w=.5]\n${expression}\n\\end{decktext}\n\\end{deckcanvas}\n\\end{frame}`;
+    const html = renderDeck(parseDeck(source)).frames[0]?.html ?? "";
+    expect(html.match(/class="display-math"/g)).toHaveLength(2);
+    expect(html.match(/class="katex"/g)).toHaveLength(2);
+    expect(html.match(/data-flow-block="displayMath"/g)).toHaveLength(1);
+    expect(html).not.toContain("data-detach-blocked");
+    expect(html).not.toContain("math-error");
+  });
+});
+
+it("renders trailing comments in canvas align without swallowing the closing environment", () => {
+  const html =
+    renderDeck(
+      parseDeck(String.raw`\begin{frame}[label=math]\begin{deckcanvas}\begin{decktext}[x=0,y=0,w=.5]\begin{align*}a &= b % keep comment
+\end{align*}\end{decktext}\end{deckcanvas}\end{frame}`),
+    ).frames[0]?.html ?? "";
+  expect(html).toContain('class="katex"');
+  expect(html).not.toContain("katex-error");
 });
