@@ -11,12 +11,258 @@ export type SlideEditResult =
   | { ok: true; edits: SlideSourceEdit[] }
   | { ok: false; reason: string };
 
-/** Comments are masked for structural parsing; edits always use the original UTF-16 source. */
+const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlisting", "minted"]);
+
+/**
+ * Mask TeX regions whose contents cannot safely participate in structural checks.
+ * The resulting string has the same UTF-16 length and line breaks as `source`, so
+ * parser spans can still be applied to the original source unchanged.
+ */
 function maskComments(source: string): string {
-  return source.replace(/(?<!\\)(?:\\\\)*%[^\r\n]*/g, (match) => {
-    const percent = match.indexOf("%");
-    return match.slice(0, percent) + " ".repeat(match.length - percent);
-  });
+  const masked = source.split("");
+  const mask = (start: number, end: number) => {
+    for (let i = start; i < end; i++) {
+      if (source[i] !== "\r" && source[i] !== "\n") masked[i] = " ";
+    }
+  };
+  const balancedArgument = (at: number, open = "{", close = "}"): SourceSpan | null => {
+    let cursor = skipTrivia(at);
+    if (source[cursor] !== open) return null;
+    const start = cursor;
+    let depth = 1;
+    let slashRun = 0;
+    for (cursor++; cursor < source.length; cursor++) {
+      const char = source[cursor] as string;
+      if (char === "%" && slashRun % 2 === 0) {
+        while (cursor < source.length && source[cursor] !== "\r" && source[cursor] !== "\n")
+          cursor++;
+        slashRun = 0;
+        continue;
+      }
+      if (char === open && slashRun % 2 === 0) depth++;
+      else if (char === close && slashRun % 2 === 0 && --depth === 0)
+        return { start, end: cursor + 1 };
+      slashRun = char === "\\" ? slashRun + 1 : 0;
+    }
+    return null;
+  };
+  const skipCommand = (at: number): number | null => {
+    if (source[at] !== "\\") return null;
+    let end = at + 1;
+    if (/[a-zA-Z@]/.test(source[end] ?? ""))
+      while (end < source.length && /[a-zA-Z@]/.test(source[end] as string)) end++;
+    else end++;
+    return end;
+  };
+  const skipTrivia = (at: number): number => {
+    while (at < source.length && /\s/.test(source[at] as string)) at++;
+    if (source[at] !== "%") return at;
+    let slashes = 0;
+    for (let previous = at - 1; previous >= 0 && source[previous] === "\\"; previous--) slashes++;
+    if (slashes % 2 !== 0) return at;
+    while (at < source.length && source[at] !== "\r" && source[at] !== "\n") at++;
+    return skipTrivia(at);
+  };
+  const latexDefinitionBody = (at: number): SourceSpan | null => {
+    let cursor = skipTrivia(at);
+    if (source[cursor] === "*") cursor = skipTrivia(cursor + 1);
+    const name =
+      balancedArgument(cursor) ??
+      (() => {
+        const end = skipCommand(cursor);
+        return end === null ? null : { start: cursor, end };
+      })();
+    if (!name) return null;
+    cursor = skipTrivia(name.end);
+    for (let count = 0; count < 2; count++) {
+      const optional = balancedArgument(cursor, "[", "]");
+      if (!optional) break;
+      cursor = skipTrivia(optional.end);
+    }
+    return balancedArgument(cursor);
+  };
+  const primitiveDefinitionBody = (at: number): SourceSpan | null => {
+    let cursor = skipTrivia(at);
+    const nameEnd = skipCommand(cursor);
+    if (nameEnd === null) return null;
+    cursor = nameEnd;
+    while (cursor < source.length) {
+      if (source[cursor] === "{") return balancedArgument(cursor);
+      if (source[cursor] === "\\") {
+        const end = skipCommand(cursor);
+        if (end === null) return null;
+        cursor = end;
+        continue;
+      }
+      if (source[cursor] === "}" || source[cursor] === "%") return null;
+      cursor++;
+    }
+    return null;
+  };
+  const environmentDefinitionBodies = (at: number): [SourceSpan, SourceSpan] | null => {
+    let cursor = skipTrivia(at);
+    if (source[cursor] === "*") cursor = skipTrivia(cursor + 1);
+    const name = balancedArgument(cursor);
+    if (!name) return null;
+    cursor = skipTrivia(name.end);
+    for (let count = 0; count < 2; count++) {
+      const optional = balancedArgument(cursor, "[", "]");
+      if (!optional) break;
+      cursor = skipTrivia(optional.end);
+    }
+    const begin = balancedArgument(cursor);
+    if (!begin) return null;
+    const end = balancedArgument(begin.end);
+    return end ? [begin, end] : null;
+  };
+
+  let slashRun = 0;
+  let stringifyNextToken = false;
+  for (let cursor = 0; cursor < source.length; cursor++) {
+    const slashesBefore = slashRun;
+    if (stringifyNextToken) {
+      if (source[cursor] === "%" && slashesBefore % 2 === 0) {
+        let end = cursor;
+        while (end < source.length && source[end] !== "\r" && source[end] !== "\n") end++;
+        mask(cursor, end);
+        cursor = end - 1;
+        slashRun = 0;
+        continue;
+      }
+      if (/\s/.test(source[cursor] as string)) {
+        slashRun = source[cursor] === "\\" ? slashRun + 1 : 0;
+        continue;
+      }
+      stringifyNextToken = false;
+      if (source[cursor] !== "\\") {
+        slashRun = 0;
+        continue;
+      }
+      let end = cursor + 1;
+      if (/[a-zA-Z@]/.test(source[end] ?? ""))
+        while (end < source.length && /[a-zA-Z@]/.test(source[end] as string)) end++;
+      else end = Math.min(end + 1, source.length);
+      cursor = end - 1;
+      slashRun = 0;
+      continue;
+    }
+    if (source[cursor] === "%" && slashesBefore % 2 === 0) {
+      let end = cursor;
+      while (end < source.length && source[end] !== "\r" && source[end] !== "\n") end++;
+      mask(cursor, end);
+      cursor = end - 1;
+      slashRun = 0;
+      continue;
+    }
+    if (source[cursor] !== "\\" || slashesBefore % 2 !== 0) {
+      slashRun = source[cursor] === "\\" ? slashRun + 1 : 0;
+      continue;
+    }
+
+    if (source.startsWith("\\detokenize", cursor) && !/[a-zA-Z@]/.test(source[cursor + 11] ?? "")) {
+      const argument = balancedArgument(cursor + 11);
+      if (argument) {
+        mask(cursor + 11, argument.end);
+        cursor = argument.end - 1;
+        slashRun = 0;
+        continue;
+      }
+    }
+    if (
+      (source.startsWith("\\string", cursor) && !/[a-zA-Z@]/.test(source[cursor + 7] ?? "")) ||
+      (source.startsWith("\\meaning", cursor) && !/[a-zA-Z@]/.test(source[cursor + 8] ?? ""))
+    ) {
+      stringifyNextToken = true;
+      cursor += source[cursor + 1] === "s" ? 6 : 7;
+      slashRun = 0;
+      continue;
+    }
+
+    const latexDefinition = [
+      "newcommand",
+      "renewcommand",
+      "providecommand",
+      "DeclareRobustCommand",
+    ].find(
+      (command) =>
+        source.startsWith(`\\${command}`, cursor) &&
+        !/[a-zA-Z@]/.test(source[cursor + command.length + 1] ?? ""),
+    );
+    const primitiveDefinition = ["def", "gdef", "edef", "xdef"].find(
+      (command) =>
+        source.startsWith(`\\${command}`, cursor) &&
+        !/[a-zA-Z@]/.test(source[cursor + command.length + 1] ?? ""),
+    );
+    const environmentDefinition = ["newenvironment", "renewenvironment", "provideenvironment"].find(
+      (command) =>
+        source.startsWith(`\\${command}`, cursor) &&
+        !/[a-zA-Z@]/.test(source[cursor + command.length + 1] ?? ""),
+    );
+    const definition = latexDefinition
+      ? latexDefinitionBody(cursor + latexDefinition.length + 1)
+      : primitiveDefinition
+        ? primitiveDefinitionBody(cursor + primitiveDefinition.length + 1)
+        : null;
+    if (definition) {
+      const commandEnd = cursor + (latexDefinition ?? primitiveDefinition ?? "").length + 1;
+      mask(commandEnd, definition.end);
+      cursor = definition.end - 1;
+      slashRun = 0;
+      continue;
+    }
+    const environmentBodies = environmentDefinition
+      ? environmentDefinitionBodies(cursor + environmentDefinition.length + 1)
+      : null;
+    if (environmentBodies) {
+      mask(cursor + environmentDefinition!.length + 1, environmentBodies[1].end);
+      cursor = environmentBodies[1].end - 1;
+      slashRun = 0;
+      continue;
+    }
+
+    const environment = /^\\begin\{(verbatim|verbatim\*|semiverbatim|lstlisting|minted)\}/.exec(
+      source.slice(cursor),
+    )?.[1];
+    if (environment && VERBATIM_ENVS.has(environment)) {
+      const beginEnd = cursor + `\\begin{${environment}}`.length;
+      const endToken = `\\end{${environment}}`;
+      const end = source.indexOf(endToken, beginEnd);
+      if (end === -1) {
+        mask(beginEnd, source.length);
+        return masked.join("");
+      }
+      mask(beginEnd, end);
+      cursor = end + endToken.length - 1;
+      slashRun = 0;
+      continue;
+    }
+
+    if (!source.startsWith("\\verb", cursor)) {
+      slashRun++;
+      continue;
+    }
+    const star = source[cursor + 5] === "*";
+    const delimiterAt = cursor + (star ? 6 : 5);
+    const delimiter = source[delimiterAt];
+    if (!delimiter || /[A-Za-z@\r\n]/.test(delimiter)) {
+      slashRun++;
+      continue;
+    }
+    const end = source.indexOf(delimiter, delimiterAt + 1);
+    let lineEnd = delimiterAt;
+    while (lineEnd < source.length && source[lineEnd] !== "\r" && source[lineEnd] !== "\n")
+      lineEnd++;
+    if (end === -1 || end >= lineEnd) {
+      mask(delimiterAt, lineEnd);
+      cursor = lineEnd - 1;
+      slashRun = 0;
+      continue;
+    }
+    mask(delimiterAt, end + 1);
+    cursor = end;
+    slashRun = delimiter === "\\" ? 1 : 0;
+  }
+  return masked.join("");
 }
 
 /** Whole-line comments immediately before a frame and its end-of-line comment travel with it. */
@@ -43,8 +289,6 @@ function unusedLabel(source: string): string {
   while (source.includes(`slide-${index}`)) index++;
   return `slide-${index}`;
 }
-
-const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlisting", "minted"]);
 
 /** Reject frame nesting and unmatched frame tags before an edit can remove a swallowed frame. */
 function hasWellFormedFrames(masked: string): boolean {

@@ -100,6 +100,175 @@ describe("slide source edits", () => {
     const source = deck(frame("A").replace("A body", "% \\label{example}"));
     expect(labels(apply(source, "duplicate", 0))).toEqual([null, "slide-1"]);
   });
+  it("ignores document, frame, and label tokens in comments and verbatim environments", () => {
+    for (const environment of ["verbatim", "verbatim*", "semiverbatim", "lstlisting", "minted"]) {
+      const source = deck(
+        frame("A").replace(
+          "A body",
+          [
+            "% \\end{document} \\begin{frame} \\label{comment}",
+            `\\begin{${environment}}`,
+            "\\end{document} \\begin{frame} \\label{opaque}",
+            `\\end{${environment}}`,
+          ].join("\n"),
+        ),
+      );
+      const result = editSlide(source, "duplicate", source.indexOf("\\begin{frame}"));
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+    }
+  });
+  it("ignores structure and labels inside verb and verb* delimiters", () => {
+    for (const command of [
+      "\\verb|\\end{document} \\begin{frame} \\label{fake}|",
+      "\\verb*+\\end{frame} \\label{fake}+",
+    ]) {
+      const source = deck(frame("A").replace("A body", command));
+      const result = editSlide(source, "duplicate", source.indexOf("\\begin{frame}"));
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+    }
+  });
+  it("still rejects a live label immediately after opaque text", () => {
+    for (const body of [
+      "\\verb|\\label{fake}|\\label{live}",
+      "\\begin{semiverbatim}\n\\label{fake}\n\\end{semiverbatim}\\label{live}",
+    ]) {
+      const source = deck(frame("A").replace("A body", body));
+      const result = editSlide(source, "duplicate", source.indexOf("\\begin{frame}"));
+      expect(result).toEqual(expect.objectContaining({ ok: false }));
+    }
+  });
+  it("keeps later lines live after an unclosed verb command", () => {
+    const source = deck(frame("A").replace("A body", "\\verb|\\label{fake}\n\\label{live}"));
+    const result = editSlide(source, "duplicate", source.indexOf("\\begin{frame}"));
+    expect(result).toEqual(expect.objectContaining({ ok: false }));
+  });
+  it("allows a macro expansion that produces a verbatim label", () => {
+    const source = [
+      "%% deck-source-version: 1",
+      "\\documentclass{beamer}",
+      "%% macros:begin",
+      "\\newcommand{\\maskedLabel}{\\verb|\\label{x}|}",
+      "%% macros:end",
+      "\\begin{document}",
+      frame("A").replace("A body", "\\maskedLabel"),
+      "\\end{document}",
+      "",
+    ].join("\n");
+    const result = editSlide(source, "duplicate", source.indexOf("\\begin{frame}"));
+    expect(result).toEqual(expect.objectContaining({ ok: true }));
+  });
+  it("keeps a live label visible after stringified opaque commands in macro definitions", () => {
+    for (const definition of [
+      "\\detokenize{\\begin{verbatim}}",
+      "\\string\\begin{verbatim}",
+      "\\meaning\\begin{verbatim}",
+    ]) {
+      const source = [
+        "%% deck-source-version: 1",
+        "\\documentclass{beamer}",
+        "%% macros:begin",
+        `\\newcommand{\\literal}{${definition}}`,
+        "%% macros:end",
+        "\\begin{document}",
+        frame("A").replace("A body", "\\label{live}"),
+        "\\end{document}",
+        "",
+      ].join("\n");
+      const result = editSlide(source, "duplicate", source.indexOf("\\begin{frame}"));
+      expect(result).toEqual(expect.objectContaining({ ok: false }));
+    }
+  });
+  it("keeps a live label visible after a stringified command and comment", () => {
+    for (const command of ["\\string", "\\meaning"]) {
+      const source = deck(
+        frame("A").replace(
+          "A body",
+          `${command}% comment\n\\begin{verbatim}\\label{live}${command}\\end{verbatim}`,
+        ),
+      );
+      const result = editSlide(source, "duplicate", source.indexOf("\\begin{frame}"));
+      expect(result).toEqual(expect.objectContaining({ ok: false }));
+    }
+  });
+  it("ignores structural tokens in macro definition replacement bodies", () => {
+    for (const definition of [
+      "\\newcommand{\\literal}{\\begin{frame}\\end{frame}\\verb|\\label{x}|}",
+      "\\renewcommand{\\literal}{\\begin{frame}\\end{frame}}",
+      "\\providecommand{\\literal}[1]{\\begin{frame}\\end{frame}}",
+      "\\DeclareRobustCommand{\\literal}{\\begin{frame}\\end{frame}}",
+      "\\def\\literal#1{\\begin{frame}\\end{frame}}",
+      "\\gdef\\literal{\\begin{frame}\\end{frame}}",
+      "\\edef\\literal{\\begin{frame}\\end{frame}}",
+      "\\xdef\\literal{\\begin{frame}\\end{frame}}",
+    ]) {
+      const source = deck(frame("A").replace("A body", definition));
+      const result = editSlide(source, "duplicate", source.indexOf("\\begin{frame}"));
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+    }
+  });
+  it("rejects a live label after fake structural tokens in a macro definition", () => {
+    const source = deck(
+      frame("A").replace(
+        "A body",
+        [
+          "\\newcommand{\\fakeopen}{\\begin{verbatim}}",
+          "\\label{live}",
+          "\\newcommand{\\fakeclose}{\\end{verbatim}}",
+        ].join("\n"),
+      ),
+    );
+    const result = editSlide(source, "duplicate", source.indexOf("\\begin{frame}"));
+    expect(result).toEqual(expect.objectContaining({ ok: false }));
+  });
+  it("ignores structural tokens in environment definition bodies", () => {
+    for (const definition of [
+      "\\newenvironment{literal}[1][default]{\\begin{frame}}{\\end{frame}\\verb|\\label{x}|}",
+      "\\renewenvironment{literal}{\\begin{frame}}{\\end{frame}}",
+      "\\provideenvironment{literal}{\\begin{frame}}{\\end{frame}}",
+    ]) {
+      const source = deck(frame("A").replace("A body", definition));
+      const result = editSlide(source, "duplicate", source.indexOf("\\begin{frame}"));
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+    }
+  });
+  it("rejects a live label after fake environment and macro definition tokens", () => {
+    for (const body of [
+      [
+        "\\newenvironment{fakeopen}{\\begin{verbatim}}{}",
+        "\\label{live}",
+        "\\newenvironment{fakeclose}{}{\\end{verbatim}}",
+      ].join("\n"),
+      [
+        "\\newcommand% comment\n{\\fakeopen}{\\begin{verbatim}}",
+        "\\label{live}",
+        "\\newcommand{\\fakeclose}{\\end{verbatim}}",
+      ].join("\n"),
+      [
+        "\\newcommand{\\fakeopen}{% comment { }\n\\begin{verbatim}\n}",
+        "\\label{live}",
+        "\\newcommand{\\fakeclose}{\\end{verbatim}}",
+      ].join("\n"),
+    ]) {
+      const source = deck(frame("A").replace("A body", body));
+      const result = editSlide(source, "duplicate", source.indexOf("\\begin{frame}"));
+      expect(result).toEqual(expect.objectContaining({ ok: false }));
+    }
+  });
+  it("ignores comments and optional defaults in complete macro definitions", () => {
+    for (const definition of [
+      "\\newcommand% \\end{document}\n{\\literal}{text}",
+      "\\newcommand{\\literal}[1][\\begin{frame}\\end{frame}]{text}",
+    ]) {
+      const source = deck(frame("A").replace("A body", definition));
+      const result = editSlide(source, "duplicate", source.indexOf("\\begin{frame}"));
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+    }
+  });
+  it("handles long backslash runs without changing slide detection", () => {
+    const source = deck(frame("A").replace("A body", "\\".repeat(20_000)));
+    const result = editSlide(source, "duplicate", source.indexOf("\\begin{frame}"));
+    expect(result).toEqual(expect.objectContaining({ ok: true }));
+  });
   it("refuses a macro-generated internal label only for the frame containing its call site", () => {
     const source = [
       "%% deck-source-version: 1",
