@@ -822,11 +822,14 @@ async function runSnapshot(
       });
     }
     reserved = true;
-    for (const item of outputs)
-      await writeSnapshotFile(join(filesystemOutput, item.file), item.image.png, { flag: "wx" });
-    // Absence is deliberately not a completion signal: a crashed or failed cleanup can leave
-    // a partial directory behind. Publish only after every PNG is durably present.
-    await writeSnapshotFile(join(filesystemOutput, COMPLETE_MARKER), "", { flag: "wx" });
+    try {
+      for (const item of outputs)
+        await writeSnapshotFile(join(filesystemOutput, item.file), item.image.png, { flag: "wx" });
+      // マーカーがないディレクトリは未完成として扱う。全 PNG の保存後に公開する。
+      await writeSnapshotFile(join(filesystemOutput, COMPLETE_MARKER), "", { flag: "wx" });
+    } catch (error) {
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), { code: "E_IO" });
+    }
     published = true;
     if (parsed.json)
       process.stdout.write(

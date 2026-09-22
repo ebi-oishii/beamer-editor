@@ -81,7 +81,7 @@ export function createNodePdfRasterizer(
               throw new PdfExportError("E_CANCELLED", "rasterize はキャンセルされました");
             const base = page.getViewport({ scale: 1 });
             const viewport = page.getViewport({ scale: 1600 / base.width });
-            const width = Math.ceil(viewport.width);
+              const width = Math.round(viewport.width);
             const height = Math.round(viewport.height);
             // 不正な viewport を createCanvas に渡さない。0 と NaN は上限比較を通過する。
             if (!isCanvasExtent(width) || !isCanvasExtent(height))
