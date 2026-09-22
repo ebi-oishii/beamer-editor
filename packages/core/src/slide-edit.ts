@@ -1,4 +1,5 @@
 import { type AnyFrameNode, framesOf, type SourceSpan } from "./ast.js";
+import { expandDeck, mapExpandedRangeToSourceExact } from "./expander.js";
 import { parseDeck } from "./parser.js";
 
 export type SlideEditAction = "moveUp" | "moveDown" | "duplicate" | "delete" | "insert";
@@ -43,22 +44,126 @@ function unusedLabel(source: string): string {
   return `slide-${index}`;
 }
 
+const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlisting", "minted"]);
+
+/** Reject frame nesting and unmatched frame tags before an edit can remove a swallowed frame. */
+function hasWellFormedFrames(masked: string): boolean {
+  const token = /\\(begin|end)\{([^}\\\r\n]+)\}/g;
+  let depth = 0;
+  for (let match = token.exec(masked); match; match = token.exec(masked)) {
+    let precedingSlashes = 0;
+    for (let i = (match.index ?? 0) - 1; i >= 0 && masked[i] === "\\"; i--) precedingSlashes++;
+    // Match parser.ts: a tag after `\\` is live (the two slashes are a line break),
+    // while a tag after one escaped slash is literal text.
+    if (precedingSlashes % 2 !== 0) continue;
+    const kind = match[1];
+    const environment = match[2];
+    if (!kind || !environment) return false;
+    if (kind === "begin" && VERBATIM_ENVS.has(environment)) {
+      const end = `\\end{${environment}}`;
+      const endAt = masked.indexOf(end, token.lastIndex);
+      if (endAt === -1) return false;
+      token.lastIndex = endAt + end.length;
+      continue;
+    }
+    if (environment !== "frame") continue;
+    if (kind === "begin") {
+      if (depth !== 0) return false;
+      depth = 1;
+    } else {
+      if (depth !== 1) return false;
+      depth = 0;
+    }
+  }
+  return depth === 0;
+}
+
+function skipHeaderTrivia(source: string, cursor: number): number {
+  while (cursor < source.length) {
+    const whitespace = /^[ \t\r\n]+/.exec(source.slice(cursor));
+    if (whitespace) {
+      cursor += whitespace[0].length;
+      continue;
+    }
+    if (source[cursor] === "%") {
+      const eol = source.indexOf("\n", cursor);
+      cursor = eol === -1 ? source.length : eol + 1;
+      continue;
+    }
+    break;
+  }
+  return cursor;
+}
+
+interface FrameHeader {
+  options: SourceSpan | null;
+  insertAt: number;
+}
+
+/**
+ * Locate the simple public part of a frame header. We retain all bytes, but only
+ * rewrite an ordinary option list after optional whitespace, comments, and one overlay spec.
+ */
+function parseFrameHeader(source: string, begin: number): FrameHeader | null {
+  let cursor = begin + "\\begin{frame}".length;
+  cursor = skipHeaderTrivia(source, cursor);
+  if (source[cursor] === "<") {
+    const close = source.indexOf(">", cursor + 1);
+    if (close === -1 || /[\r\n%{}\\<>]/.test(source.slice(cursor + 1, close))) return null;
+    cursor = skipHeaderTrivia(source, close + 1);
+  }
+  const insertAt = cursor;
+  if (source[cursor] !== "[") return { options: null, insertAt };
+  const close = source.indexOf("]", cursor + 1);
+  if (close === -1 || /[\r\n%{}\\[\]]/.test(source.slice(cursor + 1, close))) return null;
+  return { options: { start: insertAt, end: close + 1 }, insertAt };
+}
+
 /** Replace only the frame's public address, retaining its other options and opaque body. */
 function duplicateFrame(source: string, label: string, begin: number): string | null {
   if (begin < 0) return null;
-  const at = begin + "\\begin{frame}".length;
-  if (source[at] !== "[") return `${source.slice(0, at)}[label=${label}]${source.slice(at)}`;
-  const options = /^\[[^[\]\r\n]*\]/.exec(source.slice(at))?.[0];
-  if (!options || /[%{}\\]/.test(options)) return null;
+  const header = parseFrameHeader(source, begin);
+  if (!header) return null;
+  if (!header.options)
+    return `${source.slice(0, header.insertAt)}[label=${label}]${source.slice(header.insertAt)}`;
+  const options = source.slice(header.options.start, header.options.end);
   const matches = [...options.matchAll(/([[,])([ \t]*label[ \t]*=[ \t]*)([^,\]]*)/g)];
-  if (matches.length > 1) return null;
+  if (matches.length > 1 || matches.some((match) => !match[3]?.trim())) return null;
   const match = matches[0];
   const changed = match
     ? options.slice(0, (match.index ?? 0) + (match[1]?.length ?? 0)) +
       `${match[2]}${label}` +
       options.slice((match.index ?? 0) + match[0].length)
     : `${options.slice(0, -1)}${options.length > 2 ? "," : ""}label=${label}]`;
-  return source.slice(0, at) + changed + source.slice(at + options.length);
+  return source.slice(0, header.options.start) + changed + source.slice(header.options.end);
+}
+
+function hasInternalLabel(source: string, masked: string, span: SourceSpan): boolean {
+  if (/\\label\s*\{/.test(masked.slice(span.start, span.end))) return true;
+  const expanded = expandDeck(source);
+  const expandedMasked = maskComments(expanded.source);
+  for (const match of expandedMasked.matchAll(/\\label\s*\{/g)) {
+    const start = match.index;
+    if (start === undefined) continue;
+    const range = { start, end: start + match[0].length };
+    const exact = mapExpandedRangeToSourceExact(expanded.map, range);
+    if (exact && exact.start >= span.start && exact.end <= span.end) return true;
+    if (exact) continue;
+    // A synthetic label cannot be rewritten safely. Refuse only when its call site
+    // belongs to this frame, so macro labels in other frames remain editable.
+    if (
+      expanded.map.some(
+        (segment) =>
+          segment.expandedStart < range.end &&
+          segment.expandedEnd > range.start &&
+          !segment.exact &&
+          segment.sourceStart < span.end &&
+          segment.sourceEnd > span.start,
+      )
+    )
+      return true;
+  }
+  return false;
 }
 
 /** Pure source edits. No reformatting or macro expansion of source being moved/copied. */
@@ -83,6 +188,8 @@ export function editSlide(
     return fail("document環境の境界を特定できません。ソースを確認してください。");
   }
   const bodyStart = begin + "\\begin{document}".length;
+  if (!hasWellFormedFrames(masked.slice(bodyStart, end)))
+    return fail("閉じていない、または入れ子になったフレームがあります。ソースを確認してください。");
   // The parser's document delimiter lookup is literal. Mask comments for it as well,
   // while retaining original source bytes for every replacement.
   const frames = framesOf(parseDeck(masked));
@@ -117,7 +224,7 @@ export function editSlide(
   } else if (action === "duplicate") {
     // An internal TeX label can be referenced anywhere, including opaque commands.
     // Do not silently duplicate those targets or rewrite unknown TeX references.
-    if (/\\label\s*\{/.test(masked.slice(span.start, span.end))) {
+    if (hasInternalLabel(source, masked, span)) {
       return fail("本文に\\labelがあるスライドは、参照先を確認してソース上で複製してください。");
     }
     const frame = frames[index];

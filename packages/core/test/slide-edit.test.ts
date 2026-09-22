@@ -45,6 +45,17 @@ describe("slide source edits", () => {
     expect(labels(next)).toEqual(["r", "slide-1"]);
     expect(next).toContain(frame("Raw", "[unsupported,label=slide-1]"));
   });
+  it("updates a simple label after header trivia and one overlay specification", () => {
+    const source = deck(
+      "\\begin{frame}\n% header note\n<2->\n[fragile, label=old]\n{A}\nA body\n\\end{frame}",
+    );
+    const next = apply(source, "duplicate", 0);
+    expect(next).toContain("<2->\n[fragile, label=slide-1]\n{A}");
+    expect(next).toContain("<2->\n[fragile, label=old]\n{A}");
+
+    const unlabeled = deck("\\begin{frame}\n% header note\n<1>\n{A}\nA body\n\\end{frame}");
+    expect(apply(unlabeled, "duplicate", 0)).toContain("<1>\n[label=slide-1]{A}");
+  });
   it("adds a label to an unlabeled copy and supports adjacent frames without newlines", () => {
     const source = deck(frame("A") + frame("B"));
     expect(labels(apply(source, "duplicate", 0))).toEqual([null, "slide-1", null]);
@@ -84,6 +95,41 @@ describe("slide source edits", () => {
       false,
     );
     expect(labels(apply(source, "moveUp", 0))).toHaveLength(1);
+  });
+  it("does not treat a commented internal label as a reference target", () => {
+    const source = deck(frame("A").replace("A body", "% \\label{example}"));
+    expect(labels(apply(source, "duplicate", 0))).toEqual([null, "slide-1"]);
+  });
+  it("refuses a macro-generated internal label only for the frame containing its call site", () => {
+    const source = [
+      "%% deck-source-version: 1",
+      "\\documentclass{beamer}",
+      "%% macros:begin",
+      "\\newcommand{\\anchor}{\\label{eq:one}}",
+      "%% macros:end",
+      "\\begin{document}",
+      frame("A").replace("A body", "\\anchor"),
+      frame("B"),
+      "\\end{document}",
+      "",
+    ].join("\n");
+    const first = framesOf(parseDeck(source))[0];
+    expect(editSlide(source, "duplicate", first?.span.start)).toEqual(
+      expect.objectContaining({ ok: false }),
+    );
+    expect(labels(apply(source, "duplicate", 1))).toEqual([null, null, "slide-1"]);
+  });
+  it("refuses malformed nested or unclosed frames without returning edits", () => {
+    const source = deck(
+      `${frame("A").replace("A body", "\\begin{frame}{Nested}\nNested body")}\n${frame("B")}`,
+    );
+    const result = editSlide(source, "delete", framesOf(parseDeck(source))[0]?.span.start);
+    expect(result).toEqual(expect.objectContaining({ ok: false }));
+    expect(result).not.toHaveProperty("edits");
+  });
+  it("recognizes a frame end after a TeX line break", () => {
+    const source = deck(frame("A").replace("A body\n", "A body\\\\"));
+    expect(apply(source, "delete", 0)).toBe(deck(""));
   });
   it("does not create edits when moving past an edge", () => {
     const source = deck(frame("A"));
