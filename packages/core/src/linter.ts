@@ -929,7 +929,7 @@ export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiag
           diagnostic(
             "L010",
             "warning",
-            `同梱スキルの版(${options.skillVersion ?? "不明"})がCLIの版(${options.expectedSkillVersion})と一致しません。スキルを再生成してください`,
+            `同梱スキルの版(${options.skillVersion ?? "不明"})がCLIの版(${options.expectedSkillVersion})と一致しません。deck init <directory> --update-skill を実行してください`,
             { start: 0, end: 0 },
           ),
         ]

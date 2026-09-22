@@ -1,3 +1,12 @@
+/** Canonical generated skill manifest. Consumers derive output directories from these paths. */
+export const SKILL_FILE_PATHS = [
+  "SKILL.md",
+  "references/subset-cheatsheet.md",
+  "references/cli.md",
+  "examples/prompts.md",
+] as const;
+export const SKILL_DIRECTORIES = ["skills/beamer-deck", ".claude/skills/beamer-deck"] as const;
+
 /** Generate portable skill files from the maintained spec, protocol, and actual CLI help. */
 export function buildSkillFiles(input: {
   subsetSpec: string;
@@ -27,10 +36,11 @@ export function buildSkillFiles(input: {
     .replace(/\n---\n/, `\nmetadata:\n  cli-version: ${JSON.stringify(version)}\n---\n${banner}`)
     .replace("references/subset-cheatsheet.md", "[語彙・制約](references/subset-cheatsheet.md)")
     .replace("`deck snapshot --frame <addr>`", "`deck snapshot <file> --frame <addr>`");
-  return {
+  const files: Record<(typeof SKILL_FILE_PATHS)[number], string> = {
     "SKILL.md": `${skill}\n\n利用可能なコマンドは [CLI リファレンス](references/cli.md)、依頼例は [指示パターン](examples/prompts.md)を参照。未提供のコマンドは実行せず、検証できなかった項目を報告する。\n`,
     "references/subset-cheatsheet.md": `${banner}# Beamer 語彙・制約\n\n語彙の唯一の生成元: docs/subset-spec.md。制約を落とさないよう関連節を収録する。ここにある仕様の一部は実装待ちであり、CLIの利用可能範囲は cli.md を参照。\n\n${portable(vocabulary)}\n`,
-    "references/cli.md": `${banner}# CLI リファレンス\n\nCLI ${version} の実装済みコマンド（実際のヘルプから生成）:\n\n\`\`\`text\n${cliUsage.trim()}\n\`\`\`\n\nリポジトリ内では \`pnpm --filter @beamer-editor/cli deck <command> ...\` で実行する。\n\n終了コード: 0=成功・情報のみ、1=警告、2=lint error、3=操作失敗。JSONの成功結果はstdout、E_*エラーはstderr。\n\nsnapshot等、上の一覧に無いコマンドはこの版では未提供。PDF確認には \`deck export <file> --format pdf -o <pdf>\` を使い、実施できなかった検証を報告する。\n`,
+    "references/cli.md": `${banner}# CLI リファレンス\n\nCLI ${version} の実装済みコマンド（実際のヘルプから生成）:\n\n\`\`\`text\n${cliUsage.trim()}\n\`\`\`\n\nCLI はまだ単独配布されていない。beamer-editor の checkout を用意し、\`pnpm --dir /path/to/beamer-editor --filter @beamer-editor/cli deck <command> ...\` を実行する。コマンドは \`packages/cli\` を作業ディレクトリにするため、生成プロジェクトのファイルと出力先は絶対パスで指定し、出力先を省略しない。\n\n終了コード: 0=成功・情報のみ、1=警告、2=lint error、3=操作失敗。JSONの成功結果はstdout、E_*エラーはstderr。\n\nsnapshot等、上の一覧に無いコマンドはこの版では未提供。PDF確認には \`deck export <file> --format pdf -o <pdf>\` を使い、実施できなかった検証を報告する。\n`,
     "examples/prompts.md": `${banner}${portable(section(protocol, "## 6. 人間側の指示パターン", "## 7. 微調整モード"))}\n`,
   };
+  return files;
 }

@@ -211,7 +211,7 @@ default テーマ・16:9 の実測値(2026-07-10、tectonic 0.16.9 / zref-savepo
 | 幅 | 398.34pt |
 | 高さ | 236.97pt(下端 256.03pt ≒ ページ下端。default テーマは footline が空) |
 
-実装は `fixtures/deck-canvas-preamble.tex`(将来はツールがプリアンブルへインライン展開して所有する)。
+実装は `packages/core/resources/deck-canvas-preamble.tex`。`deck init` はこれをプリアンブルへインライン展開して所有する。
 
 #### オーバーレイ
 

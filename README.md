@@ -72,4 +72,4 @@ pnpm --dir packages/cli deck check talk.slide.tex --tectonic /path/to/tectonic -
 
 ### 新規デッキ
 
-`pnpm --filter @beamer-editor/cli deck init /path/to/my-talk` で `main.slide.tex`、空の `assets/`、`.claude/skills/beamer-deck/` を生成します。`deck init` の出力先省略時はカレントディレクトリです。新規または空のディレクトリだけを受け付け、既存データは上書きしません。`--json` で生成ファイル一覧を取得できます。プリアンブルはデッキへ埋め込むためリポジトリのfixtureに依存せず、PDF出力にはTectonicが必要です。初期本文は英語です。日本語を使う場合は `deck fonts fetch` でフォントを用意し、style領域へ `\deckfont{main}{Noto Sans CJK JP}` を指定します。
+`pnpm --dir /path/to/beamer-editor --filter @beamer-editor/cli deck init /path/to/my-talk` で `main.slide.tex`、空の `assets/`、`.claude/skills/beamer-deck/` を生成します。CLI はまだ単独配布されていません。この起動方法では `packages/cli` が作業ディレクトリになるため、生成プロジェクトの入力・出力先は絶対パスで指定し、出力先を省略しないでください。`deck init /absolute/path/to/project --update-skill` は既存プロジェクトの同梱スキルだけを更新し、L010 の版ずれを解消します。新規または空のディレクトリだけを受け付け、既存データは上書きしません。`--json` で生成ファイル一覧を取得できます。プリアンブルはデッキへ埋め込むためリポジトリのfixtureに依存せず、PDF出力にはTectonicが必要です。初期本文は英語です。日本語を使う場合は `deck fonts fetch` でフォントを用意し、style領域へ `\deckfont{main}{Noto Sans CJK JP}` を指定します。

@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { USAGE } from "../src/cli.ts";
-import { buildSkillFiles } from "../src/skill-generator.ts";
+import { buildSkillFiles, SKILL_DIRECTORIES } from "../src/skill-generator.ts";
 import { CLI_VERSION } from "../src/version.ts";
 
 const root = resolve(import.meta.dirname, "../../..");
@@ -11,7 +11,7 @@ const files = buildSkillFiles({
   cliUsage: USAGE,
   version: CLI_VERSION,
 });
-for (const directory of ["skills/beamer-deck", ".claude/skills/beamer-deck"]) {
+for (const directory of SKILL_DIRECTORIES) {
   for (const [name, content] of Object.entries(files)) {
     const path = resolve(root, directory, name);
     if (process.argv.includes("--check")) {
