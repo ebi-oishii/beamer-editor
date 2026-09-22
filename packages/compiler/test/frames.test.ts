@@ -8,6 +8,7 @@ import {
   compileDeckFrames,
   type DeckFrameRasterizer,
   findDeckFrames,
+  frameSelectorFromAddress,
   groupFramePages,
   injectFrameMarkers,
   PdfExportError,
@@ -75,6 +76,36 @@ describe("frame measurement helpers", () => {
       { number: 2, label: "second" },
     ]);
     expect(deck.slice(frames[0]?.span.start, frames[0]?.span.end)).toContain("allowframebreaks");
+  });
+
+  it("limits frame discovery to the document body while retaining original offsets", () => {
+    const source = String.raw`\documentclass{beamer}
+\newcommand\preambleframe{\begin{frame}[label=preamble]}
+\newcommand\preambleend{\end{document}}
+\begin{document}
+\begin{frame}[label=body]Body\end{frame}
+\end{document}`;
+    const frames = findDeckFrames(source);
+
+    expect(frames.map((frame) => frame.address)).toEqual([{ number: 1, label: "body" }]);
+    expect(source.slice(frames[0]?.span.start, frames[0]?.span.end)).toBe(
+      "\\begin{frame}[label=body]Body\\end{frame}",
+    );
+  });
+
+  it("interprets snapshot frame addresses consistently", () => {
+    expect(frameSelectorFromAddress("007")).toEqual({ kind: "number", value: 7 });
+    expect(frameSelectorFromAddress("label:007")).toEqual({ kind: "label", value: "007" });
+    expect(frameSelectorFromAddress("results")).toEqual({ kind: "label", value: "results" });
+  });
+
+  it("finds labels in frame options split across lines", () => {
+    expect(
+      findDeckFrames(String.raw`\begin{frame}[
+  allowframebreaks,
+  label = multi-line
+] X\end{frame}`)[0]?.address,
+    ).toEqual({ number: 1, label: "multi-line" });
   });
 
   it("injects fixed-width same-line markers without changing source line count", () => {
@@ -424,6 +455,38 @@ describe("compileDeckFrames", () => {
     ).rejects.toMatchObject({ code: "E_LIMIT" });
   });
 
+  it("renders only selected frame pages while retaining empty unselected frames", async () => {
+    const inputPath = await source(deck);
+    const runner: ProcessRunner = {
+      async run(_command, args) {
+        if (args[0] === "--version") return result();
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        const measuredInput = args.at(-1) as string;
+        await writeFile(join(outdir, basename(measuredInput).replace(/\.tex$/, ".pdf")), "%PDF");
+        await writeFile(
+          join(outdir, basename(measuredInput).replace(/\.tex$/, ".log")),
+          "BEAMER_EDITOR_FRAME:000001 [1] BEAMER_EDITOR_FRAME:000002 [2]",
+        );
+        return result();
+      },
+    };
+    let pageNumbers: readonly number[] | undefined;
+    const value = await compileDeckFrames(
+      { inputPath, maxPages: 1, frameSelectors: [{ kind: "label", value: "two" }] },
+      {
+        runner,
+        rasterizer: {
+          async rasterize(_pdf, options) {
+            pageNumbers = options.pageNumbers;
+            return [{ page: 2, png: new Uint8Array([2]), width: 1, height: 1 }];
+          },
+        },
+      },
+    );
+    expect(pageNumbers).toEqual([2]);
+    expect(value.frames.map((frame) => frame.images.map((image) => image.page))).toEqual([[], [2]]);
+  });
+
   it("uses a rasterizer by default, but does not require one for analysis-only output", async () => {
     const inputPath = await source(deck);
     await expect(compileDeckFrames({ inputPath })).rejects.toMatchObject({ code: "E_RASTERIZE" });
@@ -467,6 +530,7 @@ describe("compileDeckFrames", () => {
           maxPngBytes: number;
           maxPixelsPerPage: number;
           maxImageDimension: number;
+          pageNumbers?: readonly number[];
         }
       | undefined;
     const runner: ProcessRunner = {
@@ -509,6 +573,7 @@ describe("compileDeckFrames", () => {
       maxPixelsPerPage: 5678,
       maxImageDimension: 90,
     });
+    expect(received?.pageNumbers).toBeUndefined();
   });
 
   it("fails with typed errors when the final Tectonic log is absent or too large", async () => {

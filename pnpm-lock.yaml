@@ -129,6 +129,12 @@ importers:
       '@beamer-editor/core':
         specifier: workspace:*
         version: link:../core
+      '@napi-rs/canvas':
+        specifier: 1.0.8
+        version: 1.0.8
+      pdfjs-dist:
+        specifier: 6.3.289
+        version: 6.3.289
     devDependencies:
       '@types/node':
         specifier: ^26.1.1
