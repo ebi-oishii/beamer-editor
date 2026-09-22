@@ -1,12 +1,44 @@
-import { fileURLToPath } from "node:url";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createNodePdfRasterizer, nodePdfRasterizer } from "../src/pdf-rasterizer.ts";
 
-const resultChart = fileURLToPath(
-  new URL("../../../fixtures/assets/result-chart.pdf", import.meta.url),
-);
-
 type Viewport = { width: number; height: number };
+
+/** 日本語 CID フォントと UniJIS CMap を使う、最小の実 PDF。 */
+function japanesePdf(textHex: string | null = "65E5672C8A9E"): Uint8Array {
+  const content = textHex === null ? "" : `BT\n/F1 24 Tf\n72 720 Td\n<${textHex}> Tj\nET\n`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    `<< /Length ${content.length} >>\nstream\n${content}endstream`,
+    "<< /Type /Font /Subtype /Type0 /BaseFont /HeiseiKakuGo-W5 /Encoding /UniJIS-UTF16-H /DescendantFonts [6 0 R] >>",
+    "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HeiseiKakuGo-W5 /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 6 >> /FontDescriptor 7 0 R /DW 1000 >>",
+    "<< /Type /FontDescriptor /FontName /HeiseiKakuGo-W5 /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 700 /StemV 80 >>",
+  ];
+  let value = "%PDF-1.4\n";
+  const offsets = [0];
+  for (const [index, object] of objects.entries()) {
+    offsets.push(new TextEncoder().encode(value).byteLength);
+    value += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  }
+  const xref = new TextEncoder().encode(value).byteLength;
+  value += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets.slice(1)) value += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  value += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return new TextEncoder().encode(value);
+}
+
+async function pngPixels(png: Uint8Array): Promise<Uint8ClampedArray> {
+  const { createCanvas, loadImage } = await import("@napi-rs/canvas");
+  const image = await loadImage(Buffer.from(png));
+  const canvas = createCanvas(image.width, image.height);
+  const context = canvas.getContext("2d");
+  context.drawImage(image, 0, 0);
+  return context.getImageData(0, 0, image.width, image.height).data;
+}
 
 interface FakeConfig {
   numPages?: number;
@@ -62,9 +94,6 @@ function createFake(config: FakeConfig = {}) {
       events.push(`getPage ${pageNumber}`);
       return page(pageNumber);
     },
-    destroy: async () => {
-      events.push("pdf.destroy");
-    },
   };
   const load = async () => {
     if (config.loadError !== undefined) throw config.loadError;
@@ -98,7 +127,7 @@ const limits = {
 };
 
 describe("createNodePdfRasterizer", () => {
-  it("renders every page and always tears the PDF down", async () => {
+  it("renders every page and always tears the loading task down", async () => {
     const { events, documentOptions, rasterizer } = createFake({ numPages: 2, pngBytes: 3 });
 
     await expect(rasterizer.rasterize("deck.pdf", limits)).resolves.toEqual([
@@ -114,7 +143,6 @@ describe("createNodePdfRasterizer", () => {
       "createCanvas 1600x800",
       "render 2",
       "cleanup 2",
-      "pdf.destroy",
       "loadingTask.destroy",
     ]);
     expect(documentOptions()).toMatchObject({
@@ -124,6 +152,21 @@ describe("createNodePdfRasterizer", () => {
     });
     expect(documentOptions()?.cMapUrl).toMatch(/cmaps\/$/);
     expect(documentOptions()?.standardFontDataUrl).toMatch(/standard_fonts\/$/);
+    expect(isAbsolute(documentOptions()?.cMapUrl as string)).toBe(true);
+    expect(isAbsolute(documentOptions()?.standardFontDataUrl as string)).toBe(true);
+  });
+
+  it("rounds a 16:9 viewport height to avoid a one-pixel floating-point excess", async () => {
+    const { rasterizer } = createFake({
+      viewport: (scale) =>
+        scale === 1
+          ? { width: 1600, height: 900.00000000001 }
+          : { width: 1600 * scale, height: 900.00000000001 * scale },
+    });
+
+    await expect(rasterizer.rasterize("deck.pdf", limits)).resolves.toMatchObject([
+      { width: 1600, height: 900 },
+    ]);
   });
 
   it("renders only requested pages and rejects invalid page selections", async () => {
@@ -155,7 +198,7 @@ describe("createNodePdfRasterizer", () => {
     await expect(
       rasterizer.rasterize("deck.pdf", { ...limits, maxPages: 2 }),
     ).rejects.toMatchObject({ code: "E_LIMIT" });
-    expect(events).toEqual(["pdf.destroy", "loadingTask.destroy"]);
+    expect(events).toEqual(["loadingTask.destroy"]);
   });
 
   it("reports E_LIMIT for an oversized dimension or pixel count", async () => {
@@ -166,7 +209,7 @@ describe("createNodePdfRasterizer", () => {
         rasterizer.rasterize("deck.pdf", { ...limits, ...overrides }),
       ).rejects.toMatchObject({ code: "E_LIMIT" });
       // No canvas is allocated for a page rejected by the limits.
-      expect(events).toEqual(["getPage 1", "cleanup 1", "pdf.destroy", "loadingTask.destroy"]);
+      expect(events).toEqual(["getPage 1", "cleanup 1", "loadingTask.destroy"]);
     }
   });
 
@@ -185,7 +228,6 @@ describe("createNodePdfRasterizer", () => {
       "createCanvas 1600x800",
       "render 2",
       "cleanup 2",
-      "pdf.destroy",
       "loadingTask.destroy",
     ]);
   });
@@ -200,7 +242,7 @@ describe("createNodePdfRasterizer", () => {
       await expect(rasterizer.rasterize("deck.pdf", limits)).rejects.toMatchObject({
         code: "E_RASTERIZE",
       });
-      expect(events).toEqual(["getPage 1", "cleanup 1", "pdf.destroy", "loadingTask.destroy"]);
+      expect(events).toEqual(["getPage 1", "cleanup 1", "loadingTask.destroy"]);
     }
   });
 
@@ -212,7 +254,7 @@ describe("createNodePdfRasterizer", () => {
     await expect(
       rasterizer.rasterize("deck.pdf", { ...limits, signal: controller.signal }),
     ).rejects.toMatchObject({ code: "E_CANCELLED" });
-    expect(events).toEqual(["pdf.destroy", "loadingTask.destroy"]);
+    expect(events).toEqual(["loadingTask.destroy"]);
   });
 
   it("cancels the render task when the signal aborts during rendering", async () => {
@@ -231,7 +273,6 @@ describe("createNodePdfRasterizer", () => {
       "render 1",
       "cancel 1",
       "cleanup 1",
-      "pdf.destroy",
       "loadingTask.destroy",
     ]);
   });
@@ -253,25 +294,53 @@ describe("createNodePdfRasterizer", () => {
       "render 1",
       "cancel 1",
       "cleanup 1",
-      "pdf.destroy",
       "loadingTask.destroy",
     ]);
   });
 });
 
 describe("nodePdfRasterizer", () => {
-  it("renders a real PDF page to a PNG", async () => {
-    const images = await nodePdfRasterizer.rasterize(resultChart, {
-      ...limits,
-      maxPngBytes: 64 * 1024 * 1024,
-    });
+  it("renders a real PDF page containing Japanese text to a PNG", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "beamer-editor-japanese-pdf-"));
+    const path = join(directory, "japanese.pdf");
+    const blankPath = join(directory, "blank.pdf");
+    const alternatePath = join(directory, "alternate-japanese.pdf");
+    try {
+      await writeFile(path, japanesePdf());
+      await writeFile(blankPath, japanesePdf(null));
+      await writeFile(alternatePath, japanesePdf("6F225B574EEE"));
+      const images = await nodePdfRasterizer.rasterize(path, {
+        ...limits,
+        maxPngBytes: 64 * 1024 * 1024,
+      });
+      const blankImages = await nodePdfRasterizer.rasterize(blankPath, {
+        ...limits,
+        maxPngBytes: 64 * 1024 * 1024,
+      });
+      const alternateImages = await nodePdfRasterizer.rasterize(alternatePath, {
+        ...limits,
+        maxPngBytes: 64 * 1024 * 1024,
+      });
 
-    expect(images).toHaveLength(1);
-    const image = images[0];
-    expect(image?.width).toBe(1600);
-    expect(image?.height).toBeGreaterThan(0);
-    expect(Array.from((image?.png ?? new Uint8Array()).subarray(0, 4))).toEqual([
-      0x89, 0x50, 0x4e, 0x47,
-    ]);
+      expect(images).toHaveLength(1);
+      expect(blankImages).toHaveLength(1);
+      expect(alternateImages).toHaveLength(1);
+      const image = images[0];
+      const blankImage = blankImages[0];
+      const alternateImage = alternateImages[0];
+      expect(image?.width).toBe(1600);
+      expect(image?.height).toBe(2264);
+      expect(Array.from((image?.png ?? new Uint8Array()).subarray(0, 4))).toEqual([
+        0x89, 0x50, 0x4e, 0x47,
+      ]);
+      expect(await pngPixels(image?.png ?? new Uint8Array())).not.toEqual(
+        await pngPixels(blankImage?.png ?? new Uint8Array()),
+      );
+      expect(await pngPixels(image?.png ?? new Uint8Array())).not.toEqual(
+        await pngPixels(alternateImage?.png ?? new Uint8Array()),
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

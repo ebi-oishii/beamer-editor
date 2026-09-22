@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   analyzeCanvasGeometry,
   compileDeckFrames,
+  frameSelectorFromAddress,
   type DeckFrameRasterizer,
   findDeckFrames,
   groupFramePages,
@@ -75,6 +76,27 @@ describe("frame measurement helpers", () => {
       { number: 2, label: "second" },
     ]);
     expect(deck.slice(frames[0]?.span.start, frames[0]?.span.end)).toContain("allowframebreaks");
+  });
+
+  it("limits frame discovery to the document body while retaining original offsets", () => {
+    const source = String.raw`\documentclass{beamer}
+\newcommand\preambleframe{\begin{frame}[label=preamble]}
+\newcommand\preambleend{\end{document}}
+\begin{document}
+\begin{frame}[label=body]Body\end{frame}
+\end{document}`;
+    const frames = findDeckFrames(source);
+
+    expect(frames.map((frame) => frame.address)).toEqual([{ number: 1, label: "body" }]);
+    expect(source.slice(frames[0]?.span.start, frames[0]?.span.end)).toBe(
+      "\\begin{frame}[label=body]Body\\end{frame}",
+    );
+  });
+
+  it("interprets snapshot frame addresses consistently", () => {
+    expect(frameSelectorFromAddress("007")).toEqual({ kind: "number", value: 7 });
+    expect(frameSelectorFromAddress("label:007")).toEqual({ kind: "label", value: "007" });
+    expect(frameSelectorFromAddress("results")).toEqual({ kind: "label", value: "results" });
   });
 
   it("finds labels in frame options split across lines", () => {

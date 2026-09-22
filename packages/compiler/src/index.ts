@@ -561,6 +561,17 @@ export interface CanvasLayoutDiagnostic {
 
 export type FrameSelector = { kind: "number"; value: number } | { kind: "label"; value: string };
 
+/**
+ * CLI とホストで共通に使う frame アドレスを、コンパイル要求用の selector に変換する。
+ * `label:` を付けると数字だけの label も指定できる。
+ */
+export function frameSelectorFromAddress(value: string): FrameSelector {
+  if (value.startsWith("label:")) return { kind: "label", value: value.slice("label:".length) };
+  return /^\d+$/.test(value)
+    ? { kind: "number", value: Number(value) }
+    : { kind: "label", value };
+}
+
 export interface CompileDeckFramesRequest {
   inputPath: string;
   tectonicPath?: string;
@@ -665,13 +676,22 @@ function frameLabel(options: string | undefined): string | null {
 /** Parse frame boundaries from source without changing any original offsets. */
 export function findDeckFrames(source: string): readonly CompiledFrame[] {
   const masked = withoutComments(source);
+  const documentBegin = masked.indexOf("\\begin{document}");
+  const documentEnd = masked.lastIndexOf("\\end{document}");
+  const bodyStart = documentBegin === -1 ? 0 : documentBegin + "\\begin{document}".length;
+  const bodyEnd = documentEnd === -1 ? masked.length : documentEnd;
   const begin = /\\begin\s*\{\s*frame\s*\}(?:<[^>\r\n]*>)?\s*(?:\[([^\]]*)\])?/g;
   const end = /\\end\s*\{\s*frame\s*\}/g;
   const frames: CompiledFrame[] = [];
-  for (let match = begin.exec(masked); match; match = begin.exec(masked)) {
+  begin.lastIndex = bodyStart;
+  for (
+    let match = begin.exec(masked);
+    match && match.index < bodyEnd;
+    match = begin.exec(masked)
+  ) {
     end.lastIndex = begin.lastIndex;
     const closing = end.exec(masked);
-    if (!closing) break;
+    if (!closing || closing.index >= bodyEnd) break;
     const number = frames.length + 1;
     frames.push({
       address: { number, label: frameLabel(match[1]) },

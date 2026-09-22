@@ -28,7 +28,7 @@ import {
   compileDeckFrames,
   type DeckFramesResult,
   exportPdf,
-  findDeckFrames,
+  frameSelectorFromAddress,
   type PdfExportErrorCode,
   type PdfExportResult,
 } from "@beamer-editor/compiler";
@@ -302,10 +302,9 @@ async function runOutline(file: string, json: boolean): Promise<number> {
     writeError("E_IO", `読み込みに失敗しました: ${file}: ${errorMessage(error)}`, json);
     return exitCodeForError("E_IO");
   }
-  const compiledFrames = findDeckFrames(source);
   const frames = framesOf(parseDeck(source)).map((frame, index) => ({
     number: index + 1,
-    label: compiledFrames[index]?.address.label ?? frameLabel(frame),
+    label: frameLabel(frame),
     title: frameTitleText(frame, index + 1),
   }));
   if (json) process.stdout.write(`${JSON.stringify({ file, frames }, null, 2)}\n`);
@@ -747,30 +746,6 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-function selectedFrame(
-  frame: string | undefined,
-  frames: readonly DeckFramesResult["frames"][number][],
-): readonly DeckFramesResult["frames"][number][] {
-  if (!frame) return frames;
-  if (/^[1-9]\d*$/.test(frame)) {
-    const found = frames[Number(frame) - 1];
-    if (!found) throw Object.assign(new Error("指定した frame がありません"), { code: "E_INPUT" });
-    return [found];
-  }
-  const label = frame.startsWith("label:") ? frame.slice(6) : frame;
-  if (/^\d+$/.test(frame) && !frame.startsWith("label:"))
-    throw Object.assign(new Error("数字の label は label:<LABEL> で指定してください"), {
-      code: "E_INPUT",
-    });
-  const found = frames.filter((item) => item.address.label === label);
-  if (found.length !== 1)
-    throw Object.assign(
-      new Error(found.length > 1 ? "frame label が重複しています" : "指定した frame がありません"),
-      { code: "E_INPUT" },
-    );
-  return found;
-}
-
 async function runSnapshot(
   parsed: ParsedSnapshotArgs,
   dependencies: CliDependencies,
@@ -812,16 +787,15 @@ async function runSnapshot(
       ...(parsed.frame === undefined
         ? {}
         : {
-            frameSelectors: [
-              parsed.frame.startsWith("label:")
-                ? { kind: "label", value: parsed.frame.slice(6) }
-                : /^\d+$/.test(parsed.frame)
-                  ? { kind: "number", value: Number(parsed.frame) }
-                  : { kind: "label", value: parsed.frame },
-            ],
+            frameSelectors: [frameSelectorFromAddress(parsed.frame)],
           }),
     });
-    const frames = selectedFrame(parsed.frame, compiled.frames);
+    // selector 指定時は compiler が選択外 frame の images を空にして返す。
+    // 全 frame の snapshot では、空の frame も結果 JSON に残す。
+    const frames =
+      parsed.frame === undefined
+        ? compiled.frames
+        : compiled.frames.filter((frame) => frame.images.length > 0);
     const outputs = frames.flatMap((item) =>
       item.images.map((image) => ({
         frame: item.address.number,
@@ -900,11 +874,9 @@ async function runSnapshot(
     const code: CliErrorCode =
       typeof candidate === "string" && Object.hasOwn(ERROR_EXIT_CODE, candidate)
         ? (candidate as CliErrorCode)
-        : typeof candidate === "string"
-          ? "E_IO"
-          : "E_INTERNAL";
+        : "E_INTERNAL";
     writeError(code, errorMessage(error), parsed.json);
-    return 3;
+    return exitCodeForError(code);
   }
 }
 

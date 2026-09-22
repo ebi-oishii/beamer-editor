@@ -14,7 +14,7 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, relative, resolve } from "node:path";
-import type { CompileDeckFramesRequest } from "@beamer-editor/compiler";
+import { findDeckFrames, type CompileDeckFramesRequest } from "@beamer-editor/compiler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type CliDependencies,
@@ -303,6 +303,58 @@ describe("deck outline", () => {
     });
   });
 
+  it("preamble 内の frame 風のマクロ定義を frame として数えない", async () => {
+    const source = await fixture(
+      "preamble-frame.tex",
+      String.raw`\documentclass{beamer}
+\newcommand\preambleframe{\begin{frame}[label=preamble]}
+\begin{document}
+\begin{frame}[label=body]{Body}\end{frame}
+\end{document}
+`,
+    );
+
+    const result = runCli("outline", source.argvPath, "--json");
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      file: source.argvPath,
+      frames: [{ number: 1, label: "body", title: "Body" }],
+    });
+  });
+
+  it("outline の frame address を snapshot compiler が解決できる", async () => {
+    const source = await fixture(
+      "outline-snapshot.tex",
+      String.raw`\documentclass{beamer}
+\newcommand\preambleframe{\begin{frame}[label=preamble]}
+\newcommand\preambleend{\end{document}}
+\begin{document}
+\begin{frame}[label=body]{Body}\end{frame}
+\end{document}
+`,
+    );
+    const outlined = JSON.parse(runCli("outline", source.argvPath, "--json").stdout) as {
+      frames: Array<{ label: string | null }>;
+    };
+    const [frame] = findDeckFrames(await readFile(source.path, "utf8"));
+    const label = outlined.frames[0]?.label;
+    if (frame === undefined || label === null || label === undefined)
+      throw new Error("outline と compiler から frame address を取得できません");
+    const output = `${await temporaryDirectory()}/snapshots`;
+    let request: CompileDeckFramesRequest | undefined;
+    const { code } = await snapshot(
+      [source.argvPath, "-o", output, "--frame", label],
+      async (value) => {
+        request = value;
+        return snapshotCompiled(snapshotFrame(frame.address.number, frame.address.label, [1])) as never;
+      },
+    );
+
+    expect(frame.address).toEqual({ number: 1, label: "body" });
+    expect(request?.frameSelectors).toEqual([{ kind: "label", value: "body" }]);
+    expect(code).toBe(EXIT_CODE.success);
+  });
+
   it("空デッキを成功として出力し、使用法と I/O エラーを既存形式で返す", async () => {
     const source = await fixture("empty.tex", deck(""));
     const empty = runCli("outline", source.argvPath, "--json");
@@ -377,7 +429,29 @@ async function snapshot(
   try {
     const code = await run(["snapshot", ...argv], {
       ...dependencies,
-      compileDeckFrames: typeof compiled === "function" ? compiled : async () => compiled as never,
+      compileDeckFrames:
+        typeof compiled === "function"
+          ? compiled
+          : async (request) => {
+              const selector = request.frameSelectors?.[0];
+              if (selector === undefined) return compiled as never;
+              const matches = compiled.frames.filter((frame) =>
+                selector.kind === "number"
+                  ? frame.address.number === selector.value
+                  : frame.address.label === selector.value,
+              );
+              if (matches.length !== 1)
+                throw Object.assign(
+                  new Error(`指定された frame selector が不正です: ${selector.value}`),
+                  { code: "E_INPUT" },
+                );
+              return {
+                ...compiled,
+                frames: compiled.frames.map((frame) =>
+                  frame === matches[0] ? frame : { ...frame, images: [] },
+                ),
+              } as never;
+            },
     });
     const text = (spy: typeof stdout) => spy.mock.calls.map((call) => String(call[0])).join("");
     return { code, stdout: text(stdout), stderr: text(stderr) };
@@ -410,7 +484,11 @@ describe("deck snapshot", () => {
     const output = `${await temporaryDirectory()}/snapshots`;
     const { code, stdout, stderr } = await snapshot(
       ["talk.tex", "-o", output, "--json"],
-      snapshotCompiled(snapshotFrame(1, "intro", [1, 2]), snapshotFrame(2, null, [3])),
+      snapshotCompiled(
+        snapshotFrame(1, "intro", [1, 2]),
+        snapshotFrame(2, null, [3]),
+        snapshotFrame(3, "empty", []),
+      ),
     );
     expect(stderr).toBe("");
     expect(code).toBe(EXIT_CODE.success);
@@ -433,6 +511,7 @@ describe("deck snapshot", () => {
             { page: 3, file: "frame-000002-page-000003.png", width: 103, height: 202, bytes: 2 },
           ],
         },
+        { number: 3, label: "empty", images: [] },
       ],
       engine: { name: "tectonic", version: "1.0" },
     });
@@ -693,14 +772,14 @@ describe("deck snapshot", () => {
     await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("uses a label selector for a multiline frame label and reports unknown failures as E_INTERNAL", async () => {
+  it("uses a label selector for a multiline frame label and reports unknown error codes as E_INTERNAL", async () => {
     const output = `${await temporaryDirectory()}/snapshots`;
     let request: CompileDeckFramesRequest | undefined;
     const { code, stderr } = await snapshot(
       ["talk.tex", "-o", output, "--frame", "multi-line", "--json"],
       async (value) => {
         request = value;
-        throw new Error("unexpected");
+        throw Object.assign(new Error("unexpected"), { code: "E_UNEXPECTED" });
       },
     );
     expect(code).toBe(EXIT_CODE.operationalFailure);
@@ -731,12 +810,14 @@ describe("deck snapshot", () => {
       snapshotFrame(2, "42", [2]),
       snapshotFrame(3, "dup", [3]),
       snapshotFrame(4, "dup", [4]),
+      snapshotFrame(7, "seven", [7]),
     );
     for (const [frame, line, file] of [
       ["2", "frame 2 (42) page 2", "frame-000002-page-000002.png"],
       ["intro", "frame 1 (intro) page 1", "frame-000001-page-000001.png"],
       ["label:intro", "frame 1 (intro) page 1", "frame-000001-page-000001.png"],
       ["label:42", "frame 2 (42) page 2", "frame-000002-page-000002.png"],
+      ["007", "frame 7 (seven) page 7", "frame-000007-page-000007.png"],
     ] as const) {
       const output = `${await temporaryDirectory()}/snapshots`;
       const { code, stdout } = await snapshot(
@@ -748,10 +829,10 @@ describe("deck snapshot", () => {
       expect((await readdir(output)).sort()).toEqual([".deck-snapshot-complete", file]);
     }
     for (const [frame, message] of [
-      ["0", "数字の label は label:<LABEL> で指定してください"],
-      ["9", "指定した frame がありません"],
-      ["label:absent", "指定した frame がありません"],
-      ["dup", "frame label が重複しています"],
+      ["0", "指定された frame selector が不正です: 0"],
+      ["9", "指定された frame selector が不正です: 9"],
+      ["label:absent", "指定された frame selector が不正です: absent"],
+      ["dup", "指定された frame selector が不正です: dup"],
     ] as const) {
       const output = `${await temporaryDirectory()}/snapshots`;
       const { code, stderr } = await snapshot(
