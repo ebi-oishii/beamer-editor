@@ -828,7 +828,9 @@ async function runSnapshot(
       // マーカーがないディレクトリは未完成として扱う。全 PNG の保存後に公開する。
       await writeSnapshotFile(join(filesystemOutput, COMPLETE_MARKER), "", { flag: "wx" });
     } catch (error) {
-      throw Object.assign(error instanceof Error ? error : new Error(String(error)), { code: "E_IO" });
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+        code: "E_IO",
+      });
     }
     published = true;
     if (parsed.json)
