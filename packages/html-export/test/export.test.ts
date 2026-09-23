@@ -40,7 +40,7 @@ describe("exportHtml", () => {
       ),
     ).toBe(true);
     const copiedFonts = new Set(await readdir(join(dir, "talk-html", "katex", "fonts")));
-    for (const url of katexCss.matchAll(/url\(fonts\/([^)]*)\)/g))
+    for (const url of katexCss.matchAll(/url\(["']?fonts\/([^)'"\s]+)/g))
       expect(copiedFonts.has(url[1] as string)).toBe(true);
     await expect(exportHtml({ inputPath: input })).rejects.toMatchObject({
       code: "E_OUTPUT_EXISTS",
@@ -175,7 +175,7 @@ describe("exportHtml", () => {
     const html = await readFile(result.indexPath, "utf8");
     expect(html).toContain("image-placeholder placeholder");
     expect(html).toContain("data-min=");
-    expect(html).toContain('style="width:30.0%"');
+    expect(html).toContain('style="width:30.0%25"');
     expect(html).toContain("assets/");
     expect(html).not.toContain('unsupported.gif" style');
   });

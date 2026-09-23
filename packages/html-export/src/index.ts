@@ -79,7 +79,7 @@ async function entry(path: string) {
   try {
     return await lstat(path);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if (["ENOENT", "ENOTDIR"].includes((e as NodeJS.ErrnoException).code ?? "")) return undefined;
     throw e;
   }
 }
@@ -316,7 +316,7 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
         // rollback 不能な backup は残し、公開済み出力を壊さない。
       }
     if (e instanceof HtmlExportError) throw e;
-    if ((e as NodeJS.ErrnoException).code === "EEXIST")
+    if (["EEXIST", "ENOTEMPTY"].includes((e as NodeJS.ErrnoException).code ?? ""))
       throw new HtmlExportError("E_OUTPUT_EXISTS", `出力先は既に存在します: ${outputPath}`, e);
     throw new HtmlExportError("E_IO", `HTML の書き出しに失敗しました: ${String(e)}`, e);
   }
