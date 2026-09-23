@@ -1,8 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
+import type { FileHandle } from "node:fs/promises";
 import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   realpath,
@@ -296,13 +298,12 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
   let staging: string | undefined;
   let backup: string | undefined;
   const lockPath = join(outputParent, `.${basename(outputPath)}.lock`);
-  const lockToken = randomUUID();
+  let lockHandle: FileHandle | undefined;
   let lockIdentity: EntryIdentity | undefined;
   try {
     abort(request.signal);
-    await mkdir(lockPath);
-    await writeFile(join(lockPath, "owner"), lockToken);
-    lockIdentity = entryIdentity(await entry(lockPath));
+    lockHandle = await open(lockPath, "wx");
+    lockIdentity = entryIdentity(await lockHandle.stat());
     staging = await mkdtemp(join(outputParent, `.${basename(outputPath)}.staging-`));
     abort(request.signal);
     await writeFile(join(staging, ".incomplete"), "incomplete\n");
@@ -394,13 +395,10 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
       throw new HtmlExportError("E_OUTPUT_EXISTS", `出力先は既に存在します: ${outputPath}`, e);
     throw new HtmlExportError("E_IO", `HTML の書き出しに失敗しました: ${String(e)}`, e);
   } finally {
-    if (
+    const ownsLock =
       lockIdentity &&
-      sameEntry(lockIdentity, entryIdentity(await entry(lockPath).catch(() => undefined)))
-    ) {
-      const owner = await readFile(join(lockPath, "owner"), "utf8").catch(() => undefined);
-      if (owner === lockToken)
-        await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
-    }
+      sameEntry(lockIdentity, entryIdentity(await entry(lockPath).catch(() => undefined)));
+    await lockHandle?.close().catch(() => undefined);
+    if (ownsLock) await rm(lockPath, { force: true }).catch(() => undefined);
   }
 }
