@@ -1,6 +1,6 @@
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { exportHtml, type HtmlExportError } from "../src/index.js";
 
@@ -40,8 +40,11 @@ describe("exportHtml", () => {
       ),
     ).toBe(true);
     const copiedFonts = new Set(await readdir(join(dir, "talk-html", "katex", "fonts")));
-    for (const url of katexCss.matchAll(/url\(["']?fonts\/([^)'"\s]+)/g))
-      expect(copiedFonts.has(url[1] as string)).toBe(true);
+    for (const match of katexCss.matchAll(/url\(([^)]+)\)/g)) {
+      const url = (match[1] ?? "").trim().replace(/^["']|["']$/g, "");
+      expect(url).toMatch(/^fonts\/[^/]+\.woff2$/);
+      expect(copiedFonts.has(basename(url))).toBe(true);
+    }
     await expect(exportHtml({ inputPath: input })).rejects.toMatchObject({
       code: "E_OUTPUT_EXISTS",
     } satisfies Partial<HtmlExportError>);
@@ -175,7 +178,7 @@ describe("exportHtml", () => {
     const html = await readFile(result.indexPath, "utf8");
     expect(html).toContain("image-placeholder placeholder");
     expect(html).toContain("data-min=");
-    expect(html).toContain('style="width:30.0%25"');
+    expect(html).toContain('style="width:30.0%"');
     expect(html).toContain("assets/");
     expect(html).not.toContain('unsupported.gif" style');
   });
