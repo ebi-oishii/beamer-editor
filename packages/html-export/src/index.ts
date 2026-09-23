@@ -301,8 +301,8 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
   try {
     abort(request.signal);
     await mkdir(lockPath);
-    lockIdentity = entryIdentity(await entry(lockPath));
     await writeFile(join(lockPath, "owner"), lockToken);
+    lockIdentity = entryIdentity(await entry(lockPath));
     staging = await mkdtemp(join(outputParent, `.${basename(outputPath)}.staging-`));
     abort(request.signal);
     await writeFile(join(staging, ".incomplete"), "incomplete\n");

@@ -60,6 +60,11 @@ describe("exportHtml", () => {
     const result = await exportHtml({ inputPath: input, outputPath: output, overwrite: true });
     await expect(readFile(result.indexPath, "utf8")).resolves.toContain("viewer.js");
     await expect(lstat(join(output, "stale.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(join(dir, ".published.lock"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      exportHtml({ inputPath: input, outputPath: output, overwrite: true }),
+    ).resolves.toMatchObject({ outputPath: output });
+    await expect(lstat(join(dir, ".published.lock"))).rejects.toMatchObject({ code: "ENOENT" });
   });
   it("refuses to replace an output directory that contains the input", async () => {
     const { dir, input } = await fixture(deck("\\begin{frame}{Hi}text\\end{frame}"));
