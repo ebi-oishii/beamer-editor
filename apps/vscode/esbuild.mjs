@@ -59,7 +59,7 @@ async function build() {
   await writeFile(
     join(katexTarget, "katex.min.css"),
     (await readFile(join(katexDist, "katex.min.css"), "utf8")).replace(
-      /,url\([^)]*?\.(?:woff|ttf)\)format\("(?:woff|truetype)"\)/g,
+      /,url\([^)]*?\.(?:woff|ttf)\)\s*format\("(?:woff|truetype)"\)/g,
       "",
     ),
   );

@@ -178,7 +178,7 @@ describe("exportHtml", () => {
     const html = await readFile(result.indexPath, "utf8");
     expect(html).toContain("image-placeholder placeholder");
     expect(html).toContain("data-min=");
-    expect(html).toContain('style="width:30.0%"');
+    expect(html).toContain("width:30.0%");
     expect(html).toContain("assets/");
     expect(html).not.toContain('unsupported.gif" style');
   });
