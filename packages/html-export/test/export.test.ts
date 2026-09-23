@@ -179,7 +179,7 @@ describe("exportHtml", () => {
     for (const [name, target] of [
       ["directory.png", outside],
       ["image.gif", join(outside, "image.gif")],
-    ]) {
+    ] as const) {
       const escaped = await fixture(
         deck(`\\begin{frame}\\includegraphics{assets/${name}}\\end{frame}`),
       );
