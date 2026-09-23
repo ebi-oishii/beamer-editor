@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   lstat,
   mkdir,
@@ -41,6 +41,8 @@ export interface HtmlExportRequest {
   signal?: AbortSignal;
   /** Packaged KaTeX dist directory. CLI callers normally use package resolution. */
   katexAssetsPath?: string;
+  /** Test seam invoked after generation and before output publication. */
+  beforePublish?: () => void | Promise<void>;
 }
 export interface HtmlExportResult {
   format: "html";
@@ -83,6 +85,25 @@ async function entry(path: string) {
     throw e;
   }
 }
+type Entry = Awaited<ReturnType<typeof entry>>;
+interface EntryIdentity {
+  dev: number;
+  ino: number;
+  directory: boolean;
+  symbolicLink: boolean;
+}
+const entryIdentity = (value: Entry): EntryIdentity | undefined =>
+  value && {
+    dev: value.dev,
+    ino: value.ino,
+    directory: value.isDirectory(),
+    symbolicLink: value.isSymbolicLink(),
+  };
+const sameEntry = (left: EntryIdentity | undefined, right: EntryIdentity | undefined) =>
+  left?.dev === right?.dev &&
+  left?.ino === right?.ino &&
+  left?.directory === right?.directory &&
+  left?.symbolicLink === right?.symbolicLink;
 const decodedAttribute = (value: string): string =>
   value
     .replaceAll("&quot;", '"')
@@ -140,11 +161,24 @@ async function collect(
         } catch (e) {
           throw new HtmlExportError("E_ASSET", `画像を確認できません: ${raw}`, e);
         }
-        if (!/\.(png|jpe?g)$/i.test(path) || !sourceEntry) {
+        if (!sourceEntry) {
           map.set(raw, undefined);
           continue;
         }
-        const real = await realpath(path).catch(() => undefined);
+        let real: string | undefined;
+        if (sourceEntry.isSymbolicLink()) {
+          real = await realpath(path).catch(() => undefined);
+          if (real) {
+            const rel = relative(rootReal, real);
+            if (!rel || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+              throw new HtmlExportError("E_ASSET", `デッキ外の画像は使えません: ${raw}`);
+          }
+        }
+        if (!/\.(png|jpe?g)$/i.test(path)) {
+          map.set(raw, undefined);
+          continue;
+        }
+        real ??= await realpath(path).catch(() => undefined);
         if (!real || !(await stat(real).catch(() => undefined))?.isFile()) {
           map.set(raw, undefined);
           continue;
@@ -184,8 +218,19 @@ function documentHtml(title: string, frames: readonly { html: string; stepCount:
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data: https: http:; style-src 'self'; style-src-attr 'unsafe-inline'; script-src 'self'; font-src 'self' data:"><title>${title.replaceAll("<", "&lt;")}</title><link rel="stylesheet" href="viewer.css"><link rel="stylesheet" href="deck.css"><link rel="stylesheet" href="katex/katex.min.css"></head><body><div id="app"></div><script id="deck-data" type="application/json">${json({ frames })}</script><script src="viewer.js"></script></body></html>`;
 }
 export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExportResult> {
-  const inputPath = resolve(request.inputPath),
-    outputPath = resolve(request.outputPath ?? defaultHtmlOutputPath(inputPath));
+  const inputPath = resolve(request.inputPath);
+  const requestedOutputPath = resolve(request.outputPath ?? defaultHtmlOutputPath(inputPath));
+  let outputParent: string;
+  try {
+    outputParent = await realpath(dirname(requestedOutputPath));
+  } catch (e) {
+    throw new HtmlExportError(
+      "E_IO",
+      `出力先の親ディレクトリを確認できません: ${requestedOutputPath}`,
+      e,
+    );
+  }
+  const outputPath = join(outputParent, basename(requestedOutputPath));
   abort(request.signal);
   try {
     await entry(inputPath);
@@ -195,7 +240,7 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
   const inputReal = await realpath(inputPath).catch(() => undefined);
   if (!inputReal || !(await stat(inputReal).catch(() => undefined))?.isFile())
     throw new HtmlExportError("E_INPUT", `入力 TeX を読み込めません: ${request.inputPath}`);
-  let outputEntry: Awaited<ReturnType<typeof entry>>;
+  let outputEntry: Entry;
   try {
     outputEntry = await entry(outputPath);
   } catch (e) {
@@ -208,6 +253,18 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
       "E_OUTPUT_EXISTS",
       `出力先はディレクトリである必要があります: ${outputPath}`,
     );
+  if (outputEntry && request.overwrite) {
+    const outputReal = await realpath(outputPath).catch(() => undefined);
+    if (outputReal) {
+      const rel = relative(outputReal, inputReal);
+      if (!rel || (!rel.startsWith(`..${sep}`) && !isAbsolute(rel)))
+        throw new HtmlExportError(
+          "E_OUTPUT_EXISTS",
+          `出力先は入力 TeX を含むため置き換えできません: ${outputPath}`,
+        );
+    }
+  }
+  const expectedOutput = entryIdentity(outputEntry);
   let sourceText: string;
   try {
     sourceText = await readFile(inputReal, "utf8");
@@ -232,9 +289,15 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
     throw new HtmlExportError("E_INPUT", "書き出すフレームがありません");
   let staging: string | undefined;
   let backup: string | undefined;
+  const lockPath = join(outputParent, `.${basename(outputPath)}.lock`);
+  const lockToken = randomUUID();
+  let lockIdentity: EntryIdentity | undefined;
   try {
     abort(request.signal);
-    staging = await mkdtemp(join(dirname(outputPath), `.${basename(outputPath)}.staging-`));
+    await mkdir(lockPath);
+    lockIdentity = entryIdentity(await entry(lockPath));
+    await writeFile(join(lockPath, "owner"), lockToken);
+    staging = await mkdtemp(join(outputParent, `.${basename(outputPath)}.staging-`));
     abort(request.signal);
     await writeFile(join(staging, ".incomplete"), "incomplete\n");
     if (collected.assets.length > 0) await mkdir(join(staging, "assets"));
@@ -283,8 +346,13 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
     abort(request.signal);
     await rm(join(staging, ".incomplete"));
     abort(request.signal);
+    await request.beforePublish?.();
+    abort(request.signal);
+    const currentOutput = entryIdentity(await entry(outputPath));
+    if (!sameEntry(expectedOutput, currentOutput))
+      throw new HtmlExportError("E_OUTPUT_EXISTS", `出力先が変更されました: ${outputPath}`);
     if (outputEntry) {
-      backup = await mkdtemp(join(dirname(outputPath), `.${basename(outputPath)}.backup-`));
+      backup = await mkdtemp(join(outputParent, `.${basename(outputPath)}.backup-`));
       await rm(backup, { recursive: true, force: true });
       await rename(outputPath, backup);
     }
@@ -319,5 +387,14 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
     if (["EEXIST", "ENOTEMPTY"].includes((e as NodeJS.ErrnoException).code ?? ""))
       throw new HtmlExportError("E_OUTPUT_EXISTS", `出力先は既に存在します: ${outputPath}`, e);
     throw new HtmlExportError("E_IO", `HTML の書き出しに失敗しました: ${String(e)}`, e);
+  } finally {
+    if (
+      lockIdentity &&
+      sameEntry(lockIdentity, entryIdentity(await entry(lockPath).catch(() => undefined)))
+    ) {
+      const owner = await readFile(join(lockPath, "owner"), "utf8").catch(() => undefined);
+      if (owner === lockToken)
+        await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }

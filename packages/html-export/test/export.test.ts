@@ -61,6 +61,13 @@ describe("exportHtml", () => {
     await expect(readFile(result.indexPath, "utf8")).resolves.toContain("viewer.js");
     await expect(lstat(join(output, "stale.txt"))).rejects.toMatchObject({ code: "ENOENT" });
   });
+  it("refuses to replace an output directory that contains the input", async () => {
+    const { dir, input } = await fixture(deck("\\begin{frame}{Hi}text\\end{frame}"));
+    await expect(
+      exportHtml({ inputPath: input, outputPath: dir, overwrite: true }),
+    ).rejects.toMatchObject({ code: "E_OUTPUT_EXISTS" });
+    await expect(readFile(input, "utf8")).resolves.toContain("\\begin{document}");
+  });
   it("accepts an input symlink to a regular TeX file", async () => {
     const { dir, input } = await fixture(deck("\\begin{frame}{Hi}text\\end{frame}"));
     const linked = join(dir, "linked.slide.tex");
@@ -163,6 +170,25 @@ describe("exportHtml", () => {
       code: "E_ASSET",
     });
     await expect(lstat(join(escaped.dir, "talk-html"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects unsupported and non-file image symlinks escaping the deck", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "deck-html-outside-"));
+    dirs.push(outside);
+    await writeFile(join(outside, "image.gif"), "outside");
+    for (const [name, target] of [
+      ["directory.png", outside],
+      ["image.gif", join(outside, "image.gif")],
+    ]) {
+      const escaped = await fixture(
+        deck(`\\begin{frame}\\includegraphics{assets/${name}}\\end{frame}`),
+      );
+      await mkdir(join(escaped.dir, "assets"));
+      await symlink(target, join(escaped.dir, "assets", name));
+      await expect(exportHtml({ inputPath: escaped.input })).rejects.toMatchObject({
+        code: "E_ASSET",
+      });
+    }
   });
 
   it("replaces only unsupported images while preserving image attributes", async () => {
@@ -282,6 +308,56 @@ describe("exportHtml", () => {
     const rejected = settled.find((result) => result.status === "rejected");
     expect(rejected).toMatchObject({ reason: { code: "E_OUTPUT_EXISTS" } });
     expect(await readFile(join(race, "index.html"), "utf8")).toContain("viewer.js");
+  });
+
+  it("keeps publication in the canonical parent and preserves paths created before publish", async () => {
+    const { dir, input } = await fixture(deck("\\begin{frame}x\\end{frame}"));
+    const firstParent = await mkdtemp(join(tmpdir(), "deck-html-parent-"));
+    const secondParent = await mkdtemp(join(tmpdir(), "deck-html-parent-"));
+    dirs.push(firstParent, secondParent);
+    const parentLink = join(dir, "output-parent");
+    await symlink(firstParent, parentLink);
+    const canonical = await exportHtml({
+      inputPath: input,
+      outputPath: join(parentLink, "published"),
+      beforePublish: async () => {
+        await rm(parentLink);
+        await symlink(secondParent, parentLink);
+      },
+    });
+    expect(canonical.outputPath).toBe(join(firstParent, "published"));
+    await expect(readFile(canonical.indexPath, "utf8")).resolves.toContain("viewer.js");
+    await expect(lstat(join(secondParent, "published"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    const raced = join(dir, "raced");
+    await expect(
+      exportHtml({
+        inputPath: input,
+        outputPath: raced,
+        beforePublish: async () => {
+          await mkdir(raced);
+          await writeFile(join(raced, "foreign.txt"), "keep");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "E_OUTPUT_EXISTS" });
+    await expect(readFile(join(raced, "foreign.txt"), "utf8")).resolves.toBe("keep");
+
+    const replaced = join(dir, "replaced");
+    await mkdir(replaced);
+    await writeFile(join(replaced, "old.txt"), "old");
+    await expect(
+      exportHtml({
+        inputPath: input,
+        outputPath: replaced,
+        overwrite: true,
+        beforePublish: async () => {
+          await rm(replaced, { recursive: true });
+          await mkdir(replaced);
+          await writeFile(join(replaced, "foreign.txt"), "keep");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "E_OUTPUT_EXISTS" });
+    await expect(readFile(join(replaced, "foreign.txt"), "utf8")).resolves.toBe("keep");
   });
 
   it("removes only its staging directory when cancelled during generation", async () => {
