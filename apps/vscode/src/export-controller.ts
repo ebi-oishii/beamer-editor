@@ -38,7 +38,7 @@ export interface ExportHost {
   withProgress<T>(task: (token: ExportCancellationToken) => Thenable<T>): Thenable<T>;
   showInformation(message: string, ...actions: string[]): Thenable<string | undefined>;
   showError(message: string, ...actions: string[]): Thenable<string | undefined>;
-  showWarning(message: string): Thenable<unknown>;
+  showWarning(message: string, ...actions: string[]): Thenable<string | undefined>;
   openPdf(uri: ExportUri): Thenable<unknown>;
   openHtml(uri: ExportUri): Thenable<unknown>;
   revealInFileManager(uri: ExportUri): Thenable<unknown>;
@@ -184,8 +184,13 @@ export class ExportController {
       format,
     );
     if (!output || this.disposed) return;
-    const overwrite = format === "pdf" ? await this.host.outputExists(output) : false;
+    let overwrite = await this.host.outputExists(output);
     if (this.disposed) return;
+    if (format === "html" && overwrite) {
+      const action = await this.host.showWarning("既存の HTML 出力を上書きしますか？", "上書き");
+      if (action !== "上書き") return;
+      overwrite = true;
+    }
     if (document.isDirty && !(await document.save())) {
       await this.host.showWarning("編集中のファイルを保存できなかったため、書き出しませんでした。");
       return;
@@ -204,6 +209,7 @@ export class ExportController {
             return await this.html({
               inputPath: document.uri.fsPath,
               outputPath: output.fsPath,
+              overwrite,
               signal: abort.signal,
               ...(this.htmlKatexAssetsPath === undefined
                 ? {}

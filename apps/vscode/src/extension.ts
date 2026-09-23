@@ -242,7 +242,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       showInformation: (message, ...actions) =>
         vscode.window.showInformationMessage(message, ...actions),
       showError: (message, ...actions) => vscode.window.showErrorMessage(message, ...actions),
-      showWarning: (message) => vscode.window.showWarningMessage(message),
+      showWarning: (message, ...actions) => vscode.window.showWarningMessage(message, ...actions),
       openPdf: (uri) => vscode.env.openExternal(uri as vscode.Uri),
       openHtml: (uri) => vscode.env.openExternal(uri as vscode.Uri),
       revealInFileManager: (uri) =>

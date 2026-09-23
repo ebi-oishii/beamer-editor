@@ -31,9 +31,34 @@ describe("exportHtml", () => {
     expect(await readFile(join(dir, "talk-html", "katex", "katex.min.css"), "utf8")).toContain(
       ".katex",
     );
+    const katexCss = await readFile(join(dir, "talk-html", "katex", "katex.min.css"), "utf8");
+    expect(katexCss).not.toContain(".woff)format(\"woff\")");
+    expect(katexCss).not.toMatch(/\.(?:woff|ttf)\)format\("(?:woff|truetype)"\)/);
+    expect((await readdir(join(dir, "talk-html", "katex", "fonts"))).every((font) => font.endsWith(".woff2"))).toBe(true);
+    const copiedFonts = new Set(await readdir(join(dir, "talk-html", "katex", "fonts")));
+    for (const url of katexCss.matchAll(/url\(fonts\/([^)]*)\)/g))
+      expect(copiedFonts.has(url[1] as string)).toBe(true);
     await expect(exportHtml({ inputPath: input })).rejects.toMatchObject({
       code: "E_OUTPUT_EXISTS",
     } satisfies Partial<HtmlExportError>);
+  });
+  it("replaces an existing directory only with --overwrite and removes stale assets", async () => {
+    const { dir, input } = await fixture(deck("\\begin{frame}{Hi}text\\end{frame}"));
+    const output = join(dir, "published");
+    await mkdir(output);
+    await writeFile(join(output, "stale.txt"), "stale");
+    await expect(exportHtml({ inputPath: input, outputPath: output })).rejects.toMatchObject({
+      code: "E_OUTPUT_EXISTS",
+    });
+    const result = await exportHtml({ inputPath: input, outputPath: output, overwrite: true });
+    await expect(readFile(result.indexPath, "utf8")).resolves.toContain("viewer.js");
+    await expect(lstat(join(output, "stale.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("accepts an input symlink to a regular TeX file", async () => {
+    const { dir, input } = await fixture(deck("\\begin{frame}{Hi}text\\end{frame}"));
+    const linked = join(dir, "linked.slide.tex");
+    await symlink(input, linked);
+    await expect(exportHtml({ inputPath: linked })).resolves.toMatchObject({ format: "html" });
   });
   it("expands macros and preserves preview style CSS", async () => {
     const { input } = await fixture(
@@ -112,14 +137,12 @@ describe("exportHtml", () => {
     });
   });
 
-  it("rejects missing rasters and symlinks escaping the deck before reserving output", async () => {
+  it("falls back for missing rasters and rejects symlinks escaping the deck", async () => {
     const missing = await fixture(
       deck("\\begin{frame}\\includegraphics{assets/missing.png}\\end{frame}"),
     );
-    await expect(exportHtml({ inputPath: missing.input })).rejects.toMatchObject({
-      code: "E_ASSET",
-    });
-    await expect(lstat(join(missing.dir, "talk-html"))).rejects.toMatchObject({ code: "ENOENT" });
+    const missingResult = await exportHtml({ inputPath: missing.input });
+    expect(await readFile(missingResult.indexPath, "utf8")).toContain("image-placeholder");
 
     const escaped = await fixture(
       deck("\\begin{frame}\\includegraphics{assets/outside.png}\\end{frame}"),
@@ -133,6 +156,22 @@ describe("exportHtml", () => {
       code: "E_ASSET",
     });
     await expect(lstat(join(escaped.dir, "talk-html"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("replaces only unsupported images while preserving image attributes", async () => {
+    const { dir, input } = await fixture(
+      deck("\\begin{frame}\\includegraphics[width=0.4\\textwidth]{assets/ok.png}\\pause \\includegraphics[width=0.3\\textwidth]{assets/unsupported.gif}\\end{frame}"),
+    );
+    await mkdir(join(dir, "assets"));
+    await writeFile(join(dir, "assets", "ok.png"), "png");
+    await writeFile(join(dir, "assets", "unsupported.gif"), "gif");
+    const result = await exportHtml({ inputPath: input });
+    const html = await readFile(result.indexPath, "utf8");
+    expect(html).toContain("image-placeholder placeholder");
+    expect(html).toContain("data-min=");
+    expect(html).toContain('style="width:30.0%"');
+    expect(html).toContain("assets/");
+    expect(html).not.toContain("unsupported.gif\" style");
   });
 
   it("applies local template and preamble styles and snapshots template images", async () => {
@@ -179,6 +218,11 @@ describe("exportHtml", () => {
     const viewer = await readFile(join(result.outputPath, "viewer.js"), "utf8");
     expect(viewer).toContain("dataset.overlay");
     expect(viewer).toContain("dataset.min");
+    expect(viewer).toContain("#plus");
+    expect(viewer).toContain("#minus");
+    expect(viewer).toContain("#reset");
+    expect(viewer).toContain("addEventListener('resize',fit)");
+    expect(viewer).toContain("transform='scale('");
     expect(viewer).not.toContain("[data-min],[data-overlay]");
     expect(viewer.indexOf("[data-min]")).toBeLessThan(viewer.indexOf("[data-overlay]"));
   });
@@ -199,9 +243,8 @@ describe("exportHtml", () => {
     );
     await mkdir(join(assetDeck.dir, "assets"));
     await writeFile(join(assetDeck.dir, "assets", "blocker"), "file");
-    await expect(exportHtml({ inputPath: assetDeck.input })).rejects.toMatchObject({
-      code: "E_ASSET",
-    });
+    const assetResult = await exportHtml({ inputPath: assetDeck.input });
+    expect(await readFile(assetResult.indexPath, "utf8")).toContain("image-placeholder");
   });
 
   it("preserves every kind of existing output and classifies concurrent reservation races", async () => {
@@ -232,7 +275,7 @@ describe("exportHtml", () => {
     expect(await readFile(join(race, "index.html"), "utf8")).toContain("viewer.js");
   });
 
-  it("removes only its claimed output when cancelled after reservation", async () => {
+  it("removes only its staging directory when cancelled during generation", async () => {
     const { dir, input } = await fixture(deck("\\begin{frame}x\\end{frame}"));
     const outputPath = join(dir, "cancelled-output");
     const controller = new AbortController();
@@ -240,7 +283,9 @@ describe("exportHtml", () => {
     const rejected = expect(running).rejects.toMatchObject({ code: "E_CANCELLED" });
     for (let attempt = 0; attempt < 200; attempt++) {
       try {
-        await lstat(join(outputPath, ".incomplete"));
+        const entries = await readdir(dir);
+        if (!entries.some((name) => name.startsWith(".cancelled-output.staging-")))
+          throw new Error("staging がまだありません");
         controller.abort();
         break;
       } catch {

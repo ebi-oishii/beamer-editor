@@ -676,7 +676,7 @@ export interface CliDependencies {
     overwrite?: boolean;
     tectonicPath?: string;
   }) => Promise<PdfExportResult>;
-  exportHtml?: (request: { inputPath: string; outputPath?: string }) => Promise<HtmlExportResult>;
+  exportHtml?: (request: { inputPath: string; outputPath?: string; overwrite?: boolean }) => Promise<HtmlExportResult>;
 }
 
 function defaultPdfOutputForDisplay(input: string): string {
@@ -691,13 +691,12 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
   const input = parsed.input as string;
   try {
     if (parsed.format === "html") {
-      if (parsed.overwrite)
-        return usageError("HTML export は --overwrite をサポートしません", parsed.json);
       if (parsed.tectonic !== undefined)
         return usageError("HTML export は --tectonic をサポートしません", parsed.json);
       const result = await (dependencies.exportHtml ?? exportHtml)({
         inputPath: input,
         ...(parsed.output === undefined ? {} : { outputPath: parsed.output }),
+        ...(parsed.overwrite ? { overwrite: true } : {}),
       });
       if (parsed.json) {
         process.stdout.write(

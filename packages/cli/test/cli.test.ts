@@ -723,12 +723,12 @@ describe("deck export", () => {
       });
       expect(stderr).not.toHaveBeenCalled();
       stdout.mockClear();
-      const html = async () => ({
+      const html = vi.fn(async () => ({
         format: "html" as const,
         inputPath: "/tmp/talk.slide.tex",
         outputPath: "/tmp/talk-html",
         indexPath: "/tmp/talk-html/index.html",
-      });
+      }));
       expect(
         await run(["export", "talk.slide.tex", "--format", "html", "--json"], { exportHtml: html }),
       ).toBe(0);
@@ -741,7 +741,8 @@ describe("deck export", () => {
         await run(["export", "talk.slide.tex", "--format", "html", "--overwrite"], {
           exportHtml: html,
         }),
-      ).toBe(3);
+      ).toBe(0);
+      expect(html).toHaveBeenLastCalledWith({ inputPath: "talk.slide.tex", overwrite: true });
     } finally {
       stdout.mockRestore();
       stderr.mockRestore();

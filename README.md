@@ -54,7 +54,7 @@ pnpm --dir packages/cli deck export talk.slide.tex --format pdf
 # talk.slide.tex -> talk.pdf
 ```
 
-`-o output.pdf` で出力先を指定できる。既存ファイルを置き換える場合は明示的に
+`-o output.pdf` で出力先を指定できる。既存の PDF または HTML 出力ディレクトリを置き換える場合は明示的に
 `--overwrite` を指定する。`--tectonic /path/to/tectonic` と `--json` も利用できる。
 
 ### 実コンパイル検査

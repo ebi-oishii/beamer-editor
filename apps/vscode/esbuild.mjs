@@ -1,4 +1,4 @@
-import { cp, mkdir, rm } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import * as esbuild from "esbuild";
@@ -56,8 +56,13 @@ async function build() {
   const katexTarget = "media/html-export/katex";
   await rm(katexTarget, { recursive: true, force: true });
   await mkdir(join(katexTarget, "fonts"), { recursive: true });
-  await cp(join(katexDist, "katex.min.css"), join(katexTarget, "katex.min.css"));
-  await cp(join(katexDist, "fonts"), join(katexTarget, "fonts"), { recursive: true });
+  await writeFile(
+    join(katexTarget, "katex.min.css"),
+    (await readFile(join(katexDist, "katex.min.css"), "utf8")).replace(/,url\([^)]*?\.(?:woff|ttf)\)format\("(?:woff|truetype)"\)/g, ""),
+  );
+  for (const font of await readdir(join(katexDist, "fonts")))
+    if (font.endsWith(".woff2"))
+      await writeFile(join(katexTarget, "fonts", font), await readFile(join(katexDist, "fonts", font)));
 }
 
 if (watch) {
