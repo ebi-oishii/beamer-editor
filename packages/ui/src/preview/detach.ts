@@ -52,10 +52,11 @@ function textOf(node: Node): string {
   return [...node.childNodes].map(textOf).join(" ");
 }
 
-/** 「段落「冒頭…」を自由配置にする」の形。画像は抜粋なし。候補外なら理由を添えた無効項目の文言。 */
+/** 「段落「冒頭…」を自由配置にする」の形。画像と数式は抜粋なし。候補外なら理由を添えた無効項目の文言。 */
 export function candidateLabel(element: HTMLElement, kind: string, blocked?: string): string {
   const base = kindLabel(element, kind);
-  const text = kind === "image" ? "" : textOf(element).replace(/\s+/g, " ").trim();
+  const text =
+    kind === "image" || kind === "displayMath" ? "" : textOf(element).replace(/\s+/g, " ").trim();
   const excerpt = text.length > EXCERPT_LENGTH ? `${text.slice(0, EXCERPT_LENGTH)}…` : text;
   const subject = excerpt ? `${base}「${excerpt}」` : base;
   if (blocked !== undefined) {

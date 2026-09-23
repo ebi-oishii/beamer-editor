@@ -9,6 +9,7 @@ import {
 } from "@beamer-editor/compiler";
 import {
   canvasPositionReplacement,
+  canvasWidthReplacement,
   detachBlockToCanvas,
   fragmentHash,
   type LintDiagnostic,
@@ -39,7 +40,7 @@ import {
   needsLatexWorkshopIgnorePrompt,
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
-import { PreviewHistory } from "./preview-history";
+import { executeHistoryCommand, PreviewHistory } from "./preview-history";
 import {
   affectsRawBlockCompile,
   dependencyFingerprint,
@@ -54,6 +55,7 @@ import {
   SlideOutlineState,
 } from "./slide-outline";
 import { resolveSourceViewColumn } from "./source-navigation";
+import { detectBundledTectonic, resolveTectonicPath } from "./tectonic";
 import { baseStyleOf, nodeTemplateFileSystem, templateStatuses } from "./templates";
 import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 
@@ -151,6 +153,15 @@ export interface TestApi {
 }
 
 export function activate(context: vscode.ExtensionContext): TestApi {
+  // プラットフォーム別 VSIX に同梱した Tectonic(#130)。設定で上書きされない限りこれを使う。
+  const bundledTectonic = detectBundledTectonic(context.extensionPath);
+  // 書き出しと部分コンパイルは、同じ設定スコープ・優先順位で実行ファイルを選ぶ。
+  const tectonicPathFor = (uri: vscode.Uri) => {
+    const value = vscode.workspace
+      .getConfiguration("beamerEditor", uri)
+      .get<unknown>("tectonicPath");
+    return resolveTectonicPath(normalizeTectonicPath(value), bundledTectonic);
+  };
   const managedPatternCache = new Map<string, readonly string[]>();
   const frameFoldCache = new FrameFoldCache();
   const foldingRangesChanged = new vscode.EventEmitter<void>();
@@ -159,6 +170,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   const previewSources = new Map<vscode.WebviewPanel, vscode.TextDocument>();
   // Webview からの undo / redo(#103)。対象のソースへフォーカスを移してコマンドを実行し、終わったら
   // Webview へ戻す。要求は拡張全体で直列にし、押下時点の panel と文書に対して実行する。
+  /** プレビューからの undo / redo を試す回数と、効かなかったときの待ち(ms)。 */
+  const HISTORY_ATTEMPTS = 3;
+  const HISTORY_RETRY_DELAY_MS = 50;
   const previewHistory = new PreviewHistory<{
     panel: vscode.WebviewPanel;
     uri: vscode.Uri;
@@ -169,12 +183,29 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         vscode.workspace.textDocuments.find(
           (candidate) => candidate.uri.toString() === target.uri.toString(),
         ) ?? (await vscode.workspace.openTextDocument(target.uri));
-      await vscode.window.showTextDocument(document, {
-        preserveFocus: false,
-        preview: false,
-        ...(target.viewColumn !== undefined ? { viewColumn: target.viewColumn } : {}),
-      });
-      await vscode.commands.executeCommand(kind);
+      // フォーカスの移動とやり直しの判断は executeHistoryCommand(preview-history.ts)にある。
+      await executeHistoryCommand(
+        kind,
+        {
+          focusEditor: async () => {
+            await vscode.window.showTextDocument(document, {
+              preserveFocus: false,
+              preview: false,
+              ...(target.viewColumn !== undefined ? { viewColumn: target.viewColumn } : {}),
+            });
+            await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
+          },
+          execute: async (command) => {
+            await vscode.commands.executeCommand(command);
+          },
+          version: () => document.version,
+          onDidChange: (listener) =>
+            vscode.workspace.onDidChangeTextDocument((event) => {
+              if (event.document === document) listener();
+            }),
+        },
+        { attempts: HISTORY_ATTEMPTS, retryDelayMs: HISTORY_RETRY_DELAY_MS },
+      );
     },
     isOpen: (panel) => previewSources.has(panel),
     reveal: (panel) => panel.reveal(undefined, false),
@@ -258,12 +289,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         exportOutput.show(true);
       },
       uriForFile: (path) => vscode.Uri.file(path) as ExportUri,
-      tectonicPath: (document) => {
-        const value = vscode.workspace
-          .getConfiguration("beamerEditor", document.uri as vscode.Uri)
-          .get<unknown>("tectonicPath");
-        return normalizeTectonicPath(value);
-      },
+      tectonicPath: (document) => tectonicPathFor(document.uri as vscode.Uri),
       timeoutMs: (document) => {
         const seconds = vscode.workspace
           .getConfiguration("beamerEditor", document.uri as vscode.Uri)
@@ -649,7 +675,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         const config = vscode.workspace.getConfiguration("beamerEditor", document.uri);
         const seconds = config.get<number>("pdfExport.timeoutSeconds", 300);
         const normalized = Number.isFinite(seconds) ? Math.trunc(seconds) : 300;
-        const tectonicPath = normalizeTectonicPath(config.get<unknown>("tectonicPath"));
+        const tectonicPath = tectonicPathFor(document.uri);
         const result = await compileFragment({
           document: fragment,
           cwd: documentDir.fsPath,
@@ -720,6 +746,32 @@ export function activate(context: vscode.ExtensionContext): TestApi {
             ? vscode.Uri.file(path)
             : vscode.Uri.joinPath(documentDir, path);
           return panel.webview.asWebviewUri(uri).toString();
+        },
+        resizeCanvasElement: async (move) => {
+          const target = vscode.workspace.textDocuments.find(
+            (candidate) => candidate === move.document,
+          );
+          if (
+            !target ||
+            target.uri.toString() !== move.document.uri.toString() ||
+            target.version !== move.version
+          )
+            return "cancelled";
+          const original = target.getText().slice(move.sourceSpan.start, move.sourceSpan.end);
+          if (original !== move.expectedOptions) return "cancelled";
+          const replacement = canvasWidthReplacement(original, move.width);
+          if (replacement === null) return "failed";
+          if (replacement === original) return "unchanged";
+          const edit = new vscode.WorkspaceEdit();
+          edit.replace(
+            target.uri,
+            new vscode.Range(
+              target.positionAt(move.sourceSpan.start),
+              target.positionAt(move.sourceSpan.end),
+            ),
+            replacement,
+          );
+          return (await vscode.workspace.applyEdit(edit)) ? "applied" : "failed";
         },
         moveCanvasElement: async (move) => {
           const target = vscode.workspace.textDocuments.find(

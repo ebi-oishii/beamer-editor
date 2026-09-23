@@ -72,9 +72,9 @@
         },
         "beamerEditor.tectonicPath": {
           "type": "string",
-          "default": "tectonic",
+          "default": "",
           "scope": "resource",
-          "description": "Path to the Tectonic executable used for PDF export."
+          "description": "Path to the Tectonic executable. Leave empty to use the Tectonic bundled with the extension (platform-specific builds; `tectonic` on PATH where nothing is bundled)."
         },
         "beamerEditor.pdfExport.timeoutSeconds": {
           "type": "integer",
@@ -168,7 +168,8 @@
     "lint": "biome check .",
     "test": "vitest run",
     "test:integration": "pnpm build && node esbuild.integration.mjs && vscode-test",
-    "package": "pnpm build && vsce package --no-dependencies -o beamer-editor.vsix"
+    "fetch-tectonic": "node scripts/fetch-tectonic.mjs",
+    "package": "pnpm build && node scripts/package.mjs"
   },
   "dependencies": {
     "@beamer-editor/compiler": "workspace:*",

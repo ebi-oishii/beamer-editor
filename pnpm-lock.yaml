@@ -135,6 +135,12 @@ importers:
       '@beamer-editor/html-export':
         specifier: workspace:*
         version: link:../html-export
+      '@napi-rs/canvas':
+        specifier: 1.0.8
+        version: 1.0.8
+      pdfjs-dist:
+        specifier: 6.3.289
+        version: 6.3.289
     devDependencies:
       '@types/node':
         specifier: ^26.1.1
