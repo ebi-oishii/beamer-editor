@@ -676,7 +676,11 @@ export interface CliDependencies {
     overwrite?: boolean;
     tectonicPath?: string;
   }) => Promise<PdfExportResult>;
-  exportHtml?: (request: { inputPath: string; outputPath?: string; overwrite?: boolean }) => Promise<HtmlExportResult>;
+  exportHtml?: (request: {
+    inputPath: string;
+    outputPath?: string;
+    overwrite?: boolean;
+  }) => Promise<HtmlExportResult>;
   /** Test seams for snapshot publication and cleanup failures. */
   writeSnapshotFile?: (
     path: string,

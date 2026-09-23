@@ -144,11 +144,25 @@ describe("ExportController", () => {
     expect(host.showWarning).not.toHaveBeenCalled();
   });
   it("asks before replacing an existing HTML folder", async () => {
-    const html = vi.fn(async () => ({ format: "html" as const, inputPath: input.fsPath, outputPath: htmlOutput.fsPath, indexPath: htmlIndex.fsPath }));
-    const cancelled = createHost({ chooseFormat: vi.fn(async () => "html" as const), chooseOutput: vi.fn(async () => htmlOutput), outputExists: vi.fn(async () => true) });
+    const html = vi.fn(async () => ({
+      format: "html" as const,
+      inputPath: input.fsPath,
+      outputPath: htmlOutput.fsPath,
+      indexPath: htmlIndex.fsPath,
+    }));
+    const cancelled = createHost({
+      chooseFormat: vi.fn(async () => "html" as const),
+      chooseOutput: vi.fn(async () => htmlOutput),
+      outputExists: vi.fn(async () => true),
+    });
     await new ExportController(cancelled, { exportHtml: html }).export(createDocument());
     expect(html).not.toHaveBeenCalled();
-    const approved = createHost({ chooseFormat: vi.fn(async () => "html" as const), chooseOutput: vi.fn(async () => htmlOutput), outputExists: vi.fn(async () => true), showWarning: vi.fn(async () => "上書き") });
+    const approved = createHost({
+      chooseFormat: vi.fn(async () => "html" as const),
+      chooseOutput: vi.fn(async () => htmlOutput),
+      outputExists: vi.fn(async () => true),
+      showWarning: vi.fn(async () => "上書き"),
+    });
     await new ExportController(approved, { exportHtml: html }).export(createDocument());
     expect(html).toHaveBeenLastCalledWith(expect.objectContaining({ overwrite: true }));
   });

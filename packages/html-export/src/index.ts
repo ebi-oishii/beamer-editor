@@ -1,5 +1,16 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandDeck } from "@beamer-editor/core";
@@ -42,15 +53,18 @@ interface Asset {
   bytes: Uint8Array;
 }
 function imagePlaceholder(html: string, path: string): string {
-  const escape = (value: string) => value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   let attributes = html
     .replace(/^<img\b|>$/g, "")
     .replace(/\s+src="[^"]*"/, "")
     .replace(/\s+title="[^"]*"/, "");
   if (/\sclass="/.test(attributes))
-    attributes = attributes.replace(/\sclass="([^"]*)"/, ' class="$1 image-placeholder placeholder"');
+    attributes = attributes.replace(
+      /\sclass="([^"]*)"/,
+      ' class="$1 image-placeholder placeholder"',
+    );
   else attributes += ' class="image-placeholder placeholder"';
-  return `<div${attributes} title="${escape(path)}"><span class="placeholder-label">${escape(basename(path))}</span></div>`;
+  return `<div${attributes} title="${escapeHtml(path)}"><span class="placeholder-label">${escapeHtml(basename(path))}</span></div>`;
 }
 const abort = (signal?: AbortSignal) => {
   if (signal?.aborted)
@@ -152,17 +166,14 @@ async function collect(
         }
         map.set(raw, target);
       }
-      return frame.replace(
-        /<img\b[^>]*\bsrc="([^"]*)"[^>]*>/g,
-        (all, value) => {
-          const target = map.get(decodedAttribute(value));
-          return target === undefined && map.has(decodedAttribute(value))
-            ? imagePlaceholder(all, decodedAttribute(value))
-            : target === undefined
-              ? all
-              : all.replace(/(\bsrc=")[^"]*(")/, `$1${target}$2`);
-        },
-      );
+      return frame.replace(/<img\b[^>]*\bsrc="([^"]*)"[^>]*>/g, (all, value) => {
+        const target = map.get(decodedAttribute(value));
+        return target === undefined && map.has(decodedAttribute(value))
+          ? imagePlaceholder(all, decodedAttribute(value))
+          : target === undefined
+            ? all
+            : all.replace(/(\bsrc=")[^"]*(")/, `$1${target}$2`);
+      });
     }),
   );
   return { frames: rewritten, assets };
@@ -193,7 +204,10 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
   if (outputEntry && !request.overwrite)
     throw new HtmlExportError("E_OUTPUT_EXISTS", `出力先は既に存在します: ${outputPath}`);
   if (outputEntry && (!outputEntry.isDirectory() || outputEntry.isSymbolicLink()))
-    throw new HtmlExportError("E_OUTPUT_EXISTS", `出力先はディレクトリである必要があります: ${outputPath}`);
+    throw new HtmlExportError(
+      "E_OUTPUT_EXISTS",
+      `出力先はディレクトリである必要があります: ${outputPath}`,
+    );
   let sourceText: string;
   try {
     sourceText = await readFile(inputReal, "utf8");

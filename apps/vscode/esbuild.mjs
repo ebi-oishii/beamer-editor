@@ -58,11 +58,17 @@ async function build() {
   await mkdir(join(katexTarget, "fonts"), { recursive: true });
   await writeFile(
     join(katexTarget, "katex.min.css"),
-    (await readFile(join(katexDist, "katex.min.css"), "utf8")).replace(/,url\([^)]*?\.(?:woff|ttf)\)format\("(?:woff|truetype)"\)/g, ""),
+    (await readFile(join(katexDist, "katex.min.css"), "utf8")).replace(
+      /,url\([^)]*?\.(?:woff|ttf)\)format\("(?:woff|truetype)"\)/g,
+      "",
+    ),
   );
   for (const font of await readdir(join(katexDist, "fonts")))
     if (font.endsWith(".woff2"))
-      await writeFile(join(katexTarget, "fonts", font), await readFile(join(katexDist, "fonts", font)));
+      await writeFile(
+        join(katexTarget, "fonts", font),
+        await readFile(join(katexDist, "fonts", font)),
+      );
 }
 
 if (watch) {

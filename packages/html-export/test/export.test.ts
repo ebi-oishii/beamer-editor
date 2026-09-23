@@ -32,9 +32,13 @@ describe("exportHtml", () => {
       ".katex",
     );
     const katexCss = await readFile(join(dir, "talk-html", "katex", "katex.min.css"), "utf8");
-    expect(katexCss).not.toContain(".woff)format(\"woff\")");
+    expect(katexCss).not.toContain('.woff)format("woff")');
     expect(katexCss).not.toMatch(/\.(?:woff|ttf)\)format\("(?:woff|truetype)"\)/);
-    expect((await readdir(join(dir, "talk-html", "katex", "fonts"))).every((font) => font.endsWith(".woff2"))).toBe(true);
+    expect(
+      (await readdir(join(dir, "talk-html", "katex", "fonts"))).every((font) =>
+        font.endsWith(".woff2"),
+      ),
+    ).toBe(true);
     const copiedFonts = new Set(await readdir(join(dir, "talk-html", "katex", "fonts")));
     for (const url of katexCss.matchAll(/url\(fonts\/([^)]*)\)/g))
       expect(copiedFonts.has(url[1] as string)).toBe(true);
@@ -160,7 +164,9 @@ describe("exportHtml", () => {
 
   it("replaces only unsupported images while preserving image attributes", async () => {
     const { dir, input } = await fixture(
-      deck("\\begin{frame}\\includegraphics[width=0.4\\textwidth]{assets/ok.png}\\pause \\includegraphics[width=0.3\\textwidth]{assets/unsupported.gif}\\end{frame}"),
+      deck(
+        "\\begin{frame}\\includegraphics[width=0.4\\textwidth]{assets/ok.png}\\pause \\includegraphics[width=0.3\\textwidth]{assets/unsupported.gif}\\end{frame}",
+      ),
     );
     await mkdir(join(dir, "assets"));
     await writeFile(join(dir, "assets", "ok.png"), "png");
@@ -171,7 +177,7 @@ describe("exportHtml", () => {
     expect(html).toContain("data-min=");
     expect(html).toContain('style="width:30.0%"');
     expect(html).toContain("assets/");
-    expect(html).not.toContain("unsupported.gif\" style");
+    expect(html).not.toContain('unsupported.gif" style');
   });
 
   it("applies local template and preamble styles and snapshots template images", async () => {
