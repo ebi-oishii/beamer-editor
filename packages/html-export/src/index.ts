@@ -89,6 +89,8 @@ type Entry = Awaited<ReturnType<typeof entry>>;
 interface EntryIdentity {
   dev: number;
   ino: number;
+  ctimeMs: number;
+  birthtimeMs: number;
   directory: boolean;
   symbolicLink: boolean;
 }
@@ -96,12 +98,16 @@ const entryIdentity = (value: Entry): EntryIdentity | undefined =>
   value && {
     dev: value.dev,
     ino: value.ino,
+    ctimeMs: value.ctimeMs,
+    birthtimeMs: value.birthtimeMs,
     directory: value.isDirectory(),
     symbolicLink: value.isSymbolicLink(),
   };
 const sameEntry = (left: EntryIdentity | undefined, right: EntryIdentity | undefined) =>
   left?.dev === right?.dev &&
   left?.ino === right?.ino &&
+  left?.ctimeMs === right?.ctimeMs &&
+  left?.birthtimeMs === right?.birthtimeMs &&
   left?.directory === right?.directory &&
   left?.symbolicLink === right?.symbolicLink;
 const decodedAttribute = (value: string): string =>
