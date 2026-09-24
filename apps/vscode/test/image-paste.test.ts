@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   imagePasteExtension,
-  imagePasteInsertText,
+  imagePasteInsertion,
   nextImagePasteFileName,
 } from "../src/image-paste";
 
@@ -38,14 +38,15 @@ describe("nextImagePasteFileName", () => {
   });
 });
 
-describe("imagePasteInsertText", () => {
-  it("通常フレームの本文には includegraphics を入れる", () => {
+describe("imagePasteInsertion", () => {
+  it("通常フレームの本文には includegraphics をカーソル位置に入れる", () => {
     const { source, offset } = withCursor(
       `${PREAMBLE}\n\\begin{frame}{Title}\n  body\n  |\n\\end{frame}\n\\end{document}\n`,
     );
-    expect(imagePasteInsertText(source, offset, "assets/image.png")).toBe(
-      "\\includegraphics[width=0.8\\textwidth]{assets/image.png}",
-    );
+    expect(imagePasteInsertion(source, offset, "assets/image.png")).toEqual({
+      text: "\\includegraphics[width=0.8\\textwidth]{assets/image.png}",
+      offset,
+    });
   });
 
   it("deckcanvas の中では deckimage を既定の位置・幅で入れる", () => {
@@ -64,8 +65,50 @@ describe("imagePasteInsertText", () => {
         "",
       ].join("\n"),
     );
-    expect(imagePasteInsertText(source, offset, "assets/image.png")).toBe(
-      "\\deckimage[x=0.100,y=0.100,w=0.400]{assets/image.png}",
+    expect(imagePasteInsertion(source, offset, "assets/image.png")).toEqual({
+      text: "\\deckimage[x=0.100,y=0.100,w=0.400]{assets/image.png}",
+      offset,
+    });
+  });
+
+  it("decktext の中では deckimage をそのアイテムの直後に入れる", () => {
+    const { source, offset } = withCursor(
+      [
+        PREAMBLE,
+        "\\begin{frame}[label=canvas-1]{Canvas}",
+        "  \\begin{deckcanvas}",
+        "    \\begin{decktext}[x=0.050,y=0.100,w=0.420,size=normal]",
+        "      text|",
+        "    \\end{decktext}",
+        "  \\end{deckcanvas}",
+        "\\end{frame}",
+        "\\end{document}",
+        "",
+      ].join("\n"),
+    );
+    const end = "\\end{decktext}";
+    expect(imagePasteInsertion(source, offset, "assets/image.png")).toEqual({
+      text: "\\deckimage[x=0.100,y=0.100,w=0.400]{assets/image.png}",
+      offset: source.indexOf(end) + end.length,
+    });
+  });
+
+  it("deckimage の中でもそのアイテムの直後に入れる", () => {
+    const { source, offset } = withCursor(
+      [
+        PREAMBLE,
+        "\\begin{frame}[label=canvas-1]{Canvas}",
+        "  \\begin{deckcanvas}",
+        "    \\deckimage[x=0.520,y=0.140,w=0.400]{assets/ch|art.pdf}",
+        "  \\end{deckcanvas}",
+        "\\end{frame}",
+        "\\end{document}",
+        "",
+      ].join("\n"),
+    );
+    const item = "\\deckimage[x=0.520,y=0.140,w=0.400]{assets/chart.pdf}";
+    expect(imagePasteInsertion(source, offset, "assets/image.png")?.offset).toBe(
+      source.indexOf(item) + item.length,
     );
   });
 
@@ -84,9 +127,10 @@ describe("imagePasteInsertText", () => {
         "",
       ].join("\n"),
     );
-    expect(imagePasteInsertText(source, offset, "assets/image.jpg")).toBe(
-      "\\includegraphics[width=0.8\\textwidth]{assets/image.jpg}",
-    );
+    expect(imagePasteInsertion(source, offset, "assets/image.jpg")).toEqual({
+      text: "\\includegraphics[width=0.8\\textwidth]{assets/image.jpg}",
+      offset,
+    });
   });
 
   it("CRLF の文書でも deckcanvas の中を見分ける", () => {
@@ -104,15 +148,31 @@ describe("imagePasteInsertText", () => {
         .join("\n")
         .replace(/\n/g, "\r\n"),
     );
-    expect(imagePasteInsertText(source, offset, "assets/image.png")).toMatch(/^\\deckimage\[/);
+    expect(imagePasteInsertion(source, offset, "assets/image.png")?.text).toMatch(/^\\deckimage\[/);
   });
 
-  it("フレームの外(プリアンブル)では includegraphics に倒す", () => {
+  it("プリアンブルでは入れない", () => {
     const { source, offset } = withCursor(
       `${PREAMBLE.replace("\\usepackage{graphicx}", "\\usepackage{graphicx}\n|")}\n\\end{document}\n`,
     );
-    expect(imagePasteInsertText(source, offset, "assets/image.png")).toMatch(
-      /^\\includegraphics\[/,
+    expect(imagePasteInsertion(source, offset, "assets/image.png")).toBeNull();
+  });
+
+  it("フレームの間では入れない", () => {
+    const { source, offset } = withCursor(
+      [
+        PREAMBLE,
+        "\\begin{frame}{One}",
+        "  body",
+        "\\end{frame}",
+        "|",
+        "\\begin{frame}{Two}",
+        "  body",
+        "\\end{frame}",
+        "\\end{document}",
+        "",
+      ].join("\n"),
     );
+    expect(imagePasteInsertion(source, offset, "assets/image.png")).toBeNull();
   });
 });

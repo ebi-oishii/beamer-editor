@@ -3,7 +3,7 @@ import {
   IMAGE_PASTE_DIRECTORY,
   IMAGE_PASTE_MIME_TYPES,
   imagePasteExtension,
-  imagePasteInsertText,
+  imagePasteInsertion,
   nextImagePasteFileName,
 } from "./image-paste";
 
@@ -30,18 +30,32 @@ export class ImagePasteEditProvider implements vscode.DocumentPasteEditProvider 
     if (!image) return undefined;
     const directory = vscode.Uri.joinPath(document.uri, "..", IMAGE_PASTE_DIRECTORY);
     const existing = new Set((await listDirectory(directory)).map(([name]) => name));
-    const data = await image.file.data();
-    if (token.isCancellationRequested) return undefined;
     const name = nextImagePasteFileName(image.extension, (candidate) => existing.has(candidate));
     const relativePath = `${IMAGE_PASTE_DIRECTORY}/${name}`;
-    const offset = document.offsetAt(ranges[0]?.start ?? new vscode.Position(0, 0));
+    const range = ranges[0] ?? new vscode.Range(0, 0, 0, 0);
+    const offset = document.offsetAt(range.start);
+    const insertion = imagePasteInsertion(document.getText(), offset, relativePath);
+    // 参照を置けない位置(フレームの外)では画像を保存せず、通常の貼り付けに任せる。
+    if (!insertion) return undefined;
+    const data = await image.file.data();
+    if (token.isCancellationRequested) return undefined;
+    const moved = insertion.offset !== offset;
     const edit = new vscode.DocumentPasteEdit(
-      imagePasteInsertText(document.getText(), offset, relativePath),
+      // 挿入先を寄せるときは貼り付け範囲を書き換えない(選択中の文字を消さない)。
+      moved ? document.getText(range) : insertion.text,
       `画像を ${relativePath} に保存して挿入`,
       ImagePasteEditProvider.kind,
     );
     edit.additionalEdit = new vscode.WorkspaceEdit();
+    if (moved)
+      edit.additionalEdit.insert(
+        document.uri,
+        document.positionAt(insertion.offset),
+        insertion.text,
+      );
     edit.additionalEdit.createFile(vscode.Uri.joinPath(directory, name), { contents: data });
+    // テキストも一緒にコピーされているときは、既定を通常のテキスト貼り付けに譲る。
+    if (dataTransfer.get("text/plain")) edit.yieldTo = [vscode.DocumentDropOrPasteEditKind.Text];
     return [edit];
   }
 }

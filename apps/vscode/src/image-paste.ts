@@ -1,4 +1,4 @@
-import { framesOf, parseDeck } from "@beamer-editor/core";
+import { type CanvasNode, framesOf, parseDeck } from "@beamer-editor/core";
 
 /**
  * エディタへの画像の貼り付け(#153)。クリップボードの画像を文書と同じ場所の `assets/` に
@@ -37,22 +37,48 @@ export function nextImagePasteFileName(
   }
 }
 
-/**
- * offset の位置に挿入する参照。deckcanvas の中なら `\deckimage`、それ以外(通常フロー・
- * 解釈できないフレーム・フレーム外)は `\includegraphics`。
- */
-export function imagePasteInsertText(source: string, offset: number, relativePath: string): string {
-  return isInsideCanvas(source, offset)
-    ? `\\deckimage[${CANVAS_IMAGE_POSITION}]{${relativePath}}`
-    : `\\includegraphics[width=${FLOW_IMAGE_WIDTH}\\textwidth]{${relativePath}}`;
+/** 貼り付けで入れる参照と、その挿入位置。 */
+export interface ImagePasteInsertion {
+  text: string;
+  /** 挿入位置。canvas のアイテムの中にはアイテムを入れられないので、その直後へ寄せる。 */
+  offset: number;
 }
 
-function isInsideCanvas(source: string, offset: number): boolean {
+/**
+ * offset の位置に入れる参照。deckcanvas の中なら `\deckimage`、フレーム内のそれ以外
+ * (通常フロー・解釈できないフレーム)は `\includegraphics`。フレームの外は入れない。
+ */
+export function imagePasteInsertion(
+  source: string,
+  offset: number,
+  relativePath: string,
+): ImagePasteInsertion | null {
+  const target = insertTarget(source, offset);
+  if (!target) return null;
+  return {
+    text: target.canvas
+      ? `\\deckimage[${CANVAS_IMAGE_POSITION}]{${relativePath}}`
+      : `\\includegraphics[width=${FLOW_IMAGE_WIDTH}\\textwidth]{${relativePath}}`,
+    offset: target.offset,
+  };
+}
+
+/**
+ * フレームの中だけを挿入先にする。プリアンブルへ入るとビルドが落ち、フレームの間へ入ると
+ * どのスライドにも出ないため、どちらも貼り付けない。
+ */
+function insertTarget(source: string, offset: number): { canvas: boolean; offset: number } | null {
   for (const frame of framesOf(parseDeck(source))) {
-    if (frame.type !== "frame" || offset < frame.span.start || offset > frame.span.end) continue;
-    return frame.body.some(
-      (block) => block.type === "canvas" && offset > block.span.start && offset < block.span.end,
+    if (offset < frame.span.start || offset > frame.span.end) continue;
+    if (frame.type !== "frame") return { canvas: false, offset };
+    const canvas = frame.body.find(
+      (block): block is CanvasNode =>
+        block.type === "canvas" && offset > block.span.start && offset < block.span.end,
     );
+    if (!canvas) return { canvas: false, offset };
+    // decktext の中に画像は置けない(L014)ので、そのアイテムの直後を挿入先にする。
+    const item = canvas.items.find((i) => offset > i.span.start && offset < i.span.end);
+    return { canvas: true, offset: item ? item.span.end : offset };
   }
-  return false;
+  return null;
 }
