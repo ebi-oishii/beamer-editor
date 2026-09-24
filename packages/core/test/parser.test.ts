@@ -348,3 +348,72 @@ describe("parseDeck: styled.slide.tex(%% style 領域)", () => {
     expect(doc2.style.entries).toHaveLength(0);
   });
 });
+
+describe("parseDeck: 閉じのない \\[ と改行 \\\\(#154)", () => {
+  const deck = (body: string) =>
+    `\\documentclass[aspectratio=169]{beamer}\n\\begin{document}\n\\begin{frame}[label=a]{T}\n${body}\n\\end{frame}\n\\end{document}\n`;
+  const frameBody = (source: string) => {
+    const frame = parseDeck(source).body.find((node) => node.type === "frame");
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    return frame.body;
+  };
+
+  it("\\\\[2ex] は改行として段落に残り、後続の itemize が構造として残る", () => {
+    const source = deck("line one \\\\[2ex] line two\n\\begin{itemize}\n\\item q\n\\end{itemize}");
+    const body = frameBody(source);
+    expect(body.map((block) => block.type)).toEqual(["paragraph", "list"]);
+    const paragraph = body[0];
+    if (paragraph?.type !== "paragraph") throw new Error("paragraph missing");
+    const lineBreak = paragraph.children.find((node) => node.type === "lineBreak");
+    if (!lineBreak) throw new Error("line break missing");
+    expect(source.slice(lineBreak.span.start, lineBreak.span.end)).toBe("\\\\[2ex]");
+    const texts = paragraph.children
+      .filter((node) => node.type === "text")
+      .map((node) => node.value);
+    expect(texts.join("").trim()).toBe("line one  line two");
+  });
+
+  it("\\\\ と \\\\* と \\\\[\\baselineskip] も改行 1 つとして読む", () => {
+    for (const lb of ["\\\\", "\\\\*", "\\\\[\\baselineskip]", "\\\\[1.5cm]"]) {
+      const source = deck(`a ${lb} b`);
+      const paragraph = frameBody(source)[0];
+      if (paragraph?.type !== "paragraph") throw new Error("paragraph missing");
+      const breaks = paragraph.children.filter((node) => node.type === "lineBreak");
+      expect(breaks).toHaveLength(1);
+      expect(source.slice(breaks[0]?.span.start, breaks[0]?.span.end)).toBe(lb);
+    }
+  });
+
+  it("\\\\[text] のように長さでない [] は改行の一部にせず、文字として残す", () => {
+    const paragraph = frameBody(deck("a \\\\[note] b"))[0];
+    if (paragraph?.type !== "paragraph") throw new Error("paragraph missing");
+    expect(paragraph.children.map((node) => node.type)).toEqual(["text", "lineBreak", "text"]);
+    const tail = paragraph.children[2];
+    expect((tail?.type === "text" ? tail.value : "").trim()).toBe("[note] b");
+  });
+
+  it("閉じのない \\[ は空行までの生ブロックになり、後続の段落とリストが残る", () => {
+    const source = deck(
+      "\\[ x = 1\nstill math?\n\nnext paragraph\n\\begin{itemize}\n\\item q\n\\end{itemize}",
+    );
+    const body = frameBody(source);
+    expect(body.map((block) => block.type)).toEqual(["rawBlock", "paragraph", "list"]);
+    const raw = body[0];
+    if (raw?.type !== "rawBlock") throw new Error("raw missing");
+    expect(source.slice(raw.span.start, raw.span.end)).toBe("\\[ x = 1\nstill math?");
+  });
+
+  it("閉じのない \\[ の直後に環境が続けば、環境の前で生ブロックを切る", () => {
+    const source = deck("\\[ x = 1\n\\begin{itemize}\n\\item q\n\\end{itemize}");
+    const body = frameBody(source);
+    expect(body.map((block) => block.type)).toEqual(["rawBlock", "list"]);
+    const raw = body[0];
+    if (raw?.type !== "rawBlock") throw new Error("raw missing");
+    expect(source.slice(raw.span.start, raw.span.end)).toBe("\\[ x = 1");
+  });
+
+  it("閉じのある \\[ ... \\] は従来どおり空行をまたいでも 1 つの数式", () => {
+    const body = frameBody(deck("\\[\nx = 1\n\ny = 2\n\\]\nafter"));
+    expect(body.map((block) => block.type)).toEqual(["displayMath", "paragraph"]);
+  });
+});

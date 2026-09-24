@@ -108,7 +108,11 @@ describe("decktext display math", () => {
     expect(text.children).toEqual([
       expect.objectContaining({
         type: "rawBlock",
-        span: { start: source.indexOf("\\[x = 1"), end: source.indexOf("\\end{decktext}") },
+        // 生ブロックは数式の原文まで(末尾の改行は含めない。#154)。
+        span: {
+          start: source.indexOf("\\[x = 1"),
+          end: source.indexOf("\\[x = 1") + "\\[x = 1".length,
+        },
       }),
     ]);
     expect(text.children.some((node) => node.type === "displayMath")).toBe(false);
