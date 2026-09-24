@@ -3,9 +3,12 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { LintOptions } from "@beamer-editor/core";
 import { GENERATED_SKILL_FINGERPRINT } from "./generated-skill-fingerprint.ts";
-import { SKILL_FILE_PATHS, type SkillFilePath, skillFingerprint } from "./skill-generator.ts";
-
-const skillRelativeDirectory = ".claude/skills/beamer-deck";
+import {
+  PROJECT_SKILL_DIRECTORIES,
+  SKILL_FILE_PATHS,
+  type SkillFilePath,
+  skillFingerprint,
+} from "./skill-generator.ts";
 
 async function canonicalOrLexical(path: string): Promise<string> {
   return realpath(path).catch(() => path);
@@ -21,8 +24,25 @@ async function isGitBoundary(directory: string): Promise<boolean> {
   }
 }
 
+/** Check every agent's skill directory; a stale one wins so a single fresh copy cannot hide it. */
 async function readBundledSkill(projectDirectory: string): Promise<LintOptions | undefined> {
-  const skillDirectory = join(projectDirectory, skillRelativeDirectory);
+  let found: LintOptions | undefined;
+  for (const relative of PROJECT_SKILL_DIRECTORIES) {
+    const options = await readSkillDirectory(projectDirectory, join(projectDirectory, relative));
+    if (!options) continue;
+    const current =
+      options.skillFingerprint === GENERATED_SKILL_FINGERPRINT &&
+      options.skillContentFingerprint === GENERATED_SKILL_FINGERPRINT;
+    if (!current) return options;
+    found ??= options;
+  }
+  return found;
+}
+
+async function readSkillDirectory(
+  projectDirectory: string,
+  skillDirectory: string,
+): Promise<LintOptions | undefined> {
   try {
     await stat(skillDirectory);
   } catch {

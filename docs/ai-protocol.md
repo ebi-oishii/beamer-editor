@@ -137,7 +137,7 @@ selection: 122–128 行目
 
 ## 8. SKILL.md による配布
 
-エージェントへの知識注入は Claude Code のスキル形式で行う。
+エージェントへの知識注入はスキル形式(`SKILL.md` + 段階開示の references)で行う。Claude Code と Codex はどちらもこの形式を読むので、同じ生成物を両方の置き場所へ配る。
 
 ```
 skills/beamer-deck/
@@ -150,7 +150,8 @@ skills/beamer-deck/
 ```
 
 - **生成物であって手書きしない。** cheatsheet と SKILL.md の語彙記述は `docs/subset-spec.md` を単一の真実としてビルドで生成する。仕様変更のたびに再生成され、スキルと実装の知識ドリフトを構造的に防ぐ。
-- **配布は `deck init` がプロジェクトに同梱する。** 新規デッキプロジェクトの雛形生成時に `.claude/skills/beamer-deck/` として書き込む。リポジトリと一緒に配布されるので、クローンした人の Claude Code がそのまま拾える(ゼロインストール)。生成時に CLI の版と4生成物の fingerprint を記録し、`deck lint` が期待する fingerprint とのずれを警告する。
+- **配布は `deck init` がプロジェクトに同梱する。** 新規デッキプロジェクトの雛形生成時に、Claude Code 用の `.claude/skills/beamer-deck/` と Codex 用の `.agents/skills/beamer-deck/` へ同じ内容を書き込む。リポジトリと一緒に配布されるので、クローンした人のエージェントがそのまま拾える(ゼロインストール)。生成時に CLI の版と4生成物の fingerprint を記録し、`deck lint` が期待する fingerprint とのずれを、どちらの置き場所についても警告する。
+- **常に読まれるプロジェクト指示も同梱する。** スキルは description で選ばれたときにしか読まれず、「GUI で操作できるように」のような依頼では汎用の pptx スキルなどに負けうる(#146)。そこで `deck init` は付録「プロジェクト指示ドラフト」を `AGENTS.md`(Codex が常に読む)として書き、`CLAUDE.md`(Claude Code が常に読む)は `@AGENTS.md` の import だけにして二重管理を避ける。この2ファイルは利用者が書き足す前提なので fingerprint の対象外とし、`deck init --update-skill` は存在しないときだけ作成して既存のものは上書きしない。
 - SKILL.md 本文は短く保ち、詳細は references/ への参照で段階開示する(スキルの一般作法に従う)。
 - 将来: プラグインとしてのユーザーレベル配布、エディタ内蔵チャット(Agent SDK)への同一スキル注入。どちらもプロトコルは本書のまま変わらない。
 
@@ -221,4 +222,23 @@ description: >
 - target のフレーム外を変更しない。必要と判断したら変更せず提案を返す
 - 見た目の依頼は snapshot で前後比較 + check。文言のみなら lint だけでよい
 - 報告は 1〜2 行に抑える。「もう少し」は直前と同じ target への追加依頼
+```
+
+## 付録: プロジェクト指示ドラフト
+
+`deck init` がデッキプロジェクトの `AGENTS.md` として書き込む内容(§8)。スキルが選ばれなかった場合でも既定の行動が変わらないよう、最小限の規約だけを置く。
+
+```markdown
+# デッキプロジェクト
+
+このディレクトリは Beamer サブセット形式のスライドデッキ(`*.slide.tex`)のプロジェクト。
+スライドの作成・編集・書き出しは beamer-deck スキル(`.claude/skills/beamer-deck/`、
+`.agents/skills/beamer-deck/`)の手順に従う。
+
+- スライドの正本は .tex。「GUI で操作」「プレビューで動かせるように」は VS Code 拡張の
+  プレビューで編集できる状態を指し、pptx に置き換えない
+- 新しく書く本文と、依頼で触るフレームの本文は `deckcanvas` の `decktext` / `deckimage`
+  で書く。依頼で触らない既存フレームは変換しない
+- PDF は `deck export <file> --format pdf` で書き出し、PDF のパスを報告する
+- pptx / PowerPoint は、ユーザーが形式を明示したときだけ .tex を残したまま別に作る
 ```
