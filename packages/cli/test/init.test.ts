@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { run } from "../src/cli.ts";
 import { initDeck, initialDeckSource } from "../src/init.ts";
 import { skillLintOptions } from "../src/skill.ts";
+import { SKILL_FILE_PATHS } from "../src/skill-generator.ts";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -188,4 +189,100 @@ it("rolls back every newly created ancestor after a nested initialization failur
     .mockRejectedValueOnce(new Error("disk full"));
   await expect(initDeck(directory)).rejects.toMatchObject({ code: "E_IO" });
   expect(await readdir(root)).toEqual([]);
+});
+
+const deckSource =
+  "%% deck-source-version: 1\n\\documentclass{beamer}\n\\begin{document}\n\\begin{frame}{Test}Hello\\end{frame}\n\\end{document}\n";
+
+async function l010(deck: string) {
+  return lintSource(await readFile(deck, "utf8"), await skillLintOptions(deck)).filter(
+    (d) => d.code === "L010",
+  );
+}
+
+/** Extract the directory argument exactly as a POSIX shell would read the advertised command. */
+function advertisedDirectory(message: string): string {
+  const word = message.match(/deck init ('(?:[^']|'\\'')*'|\S+) --update-skill/)?.[1];
+  if (!word) throw new Error(`no runnable command in: ${message}`);
+  return word.startsWith("'") ? word.slice(1, -1).replaceAll("'\\''", "'") : word;
+}
+
+async function staleSkillProject(project: string) {
+  await mkdir(project, { recursive: true });
+  await initDeck(project, { updateSkill: true });
+  await writeFile(join(project, ".claude/skills/beamer-deck/references/cli.md"), "stale\n");
+}
+
+it("L010 names the skill-owning directory; running that exact command clears it for any deck name or depth", async () => {
+  const root = await fs.realpath(await temp());
+  for (const [project, deckPath] of [
+    [join(root, "renamed"), "talk.slide.tex"],
+    [join(root, "parent project"), join("slides", "nested", "lecture.slide.tex")],
+  ] as const) {
+    await staleSkillProject(project);
+    const deck = join(project, deckPath);
+    await mkdir(join(deck, ".."), { recursive: true });
+    await writeFile(deck, deckSource);
+    const [warning, ...rest] = await l010(deck);
+    expect(rest).toEqual([]);
+    expect(warning?.message).toContain("deck init");
+    const advertised = advertisedDirectory(warning?.message ?? "");
+    expect(advertised).toBe(project);
+    vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    expect(await run(["init", advertised, "--update-skill"])).toBe(0);
+    vi.restoreAllMocks();
+    expect(await l010(deck)).toEqual([]);
+    await expect(lstat(join(project, "main.slide.tex"))).rejects.toMatchObject({ code: "ENOENT" });
+  }
+});
+
+it("L010 falls back to a generic command when the skill directory is unknown", () => {
+  const [warning] = lintSource(deckSource, {
+    skillFingerprint: "0".repeat(64),
+    skillContentFingerprint: "0".repeat(64),
+    expectedSkillFingerprint: "f".repeat(64),
+  }).filter((d) => d.code === "L010");
+  expect(warning?.message).toContain("deck init <directory> --update-skill");
+});
+
+it("--update-skill rejects a missing target or a file with a validation error, not E_IO", async () => {
+  const directory = await temp();
+  await writeFile(join(directory, "file.txt"), "keep");
+  for (const target of [
+    join(directory, "missing"),
+    join(directory, "file.txt"),
+    join(directory, "file.txt", "child"),
+  ]) {
+    await expect(initDeck(target, { updateSkill: true })).rejects.toMatchObject({
+      code: "E_OUTPUT_EXISTS",
+      message: expect.stringContaining("既存のディレクトリを指定してください"),
+    });
+  }
+  await expect(lstat(join(directory, "missing"))).rejects.toMatchObject({ code: "ENOENT" });
+  const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  expect(await run(["init", join(directory, "missing"), "--update-skill", "--json"])).toBe(3);
+  expect(JSON.parse(stderr.mock.calls.map((c) => c[0]).join(""))).toMatchObject({
+    error: { code: "E_OUTPUT_EXISTS" },
+  });
+});
+
+it("updates a repository-like layout (skill at the Git root, no main.slide.tex) to the committed generated skill", async () => {
+  const repository = await fs.realpath(await temp());
+  await mkdir(join(repository, ".git"));
+  await mkdir(join(repository, "fixtures"));
+  const deck = join(repository, "fixtures", "basic.slide.tex");
+  await writeFile(deck, deckSource);
+  await staleSkillProject(repository);
+  expect(advertisedDirectory((await l010(deck))[0]?.message ?? "")).toBe(repository);
+  await initDeck(repository, { updateSkill: true });
+  expect(await l010(deck)).toEqual([]);
+  // Same bytes as `pnpm build:skills` output, so `pnpm check:skills` stays green after the update.
+  for (const name of SKILL_FILE_PATHS) {
+    expect(await readFile(join(repository, ".claude/skills/beamer-deck", name), "utf8")).toBe(
+      await readFile(
+        new URL(`../../../.claude/skills/beamer-deck/${name}`, import.meta.url),
+        "utf8",
+      ),
+    );
+  }
 });

@@ -21,13 +21,14 @@ async function isGitBoundary(directory: string): Promise<boolean> {
   }
 }
 
-async function readBundledSkill(skillDirectory: string): Promise<LintOptions | undefined> {
+async function readBundledSkill(projectDirectory: string): Promise<LintOptions | undefined> {
+  const skillDirectory = join(projectDirectory, skillRelativeDirectory);
   try {
     await stat(skillDirectory);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR") return undefined;
-    return skillOptions(null, null);
+    return skillOptions(projectDirectory, null, null);
   }
 
   try {
@@ -37,14 +38,15 @@ async function readBundledSkill(skillDirectory: string): Promise<LintOptions | u
     }
     const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(files["SKILL.md"])?.[1];
     const declared = frontmatter?.match(/^ {2}fingerprint: "([a-f0-9]{64})"\s*$/m)?.[1] ?? null;
-    return skillOptions(declared, skillFingerprint(files));
+    return skillOptions(projectDirectory, declared, skillFingerprint(files));
   } catch {
     // A discovered bundle that cannot be read is stale, but never prevents lint/check.
-    return skillOptions(null, null);
+    return skillOptions(projectDirectory, null, null);
   }
 }
 
 function skillOptions(
+  skillProjectDirectory: string,
   skillFingerprint: string | null,
   skillContentFingerprint: string | null,
 ): LintOptions {
@@ -52,17 +54,21 @@ function skillOptions(
     skillFingerprint,
     skillContentFingerprint,
     expectedSkillFingerprint: GENERATED_SKILL_FINGERPRINT,
+    skillProjectDirectory,
   };
 }
 
-/** Find the nearest project skill, starting at the deck (not the invocation cwd). */
+/**
+ * Find the nearest project skill, starting at the deck (not the invocation cwd).
+ * `skillProjectDirectory` is the directory that `deck init <dir> --update-skill` must receive.
+ */
 export async function skillLintOptions(input: string): Promise<LintOptions> {
   let directory = await canonicalOrLexical(dirname(resolve(input)));
   const home = await canonicalOrLexical(homedir());
   for (;;) {
     // A user-level skill is not a bundled project skill.
     if (directory === home) return {};
-    const bundled = await readBundledSkill(join(directory, skillRelativeDirectory));
+    const bundled = await readBundledSkill(directory);
     if (bundled) return bundled;
     if (await isGitBoundary(directory)) return {};
     const parent = dirname(directory);

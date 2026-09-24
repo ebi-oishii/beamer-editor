@@ -51,9 +51,8 @@ import {
   nodeFontIO,
   resolveFont,
 } from "./fonts.ts";
-import { nodePdfRasterizer } from "./pdf-rasterizer.ts";
-
 import { InitError, initDeck } from "./init.ts";
+import { nodePdfRasterizer } from "./pdf-rasterizer.ts";
 import { skillLintOptions } from "./skill.ts";
 
 /** 既定で取得する標準フォント(theme-design.md §4)。 */
@@ -224,7 +223,8 @@ async function runFontsFetch(family: string, json: boolean): Promise<number> {
 
 export const USAGE = `使い方: deck <command> ...
 
-  deck init [directory] [--update-skill] [--json]  新規デッキを生成、または同梱スキルを更新
+  deck init [directory] [--json]      新規または空のディレクトリへ新規デッキを生成
+  deck init <directory> --update-skill [--json]  既存ディレクトリの .claude/skills/beamer-deck/ を更新
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示

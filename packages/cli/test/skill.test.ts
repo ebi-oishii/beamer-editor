@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { lintSource } from "@beamer-editor/core";
@@ -97,6 +97,8 @@ it("resolves a symlinked deck directory before finding its bundled skill", async
     skillFingerprint: GENERATED_SKILL_FINGERPRINT,
     skillContentFingerprint: GENERATED_SKILL_FINGERPRINT,
     expectedSkillFingerprint: GENERATED_SKILL_FINGERPRINT,
+    // Canonical, not the symlink: `deck init <dir> --update-skill` refuses a symlinked target.
+    skillProjectDirectory: await realpath(repository),
   });
 });
 

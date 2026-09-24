@@ -149,7 +149,7 @@ Electron(旧 5c)はここでは作らない(「後続」参照)。
 [ai-protocol.md](ai-protocol.md) の実装フェーズ。Phase 7 とは独立。
 
 - `deck lint` / `deck format` / `deck outline` / `deck export` / `deck check` / `deck snapshot` / `deck init`（各 `--json`対応）は実装済み。`deck init` は管理プリアンブルを埋め込んだ `main.slide.tex` とスキルを同梱した新規プロジェクトを生成する。`snapshot` は全 frame または指定 frame の実コンパイル PNG を新規出力ディレクトリへ書き出す(mkdir による予約 + 全 PNG の排他的書き込み後に `.deck-snapshot-complete` を作る完了マーカー方式)。`check` は lint と1回の Tectonic 実コンパイルを統合し、Overfull と savepos 実測のキャンバス診断をフレームアドレスへ割り付ける。
-- 実装済み: `pnpm build:skills` / `pnpm check:skills` で SKILL.md と `references/subset-cheatsheet.md` を `docs/subset-spec.md` から**ビルドで生成**する仕組み。`deck init` が新規デッキプロジェクトに `.claude/skills/beamer-deck/` として同梱する。L010 は同梱スキルの生成物 fingerprint と CLI の期待値のずれを警告する。
+- 実装済み: `pnpm build:skills` / `pnpm check:skills` で SKILL.md と `references/subset-cheatsheet.md` を `docs/subset-spec.md` から**ビルドで生成**する仕組み。`deck init` が新規デッキプロジェクトに `.claude/skills/beamer-deck/` として同梱する。L010 は同梱スキルの生成物 fingerprint と CLI の期待値のずれを警告し、スキルを見つけたプロジェクトディレクトリを指定した `deck init <directory> --update-skill` を案内する(`--update-skill` はデッキ名を問わず既存ディレクトリのスキルだけを更新する)。
 - 指示パターン集(examples/prompts.md)。このリポジトリ自身にもスキルを配置し、資料作成で運用検証する。
 - 完了条件: AI に「アウトライン提案 → 合意 → 生成 → lint/check 通過」の流れで新規デッキを作らせ、人間がエディタで微調整して PDF 書き出しまでの一連が実演できる。
 

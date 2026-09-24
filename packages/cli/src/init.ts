@@ -1,7 +1,8 @@
 import { lstat, mkdir, open, readdir, readFile, rename, rmdir, unlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { CURRENT_DECK_SOURCE_VERSION } from "@beamer-editor/core";
-import { SKILL_FILE_PATHS } from "./skill-generator.ts";
+import { GENERATED_SKILL_FINGERPRINT } from "./generated-skill-fingerprint.ts";
+import { SKILL_FILE_PATHS, type SkillFilePath, skillFingerprint } from "./skill-generator.ts";
 
 export class InitError extends Error {
   constructor(
@@ -12,14 +13,20 @@ export class InitError extends Error {
   }
 }
 
-async function generatedSkillFiles(): Promise<Record<string, string>> {
-  const files: Record<string, string> = {};
+/**
+ * The committed `buildSkillFiles` output (kept current by `pnpm check:skills`). Refuse to install a
+ * bundle whose content does not match the fingerprint lint expects, so init never creates L010.
+ */
+async function generatedSkillFiles(): Promise<Record<SkillFilePath, string>> {
+  const files = {} as Record<SkillFilePath, string>;
   for (const name of SKILL_FILE_PATHS) {
     files[name] = await readFile(
       new URL(`../../../skills/beamer-deck/${name}`, import.meta.url),
       "utf8",
     );
   }
+  if (skillFingerprint(files) !== GENERATED_SKILL_FINGERPRINT)
+    throw new InitError("E_IO", "同梱スキルの生成物が古いため中止しました (pnpm build:skills)");
   return files;
 }
 
@@ -151,17 +158,24 @@ export async function initDeck(
   }
 }
 
-/** Refresh generated skill files only; decks, assets, and unrelated project data stay untouched. */
+/**
+ * Refresh generated skill files only; decks, assets, and unrelated project data stay untouched.
+ * The target is the project directory that owns (or will own) `.claude/skills/beamer-deck/`,
+ * i.e. the directory L010 names. It need not contain a particular deck file.
+ */
 async function updateSkill(target: string): Promise<{ directory: string; files: string[] }> {
-  const deck = join(target, "main.slide.tex");
+  const invalid = () =>
+    new InitError("E_OUTPUT_EXISTS", `既存のディレクトリを指定してください: ${target}`);
   try {
-    if (!(await lstat(target)).isDirectory() || !(await lstat(deck)).isFile())
-      throw new InitError("E_OUTPUT_EXISTS", `初期化済みデッキを指定してください: ${target}`);
+    const info = await lstat(target);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw invalid();
   } catch (error) {
     if (error instanceof InitError) throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") throw invalid();
     throw new InitError(
       "E_IO",
-      `初期化済みデッキを確認できません: ${target}: ${error instanceof Error ? error.message : String(error)}`,
+      `対象ディレクトリを確認できません: ${target}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   const files = await generatedSkillFiles();
