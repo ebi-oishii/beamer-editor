@@ -218,7 +218,7 @@ default テーマ・16:9 の実測値(2026-07-10、tectonic 0.16.9 / zref-savepo
 | 幅 | 398.34pt |
 | 高さ | 236.97pt(下端 256.03pt ≒ ページ下端。default テーマは footline が空) |
 
-実装は `fixtures/deck-canvas-preamble.tex`(将来はツールがプリアンブルへインライン展開して所有する)。
+実装は `packages/core/resources/deck-canvas-preamble.tex`。`deck init` はこれをプリアンブルへインライン展開して所有する。
 
 #### オーバーレイ
 
@@ -285,7 +285,7 @@ pass では推測値を出力しないため、最終 pass で有効なレコー
 | L007 | frame 内に verbatim 系があるのに `fragile` がない | error |
 | L008 | 正規形との不一致(`--fix` で自動整形) | info |
 | L009 | frame の `label` が重複している | warning |
-| L010 | 同梱スキル(SKILL.md)の生成物 fingerprint が CLI の期待値と一致しない | warning |
+| L010 | 同梱スキル(SKILL.md)の生成物 fingerprint が CLI の期待値と一致しない。メッセージはスキルを見つけたプロジェクトディレクトリを入れた `deck init <directory> --update-skill` を示す | warning |
 | L011 | `deckcanvas` を持つ frame に一意な `label` がない | warning |
 | L012 | `x`, `y`, `w` が範囲外、またはオブジェクトが本文領域外へ出る(静的には宣言値で検査。`deck check` は savepos 実測で検査する。§2.8) | warning |
 | L013 | 許可されていない文字サイズ値 | error |

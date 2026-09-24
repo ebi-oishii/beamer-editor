@@ -6,6 +6,8 @@ CLI 0.0.1 の実装済みコマンド（実際のヘルプから生成）:
 ```text
 使い方: deck <command> ...
 
+  deck init [directory] [--json]      新規または空のディレクトリへ新規デッキを生成
+  deck init <directory> --update-skill [--json]  既存ディレクトリの .claude/skills/beamer-deck/ を更新
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示
@@ -17,7 +19,7 @@ CLI 0.0.1 の実装済みコマンド（実際のヘルプから生成）:
   deck fonts fetch [family] [--json]  family(既定 "Noto Sans CJK JP")を取得・配置
 ```
 
-リポジトリ内では `pnpm --filter @beamer-editor/cli deck <command> ...` で実行する。
+CLI はまだ単独配布されていない。beamer-editor の checkout を用意し、`pnpm --dir /path/to/beamer-editor --filter @beamer-editor/cli deck <command> ...` を実行する。コマンドは `packages/cli` を作業ディレクトリにするため、生成プロジェクトのファイルと出力先は絶対パスで指定し、出力先を省略しない。
 
 終了コード: 0=成功・情報のみ、1=警告、2=lint error、3=操作失敗。JSONの成功結果はstdout、E_*エラーはstderr。
 

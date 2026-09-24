@@ -7,6 +7,7 @@ export const SKILL_FILE_PATHS = [
   "references/cli.md",
   "examples/prompts.md",
 ] as const;
+export const SKILL_DIRECTORIES = ["skills/beamer-deck", ".claude/skills/beamer-deck"] as const;
 export type SkillFilePath = (typeof SKILL_FILE_PATHS)[number];
 
 /** Hash generated paths and contents. The SKILL metadata fingerprint is normalized to avoid a cycle. */
@@ -69,7 +70,7 @@ export function buildSkillFiles(input: {
   const files: Record<SkillFilePath, string> = {
     "SKILL.md": `${skill}\n\n利用可能なコマンドは [CLI リファレンス](references/cli.md)、依頼例は [指示パターン](examples/prompts.md)を参照。CLI リファレンスにないコマンドは実行せず、検証できなかった項目を報告する。\n`,
     "references/subset-cheatsheet.md": `${banner}# Beamer 語彙・制約\n\n${principle}\n\n語彙の唯一の生成元: docs/subset-spec.md。CLI の利用可能範囲は cli.md を参照。\n\n${portable(vocabulary)}\n`,
-    "references/cli.md": `${banner}# CLI リファレンス\n\nCLI ${version} の実装済みコマンド（実際のヘルプから生成）:\n\n\`\`\`text\n${cliUsage.trim()}\n\`\`\`\n\nリポジトリ内では \`pnpm --filter @beamer-editor/cli deck <command> ...\` で実行する。\n\n終了コード: 0=成功・情報のみ、1=警告、2=lint error、3=操作失敗。JSONの成功結果はstdout、E_*エラーはstderr。\n\n上の一覧にないコマンドはこの版では未提供。検証できない場合は、利用可能なコマンドで代替した内容と未実施項目を報告する。\n`,
+    "references/cli.md": `${banner}# CLI リファレンス\n\nCLI ${version} の実装済みコマンド（実際のヘルプから生成）:\n\n\`\`\`text\n${cliUsage.trim()}\n\`\`\`\n\nCLI はまだ単独配布されていない。beamer-editor の checkout を用意し、\`pnpm --dir /path/to/beamer-editor --filter @beamer-editor/cli deck <command> ...\` を実行する。コマンドは \`packages/cli\` を作業ディレクトリにするため、生成プロジェクトのファイルと出力先は絶対パスで指定し、出力先を省略しない。\n\n終了コード: 0=成功・情報のみ、1=警告、2=lint error、3=操作失敗。JSONの成功結果はstdout、E_*エラーはstderr。\n\n上の一覧にないコマンドはこの版では未提供。検証できない場合は、利用可能なコマンドで代替した内容と未実施項目を報告する。\n`,
     "examples/prompts.md": `${banner}# 依頼例\n\n自然言語で、対象と希望する変更を伝える。次の例を必要に応じて使う。\n\n${portable(promptTable)}\n`,
   };
   const fingerprint = skillFingerprint(files);

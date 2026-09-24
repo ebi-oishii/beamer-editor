@@ -188,6 +188,7 @@ describe("parseArgs(純関数)", () => {
       family: undefined,
       json: false,
       write: false,
+      updateSkill: false,
       unknownOptions: [],
     });
   });
@@ -216,6 +217,7 @@ describe("parseArgs(純関数)", () => {
       family: undefined,
       json: false,
       write: false,
+      updateSkill: false,
       unknownOptions: [],
     });
   });
