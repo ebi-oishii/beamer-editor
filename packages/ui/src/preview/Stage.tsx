@@ -6,7 +6,7 @@ import { CANVAS_FONT_SIZES, type CanvasFontSize, isCanvasFontSize } from "@beame
  * ドラッグの位置と幅は本文領域で止めない(余白・ページ外へのはみ出しは許容し、L012 が警告する。#152)。
  */
 
-import { clampCanvasWidth, roundCanvasCoordinate } from "@beamer-editor/core";
+import { normalizeCanvasWidth, roundCanvasCoordinate } from "@beamer-editor/core";
 import type { RenderedFrame } from "@beamer-editor/renderer";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { canvasPointFromPointer } from "./canvas-drag.js";
@@ -168,7 +168,7 @@ export function Stage({
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       event.preventDefault();
       event.stopPropagation();
-      const width = clampCanvasWidth(
+      const width = normalizeCanvasWidth(
         descriptor.position.width + (event.key === "ArrowRight" ? 0.01 : -0.01),
       );
       if (width !== null && width !== descriptor.position.width)
@@ -352,7 +352,7 @@ export function Stage({
     const canvas = drag.element.closest<HTMLElement>(".canvas");
     const bounds = canvas?.getBoundingClientRect();
     if (!bounds || !Number.isFinite(bounds.width) || bounds.width <= 0) return null;
-    return clampCanvasWidth(drag.width + (event.clientX - drag.startClientX) / bounds.width);
+    return normalizeCanvasWidth(drag.width + (event.clientX - drag.startClientX) / bounds.width);
   };
   const move = (event: PointerEvent) => {
     const drag = dragRef.current;

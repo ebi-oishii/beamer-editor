@@ -44,9 +44,11 @@ suite("#152: canvas overflow", () => {
       const receive = controller.handleMessageForTest.bind(controller);
       await receive({ type: "ready" });
       await wait(() => controller.latestOutcome?.version === doc.version, "preview renders");
-      const l012 = () =>
-        vscode.languages.getDiagnostics(doc.uri).filter((diagnostic) => diagnostic.code === "L012");
-      await wait(() => vscode.languages.getDiagnostics(doc.uri).length >= 0, "diagnostics ready");
+      const diagnostics = (code: string) =>
+        vscode.languages.getDiagnostics(doc.uri).filter((diagnostic) => diagnostic.code === code);
+      const l012 = () => diagnostics("L012");
+      // 初期ソースが必ず出す L017 を lint 完了の目印にする(L012 の不在を lint 前に空振りで確かめない)。
+      await wait(() => diagnostics("L017").length === 1, "lint runs");
       assert.equal(l012().length, 0);
 
       // 右余白の外・上のページ外へ。clamp されずにそのまま書かれる。

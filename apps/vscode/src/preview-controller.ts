@@ -1,8 +1,8 @@
 import {
   type CanvasFontSize,
-  clampCanvasWidth,
   isCanvasFontSize,
   mapExpandedRangeToSourceExact,
+  normalizeCanvasWidth,
   roundCanvasCoordinate,
 } from "@beamer-editor/core";
 import { DEFAULT_THEME } from "@beamer-editor/renderer";
@@ -408,7 +408,7 @@ export class PreviewController implements vscode.Disposable {
       this.sendDeck();
       return;
     }
-    const width = "width" in move ? clampCanvasWidth(move.width) : null;
+    const width = "width" in move ? normalizeCanvasWidth(move.width) : null;
     if (
       "width" in move
         ? width === null || element.position.width === width
