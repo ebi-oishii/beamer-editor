@@ -354,6 +354,16 @@ describe("parseDeck: TeX と同じ境界規則(tex-scan)", () => {
     `\\documentclass{beamer}\n${preamble}\\begin{document}\n${body}\n\\end{document}\n`;
   const frames = (source: string) => framesOf(parseDeck(source));
 
+  it("閉じていない verbatim 系があっても後続のフレームを失わない", () => {
+    const a = "\\begin{frame}{A}\na\n\\end{frame}";
+    const b = "\\begin{frame}{B}\nb\n\\end{frame}";
+    const c = "\\begin{frame}{C}\nc\n\\end{frame}";
+    expect(frames(deck(`${a}\n\\begin{lstlisting}\n${b}\n${c}`))).toHaveLength(3);
+    expect(frames(deck(`${a}\n${b}`, "\\begin{minted}{python}\n"))).toHaveLength(2);
+    const inside = frames(deck(`\\begin{frame}{A}\n\\begin{verbatim}\n\\end{frame}\n${b}`));
+    expect(inside).toHaveLength(2);
+  });
+
   it("fragile フレームの \\verb と fancyvrb 系 verbatim の中の frame タグで分割しない", () => {
     for (const body of [
       "\\verb|\\end{frame} \\begin{frame}|",

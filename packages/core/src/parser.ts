@@ -105,7 +105,6 @@ function findEnvEnd(src: string, name: string, from: number): number | null {
   }
   let depth = 1;
   for (const token of texTokens(src, from)) {
-    if (token.kind === "unterminated") return null;
     if ((token.kind !== "begin" && token.kind !== "end") || token.name !== name) continue;
     if (token.kind === "begin") depth++;
     else if (--depth === 0) return token.start;

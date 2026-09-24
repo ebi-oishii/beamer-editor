@@ -44,7 +44,11 @@ export type TexToken =
       start: number;
       end: number;
     }
-  /** 閉じない verbatim 系環境。以降は TeX として読めないため走査を打ち切る。 */
+  /**
+   * 閉じない verbatim 系環境の開始タグ。TeX では以降が読めないが、入力途中の文書で
+   * 後続の構造を失わないよう、走査は開始タグの直後から続ける。厳密さが要る呼び出し側
+   * (slide-edit・折りたたみ)はこのトークンを見て処理を拒否する。
+   */
   | { kind: "unterminated"; name: string; start: number; end: number };
 
 const LETTER = /[A-Za-z@]/;
@@ -308,8 +312,10 @@ export function* texTokens(src: string, from = 0, to = src.length): Generator<Te
           const endTag = `\\end{${environment}}`;
           const endAt = src.indexOf(endTag, tagEnd);
           if (endAt === -1 || endAt + endTag.length > to) {
-            yield { kind: "unterminated", name: environment, start, end: to };
-            return;
+            // 書きかけのコードブロックで後続のフレームを見失わないよう、
+            // 開始タグだけを報告して以降は通常どおり走査する。
+            yield { kind: "unterminated", name: environment, start, end: tagEnd };
+            continue;
           }
           i = endAt + endTag.length;
           yield { kind: "verbatim", name: environment, start, end: i };
@@ -352,7 +358,7 @@ export function macroDefinitions(
 export function documentTags(src: string): { begin: number; end: number } {
   let begin = -1;
   for (const token of texTokens(src)) {
-    if (token.kind === "unterminated") break;
+    if (token.kind !== "begin" && token.kind !== "end") continue;
     if (token.name !== "document") continue;
     if (begin === -1 && token.kind === "begin") begin = token.start;
     else if (begin !== -1 && token.kind === "end") return { begin, end: token.start };
