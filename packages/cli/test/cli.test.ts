@@ -267,7 +267,7 @@ describe("deck lint", () => {
         "  deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査\n" +
         "  deck snapshot <file> -o <directory> [--frame <N|LABEL|label:LABEL>] [--tectonic <path>] [--json]\n" +
         "  deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]\n" +
-        "  deck export <file> --format html [-o <directory>] [--json]\n" +
+        "  deck export <file> --format html [-o <directory>] [--overwrite] [--json]\n" +
         "  deck fonts status [--json]          フォントカタログ全 family の解決状態\n" +
         '  deck fonts fetch [family] [--json]  family(既定 "Noto Sans CJK JP")を取得・配置\n',
     );

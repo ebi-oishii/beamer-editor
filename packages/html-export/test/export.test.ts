@@ -1,5 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { exportHtml, type HtmlExportError } from "../src/index.js";
@@ -209,9 +210,42 @@ describe("exportHtml", () => {
     const html = await readFile(result.indexPath, "utf8");
     expect(html).toContain("image-placeholder placeholder");
     expect(html).toContain("data-min=");
-    expect(html).toContain("width:30.0%");
+    expect(html).toContain("width:30.0%;aspect-ratio:4 / 3");
     expect(html).toContain("assets/");
     expect(html).not.toContain('unsupported.gif" style');
+  });
+
+  it("sizes placeholders like renderer PDF placeholders and tolerates an empty image path", async () => {
+    const { input } = await fixture(
+      deck(
+        "\\begin{frame}\\includegraphics{assets/missing.png}\\end{frame}\n\\begin{frame}\\includegraphics{}\\end{frame}",
+      ),
+    );
+    const result = await exportHtml({ inputPath: input });
+    const html = await readFile(result.indexPath, "utf8");
+    expect(html.match(/style=\\"width:60\.0%;aspect-ratio:4 \/ 3\\"/g)).toHaveLength(2);
+    expect(html).toContain("(画像パス未指定)");
+  });
+
+  it("recovers a lock left by a dead process and names a live lock in the error", async () => {
+    const { dir, input } = await fixture(deck("\\begin{frame}x\\end{frame}"));
+    const lock = join(dir, ".talk-html.lock");
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+      encoding: "utf8",
+    });
+    await writeFile(lock, JSON.stringify({ pid: Number(dead.stdout), host: hostname() }));
+    await expect(exportHtml({ inputPath: input })).resolves.toMatchObject({ format: "html" });
+    await expect(lstat(lock)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await rm(join(dir, "talk-html"), { recursive: true });
+    for (const content of [JSON.stringify({ pid: process.pid, host: hostname() }), "manual"]) {
+      await writeFile(lock, content);
+      await expect(exportHtml({ inputPath: input })).rejects.toMatchObject({
+        code: "E_OUTPUT_EXISTS",
+        message: expect.stringContaining(lock),
+      });
+      await expect(readFile(lock, "utf8")).resolves.toBe(content);
+    }
   });
 
   it("applies local template and preamble styles and snapshots template images", async () => {
@@ -330,8 +364,11 @@ describe("exportHtml", () => {
         await symlink(secondParent, parentLink);
       },
     });
-    expect(canonical.outputPath).toBe(join(firstParent, "published"));
-    await expect(readFile(canonical.indexPath, "utf8")).resolves.toContain("viewer.js");
+    // 結果は指定どおりのパスで返し、実体は差し替え前の親に公開する。
+    expect(canonical.outputPath).toBe(join(parentLink, "published"));
+    await expect(readFile(join(firstParent, "published", "index.html"), "utf8")).resolves.toContain(
+      "viewer.js",
+    );
     await expect(lstat(join(secondParent, "published"))).rejects.toMatchObject({ code: "ENOENT" });
 
     const raced = join(dir, "raced");

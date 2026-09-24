@@ -13,6 +13,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import { hostname } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandDeck } from "@beamer-editor/core";
@@ -56,19 +57,36 @@ interface Asset {
   target: string;
   bytes: Uint8Array;
 }
+/**
+ * 箱の大きさ。<img> と違って中身から寸法が決まらないので、renderer の PDF プレースホルダーと
+ * 同じく幅の既定(本文幅の 6 割)と 4:3 の比を補う。背景はクラス側で全面に広げるので触らない。
+ */
+function placeholderSize(style: string, background: boolean): string {
+  if (background) return style;
+  const declarations = style.split(";").filter((d) => d.trim() !== "");
+  const has = (property: string) =>
+    declarations.some((d) => d.split(":")[0]?.trim().toLowerCase() === property);
+  if (!has("width")) declarations.push("width:60.0%");
+  if (!has("height") && !has("aspect-ratio")) declarations.push("aspect-ratio:4 / 3");
+  return declarations.join(";");
+}
 function imagePlaceholder(html: string, path: string): string {
   const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   let attributes = html
     .replace(/^<img\b|>$/g, "")
     .replace(/\s+src="[^"]*"/, "")
     .replace(/\s+title="[^"]*"/, "");
+  const background = /\sclass="[^"]*\bdeck-background\b/.test(attributes);
+  const style = decodedAttribute(/\sstyle="([^"]*)"/.exec(attributes)?.[1] ?? "");
+  attributes = attributes.replace(/\s+style="[^"]*"/, "");
   if (/\sclass="/.test(attributes))
     attributes = attributes.replace(
       /\sclass="([^"]*)"/,
       ' class="$1 image-placeholder placeholder"',
     );
   else attributes += ' class="image-placeholder placeholder"';
-  return `<div${attributes} title="${escapeHtml(path)}"><span class="placeholder-label">${escapeHtml(basename(path))}</span></div>`;
+  const label = basename(path) || "(画像パス未指定)";
+  return `<div${attributes} style="${escapeHtml(placeholderSize(style, background))}" title="${escapeHtml(path)}"><span class="placeholder-label">${escapeHtml(label)}</span></div>`;
 }
 const abort = (signal?: AbortSignal) => {
   if (signal?.aborted)
@@ -161,6 +179,11 @@ async function collect(
         abort(signal);
         const raw = decodedAttribute(m[1] ?? "");
         if (map.has(raw)) continue;
+        // 編集途中の `\includegraphics{}` はデッキ全体を止めず、欠落画像と同じ箱にする。
+        if (raw.trim() === "") {
+          map.set(raw, undefined);
+          continue;
+        }
         const path = source(raw, root);
         if (!path) continue;
         let sourceEntry: Awaited<ReturnType<typeof entry>>;
@@ -225,6 +248,74 @@ const VIEWER_CSS = `${PREVIEW_CSS}\n.html-export-controls{position:fixed;bottom:
 function documentHtml(title: string, frames: readonly { html: string; stepCount: number }[]) {
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data: https: http:; style-src 'self'; style-src-attr 'unsafe-inline'; script-src 'self'; font-src 'self' data:"><title>${title.replaceAll("<", "&lt;")}</title><link rel="stylesheet" href="viewer.css"><link rel="stylesheet" href="deck.css"><link rel="stylesheet" href="katex/katex.min.css"></head><body><div id="app"></div><script id="deck-data" type="application/json">${json({ frames })}</script><script src="viewer.js"></script></body></html>`;
 }
+interface LockOwner {
+  pid: number;
+  host: string;
+}
+function lockOwner(text: string): LockOwner | undefined {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      "pid" in value &&
+      Number.isInteger(value.pid) &&
+      "host" in value &&
+      typeof value.host === "string"
+    )
+      return { pid: value.pid as number, host: value.host };
+  } catch {
+    // 書き込み途中や手で作られたロックは所有者不明として扱う。
+  }
+  return undefined;
+}
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+/**
+ * 所有プロセスが同じホストで既に終了しているロックだけを取り除く。Ctrl+C や強制終了では
+ * finally が走らずロックが残るため、これが無いと以後の書き出しが恒久的に塞がる。
+ */
+async function removeStaleLock(lockPath: string): Promise<boolean> {
+  const before = entryIdentity(await entry(lockPath).catch(() => undefined));
+  if (!before) return true;
+  const owner = lockOwner(await readFile(lockPath, "utf8").catch(() => ""));
+  if (!owner || owner.host !== hostname() || processAlive(owner.pid)) return false;
+  if (!sameEntry(before, entryIdentity(await entry(lockPath).catch(() => undefined)))) return false;
+  await rm(lockPath, { force: true });
+  return true;
+}
+async function acquireLock(lockPath: string, displayLockPath: string): Promise<FileHandle> {
+  for (let attempt = 0; ; attempt++) {
+    let handle: FileHandle;
+    try {
+      handle = await open(lockPath, "wx");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      if (attempt === 0 && (await removeStaleLock(lockPath))) continue;
+      throw new HtmlExportError(
+        "E_OUTPUT_EXISTS",
+        `同じ出力先へ別の HTML 書き出しが実行中です(ロック: ${displayLockPath})。実行中の書き出しが無い場合はこのファイルを削除してください`,
+        e,
+      );
+    }
+    try {
+      await handle.writeFile(
+        `${JSON.stringify({ pid: process.pid, host: hostname() } satisfies LockOwner)}\n`,
+      );
+      return handle;
+    } catch (e) {
+      await handle.close().catch(() => undefined);
+      await rm(lockPath, { force: true }).catch(() => undefined);
+      throw e;
+    }
+  }
+}
 export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExportResult> {
   const inputPath = resolve(request.inputPath);
   const requestedOutputPath = resolve(request.outputPath ?? defaultHtmlOutputPath(inputPath));
@@ -238,7 +329,10 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
       e,
     );
   }
-  const outputPath = join(outputParent, basename(requestedOutputPath));
+  // 公開は正規化した親で行い(途中で親の symlink が差し替わっても行き先を変えない)、
+  // 結果とメッセージには利用者が指定したパスを出す。
+  const outputPath = requestedOutputPath;
+  const publishPath = join(outputParent, basename(requestedOutputPath));
   abort(request.signal);
   try {
     await entry(inputPath);
@@ -250,7 +344,7 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
     throw new HtmlExportError("E_INPUT", `入力 TeX を読み込めません: ${request.inputPath}`);
   let outputEntry: Entry;
   try {
-    outputEntry = await entry(outputPath);
+    outputEntry = await entry(publishPath);
   } catch (e) {
     throw new HtmlExportError("E_IO", `出力先を確認できません: ${outputPath}`, e);
   }
@@ -262,7 +356,7 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
       `出力先はディレクトリである必要があります: ${outputPath}`,
     );
   if (outputEntry && request.overwrite) {
-    const outputReal = await realpath(outputPath).catch(() => undefined);
+    const outputReal = await realpath(publishPath).catch(() => undefined);
     if (outputReal) {
       const rel = relative(outputReal, inputReal);
       if (!rel || (!rel.startsWith(`..${sep}`) && !isAbsolute(rel)))
@@ -297,12 +391,13 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
     throw new HtmlExportError("E_INPUT", "書き出すフレームがありません");
   let staging: string | undefined;
   let backup: string | undefined;
-  const lockPath = join(outputParent, `.${basename(outputPath)}.lock`);
+  const lockName = `.${basename(outputPath)}.lock`;
+  const lockPath = join(outputParent, lockName);
   let lockHandle: FileHandle | undefined;
   let lockIdentity: EntryIdentity | undefined;
   try {
     abort(request.signal);
-    lockHandle = await open(lockPath, "wx");
+    lockHandle = await acquireLock(lockPath, join(dirname(outputPath), lockName));
     lockIdentity = entryIdentity(await lockHandle.stat());
     staging = await mkdtemp(join(outputParent, `.${basename(outputPath)}.staging-`));
     abort(request.signal);
@@ -355,21 +450,21 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
     abort(request.signal);
     await request.beforePublish?.();
     abort(request.signal);
-    const currentOutput = entryIdentity(await entry(outputPath));
+    const currentOutput = entryIdentity(await entry(publishPath));
     if (!sameEntry(expectedOutput, currentOutput))
       throw new HtmlExportError("E_OUTPUT_EXISTS", `出力先が変更されました: ${outputPath}`);
     if (outputEntry) {
       backup = await mkdtemp(join(outputParent, `.${basename(outputPath)}.backup-`));
       await rm(backup, { recursive: true, force: true });
-      await rename(outputPath, backup);
+      await rename(publishPath, backup);
     }
     try {
-      await rename(staging, outputPath);
+      await rename(staging, publishPath);
       staging = undefined;
     } catch (error) {
       if (backup)
         try {
-          await rename(backup, outputPath);
+          await rename(backup, publishPath);
           backup = undefined;
         } catch {
           // rollback できない backup は catch 側で所有物として残す。
@@ -385,7 +480,7 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
     if (staging) await rm(staging, { recursive: true, force: true }).catch(() => undefined);
     if (backup)
       try {
-        await rename(backup, outputPath);
+        await rename(backup, publishPath);
         backup = undefined;
       } catch {
         // rollback 不能な backup は残し、公開済み出力を壊さない。
