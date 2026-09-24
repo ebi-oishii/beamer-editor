@@ -41,11 +41,15 @@ it("generates deterministic, portable artifacts and propagates spec and version 
   expect(changed["references/subset-cheatsheet.md"]).toContain("ネスト 2 段まで");
   expect(changed["SKILL.md"]).toContain('cli-version: "9.8.7"');
   expect(changed["SKILL.md"]).toMatch(/^ {2}fingerprint: "[a-f0-9]{64}"$/m);
+  const generatedSkill = files["SKILL.md"];
+  const changedSkill = changed["SKILL.md"];
+  expect(generatedSkill).toBeDefined();
+  expect(changedSkill).toBeDefined();
   expect(skillFingerprint(files)).toBe(
-    files["SKILL.md"].match(/^ {2}fingerprint: "([a-f0-9]{64})"$/m)?.[1],
+    generatedSkill?.match(/^ {2}fingerprint: "([a-f0-9]{64})"$/m)?.[1],
   );
   expect(skillFingerprint(changed)).toBe(
-    changed["SKILL.md"].match(/^ {2}fingerprint: "([a-f0-9]{64})"$/m)?.[1],
+    changedSkill?.match(/^ {2}fingerprint: "([a-f0-9]{64})"$/m)?.[1],
   );
   expect(skillFingerprint(changed)).not.toBe(skillFingerprint(files));
   expect(files["references/subset-cheatsheet.md"]).not.toMatch(
