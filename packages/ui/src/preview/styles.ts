@@ -303,6 +303,17 @@ export const PREVIEW_CSS = `
   border-top: 0.5pt solid #000;
 }
 
+.canvas-font-size {
+  position: absolute;
+  transform: translateY(-100%);
+  /* 狭い箱では左上の select が右端の幅変更ハンドルまで届く。ハンドルを前面に
+     残して、見えている領域を確実にドラッグできるようにする。 */
+  z-index: 10;
+  font: 12px sans-serif;
+  color: var(--vscode-dropdown-foreground, #222);
+  background: var(--vscode-dropdown-background, white);
+  border: 1px solid var(--vscode-focusBorder, #007acc);
+}
 .canvas-resize-handle {
   position: absolute;
   width: 12px;
@@ -312,7 +323,7 @@ export const PREVIEW_CSS = `
   background: var(--vscode-editor-background, white);
   transform: translate(-50%, -50%);
   cursor: ew-resize;
-  z-index: 10;
+  z-index: 11;
   touch-action: none;
 }
 .slide .display-math {

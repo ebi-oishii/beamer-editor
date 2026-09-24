@@ -1,3 +1,4 @@
+import { CANVAS_FONT_SIZES } from "./ast.js";
 /**
  * Beamer サブセット v1.1 のパーサ(Phase 1)。
  *
@@ -61,15 +62,7 @@ const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlist
 
 const STYLE_COMMANDS = new Set(["textbf", "emph", "textit", "texttt", "alert"]);
 
-const CANVAS_SIZES = new Set<CanvasFontSize>([
-  "tiny",
-  "scriptsize",
-  "footnotesize",
-  "small",
-  "normal",
-  "large",
-  "Large",
-]);
+const CANVAS_SIZES = new Set<CanvasFontSize>(CANVAS_FONT_SIZES);
 
 const STYLE_COLOR_ROLES = new Set(["structure", "alert", "example", "text", "background"]);
 const STYLE_FONT_SLOTS = new Set(["main", "mono"]);

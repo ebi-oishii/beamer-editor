@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { CANVAS_FONT_SIZES } from "../src/ast.js";
 import {
   CANVAS_MIN_WIDTH,
+  canvasFontSizeReplacement,
   canvasPositionReplacement,
   canvasWidthReplacement,
   clampCanvasPlacement,
@@ -154,6 +156,11 @@ describe("canvas width", () => {
     expect(canvasWidthReplacement("[x=0,y=.2,size=small]", 0.5)).toBe(
       "[x=0,y=.2,size=small,w=0.500]",
     );
+    expect(canvasWidthReplacement("[ ]", 0.5)).toBe("[w=0.500]");
+    expect(canvasWidthReplacement("[x=.1,y=.2,]", 0.5)).toBe("[x=.1,y=.2,w=0.500]");
+    expect(canvasWidthReplacement("[\n  x=.1,\n  y=.2\n]", 0.5)).toBe(
+      "[\n  x=.1,\n  y=.2,w=0.500\n]",
+    );
     for (const options of ["[w=.2,w=.3]", "[w=.3junk]", "[w=NaN]"])
       expect(canvasWidthReplacement(options, 0.4)).toBeNull();
     expect(canvasWidthReplacement("[w=.3]", NaN)).toBeNull();
@@ -168,5 +175,28 @@ describe("canvas width", () => {
       expect(width).not.toBeNull();
       expect(x + (width ?? 0)).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+describe("canvas font size", () => {
+  it.each(CANVAS_FONT_SIZES)("writes only the permitted size %s", (size) => {
+    expect(canvasFontSizeReplacement("[x=.1,size = small ,y=.2,w=.3]", size)).toBe(
+      `[x=.1,size = ${size} ,y=.2,w=.3]`,
+    );
+    expect(canvasFontSizeReplacement("[x=.1,y=.2,w=.3]", size)).toBe(
+      `[x=.1,y=.2,w=.3,size=${size}]`,
+    );
+    expect(canvasFontSizeReplacement("[x=.1,y=.2,w=.3,]", size)).toBe(
+      `[x=.1,y=.2,w=.3,size=${size}]`,
+    );
+    expect(canvasFontSizeReplacement("[\n  x=.1,\n  y=.2\n]", size)).toBe(
+      `[\n  x=.1,\n  y=.2,size=${size}\n]`,
+    );
+    expect(canvasFontSizeReplacement("[]", size)).toBe(`[size=${size}]`);
+    expect(canvasFontSizeReplacement("[ ]", size)).toBe(`[size=${size}]`);
+  });
+  it("rejects unknown sizes and duplicate declarations", () => {
+    expect(canvasFontSizeReplacement("[x=0,y=0,w=.3]", "Huge" as never)).toBeNull();
+    expect(canvasFontSizeReplacement("[size=normal,size=small]", "Large")).toBeNull();
   });
 });

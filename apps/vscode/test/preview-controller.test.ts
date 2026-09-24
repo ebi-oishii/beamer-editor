@@ -1136,3 +1136,96 @@ describe("canvas image width edits", () => {
     controller.dispose();
   });
 });
+
+describe("canvas text size edits", () => {
+  it("accepts an allowed size only for current editable text and preserves options", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    doc.edit(
+      String.raw`\documentclass[aspectratio=169]{beamer}\begin{document}\begin{frame}[label=c]\begin{deckcanvas}\begin{decktext}[x=.1,y=.2,w=.3]Hello\end{decktext}\deckimage[x=0,y=0,w=.2]{image.png}\end{deckcanvas}\end{frame}\end{document}`,
+    );
+    const setCanvasFontSize = vi.fn(async (_request: unknown) => "applied" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      setCanvasFontSize,
+    });
+    fire({ type: "ready" });
+    const request = {
+      type: "setCanvasFontSize",
+      frameIndex: 0,
+      elementId: "canvas-text-0",
+      version: doc.version,
+      size: "Large",
+    };
+    fire({ ...request, version: doc.version - 1 });
+    fire({ ...request, elementId: "canvas-image-0" });
+    fire({ ...request, size: "Huge" });
+    fire({ ...request, size: "normal" });
+    expect(setCanvasFontSize).not.toHaveBeenCalled();
+    fire(request);
+    fire(request);
+    await Promise.resolve();
+    expect(setCanvasFontSize).toHaveBeenCalledOnce();
+    expect(setCanvasFontSize.mock.calls[0]?.[0]).toMatchObject({
+      size: "Large",
+      expectedOptions: "[x=.1,y=.2,w=.3]",
+      document: doc,
+    });
+    controller.dispose();
+  });
+
+  it("rewrites a disallowed size when the fallback size is selected again", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    doc.edit(
+      String.raw`\documentclass[aspectratio=169]{beamer}\begin{document}\begin{frame}[label=c]\begin{deckcanvas}\begin{decktext}[x=.1,y=.2,w=.3,size=huge]Hello\end{decktext}\end{deckcanvas}\end{frame}\end{document}`,
+    );
+    const setCanvasFontSize = vi.fn(async (_request: unknown) => "applied" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      setCanvasFontSize,
+    });
+    fire({ type: "ready" });
+    fire({
+      type: "setCanvasFontSize",
+      frameIndex: 0,
+      elementId: "canvas-text-0",
+      version: doc.version,
+      size: "normal",
+    });
+    await Promise.resolve();
+    expect(setCanvasFontSize).toHaveBeenCalledOnce();
+    expect(setCanvasFontSize.mock.calls[0]?.[0]).toMatchObject({
+      size: "normal",
+      expectedOptions: "[x=.1,y=.2,w=.3,size=huge]",
+    });
+    controller.dispose();
+  });
+
+  it("cancelled text size warns to select again instead of dragging", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    doc.edit(
+      String.raw`\documentclass[aspectratio=169]{beamer}\begin{document}\begin{frame}[label=c]\begin{deckcanvas}\begin{decktext}[x=.1,y=.2,w=.3]Hello\end{decktext}\end{deckcanvas}\end{frame}\end{document}`,
+    );
+    const warning = vi.fn();
+    const setCanvasFontSize = vi.fn(async () => "cancelled" as const);
+    new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      setCanvasFontSize,
+      onWarning: warning,
+    });
+    fire({ type: "ready" });
+    fire({
+      type: "setCanvasFontSize",
+      frameIndex: 0,
+      elementId: "canvas-text-0",
+      version: doc.version,
+      size: "Large",
+    });
+    await Promise.resolve();
+    expect(warning).toHaveBeenCalledWith(
+      "Canvas text size was not updated. Try selecting it again.",
+    );
+  });
+});

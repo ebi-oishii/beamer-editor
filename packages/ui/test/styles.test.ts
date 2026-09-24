@@ -33,6 +33,16 @@ function declarationsFor(sheet: CSSStyleSheet, selector: string): CSSStyleDeclar
 }
 
 describe("PREVIEW_CSS: キャンバス幾何の契約", () => {
+  it("文字サイズ select より幅変更ハンドルを前面に置く", () => {
+    const sheet = injectPreviewCss();
+    const select = declarationsFor(sheet, ".canvas-font-size")[0];
+    const handle = declarationsFor(sheet, ".canvas-resize-handle")[0];
+    expect(Number(select?.getPropertyValue("z-index"))).toBeLessThan(
+      Number(handle?.getPropertyValue("z-index")),
+    );
+    expect(handle?.getPropertyValue("pointer-events")).not.toBe("none");
+  });
+
   it("step 操作はプレビュー下部の overlay で、スクロール領域の高さを変えない", () => {
     const sheet = injectPreviewCss();
     const preview = declarationsFor(sheet, ".beamer-preview")[0];

@@ -1,3 +1,4 @@
+import type { CanvasFontSize } from "@beamer-editor/core";
 /**
  * 全フレームを縦一列に並べるスクロール表示(Marp のプレビューと同じ読み方)。
  * 旧サムネイル一覧の役割(俯瞰・クリックで選択・ダブルクリックでソースへ)をここが担い、
@@ -59,6 +60,7 @@ function SlideCard({
   version,
   onSelect,
   onJump,
+  onSetCanvasFontSize,
   onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
@@ -72,6 +74,9 @@ function SlideCard({
   version: number;
   onSelect: (index: number) => void;
   onJump: (index: number) => void;
+  onSetCanvasFontSize?:
+    | ((frameIndex: number, elementId: string, size: CanvasFontSize) => void)
+    | undefined;
   onResizeCanvasElement?:
     | ((frameIndex: number, elementId: string, width: number) => void)
     | undefined;
@@ -105,6 +110,11 @@ function SlideCard({
         scale={scale}
         slideSize={slideSize}
         version={version}
+        onSetCanvasFontSize={
+          onSetCanvasFontSize
+            ? (elementId, size) => onSetCanvasFontSize(index, elementId, size)
+            : undefined
+        }
         onResizeCanvasElement={
           onResizeCanvasElement
             ? (elementId, width) => onResizeCanvasElement(index, elementId, width)
@@ -134,6 +144,7 @@ export function SlideScroll({
   onSelect,
   onJump,
   onScrollActive,
+  onSetCanvasFontSize,
   onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
@@ -149,6 +160,9 @@ export function SlideScroll({
   onJump: (index: number) => void;
   /** スクロールで表示領域の上端に来たフレームが変わった通知。 */
   onScrollActive: (index: number) => void;
+  onSetCanvasFontSize?:
+    | ((frameIndex: number, elementId: string, size: CanvasFontSize) => void)
+    | undefined;
   onResizeCanvasElement?:
     | ((frameIndex: number, elementId: string, width: number) => void)
     | undefined;
@@ -341,6 +355,7 @@ export function SlideScroll({
           version={version}
           onSelect={onSelect}
           onJump={onJump}
+          onSetCanvasFontSize={onSetCanvasFontSize}
           onResizeCanvasElement={onResizeCanvasElement}
           onMoveCanvasElement={onMoveCanvasElement}
           onDetachToCanvas={onDetachToCanvas}

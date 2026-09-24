@@ -1,3 +1,4 @@
+import type { CanvasFontSize } from "@beamer-editor/core";
 /**
  * AST → HTML プレビュー(Phase 4)。
  *
@@ -53,6 +54,9 @@ export interface RenderedFrame {
 export interface RenderedCanvasElement {
   id: string;
   kind: "image" | "text";
+  fontSize?: CanvasFontSize;
+  /** ソースに書かれた許可外の size。描画は fontSize のフォールバックを使い、選択 UI はこちらを見せる。 */
+  invalidFontSize?: string;
   position: { x: number; y: number; width: number };
   /** 展開後ソースの `[...]` 範囲。host が strict map を通して editable 化する。 */
   sourceSpan: SourceSpan;
@@ -642,6 +646,8 @@ class FrameRenderer {
     const describe = (
       kind: RenderedCanvasElement["kind"],
       position: { x: number; y: number; width: number; span: SourceSpan },
+      fontSize?: CanvasFontSize,
+      invalidFontSize?: string,
     ): string => {
       const count = this.canvasElements.filter((element) => element.kind === kind).length;
       const id = `canvas-${kind}-${count}`;
@@ -650,6 +656,8 @@ class FrameRenderer {
         kind,
         position: { x: position.x, y: position.y, width: position.width },
         sourceSpan: position.span,
+        ...(fontSize === undefined ? {} : { fontSize }),
+        ...(invalidFontSize === undefined ? {} : { invalidFontSize }),
       });
       return ` data-canvas-element-id="${id}" data-canvas-element-kind="${kind}"`;
     };
@@ -657,7 +665,7 @@ class FrameRenderer {
       const posStyle = (x: number, y: number, w: number) =>
         `left:${(x * 100).toFixed(2)}%;top:${(y * 100).toFixed(2)}%;width:${(w * 100).toFixed(2)}%`;
       if (item.type === "canvasText") {
-        const attrs = describe("text", item.position);
+        const attrs = describe("text", item.position, item.size, item.invalidSize?.value);
         html += `<div class="canvas-item canvas-text"${attrs} style="${posStyle(item.position.x, item.position.y, item.position.width)};font-size:${this.theme.fontSizesPt[item.size]}pt">${this.renderBlocks(item.children)}</div>`;
       } else if (item.type === "canvasImage") {
         const attrs = describe("image", item.position);
