@@ -39,10 +39,8 @@ ${element}
         await wait(() => api._previewControllerForTest() !== undefined);
         const controller = api._previewControllerForTest();
         assert.ok(controller);
-        const receive = (
-          controller as unknown as { handleMessage(raw: unknown): void }
-        ).handleMessage.bind(controller);
-        receive({ type: "ready" });
+        const receive = controller.handleMessageForTest.bind(controller);
+        await receive({ type: "ready" });
         await wait(() => controller.latestOutcome?.version === doc.version);
         const request = {
           type: "setCanvasFontSize",
@@ -51,14 +49,15 @@ ${element}
           version: doc.version,
           size: "Large",
         };
-        receive(request);
-        receive({ ...request, size: "tiny" });
+        const first = receive(request);
+        await receive({ ...request, size: "tiny" });
         const resized = source.replace(options, "[x=.1,y=.2,w=.3,size=Large]");
-        await wait(() => doc.getText() === resized && doc.version !== request.version);
+        await first;
+        assert.equal(doc.getText(), resized);
+        assert.notEqual(doc.version, request.version);
         const moved = doc.getText();
         // 適用中の要求はロックされ、適用後の古い version も書き込めない。
-        receive({ ...request, size: "tiny" });
-        await wait(() => controller.latestOutcome?.version === doc.version);
+        await receive({ ...request, size: "tiny" });
         assert.equal(doc.getText(), moved);
         await vscode.window.showTextDocument(doc);
         await vscode.commands.executeCommand("undo");

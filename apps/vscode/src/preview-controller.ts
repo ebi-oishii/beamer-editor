@@ -346,6 +346,16 @@ export class PreviewController implements vscode.Disposable {
   }
 
   private handleMessage(raw: unknown): void {
+    // Webview のイベント契約は void のまま保つ。統合テストだけは下の待機可能な入口を使う。
+    void this.dispatchMessage(raw);
+  }
+
+  /** 統合テスト用。Webview と同じメッセージ経路が処理を終えるまで待機する。 */
+  handleMessageForTest(raw: unknown): Promise<void> {
+    return this.dispatchMessage(raw);
+  }
+
+  private async dispatchMessage(raw: unknown): Promise<void> {
     const msg = parseWebviewToExtension(raw);
     if (!msg) return;
     if (msg.type === "ready") {
@@ -354,16 +364,16 @@ export class PreviewController implements vscode.Disposable {
     } else if (msg.type === "jumpToSource") {
       this.handleJump(msg.frameIndex, msg.version);
     } else if (msg.type === "resizeCanvasElement" || msg.type === "setCanvasFontSize") {
-      void this.handleCanvasStyle(msg);
+      await this.handleCanvasStyle(msg);
     } else if (msg.type === "moveCanvasElement") {
-      void this.handleMove(msg);
+      await this.handleMove(msg);
     } else if (msg.type === "detachToCanvas") {
-      void this.handleDetach(msg);
+      await this.handleDetach(msg);
     } else if (msg.type === "undoRedo") {
       // 注入された処理は同期で呼び出し、同期の例外も非同期の rejection も onError へ回す。
       const report = () => this.onError(`failed to ${msg.kind} the source document.`);
       try {
-        Promise.resolve(this.undoRedo(msg.kind)).catch(report);
+        await this.undoRedo(msg.kind);
       } catch {
         report();
       }
