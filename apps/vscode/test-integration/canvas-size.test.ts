@@ -5,14 +5,12 @@ import { join } from "node:path";
 import * as vscode from "vscode";
 import type { TestApi } from "../src/extension";
 
-suite("#82 / #83: canvas width", () => {
-  for (const kind of ["image", "text"]) {
-    test(`${kind}: changes width only through one undo, redo and save`, async () => {
+suite("#84: canvas text size", () => {
+  for (const initialSize of ["", ",size=small"]) {
+    test(`${initialSize || "default"}: changes size only through one undo, redo and save`, async () => {
       const dir = await mkdtemp(join(tmpdir(), "beamer-math-"));
-      const element =
-        kind === "image"
-          ? String.raw`\deckimage[x=.1,y=.2,w=.3]{image.png}`
-          : String.raw`\begin{decktext}[x=.1,y=.2,size=small]Text $x$\end{decktext}`;
+      const options = `[x=.1,y=.2,w=.3${initialSize}]`;
+      const element = `\\begin{decktext}${options}Text $x$\\end{decktext}`;
       const source = String.raw`\documentclass[aspectratio=169]{beamer}
 \begin{document}
 \begin{frame}[label=canvas]
@@ -45,24 +43,21 @@ ${element}
         await receive({ type: "ready" });
         await wait(() => controller.latestOutcome?.version === doc.version);
         const request = {
-          type: "resizeCanvasElement",
+          type: "setCanvasFontSize",
           frameIndex: 0,
-          elementId: `canvas-${kind}-0`,
+          elementId: "canvas-text-0",
           version: doc.version,
-          width: 0.5,
+          size: "Large",
         };
         const first = receive(request);
-        await receive({ ...request, width: 0.7 });
-        const resized =
-          kind === "image"
-            ? source.replace("w=.3", "w=0.500")
-            : source.replace("size=small]", "size=small,w=0.500]");
+        await receive({ ...request, size: "tiny" });
+        const resized = source.replace(options, "[x=.1,y=.2,w=.3,size=Large]");
         await first;
         assert.equal(doc.getText(), resized);
         assert.notEqual(doc.version, request.version);
         const moved = doc.getText();
         // 適用中の要求はロックされ、適用後の古い version も書き込めない。
-        await receive({ ...request, width: 0.7 });
+        await receive({ ...request, size: "tiny" });
         assert.equal(doc.getText(), moved);
         await vscode.window.showTextDocument(doc);
         await vscode.commands.executeCommand("undo");
