@@ -40,12 +40,12 @@ it("generates deterministic, portable artifacts and propagates spec and version 
   });
   expect(changed["references/subset-cheatsheet.md"]).toContain("ネスト 2 段まで");
   expect(changed["SKILL.md"]).toContain('cli-version: "9.8.7"');
-  expect(changed["SKILL.md"]).toMatch(/^  fingerprint: "[a-f0-9]{64}"$/m);
+  expect(changed["SKILL.md"]).toMatch(/^ {2}fingerprint: "[a-f0-9]{64}"$/m);
   expect(skillFingerprint(files)).toBe(
-    files["SKILL.md"].match(/^  fingerprint: "([a-f0-9]{64})"$/m)?.[1],
+    files["SKILL.md"].match(/^ {2}fingerprint: "([a-f0-9]{64})"$/m)?.[1],
   );
   expect(skillFingerprint(changed)).toBe(
-    changed["SKILL.md"].match(/^  fingerprint: "([a-f0-9]{64})"$/m)?.[1],
+    changed["SKILL.md"].match(/^ {2}fingerprint: "([a-f0-9]{64})"$/m)?.[1],
   );
   expect(skillFingerprint(changed)).not.toBe(skillFingerprint(files));
   expect(files["references/subset-cheatsheet.md"]).not.toMatch(
@@ -79,7 +79,7 @@ it("finds nearest bundled skill relative to the deck; missing, matching, unknown
   const skill = join(directory, ".claude/skills/beamer-deck");
   await mkdir(skill, { recursive: true });
   const fingerprint = (await readFile(join(root, "skills/beamer-deck/SKILL.md"), "utf8")).match(
-    /^  fingerprint: "([a-f0-9]{64})"$/m,
+    /^ {2}fingerprint: "([a-f0-9]{64})"$/m,
   )?.[1];
   expect(fingerprint).toBeDefined();
   for (const value of [fingerprint, "0".repeat(64), null]) {
