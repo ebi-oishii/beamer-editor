@@ -1,6 +1,6 @@
 # AI 連携プロトコル
 
-ステータス: draft / 最終更新: 2026-07-10
+ステータス: draft / 最終更新: 2026-09-25
 
 エージェント(Claude Code 等)がデッキを生成・編集するときの取り決め。語彙(何を書いてよいか)は [subset-spec.md](subset-spec.md) が定めるので、本書は**手順**(どう作業するか)と**やり取り**(人間がどう指示し、エージェントがどう報告するか)を定める。
 
@@ -53,7 +53,7 @@
 | `deck format <file> --write` | 正規形化 | 差分の有無 |
 | `deck check <file> [--tectonic <path>] [--json]` | 実コンパイルによる検証 | lint、Overfull、キャンバスのはみ出し・重なりをフレームアドレスに割り付けて報告。入力・出力は変更しない |
 | `deck snapshot <file> -o <directory> [--frame <N\|LABEL\|label:LABEL>]` | フレームの見た目の自己確認 | 実コンパイル PNG。出力先は新規ディレクトリ |
-| `deck export <file> -o <pdf>` | 最終出力 | PDF |
+| `deck export <file> --format pdf [-o <pdf>]` | 最終出力 | PDF(`-o` 省略時は入力の隣) |
 | `deck init` | 新規デッキプロジェクトの雛形生成(スキル同梱。§8) | 生成ファイル一覧 |
 
 `deck check` はキャンバスフレーム([subset-spec.md](subset-spec.md) §2.8)について、savepos 実測による本文領域外へのはみ出し・オブジェクト重なりの検出も報告する(絶対配置は Overfull 警告が出ないため)。
@@ -73,6 +73,9 @@ SKILL.md に埋め込む規範。lint が機械的に検出できるものは括
 5. 新規デッキや大規模改編は、いきなり全文を書かずに**まずアウトライン(フレームタイトル一覧)をチャットで提案し、合意してから生成する**。アウトラインのレビューは安く、全文のレビューは高い。
 6. git 管理下では 1 指示 = 1 コミットを目安にする。人間のレビューと巻き戻しの単位を指示単位に揃える。
 7. 報告は「変更したフレームのアドレス+何をしたか一行」の列挙と、lint / check の結果で締める。人間はそれを見てエディタのプレビュー(自動反映済み)で確認する。
+8. **新しく書く本文と依頼で触るフレームの本文は、既定で `deckcanvas` の `decktext` / `deckimage` にする**([subset-spec.md](subset-spec.md) §2.8)。人間がプレビューで直接動かせるので、「位置をずらして」の往復が減る。依頼で触らない既存フレームは canvas 化しない(3 と同じ理由)。decktext に入らない内容(オーバーレイ・block・columns・表・TikZ・生 LaTeX、4:3 デッキ)は通常フローで書き、報告に明記する。
+9. **成果物の正本は .tex。** 「GUI で操作できるように」「プレビューで動かせるように」は 8 の canvas 化を指し、pptx への変換ではない。pptx / PowerPoint はユーザーが形式を明示したときだけ、.tex を残したまま別の成果物として作る。
+10. **PDF は `deck export <file> --format pdf` で書き出し、PDF のパスを報告する。** TeX エンジンを直接呼ばず、.tex や中間生成物を PDF の代わりに渡さない。出力先が既にある場合は上書き(`--overwrite`)の前に確認する。
 
 ## 6. 人間側の指示パターン(例)
 
@@ -84,7 +87,10 @@ SKILL.md に埋め込む規範。lint が機械的に検出できるものは括
 | 局所修正 | 「frame 7 の箇条書きを 3 点に圧縮して」 | 対象フレームのみ編集 → format → lint → 必要なら check → 結果を報告 |
 | 横断修正 | 「全フレームのタイトルを体言止めに統一」 | outline で全体把握 → 一括編集 → 報告は変更一覧 |
 | 検証駆動 | 「溢れてるフレームがないか確認して、あれば直して」 | `deck check` → Overfull のフレームを修正 → 再 check |
-| 素材の取り込み | 「この図を『手法』のフレームに入れて」 | assets/ へ配置 → `\includegraphics` 挿入 → snapshot で目視確認 |
+| 素材の取り込み | 「この図を『手法』のフレームに入れて」 | assets/ へ配置 → canvas に `\deckimage` で配置(通常フローに置く場合は `\includegraphics`)→ snapshot で目視確認 |
+| プレビューで動かす | 「2 枚目のテキストをプレビューで動かせるように」「GUI で操作できるように」 | 対象フレームの本文を `deckcanvas` の `decktext` / `deckimage` へ移す(label が無ければ付ける)→ format → lint → check → 報告。pptx は作らない |
+| PDF 出力 | 「PDF にして」「PDF で書き出して」 | `deck export <file> --format pdf` → 出力した PDF のパスを報告 |
+| pptx の明示 | 「pptx(PowerPoint)でも欲しい」 | 形式が明示されたときだけ、.tex を正本として残したまま pptx を別に作る。プレビューの編集対象ではないと伝える |
 | スタイル合わせ | 「この会社テンプレ(pptx / 見本 PDF / スクショ)に合わせて」 | 見本から色・フォント・ロゴ・フッターを抽出 → `%% style` 領域に記述(語彙外の様式は preamble-extra へ。使ったことを報告に明記)→ snapshot と見本を比較・反復([theme-design.md](theme-design.md) §3) |
 | 見た目の微調整 | 「『結果』の表、窮屈なので余白を」 | 対象を固定 → 修正 → snapshot の前後比較 → 短い報告 |
 
@@ -165,8 +171,11 @@ skills/beamer-deck/
 name: beamer-deck
 description: >
   Beamer サブセット形式のスライドデッキ(deck プロジェクトの .tex)を
-  作成・編集するときに使う。スライドの生成・修正・レイアウト検証・
-  PDF 書き出しの手順、語彙の制約、フレームの参照方法を含む。
+  作成・編集するときに使う。スライド・プレゼン資料の生成・修正、
+  「GUI / プレビューで動かせるように」という依頼、PDF 出力の依頼も対象。
+  このプロジェクトのスライドの正本は .tex であり、pptx は作らない
+  (ユーザーが pptx を明示した場合を除く)。レイアウト検証・PDF 書き出しの
+  手順、語彙の制約、フレームの参照方法を含む。
 ---
 
 # Beamer デッキの編集
@@ -181,7 +190,22 @@ description: >
 3. `deck format <file> --write` → `deck lint <file>` をエラー 0 まで
 4. 内容量やレイアウトを変えたら `deck check <file>`(溢れ検出)
 5. 見た目に確信がなければ `deck snapshot <file> -o <new-directory> --frame <addr>` で画像確認
-6. 変更フレームのアドレス + 一行説明 + lint/check 結果を報告
+6. 変更フレームのアドレス + 一行説明 + lint/check 結果を報告(PDF を書き出したらそのパスも)
+
+## 既定の出力とレイアウト
+- 成果物は .tex。「GUI で操作」「プレビューで動かせる」は VS Code 拡張の
+  プレビューで直接編集できる状態を指す。pptx に置き換えない
+- 新しく書く本文と、依頼で触るフレームの本文は `deckcanvas` の
+  `decktext` / `deckimage` で書き、プレビューで移動・幅変更できるようにする
+  (フレームに一意な label、canvas は 1 フレーム 1 つ、x / y / w は 0〜1。
+  cheatsheet §2.8)。依頼で触らない既存フレームは canvas 化しない
+- decktext に入らないもの(オーバーレイ、block・columns・表、TikZ・生 LaTeX、
+  4:3 デッキ)は通常のフローで書き、そうしたことを報告する
+- PDF を求められたら `deck export <file> --format pdf` で書き出し、PDF の
+  パスを報告する。pdflatex 等を直接呼ばず、.tex や中間生成物を PDF の代わりに
+  渡さない。出力先が既にあれば `--overwrite` の前に確認する
+- pptx / PowerPoint は、ユーザーがその形式を明示したときだけ別の成果物として
+  作る。.tex は正本として残し、pptx はプレビューの編集対象ではないと伝える
 
 ## 規約
 - ツール管理プリアンブルは編集禁止。マクロ定義は %% macros 領域のみ
