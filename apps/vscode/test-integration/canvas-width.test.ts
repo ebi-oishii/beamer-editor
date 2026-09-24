@@ -41,10 +41,8 @@ ${element}
         await wait(() => api._previewControllerForTest() !== undefined);
         const controller = api._previewControllerForTest();
         assert.ok(controller);
-        const receive = (
-          controller as unknown as { handleMessage(raw: unknown): void }
-        ).handleMessage.bind(controller);
-        receive({ type: "ready" });
+        const receive = controller.handleMessageForTest.bind(controller);
+        await receive({ type: "ready" });
         await wait(() => controller.latestOutcome?.version === doc.version);
         const request = {
           type: "resizeCanvasElement",
@@ -53,15 +51,18 @@ ${element}
           version: doc.version,
           width: 0.5,
         };
-        receive(request);
+        const first = receive(request);
+        await receive({ ...request, width: 0.7 });
         const resized =
           kind === "image"
             ? source.replace("w=.3", "w=0.500")
             : source.replace("size=small]", "size=small,w=0.500]");
-        await wait(() => doc.getText() === resized);
+        await first;
+        assert.equal(doc.getText(), resized);
+        assert.notEqual(doc.version, request.version);
         const moved = doc.getText();
-        // A stale request cannot overwrite the new document.
-        receive({ ...request, width: 0.7 });
+        // 適用中の要求はロックされ、適用後の古い version も書き込めない。
+        await receive({ ...request, width: 0.7 });
         assert.equal(doc.getText(), moved);
         await vscode.window.showTextDocument(doc);
         await vscode.commands.executeCommand("undo");

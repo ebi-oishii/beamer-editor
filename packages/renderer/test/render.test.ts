@@ -83,6 +83,10 @@ describe("renderDeck: canvas.slide.tex", () => {
 
     expect(rendered.frames[1]?.html).toContain("font-size:11pt");
     expect(rendered.frames[1]?.html).not.toContain("font-size:undefinedpt");
+    expect(rendered.frames[1]?.canvasElements?.[0]).toMatchObject({
+      fontSize: "normal",
+      invalidFontSize: "huge",
+    });
   });
 
   it("PDF 画像はプレースホルダになる", () => {

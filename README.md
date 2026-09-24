@@ -28,7 +28,7 @@ AI がスライドの叩き台を生成し、人間が微調整して完成さ�
 実装中。**M1(読める)到達済み**。Phase 5 の VS Code 基盤は成立済みで、環境依存の項目は配布前スモークテストで確認する。進行中の作業は[GitHub の open pull requests](https://github.com/ebi-oishii/beamer-editor/pulls?q=is%3Apr+is%3Aopen)を参照。
 
 - 実装済み: パーサ + AST(Phase 1)、キャンバス正規形フォーマッタ + lint 基盤 + canonical fixture property tests(Phase 2)、マクロ展開器(Phase 3)、HTML プレビュー + KaTeX(Phase 4)、スタイル語彙 v1(S1)、Noto Sans CJK 対応(S2)、VS Code 拡張スキャフォールド(VS-1)〜テーマ/a11y(VS-7)、CSP/Workspace Trust(VS-8)、テスト・`.vsix`生成・CI artifact(VS-9)、プレビュー上のキャンバス画像ドラッグ、CLI の `lint` / `format` / `outline` / `export` / `check`。
-- 次: `deck snapshot` (#89) により実コンパイル結果をフレーム単位で画像確認できるようにする。M2 実機確認は配布前のスモークテストとして継続する。
+- `deck snapshot <file> -o <new-directory>` で実コンパイル結果をフレーム単位の PNG として確認できる(出力先は新規ディレクトリのみ。既存パスは `E_OUTPUT_EXISTS` で拒否する。詳細は [docs/ai-protocol.md](docs/ai-protocol.md) §4)。M2 実機確認は配布前のスモークテストとして継続する。
 
 ## 開発
 
@@ -45,12 +45,16 @@ pnpm --dir apps/vscode build  # VS Code 拡張のバンドル(開発は F5)
 
 ローカルに [Tectonic](https://tectonic-typesetting.github.io/) を用意すると、入力ソースを変更せずに PDF を書き出せる。
 
+### HTML スナップショット
+
+`deck export talk.slide.tex --format html` は `talk-html/index.html` に、現在のプレビュー相当の静的な HTML を書き出します。`file:` で直接開けますが、正式な TeX 出力ではありません。PDF 画像と raw TeX はプレビューと同じプレースホルダーになり、外部 URL の画像は閲覧時にネットワークを必要とします。正式な組版には PDF 書き出しを使ってください。
+
 ```bash
 pnpm --dir packages/cli deck export talk.slide.tex --format pdf
 # talk.slide.tex -> talk.pdf
 ```
 
-`-o output.pdf` で出力先を指定できる。既存ファイルを置き換える場合は明示的に
+`-o output.pdf` で出力先を指定できる。既存の PDF または HTML 出力ディレクトリを置き換える場合は明示的に
 `--overwrite` を指定する。`--tectonic /path/to/tectonic` と `--json` も利用できる。
 
 ### 実コンパイル検査
@@ -65,3 +69,11 @@ pnpm --dir packages/cli deck check talk.slide.tex --tectonic /path/to/tectonic -
 
 診断なし（または情報のみ）は終了コード 0、警告は 1、lint エラーは 2、Tectonic・入出力・
 使用法などの操作失敗は 3 で終了する。`--json` の操作失敗は stderr に出力される。
+
+### デッキ編集スキルの生成
+
+`pnpm build:skills` は仕様・AIプロトコル・実装のCLIヘルプから `skills/beamer-deck/` とリポジトリ用 `.claude/skills/beamer-deck/` を生成します。生成物は直接編集せず、元文書を更新して再生成します。`pnpm check:skills` は更新漏れを検出し、CIでも実行します。生成 SKILL の metadata には CLI 版と4生成物の SHA-256 fingerprint を記録します。`deck lint` / `deck check` は入力デッキからホームディレクトリまたはGitリポジトリ境界までにある最寄りの `.claude/skills/beamer-deck/` を探し、記録値と4生成物の内容ハッシュの両方をCLIの期待値と照合してL010で警告します。ホームディレクトリの候補は読まず、スキル未同梱の既存デッキは警告しません。L010 のメッセージには、スキルを見つけたプロジェクトディレクトリ(`.claude/` を含むディレクトリ)を入れた実行可能な `deck init <directory> --update-skill` が表示されます。このリポジトリでもルートを指定して実行でき、`pnpm build:skills` と同じ内容に更新されます。
+
+### 新規デッキ
+
+`pnpm --dir /path/to/beamer-editor --filter @beamer-editor/cli deck init /path/to/my-talk` で `main.slide.tex`、空の `assets/`、`.claude/skills/beamer-deck/` を生成します。CLI はまだ単独配布されていません。この起動方法では `packages/cli` が作業ディレクトリになるため、生成プロジェクトの入力・出力先は絶対パスで指定し、出力先を省略しないでください。新規生成は新規または空のディレクトリだけを受け付け、既存データは上書きしません。`deck init /absolute/path/to/project --update-skill` は既存ディレクトリの `.claude/skills/beamer-deck/` だけを作成・更新し、L010 の fingerprint ずれを解消します。デッキのファイル名や位置は問わず(`main.slide.tex` は不要)、デッキやassetsには触れません。存在しないパスやディレクトリ以外は `E_OUTPUT_EXISTS` で拒否します。`--json` で生成ファイル一覧を取得できます。プリアンブルはデッキへ埋め込むためリポジトリのfixtureに依存せず、PDF出力にはTectonicが必要です。初期本文は英語です。日本語を使う場合は `deck fonts fetch` でフォントを用意し、style領域へ `\deckfont{main}{Noto Sans CJK JP}` を指定します。

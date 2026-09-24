@@ -22,6 +22,7 @@ export type LintCode =
   | "L005"
   | "L007"
   | "L009"
+  | "L010"
   | "L011"
   | "L012"
   | "L013"
@@ -46,6 +47,13 @@ export interface LintDiagnostic {
 }
 
 export interface LintOptions {
+  /** undefined: no bundled skill; null: present but missing fingerprint metadata. */
+  skillFingerprint?: string | null;
+  /** undefined: no bundled skill; null: bundled files could not be verified. */
+  skillContentFingerprint?: string | null;
+  expectedSkillFingerprint?: string;
+  /** Directory containing the discovered `.claude/skills/beamer-deck/`; used only in the L010 message. */
+  skillProjectDirectory?: string;
   /** 対応する `%% deck-source-version`。 */
   expectedSourceVersion?: number;
   /** Optional external dependency; core itself never accesses the filesystem. */
@@ -912,12 +920,37 @@ function lintTemplates(statuses: readonly TemplateStatus[] | undefined): LintDia
   return diagnostics;
 }
 
+/** POSIX shell で1語として渡せる形にする(案内コマンドをそのまま実行できるように)。 */
+function shellWord(value: string): string {
+  return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function skillMismatchMessage(expected: string, projectDirectory: string | undefined): string {
+  const head = `同梱スキルがCLIの期待値(${expected})と一致しません。`;
+  return projectDirectory === undefined
+    ? `${head}スキルを含むプロジェクトのディレクトリを指定して deck init <directory> --update-skill で更新してください。`
+    : `${head}deck init ${shellWord(projectDirectory)} --update-skill で更新してください。`;
+}
+
 /**
  * AST と、必要に応じて注入された外部プローブで lint 規則を実行する。
  */
 export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiagnostic[] {
   const expectedSourceVersion = options.expectedSourceVersion ?? CURRENT_DECK_SOURCE_VERSION;
   const diagnostics = [
+    ...(options.skillFingerprint !== undefined &&
+    options.expectedSkillFingerprint !== undefined &&
+    (options.skillFingerprint !== options.expectedSkillFingerprint ||
+      options.skillContentFingerprint !== options.expectedSkillFingerprint)
+      ? [
+          diagnostic(
+            "L010",
+            "warning",
+            skillMismatchMessage(options.expectedSkillFingerprint, options.skillProjectDirectory),
+            { start: 0, end: 0 },
+          ),
+        ]
+      : []),
     ...lintRawSyntax(doc),
     ...lintMacros(doc),
     ...lintOverlays(doc),

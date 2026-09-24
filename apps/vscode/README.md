@@ -10,6 +10,8 @@ Beamer サブセットの `.tex` を編集しながら、LaTeX コンパイル�
 
 - 全フレームを縦に並べて表示し、スクロールで見る(Marp のプレビューと同じ)。スライドのダブルクリックで対応するソース行へジャンプ
 - managed slide の lint 結果は Problems パネルとエディタの波線に表示(規則番号付き)
+- キャンバスの画像・テキスト箱を選択すると、右上のハンドルで幅を変更できる。画像は縦横比を保ち、テキストは幅に合わせて折り返す。ハンドルの左右キーでも変更できる
+- テキスト箱を選択すると、文字サイズを tiny〜Large の7種類から選べる。幅変更は `w`、文字サイズ変更は `size` だけをソースへ反映する
 - Webview にフォーカスしているとき、←/→ キーでフレーム移動。step のあるフレームでは、プレビューに重なるスライダーでオーバーレイ表示を切替
 - Ctrl/Cmd+ホイール、Ctrl/Cmd+`+`/`=`・`-` で倍率を調整。Ctrl/Cmd+`0` で幅にフィット
 - Webview にフォーカスしているとき、Ctrl/Cmd+`Z` でソースの取り消し、Shift+Ctrl/Cmd+`Z`(または Ctrl+`Y`)でやり直し。ドラッグや「自由配置にする」の編集をプレビューから戻せる
@@ -54,7 +56,9 @@ TikZ などサブセット外のブロックは、プレビューではまず環
 
 コマンドパレット、`.tex` エディター、または対応するプレビューのタイトルから **Beamer Editor: Export...** を実行すると、保存先を選んで PDF を書き出せます。コンパイルには [Tectonic](https://tectonic-typesetting.github.io/) を使います。Tectonic は拡張に同梱されているので(macOS arm64 / x86_64、Linux x64 / arm64、Windows x64)、別途インストールする必要はありません。初回のコンパイル時に TeX のパッケージを Tectonic が必要な分だけダウンロードします。対象外の環境や別の版を使いたいときは `beamerEditor.tectonicPath` で実行ファイルを指定してください(同梱の無い環境では PATH の `tectonic` を使います)。
 
-編集中の内容は先に保存され、コンパイルは既定で300秒後に停止します（`beamerEditor.pdfExport.timeoutSeconds` で5〜1800秒に変更可）。失敗時は通知の「詳細を表示」からTectonicのエラーを確認できます。既存PDFはコンパイルが成功するまで置換されません。外部プログラムを起動するため、Restricted Modeではコマンドとボタンが無効になります。
+編集中の内容は先に保存され、コンパイルは既定で300秒後に停止します（`beamerEditor.pdfExport.timeoutSeconds` で5〜1800秒に変更可）。失敗時は通知の「詳細を表示」からTectonicのエラーを確認できます。既存PDFはコンパイルが成功するまで置換されません。PDF は外部プログラムを起動するため、Restricted Modeでは形式選択後に実行を拒否します。
+
+Export の形式で **HTML（プレビュー相当）** を選ぶと、保存済みの内容から `index.html` を含むフォルダーを作成します。これは `file:` で直接開ける高速プレビューの固定スナップショットであり、正式な TeX 出力ではありません。PDF 画像と raw TeX はプレースホルダーのまま、外部 URL の画像は開いたブラウザーでネットワークを必要とします。HTML は外部プロセスを使わないため Restricted Mode でも利用できます。
 
 このリポジトリで LaTeX Workshop を併用する場合の、混在 workspace と専用 workspace の設定方針は[エディタセットアップ](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/editor-setup.md)を参照してください。
 

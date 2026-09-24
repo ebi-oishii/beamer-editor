@@ -141,7 +141,7 @@
         },
         {
           "command": "beamerEditor.export",
-          "when": "resourceScheme == file && resourceExtname == .tex && isWorkspaceTrusted",
+          "when": "resourceScheme == file && resourceExtname == .tex",
           "group": "navigation"
         }
       ],
@@ -156,7 +156,7 @@
         },
         {
           "command": "beamerEditor.export",
-          "when": "isWorkspaceTrusted"
+          "when": "true"
         },
         {
           "command": "beamerEditor.slides.moveUp",
@@ -186,7 +186,7 @@
       "webview/title": [
         {
           "command": "beamerEditor.export",
-          "when": "webviewId == beamerEditor.preview && isWorkspaceTrusted",
+          "when": "webviewId == beamerEditor.preview",
           "group": "navigation"
         }
       ],
@@ -262,6 +262,7 @@
   "dependencies": {
     "@beamer-editor/compiler": "workspace:*",
     "@beamer-editor/core": "workspace:*",
+    "@beamer-editor/html-export": "workspace:*",
     "@beamer-editor/renderer": "workspace:*",
     "@beamer-editor/ui": "workspace:*",
     "katex": "^0.16.47",
