@@ -5,7 +5,7 @@ import { lintSource } from "@beamer-editor/core";
 import { afterEach, expect, it, vi } from "vitest";
 import { run, USAGE } from "../src/cli.ts";
 import { skillLintOptions } from "../src/skill.ts";
-import { buildSkillFiles } from "../src/skill-generator.ts";
+import { buildSkillFiles, skillFingerprint } from "../src/skill-generator.ts";
 import { CLI_VERSION } from "../src/version.ts";
 
 const root = resolve(import.meta.dirname, "../../..");
@@ -40,12 +40,35 @@ it("generates deterministic, portable artifacts and propagates spec and version 
   });
   expect(changed["references/subset-cheatsheet.md"]).toContain("ネスト 2 段まで");
   expect(changed["SKILL.md"]).toContain('cli-version: "9.8.7"');
+  expect(changed["SKILL.md"]).toMatch(/^  fingerprint: "[a-f0-9]{64}"$/m);
+  expect(skillFingerprint(files)).toBe(
+    files["SKILL.md"].match(/^  fingerprint: "([a-f0-9]{64})"$/m)?.[1],
+  );
+  expect(skillFingerprint(changed)).toBe(
+    changed["SKILL.md"].match(/^  fingerprint: "([a-f0-9]{64})"$/m)?.[1],
+  );
+  expect(skillFingerprint(changed)).not.toBe(skillFingerprint(files));
   expect(files["references/subset-cheatsheet.md"]).not.toMatch(
     /\]\((?:theme-design|ai-protocol)\.md/,
   );
 });
 
-it("finds nearest bundled skill relative to the deck; missing, matching, unknown and stale versions differ", async () => {
+it("does not search past the nearest Git repository boundary", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "beamer-skill-git-"));
+  directories.push(directory);
+  const repository = join(directory, "repository");
+  await mkdir(join(repository, ".git"), { recursive: true });
+  await mkdir(join(directory, ".claude/skills/beamer-deck"), { recursive: true });
+  await writeFile(
+    join(directory, ".claude/skills/beamer-deck/SKILL.md"),
+    '---\nmetadata:\n  fingerprint: "0000000000000000000000000000000000000000000000000000000000000000"\n---\n',
+  );
+  const deck = join(repository, "test.slide.tex");
+  await writeFile(deck, source);
+  expect(await skillLintOptions(deck)).toEqual({});
+});
+
+it("finds nearest bundled skill relative to the deck; missing, matching, unknown and stale fingerprints differ", async () => {
   const directory = await mkdtemp(join(tmpdir(), "beamer-skill-"));
   directories.push(directory);
   const nested = join(directory, "slides");
@@ -55,26 +78,30 @@ it("finds nearest bundled skill relative to the deck; missing, matching, unknown
   expect(await skillLintOptions(deck)).toEqual({});
   const skill = join(directory, ".claude/skills/beamer-deck");
   await mkdir(skill, { recursive: true });
-  for (const version of [CLI_VERSION, "0.0.0", null]) {
+  const fingerprint = (await readFile(join(root, "skills/beamer-deck/SKILL.md"), "utf8")).match(
+    /^  fingerprint: "([a-f0-9]{64})"$/m,
+  )?.[1];
+  expect(fingerprint).toBeDefined();
+  for (const value of [fingerprint, "0".repeat(64), null]) {
     await writeFile(
       join(skill, "SKILL.md"),
-      version === null
+      value === null
         ? "---\nname: beamer-deck\n---\n"
-        : `---\nmetadata:\n  cli-version: "${version}"\n---\n`,
+        : `---\nmetadata:\n  fingerprint: "${value}"\n---\n`,
     );
     const options = await skillLintOptions(deck);
-    expect(options.skillVersion).toBe(version);
+    expect(options.skillFingerprint).toBe(value);
     expect(lintSource(source, options).filter((d) => d.code === "L010")).toHaveLength(
-      version === CLI_VERSION ? 0 : 1,
+      value === fingerprint ? 0 : 1,
     );
   }
   const closer = join(nested, ".claude/skills/beamer-deck");
   await mkdir(closer, { recursive: true });
   await writeFile(
     join(closer, "SKILL.md"),
-    `---\nmetadata:\n  cli-version: "${CLI_VERSION}"\n---\n`,
+    `---\nmetadata:\n  fingerprint: "${fingerprint}"\n---\n`,
   );
-  expect((await skillLintOptions(deck)).skillVersion).toBe(CLI_VERSION);
+  expect((await skillLintOptions(deck)).skillFingerprint).toBe(fingerprint);
 });
 
 it("deck lint exposes L010 as a warning with JSON and text exit status", async () => {
@@ -82,7 +109,10 @@ it("deck lint exposes L010 as a warning with JSON and text exit status", async (
   directories.push(directory);
   const skill = join(directory, ".claude/skills/beamer-deck");
   await mkdir(skill, { recursive: true });
-  await writeFile(join(skill, "SKILL.md"), '---\nmetadata:\n  cli-version: "0.0.0"\n---\n');
+  await writeFile(
+    join(skill, "SKILL.md"),
+    '---\nmetadata:\n  fingerprint: "0000000000000000000000000000000000000000000000000000000000000000"\n---\n',
+  );
   const deck = join(directory, "test.slide.tex");
   await writeFile(deck, source);
   const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);

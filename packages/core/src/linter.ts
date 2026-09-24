@@ -46,9 +46,9 @@ export interface LintDiagnostic {
 }
 
 export interface LintOptions {
-  /** undefined: no bundled skill; null: present but missing version metadata. */
-  skillVersion?: string | null;
-  expectedSkillVersion?: string;
+  /** undefined: no bundled skill; null: present but missing fingerprint metadata. */
+  skillFingerprint?: string | null;
+  expectedSkillFingerprint?: string;
   /** 対応する `%% deck-source-version`。 */
   expectedSourceVersion?: number;
   /** Optional external dependency; core itself never accesses the filesystem. */
@@ -922,14 +922,14 @@ function lintTemplates(statuses: readonly TemplateStatus[] | undefined): LintDia
 export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiagnostic[] {
   const expectedSourceVersion = options.expectedSourceVersion ?? CURRENT_DECK_SOURCE_VERSION;
   const diagnostics = [
-    ...(options.skillVersion !== undefined &&
-    options.expectedSkillVersion !== undefined &&
-    options.skillVersion !== options.expectedSkillVersion
+    ...(options.skillFingerprint !== undefined &&
+    options.expectedSkillFingerprint !== undefined &&
+    options.skillFingerprint !== options.expectedSkillFingerprint
       ? [
           diagnostic(
             "L010",
             "warning",
-            `同梱スキルの版(${options.skillVersion ?? "不明"})がCLIの版(${options.expectedSkillVersion})と一致しません。スキルを再生成してください`,
+            `同梱スキルのfingerprint(${options.skillFingerprint ?? "不明"})がCLIの期待値(${options.expectedSkillFingerprint})と一致しません。スキルを再生成してください`,
             { start: 0, end: 0 },
           ),
         ]

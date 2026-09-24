@@ -22,7 +22,7 @@
 5. deck lint <file>             エラー 0 になるまで修正
 6. deck check <file>            内容量・レイアウトを変えた場合は実コンパイル検証
    (Overfull 警告・コンパイルエラーがフレームアドレス付きで返る)
-7. deck snapshot --frame <addr> 見た目に確信が持てないときは画像で目視(vision)
+7. `deck snapshot` が提供されている場合だけ、`deck snapshot <file> --frame <addr>` で画像を目視確認する。未提供なら `deck export <file> -o <pdf>` で PDF を確認し、実施できなかった検証を報告する
 8. 報告                          変更フレームのアドレス + 一行説明 + lint/check 結果
 ```
 
@@ -50,13 +50,13 @@
 | `deck lint <file>` | 語彙・規則の検証(L001〜) | ソース位置付き指摘(text / `--json`) |
 | `deck format <file> --write` | 正規形化 | 差分の有無 |
 | `deck check <file> [--tectonic <path>] [--json]` | 実コンパイルによる検証 | lint、Overfull、キャンバスのはみ出し・重なりをフレームアドレスに割り付けて報告。入力・出力は変更しない |
-| `deck snapshot <file> --frame <addr> -o <png>` | フレームの見た目の自己確認 | 実コンパイル画像 |
+| `deck snapshot <file> --frame <addr> -o <png>` | 提供されている場合のフレーム見た目確認 | 実コンパイル画像 |
 | `deck export <file> -o <pdf>` | 最終出力 | PDF |
 | `deck init` | 新規デッキプロジェクトの雛形生成(スキル同梱。§8) | 生成ファイル一覧 |
 
 `deck check` はキャンバスフレーム([subset-spec.md](subset-spec.md) §2.8)について、savepos 実測による本文領域外へのはみ出し・オブジェクト重なりの検出も報告する(絶対配置は Overfull 警告が出ないため)。
 
-`check` と `snapshot` は tectonic を使うため数秒かかるが、エージェントの検証は対話的操作ではないので許容する(人間のプレビューは常に即時の HTML 側)。`check` は診断なし（または情報のみ）を 0、警告を 1、lint エラーを 2、Tectonic・入出力・使用法などの操作失敗を 3 で終了する。`--json` の操作失敗は stderr に出る。
+`check` と、提供されている場合の `snapshot` は tectonic を使うため数秒かかるが、エージェントの検証は対話的操作ではないので許容する(人間のプレビューは常に即時の HTML 側)。`snapshot` が未提供なら `deck export <file> -o <pdf>` により PDF を確認し、実施できなかった検証を報告する。`check` は診断なし（または情報のみ）を 0、警告を 1、lint エラーを 2、Tectonic・入出力・使用法などの操作失敗を 3 で終了する。`--json` の操作失敗は stderr に出る。
 
 ## 5. 行動規約(ガードレール)
 
@@ -77,12 +77,12 @@ SKILL.md に埋め込む規範。lint が機械的に検出できるものは括
 | パターン | 指示の例 | エージェントの動き |
 |---|---|---|
 | 叩き台生成 | 「この論文要旨から 15 枚で発表の叩き台を。実験結果に重心を」 | アウトライン提案 → 合意 → 生成 → lint/check → 報告 |
-| 局所修正 | 「frame 7 の箇条書きを 3 点に圧縮して」 | 対象フレームのみ編集 → ループ 4〜8 |
+| 局所修正 | 「frame 7 の箇条書きを 3 点に圧縮して」 | 対象フレームのみ編集 → format → lint → 必要なら check → 結果を報告 |
 | 横断修正 | 「全フレームのタイトルを体言止めに統一」 | outline で全体把握 → 一括編集 → 報告は変更一覧 |
 | 検証駆動 | 「溢れてるフレームがないか確認して、あれば直して」 | `deck check` → Overfull のフレームを修正 → 再 check |
-| 素材の取り込み | 「この図を『手法』のフレームに入れて」 | assets/ へ配置 → `\includegraphics` 挿入 → snapshot で目視確認 |
-| スタイル合わせ | 「この会社テンプレ(pptx / 見本 PDF / スクショ)に合わせて」 | 見本から色・フォント・ロゴ・フッターを抽出 → `%% style` 領域に記述(語彙外の様式は preamble-extra へ。使ったことを報告に明記)→ snapshot と見本を並べて比較・反復([theme-design.md](theme-design.md) §3) |
-| 見た目の微調整 | 「『結果』の表、窮屈なので余白を」 | §7 の微調整モード(対象固定 → 修正 → snapshot 前後比較 → 短い報告) |
+| 素材の取り込み | 「この図を『手法』のフレームに入れて」 | assets/ へ配置 → `\includegraphics` 挿入 → 提供されていれば snapshot、なければ PDF export で目視確認 |
+| スタイル合わせ | 「この会社テンプレ(pptx / 見本 PDF / スクショ)に合わせて」 | 見本から色・フォント・ロゴ・フッターを抽出 → `%% style` 領域に記述(語彙外の様式は preamble-extra へ。使ったことを報告に明記)→ 提供されていれば snapshot、なければ PDF export と見本を比較・反復([theme-design.md](theme-design.md) §3) |
+| 見た目の微調整 | 「『結果』の表、窮屈なので余白を」 | 対象を固定 → 修正 → 提供されていれば snapshot の前後比較、なければ PDF export で確認 → 短い報告 |
 
 ## 7. 微調整モード
 
@@ -107,7 +107,7 @@ selection: 122–128 行目
 ### エージェントの規則
 
 1. **スコープ固定。** 変更は target のフレーム(選択があればその要素)に限る。対象外に手を入れるべきだと判断した場合(例: 内容を 2 枚に分けるべき)は、変更せずに提案として返す。
-2. **見た目の依頼は視覚で検証する。** 外観に関する依頼では、修正の前後を `deck snapshot` で比較し `deck check` を通してから報告する。改善しなければ 2 回まで自律的に手直しし、それでも解決しなければ状況を報告して指示を仰ぐ。文言のみの修正(誤字等)は lint だけでよい。
+2. **見た目の依頼は視覚で検証する。** 外観に関する依頼では、提供されていれば修正の前後を `deck snapshot` で、未提供なら PDF export で比較し、`deck check` を通してから報告する。改善しなければ 2 回まで自律的に手直しし、それでも解決しなければ状況を報告して指示を仰ぐ。文言のみの修正(誤字等)は lint だけでよい。
 3. **報告は最小限。** 高速な往復を妨げないよう「frame 7: 表の列間隔を拡大、フォントを \small に。check 通過」程度の 1〜2 行にする。
 4. **文脈の継続。** 「もう少し」「やっぱり戻して」は直前の依頼と同じ target への追加依頼として解釈する。このためセッションは使い捨てにせず維持する(エディタ統合ではデッキごとに 1 本の永続セッションを保つ)。
 
@@ -140,7 +140,7 @@ skills/beamer-deck/
 ```
 
 - **生成物であって手書きしない。** cheatsheet と SKILL.md の語彙記述は `docs/subset-spec.md` を単一の真実としてビルドで生成する。仕様変更のたびに再生成され、スキルと実装の知識ドリフトを構造的に防ぐ。
-- **配布は `deck init` がプロジェクトに同梱する。** 新規デッキプロジェクトの雛形生成時に `.claude/skills/beamer-deck/` として書き込む。リポジトリと一緒に配布されるので、クローンした人の Claude Code がそのまま拾える(ゼロインストール)。生成時に CLI のバージョンを記録し、`deck lint` が CLI と skill の版ずれを警告する。
+- **配布は `deck init` がプロジェクトに同梱する。** 新規デッキプロジェクトの雛形生成時に `.claude/skills/beamer-deck/` として書き込む。リポジトリと一緒に配布されるので、クローンした人の Claude Code がそのまま拾える(ゼロインストール)。生成時に CLI の版と4生成物の fingerprint を記録し、`deck lint` が期待する fingerprint とのずれを警告する。
 - SKILL.md 本文は短く保ち、詳細は references/ への参照で段階開示する(スキルの一般作法に従う)。
 - 将来: プラグインとしてのユーザーレベル配布、エディタ内蔵チャット(Agent SDK)への同一スキル注入。どちらもプロトコルは本書のまま変わらない。
 
@@ -154,7 +154,7 @@ skills/beamer-deck/
 
 ## 付録: SKILL.md ドラフト
 
-Phase 8 で生成する SKILL.md の骨子(語彙表・CLI 詳細は references/ に分離)。
+生成する SKILL.md の骨子(語彙表・CLI 詳細は references/ に分離)。
 
 ```markdown
 ---
@@ -176,7 +176,7 @@ references/subset-cheatsheet.md を参照。範囲外の LaTeX も書けるが�
 2. 編集する
 3. `deck format <file> --write` → `deck lint <file>` をエラー 0 まで
 4. 内容量やレイアウトを変えたら `deck check <file>`(溢れ検出)
-5. 見た目に確信がなければ `deck snapshot --frame <addr>` で画像確認
+5. `deck snapshot` が提供されていれば `deck snapshot <file> --frame <addr>` で画像確認。未提供なら `deck export <file> -o <pdf>` で確認し、実施できなかった検証を報告
 6. 変更フレームのアドレス + 一行説明 + lint/check 結果を報告
 
 ## 規約
@@ -191,6 +191,6 @@ references/subset-cheatsheet.md を参照。範囲外の LaTeX も書けるが�
 
 ## 微調整依頼([adjust] ブロック、または文脈上の微調整)
 - target のフレーム外を変更しない。必要と判断したら変更せず提案を返す
-- 見た目の依頼は snapshot で前後比較 + check。文言のみなら lint だけでよい
+- 見た目の依頼は、snapshot が提供されていれば前後比較 + check。未提供なら PDF export で確認し、文言のみなら lint だけでよい
 - 報告は 1〜2 行に抑える。「もう少し」は直前と同じ target への追加依頼
 ```
