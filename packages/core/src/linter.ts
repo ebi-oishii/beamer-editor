@@ -51,6 +51,8 @@ export interface LintOptions {
   /** undefined: no bundled skill; null: bundled files could not be verified. */
   skillContentFingerprint?: string | null;
   expectedSkillFingerprint?: string;
+  /** Directory containing the discovered `.claude/skills/beamer-deck/`; used only in the L010 message. */
+  skillProjectDirectory?: string;
   /** 対応する `%% deck-source-version`。 */
   expectedSourceVersion?: number;
   /** Optional external dependency; core itself never accesses the filesystem. */
@@ -918,6 +920,18 @@ function lintTemplates(statuses: readonly TemplateStatus[] | undefined): LintDia
   return diagnostics;
 }
 
+/** POSIX shell で1語として渡せる形にする(案内コマンドをそのまま実行できるように)。 */
+function shellWord(value: string): string {
+  return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function skillMismatchMessage(expected: string, projectDirectory: string | undefined): string {
+  const head = `同梱スキルがCLIの期待値(${expected})と一致しません。`;
+  return projectDirectory === undefined
+    ? `${head}スキルを含むプロジェクトのディレクトリを指定して deck init <directory> --update-skill で更新してください。`
+    : `${head}deck init ${shellWord(projectDirectory)} --update-skill で更新してください。`;
+}
+
 /**
  * AST と、必要に応じて注入された外部プローブで lint 規則を実行する。
  */
@@ -932,7 +946,7 @@ export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiag
           diagnostic(
             "L010",
             "warning",
-            `同梱スキルがCLIの期待値(${options.expectedSkillFingerprint})と一致しません。配布元の最新版へ更新してください。このリポジトリでは pnpm build:skills を実行します。`,
+            skillMismatchMessage(options.expectedSkillFingerprint, options.skillProjectDirectory),
             { start: 0, end: 0 },
           ),
         ]

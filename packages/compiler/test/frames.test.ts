@@ -18,7 +18,7 @@ import {
 
 const directories: string[] = [];
 const canvasPreamblePath = fileURLToPath(
-  new URL("../../../fixtures/deck-canvas-preamble.tex", import.meta.url),
+  new URL("../../core/resources/deck-canvas-preamble.tex", import.meta.url),
 );
 const fixturesDirectory = fileURLToPath(new URL("../../../fixtures/", import.meta.url));
 

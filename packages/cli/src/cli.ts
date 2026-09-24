@@ -51,8 +51,8 @@ import {
   nodeFontIO,
   resolveFont,
 } from "./fonts.ts";
+import { InitError, initDeck } from "./init.ts";
 import { nodePdfRasterizer } from "./pdf-rasterizer.ts";
-
 import { skillLintOptions } from "./skill.ts";
 
 /** 既定で取得する標準フォント(theme-design.md §4)。 */
@@ -96,6 +96,8 @@ export interface ParsedArgs {
   json: boolean;
   /** --write フラグ。 */
   write: boolean;
+  /** init の同梱スキルだけを更新する。 */
+  updateSkill: boolean;
   /** 未対応のオプション。 */
   unknownOptions: string[];
 }
@@ -111,9 +113,11 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   const unknownOptions: string[] = [];
   let json = false;
   let write = false;
+  let updateSkill = false;
   for (const arg of argv) {
     if (arg === "--json") json = true;
     else if (arg === "--write") write = true;
+    else if (arg === "--update-skill") updateSkill = true;
     else if (arg.startsWith("-")) unknownOptions.push(arg);
     else positional.push(arg);
   }
@@ -124,6 +128,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     family: rest.length > 0 ? rest.join(" ") : undefined,
     json,
     write,
+    updateSkill,
     unknownOptions,
   };
 }
@@ -218,6 +223,8 @@ async function runFontsFetch(family: string, json: boolean): Promise<number> {
 
 export const USAGE = `使い方: deck <command> ...
 
+  deck init [directory] [--json]      新規または空のディレクトリへ新規デッキを生成
+  deck init <directory> --update-skill [--json]  既存ディレクトリの .claude/skills/beamer-deck/ を更新
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示
@@ -955,8 +962,27 @@ export async function run(
   if (argv[0] === "export") return runExport(parseExportArgs(argv.slice(1)), dependencies);
   if (argv[0] === "check") return runCheck(parseCheckArgs(argv.slice(1)), dependencies);
   if (argv[0] === "snapshot") return runSnapshot(parseSnapshotArgs(argv.slice(1)), dependencies);
-  const { command, sub, family, json, write, unknownOptions } = parseArgs(argv);
+  const { command, sub, family, json, write, updateSkill, unknownOptions } = parseArgs(argv);
   if (unknownOptions.length > 0) return usageError(`不明なオプション: ${unknownOptions[0]}`, json);
+  if (updateSkill && command !== "init")
+    return usageError("--update-skill は init でだけ使用できます", json);
+  if (command === "init") {
+    if (write || family !== undefined || (updateSkill && sub === undefined))
+      return usageError("init にはディレクトリを1つまで指定してください（--write 非対応）", json);
+    try {
+      const result = await initDeck(sub ?? ".", { updateSkill });
+      process.stdout.write(
+        json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : `${result.directory}: ${updateSkill ? "同梱スキルを更新しました" : "新規デッキを生成しました"}\n${result.files.join("\n")}\n`,
+      );
+      return EXIT_CODE.success;
+    } catch (error) {
+      const code = error instanceof InitError ? error.code : "E_INTERNAL";
+      writeError(code, errorMessage(error), json);
+      return exitCodeForError(code);
+    }
+  }
   if (command === "lint") {
     if (write) return usageError("lint は --write をサポートしません", json);
     if (sub === undefined || family !== undefined)
