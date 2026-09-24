@@ -111,11 +111,30 @@ it("steers agents to canvas objects, deck export, and pptx only on explicit requ
   });
   const description = files["SKILL.md"].split("\n---\n")[0];
   for (const phrase of ["プレビュー", "PDF", "pptx"]) expect(description).toContain(phrase);
-  for (const phrase of ["decktext", "deck export <file> --format pdf", "明示したときだけ"]) {
+  for (const phrase of [
+    "decktext",
+    "deck export <file> --format pdf -o <pdf>",
+    "明示したときだけ",
+  ]) {
     expect(files["SKILL.md"]).toContain(phrase);
   }
   for (const pattern of ["プレビューで動かす", "PDF 出力", "pptx の明示"]) {
     expect(files["examples/prompts.md"]).toContain(`| ${pattern} |`);
+  }
+});
+
+it("gives one PDF export instruction: absolute paths with an explicit -o", async () => {
+  const protocol = await readFile(join(root, "docs/ai-protocol.md"), "utf8");
+  const files = buildSkillFiles({
+    subsetSpec: await readFile(join(root, "docs/subset-spec.md"), "utf8"),
+    protocol,
+    cliUsage: USAGE,
+    version: CLI_VERSION,
+  });
+  expect(files["references/cli.md"]).toContain("出力先を省略しない");
+  // cli.md forbids omitting the output, so no other guidance may show an export without -o.
+  for (const content of [...Object.values(files), buildProjectInstructions(protocol)]) {
+    expect(content).not.toMatch(/--format pdf(?! \[?-o )/);
   }
 });
 

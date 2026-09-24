@@ -75,7 +75,7 @@ SKILL.md に埋め込む規範。lint が機械的に検出できるものは括
 7. 報告は「変更したフレームのアドレス+何をしたか一行」の列挙と、lint / check の結果で締める。人間はそれを見てエディタのプレビュー(自動反映済み)で確認する。
 8. **新しく書く本文と依頼で触るフレームの本文は、既定で `deckcanvas` の `decktext` / `deckimage` にする**([subset-spec.md](subset-spec.md) §2.8)。人間がプレビューで直接動かせるので、「位置をずらして」の往復が減る。依頼で触らない既存フレームは canvas 化しない(3 と同じ理由)。decktext に入らない内容(オーバーレイ・block・columns・表・TikZ・生 LaTeX、4:3 デッキ)は通常フローで書き、報告に明記する。
 9. **成果物の正本は .tex。** 「GUI で操作できるように」「プレビューで動かせるように」は 8 の canvas 化を指し、pptx への変換ではない。pptx / PowerPoint はユーザーが形式を明示したときだけ、.tex を残したまま別の成果物として作る。
-10. **PDF は `deck export <file> --format pdf` で書き出し、PDF のパスを報告する。** TeX エンジンを直接呼ばず、.tex や中間生成物を PDF の代わりに渡さない。出力先が既にある場合は上書き(`--overwrite`)の前に確認する。
+10. **PDF は `deck export <file> --format pdf -o <pdf>` で書き出し、PDF のパスを報告する。** 入力も出力先も絶対パスで明示し、`-o` を省略しない(CLI は checkout 内の `packages/cli` を作業ディレクトリにして動くため。出力先の指定がなければ入力の隣の `<name>.pdf` にする)。TeX エンジンを直接呼ばず、.tex や中間生成物を PDF の代わりに渡さない。出力先が既にある場合は上書き(`--overwrite`)の前に確認する。
 
 ## 6. 人間側の指示パターン(例)
 
@@ -89,7 +89,7 @@ SKILL.md に埋め込む規範。lint が機械的に検出できるものは括
 | 検証駆動 | 「溢れてるフレームがないか確認して、あれば直して」 | `deck check` → Overfull のフレームを修正 → 再 check |
 | 素材の取り込み | 「この図を『手法』のフレームに入れて」 | assets/ へ配置 → canvas に `\deckimage` で配置(通常フローに置く場合は `\includegraphics`)→ snapshot で目視確認 |
 | プレビューで動かす | 「2 枚目のテキストをプレビューで動かせるように」「GUI で操作できるように」 | 対象フレームの本文を `deckcanvas` の `decktext` / `deckimage` へ移す(label が無ければ付ける)→ format → lint → check → 報告。pptx は作らない |
-| PDF 出力 | 「PDF にして」「PDF で書き出して」 | `deck export <file> --format pdf` → 出力した PDF のパスを報告 |
+| PDF 出力 | 「PDF にして」「PDF で書き出して」 | `deck export <file> --format pdf -o <pdf>`(どちらも絶対パス。指定がなければ入力の隣の `<name>.pdf`)→ 出力した PDF のパスを報告 |
 | pptx の明示 | 「pptx(PowerPoint)でも欲しい」 | 形式が明示されたときだけ、.tex を正本として残したまま pptx を別に作る。プレビューの編集対象ではないと伝える |
 | スタイル合わせ | 「この会社テンプレ(pptx / 見本 PDF / スクショ)に合わせて」 | 見本から色・フォント・ロゴ・フッターを抽出 → `%% style` 領域に記述(語彙外の様式は preamble-extra へ。使ったことを報告に明記)→ snapshot と見本を比較・反復([theme-design.md](theme-design.md) §3) |
 | 見た目の微調整 | 「『結果』の表、窮屈なので余白を」 | 対象を固定 → 修正 → snapshot の前後比較 → 短い報告 |
@@ -202,9 +202,11 @@ description: >
   cheatsheet §2.8)。依頼で触らない既存フレームは canvas 化しない
 - decktext に入らないもの(オーバーレイ、block・columns・表、TikZ・生 LaTeX、
   4:3 デッキ)は通常のフローで書き、そうしたことを報告する
-- PDF を求められたら `deck export <file> --format pdf` で書き出し、PDF の
-  パスを報告する。pdflatex 等を直接呼ばず、.tex や中間生成物を PDF の代わりに
-  渡さない。出力先が既にあれば `--overwrite` の前に確認する
+- PDF を求められたら `deck export <file> --format pdf -o <pdf>` で書き出し、
+  PDF のパスを報告する。`<file>` と `<pdf>` はどちらも絶対パスで、出力先は
+  省略しない(指定がなければ入力の隣の `<name>.pdf`。`x.slide.tex` なら `x.pdf`)。
+  pdflatex 等を直接呼ばず、.tex や中間生成物を PDF の代わりに渡さない。
+  出力先が既にあれば `--overwrite` の前に確認する
 - pptx / PowerPoint は、ユーザーがその形式を明示したときだけ別の成果物として
   作る。.tex は正本として残し、pptx はプレビューの編集対象ではないと伝える
 
@@ -239,6 +241,7 @@ description: >
   プレビューで編集できる状態を指し、pptx に置き換えない
 - 新しく書く本文と、依頼で触るフレームの本文は `deckcanvas` の `decktext` / `deckimage`
   で書く。依頼で触らない既存フレームは変換しない
-- PDF は `deck export <file> --format pdf` で書き出し、PDF のパスを報告する
+- PDF は `deck export <file> --format pdf -o <pdf>`(どちらも絶対パス)で書き出し、
+  PDF のパスを報告する
 - pptx / PowerPoint は、ユーザーが形式を明示したときだけ .tex を残したまま別に作る
 ```
