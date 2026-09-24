@@ -51,7 +51,7 @@ it("installs the skill for Claude Code and Codex with always-read project instru
   expect(agents).toBe(
     await readFile(new URL("../../../skills/deck-project/AGENTS.md", import.meta.url), "utf8"),
   );
-  for (const phrase of ["decktext", "deck export <file> --format pdf", "pptx"])
+  for (const phrase of ["decktext", "deck export <file> --format pdf -o <pdf>", "pptx"])
     expect(agents).toContain(phrase);
   expect(await readFile(join(directory, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
 });

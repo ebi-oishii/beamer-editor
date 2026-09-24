@@ -8,5 +8,6 @@
   プレビューで編集できる状態を指し、pptx に置き換えない
 - 新しく書く本文と、依頼で触るフレームの本文は `deckcanvas` の `decktext` / `deckimage`
   で書く。依頼で触らない既存フレームは変換しない
-- PDF は `deck export <file> --format pdf` で書き出し、PDF のパスを報告する
+- PDF は `deck export <file> --format pdf -o <pdf>`(どちらも絶対パス)で書き出し、
+  PDF のパスを報告する
 - pptx / PowerPoint は、ユーザーが形式を明示したときだけ .tex を残したまま別に作る
