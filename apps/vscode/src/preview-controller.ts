@@ -1,9 +1,9 @@
 import {
   type CanvasFontSize,
-  clampCanvasPosition,
   clampCanvasWidth,
   isCanvasFontSize,
   mapExpandedRangeToSourceExact,
+  roundCanvasCoordinate,
 } from "@beamer-editor/core";
 import { DEFAULT_THEME } from "@beamer-editor/renderer";
 import type { ExtensionToWebview } from "@beamer-editor/ui";
@@ -408,7 +408,7 @@ export class PreviewController implements vscode.Disposable {
       this.sendDeck();
       return;
     }
-    const width = "width" in move ? clampCanvasWidth(element.position.x, move.width) : null;
+    const width = "width" in move ? clampCanvasWidth(move.width) : null;
     if (
       "width" in move
         ? width === null || element.position.width === width
@@ -496,9 +496,10 @@ export class PreviewController implements vscode.Disposable {
       this.sendDeck();
       return;
     }
-    // 書き込む座標は必ず本文領域内に収める(lint L012)。webview 側でも同じ位置で
-    // 止めているが、拡張が自分で lint を通らないソースを書かないための最終防御。
-    const { x, y } = clampCanvasPosition(move.x, move.y, element.position.width);
+    // 座標は本文領域で止めない(余白・ページ外へのはみ出しは許容し、L012 が警告する。#152)。
+    // 書く値は正規形の小数 3 桁で、丸めて現在位置と同じなら書かない。
+    const x = roundCanvasCoordinate(move.x);
+    const y = roundCanvasCoordinate(move.y);
     if (element.position.x === x && element.position.y === y) return;
     const { frameIndex, elementId, version } = move;
     const document = this.document;

@@ -165,16 +165,11 @@ describe("canvas width", () => {
       expect(canvasWidthReplacement(options, 0.4)).toBeNull();
     expect(canvasWidthReplacement("[w=.3]", NaN)).toBeNull();
   });
-  it("keeps the fixed anchor and width within the right edge at three-decimal precision", () => {
-    expect(clampCanvasWidth(0.1, 2)).toBe(0.9);
-    expect(clampCanvasWidth(0.1, 0)).toBe(0.05);
-    expect(clampCanvasWidth(0.999, 1)).toBe(0.001);
-    expect(clampCanvasWidth(-0.1, 0.3)).toBeNull();
-    for (const x of [0.1, 0.333, 0.666, 0.0001, 0.12345]) {
-      const width = clampCanvasWidth(x, 2);
-      expect(width).not.toBeNull();
-      expect(x + (width ?? 0)).toBeLessThanOrEqual(1);
-    }
+  it("幅は 3 桁に丸めて最小幅より細くしないだけで、右端では止めない(#152)", () => {
+    expect(clampCanvasWidth(2)).toBe(2);
+    expect(clampCanvasWidth(0)).toBe(0.05);
+    expect(clampCanvasWidth(0.12345)).toBe(0.123);
+    expect(clampCanvasWidth(Number.NaN)).toBeNull();
   });
 });
 

@@ -146,16 +146,13 @@ export function updateCanvasPosition(
     : `${source.slice(0, optionsSpan.start)}${replacement}${source.slice(optionsSpan.end)}`;
 }
 
-/** 位置を保ったまま、幅だけを最小幅と右端の間へ収める。 */
-export function clampCanvasWidth(x: number, width: number): number | null {
-  if (!Number.isFinite(x) || !Number.isFinite(width) || x < 0 || x >= 1) return null;
-  let maximum = Math.floor((1 - x) * 1000 + Number.EPSILON * 1000) / 1000;
-  if (x + maximum > 1) maximum = Math.max(0, maximum - 0.001);
-  if (maximum <= 0) return null;
-  return Math.min(
-    maximum,
-    Math.max(Math.min(CANVAS_MIN_WIDTH, maximum), roundCanvasCoordinate(width)),
-  );
+/**
+ * 幅を小数 3 桁に丸め、最小幅より細くしない。右端で止めない(本文領域からのはみ出しは
+ * 許容し、L012 が警告する。#152)。不正な値は null。
+ */
+export function clampCanvasWidth(width: number): number | null {
+  if (!Number.isFinite(width)) return null;
+  return Math.max(CANVAS_MIN_WIDTH, roundCanvasCoordinate(width));
 }
 
 /** options 内の w を置換し、未指定なら追加する。位置・画像パス・他の宣言は原文のまま保つ。 */
