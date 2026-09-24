@@ -150,3 +150,61 @@ suite("#85: append ignores the focused item", () => {
     }
   });
 });
+
+suite("#85: palette insert and edge moves", () => {
+  async function open(dir: string) {
+    const file = path.join(dir, "deck.slide.tex");
+    await writeFile(file, SOURCE);
+    const document = await vscode.workspace.openTextDocument(file);
+    await vscode.window.showTextDocument(document);
+    const extension = vscode.extensions.getExtension("ebi-oishii.beamer-editor");
+    assert.ok(extension);
+    const api = (await extension.activate()) as TestApi;
+    await waitFor(
+      () => (api._slideItemsForTest()[0] as Item | undefined)?.entry.document === document,
+      "outline ready",
+    );
+    return { document, api };
+  }
+
+  test("palette Insert New Slide asks where and inserts after the chosen slide", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "beamer-slide-palette-"));
+    try {
+      const { document } = await open(dir);
+      const pending = vscode.commands.executeCommand("beamerEditor.slides.insert");
+      // The quick pick opens with the first slide (A) selected.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await vscode.commands.executeCommand("workbench.action.acceptSelectedQuickOpenItem");
+      assert.equal(await pending, true);
+      const text = document.getText();
+      const inserted = text.indexOf("label=slide-1");
+      assert.ok(inserted > text.indexOf("A body"));
+      assert.ok(inserted < text.indexOf("B body"));
+      await vscode.window.showTextDocument(document);
+      await vscode.commands.executeCommand("undo");
+      await waitFor(() => document.getText() === SOURCE, "palette insert undone");
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("moving the first slide up is refused without editing", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "beamer-slide-edge-"));
+    try {
+      const { document, api } = await open(dir);
+      assert.equal(
+        await vscode.commands.executeCommand(
+          "beamerEditor.slides.moveUp",
+          api._slideItemsForTest()[0],
+        ),
+        false,
+      );
+      assert.equal(document.getText(), SOURCE);
+      assert.equal(document.isDirty, false);
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -30,7 +30,16 @@ export class SlideEditController<Document extends SlideOutlineDocument> {
       this.host.warn(result.reason);
       return false;
     }
-    if (result.edits.length === 0) return false;
+    if (result.edits.length === 0) {
+      this.host.warn(
+        action === "moveUp"
+          ? "先頭のスライドはこれ以上上へ移動できません。"
+          : action === "moveDown"
+            ? "末尾のスライドはこれ以上下へ移動できません。"
+            : "スライドに変更はありません。",
+      );
+      return false;
+    }
     if (document.version !== version) return false;
     this.pending.add(document);
     try {
@@ -47,4 +56,33 @@ export class SlideEditController<Document extends SlideOutlineDocument> {
       this.pending.delete(document);
     }
   }
+}
+
+export type SlideCommandTarget<Document extends SlideOutlineDocument> =
+  | { kind: "run"; entry: SlideOutlineEntry<Document> | undefined }
+  | { kind: "cancel" };
+
+/**
+ * Resolve the slide a command acts on. Tree items are used as-is; from the command palette
+ * the user picks a slide. `insert` picks the slide to insert after (an empty deck appends).
+ */
+export async function resolveSlideCommandTarget<Document extends SlideOutlineDocument>(
+  action: SlideEditAction,
+  item: SlideOutlineEntry<Document> | undefined | "other",
+  entries: readonly SlideOutlineEntry<Document>[],
+  pick: (
+    entries: readonly SlideOutlineEntry<Document>[],
+    placeHolder: string,
+  ) => Promise<SlideOutlineEntry<Document> | undefined>,
+): Promise<SlideCommandTarget<Document>> {
+  if (item === "other") return { kind: "cancel" };
+  if (item) return { kind: "run", entry: item };
+  if (action === "insert" && entries.length === 0) return { kind: "run", entry: undefined };
+  const entry = await pick(
+    entries,
+    action === "insert"
+      ? "新しいスライドを挿入する位置(このスライドの後)を選択"
+      : "操作するスライドを選択",
+  );
+  return entry ? { kind: "run", entry } : { kind: "cancel" };
 }

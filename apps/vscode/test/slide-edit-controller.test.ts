@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { SlideEditController } from "../src/slide-edit-controller";
+import { resolveSlideCommandTarget, SlideEditController } from "../src/slide-edit-controller";
 import { SlideOutlineState } from "../src/slide-outline";
 
 function setup() {
@@ -53,7 +53,42 @@ it("blocks overlapping requests, releases its lock on failed edits, and allows r
 it("does not write readonly documents, invalid sources or edge no-ops", async () => {
   const { controller, host, entry } = setup();
   expect(await controller.execute("moveUp", entry)).toBe(false);
+  expect(host.warn).toHaveBeenLastCalledWith("先頭のスライドはこれ以上上へ移動できません。");
+  expect(await controller.execute("moveDown", entry)).toBe(false);
+  expect(host.warn).toHaveBeenLastCalledWith("末尾のスライドはこれ以上下へ移動できません。");
   host.isEditable = () => false;
   expect(await controller.execute("insert", entry)).toBe(false);
   expect(host.apply).not.toHaveBeenCalled();
+});
+it("palette commands pick a slide; palette insert inserts after the chosen slide", async () => {
+  const { entry, state } = setup();
+  const entries = state.getEntries();
+  const pick = vi.fn(async () => entry);
+  expect(await resolveSlideCommandTarget("insert", undefined, entries, pick)).toEqual({
+    kind: "run",
+    entry,
+  });
+  expect(pick).toHaveBeenLastCalledWith(entries, expect.stringContaining("挿入する位置"));
+  expect(await resolveSlideCommandTarget("delete", undefined, entries, pick)).toEqual({
+    kind: "run",
+    entry,
+  });
+  expect(pick).toHaveBeenLastCalledWith(entries, "操作するスライドを選択");
+  const cancel = vi.fn(async () => undefined);
+  expect(await resolveSlideCommandTarget("insert", undefined, entries, cancel)).toEqual({
+    kind: "cancel",
+  });
+  // A tree item is used directly; an empty deck has nowhere to pick and appends.
+  expect(await resolveSlideCommandTarget("insert", entry, entries, cancel)).toEqual({
+    kind: "run",
+    entry,
+  });
+  expect(await resolveSlideCommandTarget("insert", undefined, [], cancel)).toEqual({
+    kind: "run",
+    entry: undefined,
+  });
+  expect(await resolveSlideCommandTarget("insert", "other", entries, pick)).toEqual({
+    kind: "cancel",
+  });
+  expect(cancel).toHaveBeenCalledTimes(1);
 });

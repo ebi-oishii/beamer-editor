@@ -47,7 +47,7 @@ import {
   RawBlockCompiler,
 } from "./raw-block-compiler";
 import { frameLensPositions, sourceHasFrameAt } from "./reveal-slide";
-import { SlideEditController } from "./slide-edit-controller";
+import { resolveSlideCommandTarget, SlideEditController } from "./slide-edit-controller";
 import {
   hasSlideOutlineContentChanges,
   managedOutlineDocument,
@@ -409,21 +409,19 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   for (const action of ["moveUp", "moveDown", "duplicate", "delete", "insert"] as const) {
     context.subscriptions.push(
       vscode.commands.registerCommand(`beamerEditor.slides.${action}`, async (item: unknown) => {
-        let entry: SlideOutlineEntry<vscode.TextDocument> | undefined;
-        if (item instanceof SlideOutlineItem) entry = item.entry;
-        else if (item !== undefined) return false;
-        else if (action !== "insert") {
-          const chosen = await vscode.window.showQuickPick(
-            slideOutlineState.getEntries().map((entry) => ({
-              label: `${entry.frameNumber}. ${entry.title}`,
-              entry,
-            })),
-            { placeHolder: "操作するスライドを選択" },
-          );
-          if (!chosen) return false;
-          entry = chosen.entry;
-        }
-        return slideEdits.execute(action, entry);
+        const target = await resolveSlideCommandTarget(
+          action,
+          item instanceof SlideOutlineItem ? item.entry : item === undefined ? undefined : "other",
+          slideOutlineState.getEntries(),
+          async (entries, placeHolder) =>
+            (
+              await vscode.window.showQuickPick(
+                entries.map((entry) => ({ label: `${entry.frameNumber}. ${entry.title}`, entry })),
+                { placeHolder },
+              )
+            )?.entry,
+        );
+        return target.kind === "run" && slideEdits.execute(action, target.entry);
       }),
     );
   }
