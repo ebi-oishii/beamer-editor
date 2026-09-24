@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { LintOptions } from "@beamer-editor/core";
@@ -16,8 +16,8 @@ async function isGitRoot(directory: string): Promise<boolean> {
 
 /** Find the nearest project skill, starting at the deck (not the invocation cwd). */
 export async function skillLintOptions(input: string): Promise<LintOptions> {
-  let directory = dirname(resolve(input));
-  const home = resolve(homedir());
+  let directory = await realpath(dirname(resolve(input)));
+  const home = await realpath(homedir());
   for (;;) {
     const path = join(directory, ".claude/skills/beamer-deck/SKILL.md");
     try {

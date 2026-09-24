@@ -56,9 +56,9 @@ export function buildSkillFiles(input: {
     .replace("references/subset-cheatsheet.md", "[語彙・制約](references/subset-cheatsheet.md)")
     .replace("`deck snapshot --frame <addr>`", "`deck snapshot <file> --frame <addr>`");
   const files = {
-    "SKILL.md": `${skill}\n\n利用可能なコマンドは [CLI リファレンス](references/cli.md)、依頼例は [指示パターン](examples/prompts.md)を参照。未提供のコマンドは実行せず、検証できなかった項目を報告する。\n`,
+    "SKILL.md": `${skill}\n\n利用可能なコマンドは [CLI リファレンス](references/cli.md)、依頼例は [指示パターン](examples/prompts.md)を参照。CLI リファレンスにないコマンドは実行せず、検証できなかった項目を報告する。\n`,
     "references/subset-cheatsheet.md": `${banner}# Beamer 語彙・制約\n\n語彙の唯一の生成元: docs/subset-spec.md。制約を落とさないよう関連節を収録する。ここにある仕様の一部は実装待ちであり、CLIの利用可能範囲は cli.md を参照。\n\n${portable(vocabulary)}\n`,
-    "references/cli.md": `${banner}# CLI リファレンス\n\nCLI ${version} の実装済みコマンド（実際のヘルプから生成）:\n\n\`\`\`text\n${cliUsage.trim()}\n\`\`\`\n\nリポジトリ内では \`pnpm --filter @beamer-editor/cli deck <command> ...\` で実行する。\n\n終了コード: 0=成功・情報のみ、1=警告、2=lint error、3=操作失敗。JSONの成功結果はstdout、E_*エラーはstderr。\n\nsnapshot等、上の一覧に無いコマンドはこの版では未提供。PDF確認には \`deck export <file> --format pdf -o <pdf>\` を使い、実施できなかった検証を報告する。\n`,
+    "references/cli.md": `${banner}# CLI リファレンス\n\nCLI ${version} の実装済みコマンド（実際のヘルプから生成）:\n\n\`\`\`text\n${cliUsage.trim()}\n\`\`\`\n\nリポジトリ内では \`pnpm --filter @beamer-editor/cli deck <command> ...\` で実行する。\n\n終了コード: 0=成功・情報のみ、1=警告、2=lint error、3=操作失敗。JSONの成功結果はstdout、E_*エラーはstderr。\n\n上の一覧にないコマンドはこの版では未提供。検証できない場合は、利用可能なコマンドで代替した内容と未実施項目を報告する。\n`,
     "examples/prompts.md": `${banner}${portable(section(protocol, "## 6. 人間側の指示パターン", "## 7. 微調整モード"))}\n`,
   };
   const fingerprint = skillFingerprint(files);

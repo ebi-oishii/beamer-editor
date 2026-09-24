@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { lintSource } from "@beamer-editor/core";
 import { afterEach, expect, it, vi } from "vitest";
 import { run, USAGE } from "../src/cli.ts";
+import { GENERATED_SKILL_FINGERPRINT } from "../src/generated-skill-fingerprint.ts";
 import { skillLintOptions } from "../src/skill.ts";
 import { buildSkillFiles, skillFingerprint } from "../src/skill-generator.ts";
 import { CLI_VERSION } from "../src/version.ts";
@@ -55,6 +56,31 @@ it("generates deterministic, portable artifacts and propagates spec and version 
   expect(files["references/subset-cheatsheet.md"]).not.toMatch(
     /\]\((?:theme-design|ai-protocol)\.md/,
   );
+  expect(files["references/cli.md"]).toContain("deck snapshot");
+  expect(files["references/cli.md"]).not.toContain("snapshot等");
+});
+
+it("resolves a symlinked deck directory before finding its bundled skill", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "beamer-skill-symlink-"));
+  directories.push(directory);
+  const repository = join(directory, "repository");
+  const slides = join(repository, "slides");
+  const skill = join(repository, ".claude/skills/beamer-deck");
+  await mkdir(slides, { recursive: true });
+  await mkdir(join(repository, ".git"));
+  await mkdir(skill, { recursive: true });
+  await writeFile(
+    join(skill, "SKILL.md"),
+    `---\nmetadata:\n  fingerprint: "${GENERATED_SKILL_FINGERPRINT}"\n---\n`,
+  );
+  const linkedRepository = join(directory, "linked-repository");
+  await symlink(repository, linkedRepository, "dir");
+  const deck = join(linkedRepository, "slides/test.slide.tex");
+  await writeFile(join(slides, "test.slide.tex"), source);
+  expect(await skillLintOptions(deck)).toEqual({
+    skillFingerprint: GENERATED_SKILL_FINGERPRINT,
+    expectedSkillFingerprint: GENERATED_SKILL_FINGERPRINT,
+  });
 });
 
 it("does not search past the nearest Git repository boundary", async () => {
