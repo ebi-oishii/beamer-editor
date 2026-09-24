@@ -5,9 +5,9 @@ export const SKILL_FINGERPRINT_PLACEHOLDER = "__BEAMER_DECK_SKILL_FINGERPRINT__"
 /** Hash generated paths and contents. The SKILL metadata fingerprint is normalized to avoid a cycle. */
 export function skillFingerprint(files: Record<string, string>): string {
   const hash = createHash("sha256");
-  for (const [path, content] of Object.entries(files).sort(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
+  for (const path of Object.keys(files).sort()) {
+    const content = files[path];
+    if (content === undefined) throw new Error(`生成物が見つかりません: ${path}`);
     hash.update(path);
     hash.update("\0");
     hash.update(
