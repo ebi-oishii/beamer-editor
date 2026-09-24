@@ -67,3 +67,9 @@ managed な `.tex` エディターで、クリップボードの画像(PNG / JPE
 Export の形式で **HTML（プレビュー相当）** を選ぶと、保存済みの内容から `index.html` を含むフォルダーを作成します。これは `file:` で直接開ける高速プレビューの固定スナップショットであり、正式な TeX 出力ではありません。PDF 画像と raw TeX はプレースホルダーのまま、外部 URL の画像は開いたブラウザーでネットワークを必要とします。HTML は外部プロセスを使わないため Restricted Mode でも利用できます。
 
 このリポジトリで LaTeX Workshop を併用する場合の、混在 workspace と専用 workspace の設定方針は[エディタセットアップ](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/editor-setup.md)を参照してください。
+
+### スライド一覧からの編集
+
+Beamer Slides の項目を右クリックすると、Move Slide Up / Down、Duplicate Slide、Delete Slide、Insert New Slide を使えます。挿入は選択スライドの直後、一覧タイトルの「+」からは末尾です。空のデッキにも挿入できます。各操作は1回のundoで戻り、プレビューとソースへ反映されます。
+
+移動時は直前の連続したコメント行と末尾の行コメントも一緒に移動します。sectionやフレーム間のその他のTeXはその位置に保持するため、section境界を越える移動では所属するsectionが変わります。複製はframe labelを未使用の `slide-N` に変更します。本文に `\label`・`\hypertarget`・`\newcounter` など文書内で一意な定義(それを生成するマクロを含む)や安全に解釈できないframeオプションがある場合は、参照先やコンパイルを壊さないため複製を拒否し、ソース上での編集を案内します。マクロが生成した仮想フレームは一覧操作の対象外です。

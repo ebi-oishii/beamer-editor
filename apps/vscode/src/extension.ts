@@ -49,6 +49,7 @@ import {
   RawBlockCompiler,
 } from "./raw-block-compiler";
 import { frameLensPositions, sourceHasFrameAt } from "./reveal-slide";
+import { resolveSlideCommandTarget, SlideEditController } from "./slide-edit-controller";
 import {
   hasSlideOutlineContentChanges,
   managedOutlineDocument,
@@ -152,6 +153,7 @@ async function jumpToOffset(
 /** 統合テストからの観測用 API(activate の戻り値)。製品コードから参照しない。 */
 export interface TestApi {
   _previewControllerForTest(): PreviewController | undefined;
+  _slideItemsForTest(): unknown[];
   _imagePasteProviderForTest(): ImagePasteEditProvider;
 }
 
@@ -374,6 +376,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   class SlideOutlineItem extends vscode.TreeItem {
     constructor(readonly entry: SlideOutlineEntry<vscode.TextDocument>) {
       super(`${entry.frameNumber}. ${entry.title}`, vscode.TreeItemCollapsibleState.None);
+      this.contextValue = "beamerSlide";
       if (entry.label) this.description = `label: ${entry.label}`;
       else if (entry.raw) this.description = "raw";
       this.tooltip = entry.raw
@@ -405,6 +408,55 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       );
     }),
   );
+
+  const slideEdits = new SlideEditController(slideOutlineState, {
+    isEditable: (document) =>
+      !document.isClosed &&
+      isManaged(document) &&
+      vscode.workspace.fs.isWritableFileSystem(document.uri.scheme) !== false,
+    apply: async (document, edits) => {
+      const workspaceEdit = new vscode.WorkspaceEdit();
+      for (const { span, text } of edits) {
+        workspaceEdit.replace(
+          document.uri,
+          new vscode.Range(document.positionAt(span.start), document.positionAt(span.end)),
+          text,
+        );
+      }
+      return vscode.workspace.applyEdit(workspaceEdit);
+    },
+    changed: (document) => {
+      if (slideOutlineState.hasDocument(document)) updateSlideOutline(document);
+    },
+    warn: (message) => {
+      void vscode.window.showWarningMessage(message);
+    },
+  });
+  // View title actions may receive the focused tree item. Appending must ignore it.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("beamerEditor.slides.append", () =>
+      slideEdits.execute("insert"),
+    ),
+  );
+  for (const action of ["moveUp", "moveDown", "duplicate", "delete", "insert"] as const) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(`beamerEditor.slides.${action}`, async (item: unknown) => {
+        const target = await resolveSlideCommandTarget(
+          action,
+          item instanceof SlideOutlineItem ? item.entry : item === undefined ? undefined : "other",
+          slideOutlineState.getEntries(),
+          async (entries, placeHolder) =>
+            (
+              await vscode.window.showQuickPick(
+                entries.map((entry) => ({ label: `${entry.frameNumber}. ${entry.title}`, entry })),
+                { placeHolder },
+              )
+            )?.entry,
+        );
+        return target.kind === "run" && slideEdits.execute(action, target.entry);
+      }),
+    );
+  }
 
   function updateSlideOutline(document: vscode.TextDocument | undefined): void {
     slideOutlineRefresh.cancel();
@@ -1083,6 +1135,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
   return {
     _previewControllerForTest: () => previewController,
+    _slideItemsForTest: () =>
+      slideOutlineState.getEntries().map((entry) => new SlideOutlineItem(entry)),
     _imagePasteProviderForTest: () => imagePaste,
   };
 }
