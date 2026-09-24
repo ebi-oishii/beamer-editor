@@ -568,6 +568,23 @@ code
     ).toBe(false);
   });
 
+  it("fancyvrb の Verbatim も fragile の無い frame では L007", () => {
+    for (const environment of ["Verbatim", "BVerbatim", "LVerbatim"]) {
+      const source = deck(`
+\\begin{frame}{Code}
+\\begin{${environment}}
+code
+\\end{${environment}}
+\\end{frame}`);
+      expect(lintDeck(parseDeck(source)).some((entry) => entry.code === "L007")).toBe(true);
+      expect(
+        lintDeck(parseDeck(source.replace("\\begin{frame}", "\\begin{frame}[fragile]"))).some(
+          (entry) => entry.code === "L007",
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("未知環境の生ブロック内にネストした verbatim 系も L007 で報告する", () => {
     const source = deck(`
 \\begin{frame}{Code}

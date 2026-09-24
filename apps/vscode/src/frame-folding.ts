@@ -1,4 +1,4 @@
-import { framesOf, parseDeck } from "@beamer-editor/core";
+import { framesOf, parseDeck, texTokens } from "@beamer-editor/core";
 
 /** VS Code に依存しない折りたたみ範囲。行番号は 0 始まりで両端を含む。 */
 export interface FrameFoldRange {
@@ -19,10 +19,6 @@ export interface FrameFoldDocument {
 export interface FrameFoldCancellation {
   isCancellationRequested: boolean;
 }
-
-const FRAME_BEGIN = "\\begin{frame}";
-const FRAME_END = "\\end{frame}";
-const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlisting", "minted"]);
 
 /** 直前にある連続バックスラッシュ数が奇数なら、その位置の文字は TeX でエスケープされる。 */
 function isEscaped(source: string, position: number): boolean {
@@ -45,62 +41,21 @@ function hasOnlyTrailingTrivia(source: string, start: number, end: number): bool
 }
 
 /**
- * parser の frame span 内で、コメント・エスケープを考慮して frame delimiter の深さを追う。
+ * parser の frame span 内で、parser と同じ tex-scan の規則(コメント・`\verb`・verbatim 系・
+ * マクロ定義本体を数えない)で frame delimiter の深さを追う。
  * 外側を閉じる end だけを受け入れ、その後には trailing trivia だけを許可する。
  */
 function completeOuterFrameEnd(source: string, start: number, end: number): number | undefined {
   let depth = 0;
-  let cursor = start;
-  let slashes = 0;
-  while (cursor < end) {
-    const char = source[cursor] as string;
-    if (char === "%" && slashes % 2 === 0) {
-      while (cursor < end && source[cursor] !== "\n" && source[cursor] !== "\r") cursor++;
-      slashes = 0;
-      continue;
-    }
-    if (slashes % 2 === 0 && source.startsWith("\\begin{", cursor)) {
-      let close = cursor + 7;
-      while (
-        close < end &&
-        source[close] !== "}" &&
-        source[close] !== "\\" &&
-        source[close] !== "\n" &&
-        source[close] !== "\r"
-      )
-        close++;
-      if (source[close] !== "}") {
-        cursor += "\\begin{".length;
-        slashes = 0;
-        continue;
-      }
-      const environment = source.slice(cursor + 7, close);
-      if (VERBATIM_ENVS.has(environment)) {
-        const verbatimEnd = `\\end{${environment}}`;
-        const endPos = source.indexOf(verbatimEnd, close + 1);
-        if (endPos === -1 || endPos >= end) return undefined;
-        cursor = endPos + verbatimEnd.length;
-        slashes = 0;
-        continue;
-      }
-    }
-    if (slashes % 2 === 0 && source.startsWith(FRAME_BEGIN, cursor)) {
+  for (const token of texTokens(source, start, end)) {
+    if (token.kind === "unterminated") return undefined;
+    if ((token.kind !== "begin" && token.kind !== "end") || token.name !== "frame") continue;
+    if (token.kind === "begin") {
       depth++;
-      cursor += FRAME_BEGIN.length;
-      slashes = 0;
       continue;
     }
-    if (slashes % 2 === 0 && source.startsWith(FRAME_END, cursor)) {
-      if (depth === 0) return undefined;
-      depth--;
-      const outerEnd = cursor + FRAME_END.length;
-      if (depth === 0) return hasOnlyTrailingTrivia(source, outerEnd, end) ? outerEnd : undefined;
-      cursor = outerEnd;
-      slashes = 0;
-      continue;
-    }
-    slashes = char === "\\" ? slashes + 1 : 0;
-    cursor++;
+    if (depth === 0) return undefined;
+    if (--depth === 0) return hasOnlyTrailingTrivia(source, token.end, end) ? token.end : undefined;
   }
   return undefined;
 }

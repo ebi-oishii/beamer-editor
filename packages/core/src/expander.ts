@@ -28,6 +28,7 @@
 
 import type { DeckDocument, MacroDefinition, SourceSpan } from "./ast.js";
 import { parseDeck } from "./parser.js";
+import { documentTags, VERBATIM_ENVS } from "./tex-scan.js";
 
 // ---------------------------------------------------------------------------
 // 公開 API
@@ -106,9 +107,6 @@ export interface ExpandResult {
 // ---------------------------------------------------------------------------
 // 内部
 // ---------------------------------------------------------------------------
-
-/** verbatim 系環境(内部は展開しない)。parser.ts と同一集合。 */
-const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlisting", "minted"]);
 
 /** 呼び出し連鎖の深さ上限。これを超える展開は行わず max-depth を積む(無限再帰の停止)。 */
 const MAX_DEPTH = 16;
@@ -504,31 +502,6 @@ function buildSegments(pieces: Piece[]): ExpansionMap {
   return segs;
 }
 
-/**
- * `\begin{document}` の開始位置を探す。プリアンブルの `%` 行コメント内の
- * `% \begin{document}` に誤マッチしないよう、行コメントを飛ばしながら走査する
- *(`\%` エスケープは考慮。verbatim はプリアンブルにほぼ無いため考慮しない)。見つからなければ -1。
- */
-function findDocumentBegin(source: string): number {
-  const marker = "\\begin{document}";
-  let i = 0;
-  while (i < source.length) {
-    if (source.startsWith(marker, i)) return i;
-    const ch = source.charAt(i);
-    if (ch === "%") {
-      const nl = source.indexOf("\n", i);
-      i = nl === -1 ? source.length : nl + 1;
-      continue;
-    }
-    if (ch === "\\") {
-      i += 2; // エスケープ(\% など)は 2 文字読み飛ばす(marker の判定は上で済んでいる)
-      continue;
-    }
-    i += 1;
-  }
-  return -1;
-}
-
 /** 入力パースが失敗したときのフォールバック用の空 DeckDocument(呼び出し側をクラッシュさせない)。 */
 function emptyDoc(source: string): DeckDocument {
   const span: SourceSpan = { start: 0, end: source.length };
@@ -577,7 +550,8 @@ export function expandDeck(source: string): ExpandResult {
   const expander = new Expander(doc);
 
   const marker = "\\begin{document}";
-  const docBegin = findDocumentBegin(source);
+  // parser と同じ規則(コメント・verbatim・定義本体を除く)で本文の開始を決める。
+  const docBegin = documentTags(source).begin;
 
   let pieces: Piece[];
   if (docBegin === -1 || !expander.hasDefs) {

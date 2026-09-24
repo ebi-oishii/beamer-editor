@@ -7,4 +7,6 @@ export * from "./fragment.js";
 export * from "./image.js";
 export * from "./linter.js";
 export * from "./parser.js";
+export * from "./slide-edit.js";
 export * from "./template.js";
+export { type TexToken, texTokens, VERBATIM_ENVS } from "./tex-scan.js";

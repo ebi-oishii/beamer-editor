@@ -24,7 +24,7 @@ import {
   clampCanvasPlacement,
   formatCanvasCoordinate,
 } from "./canvas-edit.js";
-import { parseDeck } from "./parser.js";
+import { parseDeck, readFrameHeader } from "./parser.js";
 
 /** 元ソースの span をこのテキストで置き換える、という結果。 */
 export interface SourceReplacement {
@@ -32,7 +32,6 @@ export interface SourceReplacement {
   text: string;
 }
 
-const BEGIN_FRAME = "\\begin{frame}";
 /** decktext 内のリストは本文と同じ 3 段までネスト可(L014 と同じ条件)。項目のオーバーレイは不可。 */
 function listFitsDecktext(list: ListNode, depth: number): boolean {
   return list.items.every(
@@ -358,10 +357,11 @@ function nextCanvasLabel(doc: DeckDocument): string {
  * frame へ `label=` を足す編集。options が無ければ `[label=...]` を新設し、
  * あれば既知 option を既定順に組み直す。空の label は置換し、空 option や末尾カンマも正規化する。
  */
-function addLabelEdit(frame: FrameNode, label: string): Edit {
+function addLabelEdit(source: string, frame: FrameNode, label: string): Edit {
   const options = frame.options.span;
   if (options === null) {
-    const at = frame.span.start + BEGIN_FRAME.length;
+    // overlay や見出しの空白・コメントの後ろでも、パーサが読んだ見出しの直後に入れる。
+    const at = readFrameHeader(source, frame.span.start, frame.span.end).insertAt;
     return { start: at, end: at, text: `[label=${label}]` };
   }
   const normalized = [
@@ -397,7 +397,7 @@ function rewriteFrame({
 
   // 0. キャンバスフレームには一意な label が要る(L011)。GUI 操作の結果が
   //    そのまま lint を通るよう、label の無いフレームにはここで付ける。
-  if (addLabel !== null) edits.push(addLabelEdit(frame, addLabel));
+  if (addLabel !== null) edits.push(addLabelEdit(source, frame, addLabel));
 
   // 1. 対象の原文(唯一の内容なら \\item やリストごと)を取り除く。行を占有していれば改行ごと消す。
   //    広げた範囲にあったコメントは、行を占有して消せるときは同じ位置に行として残す(§2.4)。
