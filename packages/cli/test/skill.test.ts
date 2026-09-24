@@ -15,7 +15,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { run, USAGE } from "../src/cli.ts";
 import { GENERATED_SKILL_FINGERPRINT } from "../src/generated-skill-fingerprint.ts";
 import { skillLintOptions } from "../src/skill.ts";
-import { buildSkillFiles, skillFingerprint } from "../src/skill-generator.ts";
+import {
+  buildProjectInstructions,
+  buildSkillFiles,
+  PROJECT_INSTRUCTIONS_PATH,
+  SKILL_DIRECTORIES,
+  skillFingerprint,
+} from "../src/skill-generator.ts";
 import { CLI_VERSION } from "../src/version.ts";
 
 const root = resolve(import.meta.dirname, "../../..");
@@ -57,11 +63,19 @@ it("generates deterministic, portable artifacts and propagates spec and version 
   };
   const files = buildSkillFiles(input);
   expect(buildSkillFiles(input)).toEqual(files);
-  for (const directory of ["skills/beamer-deck", ".claude/skills/beamer-deck"]) {
+  expect(SKILL_DIRECTORIES).toEqual([
+    "skills/beamer-deck",
+    ".claude/skills/beamer-deck",
+    ".agents/skills/beamer-deck",
+  ]);
+  for (const directory of SKILL_DIRECTORIES) {
     for (const [path, content] of Object.entries(files)) {
       expect(await readFile(join(root, directory, path), "utf8")).toBe(content);
     }
   }
+  expect(await readFile(join(root, PROJECT_INSTRUCTIONS_PATH), "utf8")).toBe(
+    buildProjectInstructions(input.protocol),
+  );
   const changed = buildSkillFiles({
     ...input,
     version: "9.8.7",
