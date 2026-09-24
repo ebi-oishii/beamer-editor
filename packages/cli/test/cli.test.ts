@@ -262,7 +262,7 @@ describe("deck lint", () => {
       "不明なコマンド: unknown-command\n" +
         "使い方: deck <command> ...\n\n" +
         "  deck init [directory] [--json]      新規または空のディレクトリへ新規デッキを生成\n" +
-        "  deck init <directory> --update-skill [--json]  既存ディレクトリの .claude/skills/beamer-deck/ を更新\n" +
+        "  deck init <directory> --update-skill [--json]  既存ディレクトリの .claude と .agents 配下の skills/beamer-deck/ を更新\n" +
         "  deck lint <file> [--json]           デッキを検査\n" +
         "  deck format <file> [--write] [--json]  デッキを正規化\n" +
         "  deck outline <file> [--json]        フレーム一覧を表示\n" +

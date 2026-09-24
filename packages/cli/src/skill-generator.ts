@@ -7,7 +7,14 @@ export const SKILL_FILE_PATHS = [
   "references/cli.md",
   "examples/prompts.md",
 ] as const;
-export const SKILL_DIRECTORIES = ["skills/beamer-deck", ".claude/skills/beamer-deck"] as const;
+/** Where agents discover a project skill: Claude Code, then Codex. Both receive identical files. */
+export const PROJECT_SKILL_DIRECTORIES = [
+  ".claude/skills/beamer-deck",
+  ".agents/skills/beamer-deck",
+] as const;
+export const SKILL_DIRECTORIES = ["skills/beamer-deck", ...PROJECT_SKILL_DIRECTORIES] as const;
+/** Generated always-read project instructions that `deck init` installs as AGENTS.md. */
+export const PROJECT_INSTRUCTIONS_PATH = "skills/deck-project/AGENTS.md";
 export type SkillFilePath = (typeof SKILL_FILE_PATHS)[number];
 
 /** Hash generated paths and contents. The SKILL metadata fingerprint is normalized to avoid a cycle. */
@@ -80,4 +87,13 @@ export function buildSkillFiles(input: {
       content.replaceAll(SKILL_FINGERPRINT_PLACEHOLDER, fingerprint),
     ]),
   ) as Record<SkillFilePath, string>;
+}
+
+/** Project instructions from the protocol appendix; users may edit them, so no fingerprint. */
+export function buildProjectInstructions(protocol: string): string {
+  const draft = protocol
+    .split("## 付録: プロジェクト指示ドラフト")[1]
+    ?.match(/```markdown\n([\s\S]*?)\n```/)?.[1];
+  if (!draft) throw new Error("プロジェクト指示の生成元ドラフトが見つかりません");
+  return `${draft}\n`;
 }

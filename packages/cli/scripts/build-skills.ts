@@ -1,13 +1,20 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { USAGE } from "../src/cli.ts";
-import { buildSkillFiles, SKILL_DIRECTORIES, SKILL_FILE_PATHS } from "../src/skill-generator.ts";
+import {
+  buildProjectInstructions,
+  buildSkillFiles,
+  PROJECT_INSTRUCTIONS_PATH,
+  SKILL_DIRECTORIES,
+  SKILL_FILE_PATHS,
+} from "../src/skill-generator.ts";
 import { CLI_VERSION } from "../src/version.ts";
 
 const root = resolve(import.meta.dirname, "../../..");
+const protocol = await readFile(resolve(root, "docs/ai-protocol.md"), "utf8");
 const files = buildSkillFiles({
   subsetSpec: await readFile(resolve(root, "docs/subset-spec.md"), "utf8"),
-  protocol: await readFile(resolve(root, "docs/ai-protocol.md"), "utf8"),
+  protocol,
   cliUsage: USAGE,
   version: CLI_VERSION,
 });
@@ -41,4 +48,14 @@ for (const directory of SKILL_DIRECTORIES) {
       await writeFile(path, content);
     }
   }
+}
+const instructionsPath = resolve(root, PROJECT_INSTRUCTIONS_PATH);
+const instructions = buildProjectInstructions(protocol);
+if (process.argv.includes("--check")) {
+  if ((await readFile(instructionsPath, "utf8").catch(() => null)) !== instructions) {
+    throw new Error(`生成物が古いか存在しません: ${instructionsPath} (pnpm build:skills)`);
+  }
+} else {
+  await mkdir(dirname(instructionsPath), { recursive: true });
+  await writeFile(instructionsPath, instructions);
 }
