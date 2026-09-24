@@ -88,6 +88,23 @@ it("generates deterministic, portable artifacts and propagates spec and version 
   expect(files["references/cli.md"]).not.toContain("snapshot等");
 });
 
+it("steers agents to canvas objects, deck export, and pptx only on explicit request", async () => {
+  const files = buildSkillFiles({
+    subsetSpec: await readFile(join(root, "docs/subset-spec.md"), "utf8"),
+    protocol: await readFile(join(root, "docs/ai-protocol.md"), "utf8"),
+    cliUsage: USAGE,
+    version: CLI_VERSION,
+  });
+  const description = files["SKILL.md"].split("\n---\n")[0];
+  for (const phrase of ["プレビュー", "PDF", "pptx"]) expect(description).toContain(phrase);
+  for (const phrase of ["decktext", "deck export <file> --format pdf", "明示したときだけ"]) {
+    expect(files["SKILL.md"]).toContain(phrase);
+  }
+  for (const pattern of ["プレビューで動かす", "PDF 出力", "pptx の明示"]) {
+    expect(files["examples/prompts.md"]).toContain(`| ${pattern} |`);
+  }
+});
+
 it("resolves a symlinked deck directory before finding its bundled skill", async () => {
   const directory = await mkdtemp(join(tmpdir(), "beamer-skill-symlink-"));
   directories.push(directory);
