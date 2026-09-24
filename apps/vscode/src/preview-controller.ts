@@ -5,7 +5,7 @@ import {
   isCanvasFontSize,
   mapExpandedRangeToSourceExact,
 } from "@beamer-editor/core";
-import { DEFAULT_THEME } from "@beamer-editor/renderer";
+import { DEFAULT_THEME, type RenderedCanvasElement } from "@beamer-editor/renderer";
 import type { ExtensionToWebview } from "@beamer-editor/ui";
 import { parseWebviewToExtension } from "@beamer-editor/ui";
 import type * as vscode from "vscode";
@@ -144,6 +144,34 @@ export interface PreviewControllerOptions {
     placement: CanvasPlacement;
     document: PreviewDocument;
   }) => Promise<CanvasEditResult>;
+  /** 選択中のキャンバス要素を取り除く(Delete。#148)。sourceSpan は要素の options の範囲。 */
+  deleteCanvasElement?: (request: {
+    frameIndex: number;
+    elementId: string;
+    version: number;
+    sourceSpan: { start: number; end: number };
+    document: PreviewDocument;
+    expectedOptions: string;
+  }) => Promise<CanvasEditResult>;
+  /** 選択中のキャンバス要素のソースをクリップボードへ写す(Cmd+C)。写せたら true。 */
+  copyCanvasElement?: (request: {
+    frameIndex: number;
+    elementId: string;
+    version: number;
+    sourceSpan: { start: number; end: number };
+    document: PreviewDocument;
+    expectedOptions: string;
+  }) => Promise<boolean>;
+  /**
+   * クリップボードのキャンバス要素を、frameOffset(元ソース上の位置)を含むフレームへ貼り付ける
+   * (Cmd+V)。要素でなければ "cancelled"。
+   */
+  pasteCanvasElements?: (request: {
+    frameIndex: number;
+    version: number;
+    frameOffset: number;
+    document: PreviewDocument;
+  }) => Promise<CanvasEditResult>;
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -243,6 +271,9 @@ export class PreviewController implements vscode.Disposable {
   private readonly onWebviewReady: () => void;
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
   private readonly detachToCanvas: PreviewControllerOptions["detachToCanvas"];
+  private readonly deleteCanvasElement: PreviewControllerOptions["deleteCanvasElement"];
+  private readonly copyCanvasElement: PreviewControllerOptions["copyCanvasElement"];
+  private readonly pasteCanvasElements: PreviewControllerOptions["pasteCanvasElements"];
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
@@ -293,6 +324,9 @@ export class PreviewController implements vscode.Disposable {
     this.onWebviewReady = options.onWebviewReady ?? (() => {});
     this.moveCanvasElement = options.moveCanvasElement;
     this.detachToCanvas = options.detachToCanvas;
+    this.deleteCanvasElement = options.deleteCanvasElement;
+    this.copyCanvasElement = options.copyCanvasElement;
+    this.pasteCanvasElements = options.pasteCanvasElements;
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
@@ -369,6 +403,12 @@ export class PreviewController implements vscode.Disposable {
       await this.handleMove(msg);
     } else if (msg.type === "detachToCanvas") {
       await this.handleDetach(msg);
+    } else if (msg.type === "deleteCanvasElement") {
+      await this.handleDelete(msg);
+    } else if (msg.type === "copyCanvasElement") {
+      await this.handleCopy(msg);
+    } else if (msg.type === "pasteCanvasElements") {
+      await this.handlePaste(msg);
     } else if (msg.type === "undoRedo") {
       // 注入された処理は同期で呼び出し、同期の例外も非同期の rejection も onError へ回す。
       const report = () => this.onError(`failed to ${msg.kind} the source document.`);
@@ -605,6 +645,174 @@ export class PreviewController implements vscode.Disposable {
     }
     if (!this.disposed) {
       this.onError("failed to move the element to the canvas.");
+      this.sendDeck();
+    }
+  }
+
+  /**
+   * 要求が指す editable なキャンバス要素の最新 descriptor。プレビューが古い版を見ていれば undefined
+   * (move と同じ条件)。
+   */
+  private currentCanvasElement(request: {
+    frameIndex: number;
+    elementId: string;
+    version: number;
+  }): RenderedCanvasElement | undefined {
+    const latest = this.latest;
+    const frame = latest?.deck.frames[request.frameIndex];
+    const element = frame?.canvasElements?.find(
+      (candidate) => candidate.id === request.elementId && candidate.editable,
+    );
+    if (
+      !latest ||
+      this.latestDocument !== this.document ||
+      request.version !== this.document.version ||
+      latest.version !== this.document.version ||
+      !frame ||
+      !element
+    )
+      return undefined;
+    return element;
+  }
+
+  /** 選択中のキャンバス要素を取り除く(Delete。#148)。move と同じく最新 version の文書にだけ適用する。 */
+  private async handleDelete(request: {
+    frameIndex: number;
+    elementId: string;
+    version: number;
+  }): Promise<void> {
+    if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
+    const element = this.currentCanvasElement(request);
+    if (!element) {
+      this.sendDeck();
+      return;
+    }
+    const { frameIndex, elementId, version } = request;
+    const document = this.document;
+    const expectedOptions = document
+      .getText()
+      .slice(element.sourceSpan.start, element.sourceSpan.end);
+    this.editApplyPending = true;
+    try {
+      const result = await this.deleteCanvasElement?.({
+        frameIndex,
+        elementId,
+        version,
+        sourceSpan: element.sourceSpan,
+        document,
+        expectedOptions,
+      });
+      this.editApplyPending = false;
+      if (this.disposed) return;
+      if (result === "applied") {
+        this.editAwaitingVersion = version;
+        if (this.document.version !== version) this.sendDeck();
+        return;
+      }
+      if (result === "unchanged") {
+        this.sendDeck();
+        return;
+      }
+      if (result === "cancelled") {
+        this.onWarning("キャンバス要素を削除できませんでした。選び直してください。");
+        this.sendDeck();
+        return;
+      }
+    } catch {
+      this.editApplyPending = false;
+      if (this.disposed) return;
+    }
+    if (!this.disposed) {
+      this.onError("failed to delete the canvas element.");
+      this.sendDeck();
+    }
+  }
+
+  /** 選択中のキャンバス要素のソースをクリップボードへ写す(Cmd+C)。cut(Cmd+X)なら続けて取り除く。 */
+  private async handleCopy(request: {
+    frameIndex: number;
+    elementId: string;
+    version: number;
+    cut: boolean;
+  }): Promise<void> {
+    const element = this.currentCanvasElement(request);
+    if (!element) {
+      this.sendDeck();
+      return;
+    }
+    const { frameIndex, elementId, version } = request;
+    const document = this.document;
+    const expectedOptions = document
+      .getText()
+      .slice(element.sourceSpan.start, element.sourceSpan.end);
+    let copied = false;
+    try {
+      copied =
+        (await this.copyCanvasElement?.({
+          frameIndex,
+          elementId,
+          version,
+          sourceSpan: element.sourceSpan,
+          document,
+          expectedOptions,
+        })) === true;
+    } catch {
+      copied = false;
+    }
+    if (this.disposed) return;
+    if (!copied) {
+      this.onError("failed to copy the canvas element.");
+      return;
+    }
+    if (request.cut) await this.handleDelete(request);
+  }
+
+  /** クリップボードのキャンバス要素を、表示中のフレームへ貼り付ける(Cmd+V。#148)。 */
+  private async handlePaste(request: { frameIndex: number; version: number }): Promise<void> {
+    if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
+    const latest = this.latest;
+    if (
+      !latest ||
+      this.latestDocument !== this.document ||
+      request.version !== this.document.version ||
+      latest.version !== this.document.version
+    ) {
+      this.sendDeck();
+      return;
+    }
+    const frameOffset = resolveJumpOffset(latest, request.frameIndex);
+    if (frameOffset === null) return;
+    const { frameIndex, version } = request;
+    const document = this.document;
+    this.editApplyPending = true;
+    try {
+      const result = await this.pasteCanvasElements?.({
+        frameIndex,
+        version,
+        frameOffset,
+        document,
+      });
+      this.editApplyPending = false;
+      if (this.disposed) return;
+      if (result === "applied") {
+        this.editAwaitingVersion = version;
+        if (this.document.version !== version) this.sendDeck();
+        return;
+      }
+      if (result === "unchanged") {
+        this.sendDeck();
+        return;
+      }
+      if (result === "cancelled") {
+        this.onWarning("クリップボードにキャンバスの要素(decktext / deckimage)がありません。");
+        return;
+      }
+    } catch {
+      this.editApplyPending = false;
+      if (this.disposed) return;
+    }
+    if (!this.disposed) {
+      this.onError("failed to paste canvas elements.");
       this.sendDeck();
     }
   }

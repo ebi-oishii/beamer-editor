@@ -85,6 +85,7 @@ export function Stage({
   onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
+  onSelectionChange,
 }: {
   frame: RenderedFrame;
   step: number;
@@ -96,10 +97,19 @@ export function Stage({
   onMoveCanvasElement: (elementId: string, x: number, y: number) => void;
   /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
   onDetachToCanvas?: ((request: DetachRequest) => void) | undefined;
+  /** 選択中のキャンバス要素が変わった通知(null は選択解除)。Delete / コピーの対象を親が知るために使う。 */
+  onSelectionChange?: ((elementId: string | null) => void) | undefined;
 }): JSX.Element {
   const scaleRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState>();
   const [selected, setSelected] = useState<string | null>(null);
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
+  useEffect(() => {
+    onSelectionChangeRef.current?.(selected);
+  }, [selected]);
+  // フレームごと消えたときも、親に残った選択を外す。
+  useEffect(() => () => onSelectionChangeRef.current?.(null), []);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const highlightRef = useRef<HTMLElement | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);

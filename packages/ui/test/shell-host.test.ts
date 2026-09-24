@@ -168,3 +168,27 @@ describe("createMessageShellHost", () => {
     expect(cleared).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("createMessageShellHost: canvas clipboard(#148)", () => {
+  it("delete / copy / paste を transport へ post する", () => {
+    const posted: unknown[] = [];
+    const host = createMessageShellHost({
+      post: (msg) => posted.push(msg),
+      subscribe: () => () => {},
+    });
+    host.deleteCanvasElement?.(0, "canvas-text-0", 4);
+    host.copyCanvasElement?.(0, "canvas-text-0", 4, true);
+    host.pasteCanvasElements?.(1, 4);
+    expect(posted).toEqual([
+      { type: "deleteCanvasElement", frameIndex: 0, elementId: "canvas-text-0", version: 4 },
+      {
+        type: "copyCanvasElement",
+        frameIndex: 0,
+        elementId: "canvas-text-0",
+        version: 4,
+        cut: true,
+      },
+      { type: "pasteCanvasElements", frameIndex: 1, version: 4 },
+    ]);
+  });
+});

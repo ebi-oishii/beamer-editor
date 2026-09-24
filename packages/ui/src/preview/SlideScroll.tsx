@@ -64,6 +64,7 @@ function SlideCard({
   onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
+  onSelectionChange,
 }: {
   frame: RenderedFrame;
   index: number;
@@ -82,6 +83,7 @@ function SlideCard({
     | undefined;
   onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
   onDetachToCanvas: ((frameIndex: number, request: DetachRequest) => void) | undefined;
+  onSelectionChange: ((frameIndex: number, elementId: string | null) => void) | undefined;
 }): JSX.Element {
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter") return;
@@ -124,6 +126,9 @@ function SlideCard({
         onDetachToCanvas={
           onDetachToCanvas ? (request) => onDetachToCanvas(index, request) : undefined
         }
+        onSelectionChange={
+          onSelectionChange ? (elementId) => onSelectionChange(index, elementId) : undefined
+        }
       />
       <div className="slide-caption">
         {frame.index}. {frame.titleText}
@@ -148,6 +153,7 @@ export function SlideScroll({
   onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
+  onSelectionChange,
   onFitScaleChange,
 }: {
   frames: RenderedFrame[];
@@ -169,6 +175,8 @@ export function SlideScroll({
   onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
   /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
   onDetachToCanvas?: ((frameIndex: number, request: DetachRequest) => void) | undefined;
+  /** 選択中のキャンバス要素が変わった通知(#148)。 */
+  onSelectionChange?: ((frameIndex: number, elementId: string | null) => void) | undefined;
   onFitScaleChange: (scale: number) => void;
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -359,6 +367,7 @@ export function SlideScroll({
           onResizeCanvasElement={onResizeCanvasElement}
           onMoveCanvasElement={onMoveCanvasElement}
           onDetachToCanvas={onDetachToCanvas}
+          onSelectionChange={onSelectionChange}
         />
       ))}
     </div>

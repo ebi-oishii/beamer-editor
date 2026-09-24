@@ -85,6 +85,21 @@ export interface ShellHost {
     y: number,
   ): void;
   /**
+   * ui → ホスト: 選択中のキャンバス要素を取り除く(Delete / Backspace。#148)。
+   * 実装しないホストではキーを奪わない。
+   */
+  deleteCanvasElement?(frameIndex: number, elementId: string, version: number): void;
+  /**
+   * ui → ホスト: 選択中のキャンバス要素のソースをクリップボードへ写す(Cmd/Ctrl+C)。
+   * cut(Cmd/Ctrl+X)なら続けて取り除く。実装しないホストではキーを奪わない。
+   */
+  copyCanvasElement?(frameIndex: number, elementId: string, version: number, cut: boolean): void;
+  /**
+   * ui → ホスト: クリップボードのキャンバス要素を、表示中のフレームへ貼り付ける(Cmd/Ctrl+V)。
+   * 実装しないホストではキーを奪わない。
+   */
+  pasteCanvasElements?(frameIndex: number, version: number): void;
+  /**
    * ui → ホスト: フロー要素(段落・リスト・画像)を同じフレームの deckcanvas へ移す要求
    * (「自由配置にする」)。sourceSpan は展開後ソース、rect はスライド全体を 1 とした
    * 左上座標と幅。実装しないホストではメニューを出さない。
@@ -175,6 +190,15 @@ export function createMessageShellHost(
     },
     detachToCanvas(frameIndex, version, sourceSpan, rect) {
       transport.post({ type: "detachToCanvas", frameIndex, version, sourceSpan, rect });
+    },
+    deleteCanvasElement(frameIndex, elementId, version) {
+      transport.post({ type: "deleteCanvasElement", frameIndex, elementId, version });
+    },
+    copyCanvasElement(frameIndex, elementId, version, cut) {
+      transport.post({ type: "copyCanvasElement", frameIndex, elementId, version, cut });
+    },
+    pasteCanvasElements(frameIndex, version) {
+      transport.post({ type: "pasteCanvasElements", frameIndex, version });
     },
     loadNavState() {
       return parseNavState(state?.getState());
