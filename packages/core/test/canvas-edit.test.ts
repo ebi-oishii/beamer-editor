@@ -182,6 +182,7 @@ describe("canvas font size", () => {
       `[x=.1,y=.2,w=.3,size=${size}]`,
     );
     expect(canvasFontSizeReplacement("[]", size)).toBe(`[size=${size}]`);
+    expect(canvasFontSizeReplacement("[ ]", size)).toBe(`[size=${size}]`);
   });
   it("rejects unknown sizes and duplicate declarations", () => {
     expect(canvasFontSizeReplacement("[x=0,y=0,w=.3]", "Huge" as never)).toBeNull();

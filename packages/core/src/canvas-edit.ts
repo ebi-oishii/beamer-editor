@@ -192,7 +192,9 @@ export function canvasFontSizeReplacement(options: string, size: CanvasFontSize)
   if (indices.length > 1) return null;
   const index = indices[0];
   if (index === undefined)
-    return options === "[]" ? `[size=${size}]` : `${options.slice(0, -1)},size=${size}]`;
+    return options.slice(1, -1).trim() === ""
+      ? `[size=${size}]`
+      : `${options.slice(0, -1)},size=${size}]`;
   const match = /^(\s*size\s*=\s*)([^\s,]+)(\s*)$/.exec(parts[index] ?? "");
   if (!match) return null;
   parts[index] = `${match[1]}${size}${match[3]}`;
