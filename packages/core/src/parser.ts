@@ -508,14 +508,19 @@ class Parser {
       if (this.src.startsWith("\\[", pos)) {
         flushPara(pos);
         const close = this.src.indexOf("\\]", pos + 2);
-        const realClose = close === -1 || close > end ? end : close;
+        if (close === -1 || close > end) {
+          // 閉じが見つからない数式は、後続の環境終端まで飲み込まず生ブロックにする。
+          out.push(this.rawBlock(pos, end, null, "unknown-command"));
+          pos = end;
+          continue;
+        }
         out.push({
           type: "displayMath",
           kind: "bracket",
-          tex: this.src.slice(pos + 2, realClose).trim(),
-          span: span(pos, realClose + 2),
+          tex: this.src.slice(pos + 2, close).trim(),
+          span: span(pos, close + 2),
         });
-        pos = realClose + 2;
+        pos = close + 2;
         continue;
       }
       if (ch === "\\") {
@@ -982,7 +987,10 @@ class Parser {
         }
         const contentStart = optClose === null ? optOpen : optClose + 1;
         const children = this.parseBlocks(contentStart, envEnd).map((b) =>
-          b.type === "paragraph" || b.type === "list" || b.type === "rawBlock"
+          b.type === "paragraph" ||
+          b.type === "displayMath" ||
+          b.type === "list" ||
+          b.type === "rawBlock"
             ? b
             : this.rawBlock(b.span.start, b.span.end, null, "canvas-unsupported-content"),
         );

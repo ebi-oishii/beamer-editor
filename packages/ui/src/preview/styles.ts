@@ -303,6 +303,18 @@ export const PREVIEW_CSS = `
   border-top: 0.5pt solid #000;
 }
 
+.canvas-resize-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 1px solid var(--vscode-focusBorder, #007acc);
+  background: var(--vscode-editor-background, white);
+  transform: translate(-50%, -50%);
+  cursor: ew-resize;
+  z-index: 10;
+  touch-action: none;
+}
 .slide .display-math {
   text-align: center;
   margin: 4pt 0 8pt;
@@ -402,6 +414,26 @@ export const PREVIEW_CSS = `
 }
 .slide .canvas-item.placeholder {
   margin: 0;
+}
+/* 部分コンパイル(#81)が済んだ箱: 枠と背景を消して画像だけを見せる。失敗した箱は赤い枠で残す。 */
+.slide .placeholder.compiled {
+  border-color: transparent;
+  background: transparent;
+}
+.slide .placeholder .raw-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.slide .placeholder.failed {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+.slide .placeholder.failed .placeholder-label::after {
+  content: "(コンパイル失敗)";
+  display: block;
+  font-size: 6.5pt;
 }
 
 /* ---- キャンバス（subset-spec §2.8）---- */

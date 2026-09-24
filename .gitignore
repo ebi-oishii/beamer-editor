@@ -8,6 +8,9 @@ apps/vscode/media/
 apps/vscode/out-test/
 apps/vscode/.vscode-test/
 apps/vscode/*.vsix
+# 同梱する Tectonic(scripts/fetch-tectonic.mjs が置く)とそのアーカイブのキャッシュ
+apps/vscode/bin/
+apps/vscode/.tectonic-cache/
 
 # LaTeX ビルド成果物(fixtures のコンパイル確認で生成される)
 *.aux

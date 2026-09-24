@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -8,6 +8,7 @@ import {
   compileDeckFrames,
   type DeckFrameRasterizer,
   findDeckFrames,
+  frameSelectorFromAddress,
   groupFramePages,
   injectFrameMarkers,
   PdfExportError,
@@ -19,6 +20,7 @@ const directories: string[] = [];
 const canvasPreamblePath = fileURLToPath(
   new URL("../../core/resources/deck-canvas-preamble.tex", import.meta.url),
 );
+const fixturesDirectory = fileURLToPath(new URL("../../../fixtures/", import.meta.url));
 
 async function directory(): Promise<string> {
   const value = await mkdtemp(join(tmpdir(), "beamer-editor-frames-test-"));
@@ -76,11 +78,63 @@ describe("frame measurement helpers", () => {
     expect(deck.slice(frames[0]?.span.start, frames[0]?.span.end)).toContain("allowframebreaks");
   });
 
+  it("limits frame discovery to the document body while retaining original offsets", () => {
+    const source = String.raw`\documentclass{beamer}
+\newcommand\preambleframe{\begin{frame}[label=preamble]}
+\newcommand\preambleend{\end{document}}
+\begin{document}
+\begin{frame}[label=body]Body\end{frame}
+\end{document}`;
+    const frames = findDeckFrames(source);
+
+    expect(frames.map((frame) => frame.address)).toEqual([{ number: 1, label: "body" }]);
+    expect(source.slice(frames[0]?.span.start, frames[0]?.span.end)).toBe(
+      "\\begin{frame}[label=body]Body\\end{frame}",
+    );
+  });
+
+  it("interprets snapshot frame addresses consistently", () => {
+    expect(frameSelectorFromAddress("007")).toEqual({ kind: "number", value: 7 });
+    expect(frameSelectorFromAddress("label:007")).toEqual({ kind: "label", value: "007" });
+    expect(frameSelectorFromAddress("results")).toEqual({ kind: "label", value: "results" });
+  });
+
+  it("finds labels in frame options split across lines", () => {
+    expect(
+      findDeckFrames(String.raw`\begin{frame}[
+  allowframebreaks,
+  label = multi-line
+] X\end{frame}`)[0]?.address,
+    ).toEqual({ number: 1, label: "multi-line" });
+  });
+
   it("injects fixed-width same-line markers without changing source line count", () => {
     const measured = injectFrameMarkers(deck);
     expect(measured.match(/BEAMER_EDITOR_FRAME:\d{6}/g)).toHaveLength(2);
     expect(measured.split("\n")).toHaveLength(deck.split("\n").length);
     expect(measured).toContain("BEAMER_EDITOR_FRAME:000001}\\begin{frame}");
+  });
+
+  it.each([
+    "\n",
+    "\r\n",
+  ])("preserves UTF-16 spans after comments with astral characters (%j)", (newline) => {
+    const first = String.raw`\begin{frame}[label=first]One\end{frame}`;
+    const second = String.raw`\begin{frame}[label=second]Two\end{frame}`;
+    const original = [`% 😀 𠮷`, first, `% 🚀 comment`, second].join(newline);
+    const frames = findDeckFrames(original);
+    expect(frames.map((frame) => original.slice(frame.span.start, frame.span.end))).toEqual([
+      first,
+      second,
+    ]);
+    expect(injectFrameMarkers(original)).toBe(
+      [
+        `% 😀 𠮷`,
+        `\\typeout{BEAMER_EDITOR_FRAME:000001}${first}`,
+        `% 🚀 comment`,
+        `\\typeout{BEAMER_EDITOR_FRAME:000002}${second}`,
+      ].join(newline),
+    );
   });
 
   it("groups overlay and allowframebreaks pages under the same logical frame", () => {
@@ -308,6 +362,11 @@ describe("compileDeckFrames", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[1]).toContain("--keep-logs");
+    const searchPathIndex = calls[1].indexOf("-Z");
+    expect(calls[1].slice(searchPathIndex, searchPathIndex + 2)).toEqual([
+      "-Z",
+      `search-path=${dirname(inputPath)}`,
+    ]);
     expect(await readFile(inputPath, "utf8")).toBe(deck);
     expect(measuredSource).toContain("BEAMER_EDITOR_FRAME:000001");
     expect(value.frames.map((frame) => frame.images.map((image) => image.page))).toEqual([
@@ -329,6 +388,39 @@ describe("compileDeckFrames", () => {
     expect(analysisOnly.warnings).toEqual(value.warnings);
     expect(value.layoutDiagnostics).toEqual([]);
     expect(analysisOnly.layoutDiagnostics).toEqual([]);
+  });
+
+  it("keeps the marked input in tmp while Tectonic searches the absolute source directory", async () => {
+    const inputDirectory = join(await directory(), "deck source");
+    await mkdir(inputDirectory);
+    const inputPath = join(inputDirectory, "talk.slide.tex");
+    await writeFile(inputPath, deck);
+    let measuredInput = "";
+    let compileArgs: readonly string[] = [];
+    const runner: ProcessRunner = {
+      async run(_command, args) {
+        if (args[0] === "--version") return result();
+        compileArgs = args;
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        measuredInput = args.at(-1) as string;
+        await writeFile(join(outdir, basename(measuredInput).replace(/\.tex$/, ".pdf")), "%PDF");
+        await writeFile(
+          join(outdir, basename(measuredInput).replace(/\.tex$/, ".log")),
+          "BEAMER_EDITOR_FRAME:000001 [1] BEAMER_EDITOR_FRAME:000002 [2]",
+        );
+        return result();
+      },
+    };
+
+    await compileDeckFrames({ inputPath, includeImages: false }, { runner });
+
+    expect(measuredInput).not.toBe(inputPath);
+    expect(dirname(measuredInput)).not.toBe(dirname(inputPath));
+    const searchPathIndex = compileArgs.indexOf("-Z");
+    expect(compileArgs.slice(searchPathIndex, searchPathIndex + 2)).toEqual([
+      "-Z",
+      `search-path=${dirname(inputPath)}`,
+    ]);
   });
 
   it("rejects page and PNG limits", async () => {
@@ -361,6 +453,38 @@ describe("compileDeckFrames", () => {
         { runner, rasterizer: rasterizer([{ page: 1, png: new Uint8Array([1, 2]) }, { page: 2 }]) },
       ),
     ).rejects.toMatchObject({ code: "E_LIMIT" });
+  });
+
+  it("renders only selected frame pages while retaining empty unselected frames", async () => {
+    const inputPath = await source(deck);
+    const runner: ProcessRunner = {
+      async run(_command, args) {
+        if (args[0] === "--version") return result();
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        const measuredInput = args.at(-1) as string;
+        await writeFile(join(outdir, basename(measuredInput).replace(/\.tex$/, ".pdf")), "%PDF");
+        await writeFile(
+          join(outdir, basename(measuredInput).replace(/\.tex$/, ".log")),
+          "BEAMER_EDITOR_FRAME:000001 [1] BEAMER_EDITOR_FRAME:000002 [2]",
+        );
+        return result();
+      },
+    };
+    let pageNumbers: readonly number[] | undefined;
+    const value = await compileDeckFrames(
+      { inputPath, maxPages: 1, frameSelectors: [{ kind: "label", value: "two" }] },
+      {
+        runner,
+        rasterizer: {
+          async rasterize(_pdf, options) {
+            pageNumbers = options.pageNumbers;
+            return [{ page: 2, png: new Uint8Array([2]), width: 1, height: 1 }];
+          },
+        },
+      },
+    );
+    expect(pageNumbers).toEqual([2]);
+    expect(value.frames.map((frame) => frame.images.map((image) => image.page))).toEqual([[], [2]]);
   });
 
   it("uses a rasterizer by default, but does not require one for analysis-only output", async () => {
@@ -406,6 +530,7 @@ describe("compileDeckFrames", () => {
           maxPngBytes: number;
           maxPixelsPerPage: number;
           maxImageDimension: number;
+          pageNumbers?: readonly number[];
         }
       | undefined;
     const runner: ProcessRunner = {
@@ -448,6 +573,7 @@ describe("compileDeckFrames", () => {
       maxPixelsPerPage: 5678,
       maxImageDimension: 90,
     });
+    expect(received?.pageNumbers).toBeUndefined();
   });
 
   it("fails with typed errors when the final Tectonic log is absent or too large", async () => {
@@ -545,6 +671,33 @@ describe("compileDeckFrames", () => {
   });
 
   it.runIf(process.env.TECTONIC_INTEGRATION === "1")(
+    "compiles frames after comments containing astral characters",
+    async () => {
+      const inputPath = await source(String.raw`\documentclass{beamer}
+\begin{document}
+% 😀 comment
+\begin{frame}[label=first]One\end{frame}
+% 𠮷 🚀 comment
+\begin{frame}[label=second]Two\end{frame}
+\end{document}
+`);
+      const value = await compileDeckFrames(
+        { inputPath, timeoutMs: 120_000 },
+        { rasterizer: rasterizer([{ page: 1 }, { page: 2 }]) },
+      );
+      expect(value.frames.map((frame) => frame.images.map((image) => image.page))).toEqual([
+        [1],
+        [2],
+      ]);
+      expect(value.frames.map((frame) => frame.address)).toEqual([
+        { number: 1, label: "first" },
+        { number: 2, label: "second" },
+      ]);
+    },
+    180_000,
+  );
+
+  it.runIf(process.env.TECTONIC_INTEGRATION === "1")(
     "uses resolved zref-savepos geometry from the final Tectonic pass for canvas overflow",
     async () => {
       const preamble = await readFile(canvasPreamblePath, "utf8");
@@ -574,5 +727,23 @@ ${preamble}
       ]);
     },
     180_000,
+  );
+
+  it.runIf(process.env.TECTONIC_INTEGRATION === "1")(
+    "resolves relative fixture dependencies from the original input directory",
+    async () => {
+      for (const file of ["basic.slide.tex", "japanese.slide.tex"]) {
+        const inputPath = join(fixturesDirectory, file);
+        const expectedFrameCount = findDeckFrames(await readFile(inputPath, "utf8")).length;
+        const value = await compileDeckFrames({
+          inputPath,
+          includeImages: false,
+          timeoutMs: 120_000,
+        });
+        expect(value.frames).toHaveLength(expectedFrameCount);
+        expect(value.frames.every((frame) => frame.images.length === 0)).toBe(true);
+      }
+    },
+    300_000,
   );
 });

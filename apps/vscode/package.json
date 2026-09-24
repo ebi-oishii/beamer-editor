@@ -72,9 +72,9 @@
         },
         "beamerEditor.tectonicPath": {
           "type": "string",
-          "default": "tectonic",
+          "default": "",
           "scope": "resource",
-          "description": "Path to the Tectonic executable used for PDF export."
+          "description": "Path to the Tectonic executable. Leave empty to use the Tectonic bundled with the extension (platform-specific builds; `tectonic` on PATH where nothing is bundled)."
         },
         "beamerEditor.pdfExport.timeoutSeconds": {
           "type": "integer",
@@ -83,6 +83,12 @@
           "maximum": 1800,
           "scope": "resource",
           "description": "Maximum time in seconds to wait for PDF compilation."
+        },
+        "beamerEditor.preview.compileRawBlocks": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "TikZ などサブセット外のブロックを Tectonic で部分コンパイルし、プレビューのプレースホルダに画像として差し込みます(Workspace Trust が必要)。"
         }
       }
     },
@@ -162,7 +168,8 @@
     "lint": "biome check .",
     "test": "vitest run",
     "test:integration": "pnpm build && node esbuild.integration.mjs && vscode-test",
-    "package": "pnpm build && vsce package --no-dependencies -o beamer-editor.vsix"
+    "fetch-tectonic": "node scripts/fetch-tectonic.mjs",
+    "package": "pnpm build && node scripts/package.mjs"
   },
   "dependencies": {
     "@beamer-editor/compiler": "workspace:*",
@@ -170,6 +177,7 @@
     "@beamer-editor/renderer": "workspace:*",
     "@beamer-editor/ui": "workspace:*",
     "katex": "^0.16.47",
+    "pdfjs-dist": "6.3.289",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

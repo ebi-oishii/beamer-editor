@@ -46,9 +46,11 @@ export interface LintDiagnostic {
 }
 
 export interface LintOptions {
-  /** undefined: no bundled skill; null: present but missing version metadata. */
-  skillVersion?: string | null;
-  expectedSkillVersion?: string;
+  /** undefined: no bundled skill; null: present but missing fingerprint metadata. */
+  skillFingerprint?: string | null;
+  /** undefined: no bundled skill; null: bundled files could not be verified. */
+  skillContentFingerprint?: string | null;
+  expectedSkillFingerprint?: string;
   /** 対応する `%% deck-source-version`。 */
   expectedSourceVersion?: number;
   /** Optional external dependency; core itself never accesses the filesystem. */
@@ -658,7 +660,7 @@ function lintCanvas(canvas: CanvasNode): LintDiagnostic[] {
     }
     const visitTextBlocks = (blocks: BlockNode[], listDepth: number): void => {
       for (const block of blocks) {
-        if (block.type === "paragraph") {
+        if (block.type === "paragraph" || block.type === "displayMath") {
           continue;
         }
         if (block.type === "rawBlock") {
@@ -922,14 +924,15 @@ function lintTemplates(statuses: readonly TemplateStatus[] | undefined): LintDia
 export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiagnostic[] {
   const expectedSourceVersion = options.expectedSourceVersion ?? CURRENT_DECK_SOURCE_VERSION;
   const diagnostics = [
-    ...(options.skillVersion !== undefined &&
-    options.expectedSkillVersion !== undefined &&
-    options.skillVersion !== options.expectedSkillVersion
+    ...(options.skillFingerprint !== undefined &&
+    options.expectedSkillFingerprint !== undefined &&
+    (options.skillFingerprint !== options.expectedSkillFingerprint ||
+      options.skillContentFingerprint !== options.expectedSkillFingerprint)
       ? [
           diagnostic(
             "L010",
             "warning",
-            `同梱スキルの版(${options.skillVersion ?? "不明"})がCLIの版(${options.expectedSkillVersion})と一致しません。deck init <directory> --update-skill を実行してください`,
+            `同梱スキルがCLIの期待値(${options.expectedSkillFingerprint})と一致しません。deck init <directory> --update-skill で更新してください。`,
             { start: 0, end: 0 },
           ),
         ]

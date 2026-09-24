@@ -15,3 +15,6 @@ tsconfig.json
 **/*.map
 *.vsix
 node_modules/**
+scripts/**
+.tectonic-cache/**
+tectonic.json

@@ -11,6 +11,7 @@ CLI 0.0.1 の実装済みコマンド（実際のヘルプから生成）:
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示
   deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査
+  deck snapshot <file> -o <directory> [--frame <N|LABEL|label:LABEL>] [--tectonic <path>] [--json]
   deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]
   deck fonts status [--json]          フォントカタログ全 family の解決状態
   deck fonts fetch [family] [--json]  family(既定 "Noto Sans CJK JP")を取得・配置
@@ -20,4 +21,4 @@ CLI はまだ単独配布されていない。beamer-editor の checkout を用�
 
 終了コード: 0=成功・情報のみ、1=警告、2=lint error、3=操作失敗。JSONの成功結果はstdout、E_*エラーはstderr。
 
-snapshot等、上の一覧に無いコマンドはこの版では未提供。PDF確認には `deck export <file> --format pdf -o <pdf>` を使い、実施できなかった検証を報告する。
+上の一覧にないコマンドはこの版では未提供。検証できない場合は、利用可能なコマンドで代替した内容と未実施項目を報告する。

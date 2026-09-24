@@ -301,6 +301,50 @@ function processDetail(result: ProcessResult): string {
   return detail ? `: ${detail}` : "";
 }
 
+/** `tectonic --version` で実行できることを確かめ、バージョン文字列を返す(exportPdf / compileFragment 共通)。 */
+async function ensureTectonic(
+  runner: ProcessRunner,
+  tectonic: string,
+  cwd: string,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  let versionResult: ProcessResult;
+  try {
+    versionResult = await runner.run(
+      tectonic,
+      ["--version"],
+      runnerOptions(cwd, signal, VERSION_TIMEOUT_MS),
+    );
+  } catch (error) {
+    if (isAbort(error, signal))
+      throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました", error);
+    if (error instanceof ProcessNotFoundError || isNotFound(error))
+      throw new PdfExportError("E_TECTONIC_NOT_FOUND", errorMessage(error), error);
+    throw new PdfExportError(
+      "E_TECTONIC_VERSION",
+      `Tectonic のバージョンを取得できません: ${String(error)}`,
+      error,
+    );
+  }
+  if (versionResult.cancelled || signal?.aborted)
+    throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました");
+  if (versionResult.timedOut)
+    throw new PdfExportError(
+      "E_TECTONIC_VERSION",
+      `Tectonic のバージョン確認が ${VERSION_TIMEOUT_MS / 1000} 秒でタイムアウトしました`,
+    );
+  const engineVersion =
+    versionResult.exitCode === 0
+      ? versionFrom(`${versionResult.stdout}\n${versionResult.stderr}`)
+      : undefined;
+  if (!engineVersion)
+    throw new PdfExportError(
+      "E_TECTONIC_VERSION",
+      `Tectonic のバージョンを確認できません${processDetail(versionResult)}`,
+    );
+  return engineVersion;
+}
+
 /**
  * Compile the untouched input source through Tectonic, staging all compiler
  * output under the OS temp directory. The destination is replaced only after a
@@ -345,40 +389,7 @@ export async function exportPdf(
   }
   throwIfCancelled(signal);
 
-  let versionResult: ProcessResult;
-  try {
-    versionResult = await runner.run(
-      tectonic,
-      ["--version"],
-      runnerOptions(dirname(inputPath), signal, VERSION_TIMEOUT_MS),
-    );
-  } catch (error) {
-    if (isAbort(error, signal))
-      throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました", error);
-    if (error instanceof ProcessNotFoundError || isNotFound(error))
-      throw new PdfExportError("E_TECTONIC_NOT_FOUND", errorMessage(error), error);
-    throw new PdfExportError(
-      "E_TECTONIC_VERSION",
-      `Tectonic のバージョンを取得できません: ${String(error)}`,
-      error,
-    );
-  }
-  if (versionResult.cancelled || signal?.aborted)
-    throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました");
-  if (versionResult.timedOut)
-    throw new PdfExportError(
-      "E_TECTONIC_VERSION",
-      `Tectonic のバージョン確認が ${VERSION_TIMEOUT_MS / 1000} 秒でタイムアウトしました`,
-    );
-  const engineVersion =
-    versionResult.exitCode === 0
-      ? versionFrom(`${versionResult.stdout}\n${versionResult.stderr}`)
-      : undefined;
-  if (!engineVersion)
-    throw new PdfExportError(
-      "E_TECTONIC_VERSION",
-      `Tectonic のバージョンを確認できません${processDetail(versionResult)}`,
-    );
+  const engineVersion = await ensureTectonic(runner, tectonic, dirname(inputPath), signal);
 
   const makeTemp =
     dependencies.temporaryDirectory ?? ((prefix: string) => mkdtemp(join(tmpdir(), prefix)));
@@ -548,6 +559,17 @@ export interface CanvasLayoutDiagnostic {
   overlappingGeometry?: CanvasGeometry;
 }
 
+export type FrameSelector = { kind: "number"; value: number } | { kind: "label"; value: string };
+
+/**
+ * CLI とホストで共通に使う frame アドレスを、コンパイル要求用の selector に変換する。
+ * `label:` を付けると数字だけの label も指定できる。
+ */
+export function frameSelectorFromAddress(value: string): FrameSelector {
+  if (value.startsWith("label:")) return { kind: "label", value: value.slice("label:".length) };
+  return /^\d+$/.test(value) ? { kind: "number", value: Number(value) } : { kind: "label", value };
+}
+
 export interface CompileDeckFramesRequest {
   inputPath: string;
   tectonicPath?: string;
@@ -555,6 +577,7 @@ export interface CompileDeckFramesRequest {
   timeoutMs?: number;
   /** Whether to render physical PDF pages as PNGs. Defaults to true. */
   includeImages?: boolean;
+  frameSelectors?: readonly FrameSelector[];
   /** Maximum physical PDF pages accepted. Defaults to 200. */
   maxPages?: number;
   /** Maximum compiled PDF size. Defaults to 64 MiB. */
@@ -582,6 +605,7 @@ export interface DeckFrameRasterizer {
       maxPngBytes: number;
       maxPixelsPerPage: number;
       maxImageDimension: number;
+      pageNumbers?: readonly number[];
     },
   ): Promise<readonly FrameImage[]>;
 }
@@ -620,7 +644,7 @@ function withoutComments(source: string): string {
       comment = false;
       backslashes = 0;
     } else if (comment) {
-      value += " ";
+      value += " ".repeat(character.length);
     } else if (character === "%" && backslashes % 2 === 0) {
       value += " ";
       comment = true;
@@ -650,13 +674,18 @@ function frameLabel(options: string | undefined): string | null {
 /** Parse frame boundaries from source without changing any original offsets. */
 export function findDeckFrames(source: string): readonly CompiledFrame[] {
   const masked = withoutComments(source);
-  const begin = /\\begin\s*\{\s*frame\s*\}(?:<[^>\r\n]*>)?\s*(?:\[([^\]\r\n]*)\])?/g;
+  const documentBegin = masked.indexOf("\\begin{document}");
+  const documentEnd = masked.lastIndexOf("\\end{document}");
+  const bodyStart = documentBegin === -1 ? 0 : documentBegin + "\\begin{document}".length;
+  const bodyEnd = documentEnd === -1 ? masked.length : documentEnd;
+  const begin = /\\begin\s*\{\s*frame\s*\}(?:<[^>\r\n]*>)?\s*(?:\[([^\]]*)\])?/g;
   const end = /\\end\s*\{\s*frame\s*\}/g;
   const frames: CompiledFrame[] = [];
-  for (let match = begin.exec(masked); match; match = begin.exec(masked)) {
+  begin.lastIndex = bodyStart;
+  for (let match = begin.exec(masked); match && match.index < bodyEnd; match = begin.exec(masked)) {
     end.lastIndex = begin.lastIndex;
     const closing = end.exec(masked);
-    if (!closing) break;
+    if (!closing || closing.index >= bodyEnd) break;
     const number = frames.length + 1;
     frames.push({
       address: { number, label: frameLabel(match[1]) },
@@ -666,6 +695,30 @@ export function findDeckFrames(source: string): readonly CompiledFrame[] {
     begin.lastIndex = end.lastIndex;
   }
   return frames;
+}
+
+function selectedFrameNumbers(
+  selectors: readonly FrameSelector[] | undefined,
+  frames: readonly Pick<CompiledFrame, "address">[],
+): ReadonlySet<number> | undefined {
+  if (selectors === undefined) return undefined;
+  const selected = new Set<number>();
+  for (const selector of selectors) {
+    const matches =
+      selector.kind === "number"
+        ? Number.isSafeInteger(selector.value) && selector.value > 0
+          ? frames.filter((frame) => frame.address.number === selector.value)
+          : []
+        : frames.filter((frame) => frame.address.label === selector.value);
+    const matched = matches[0];
+    if (!matched || matches.length !== 1 || selected.has(matched.address.number))
+      throw new PdfExportError(
+        "E_INPUT",
+        `指定された frame selector が不正です: ${selector.value}`,
+      );
+    selected.add(matched.address.number);
+  }
+  return selected;
 }
 
 /** Add same-line markers so original source line numbers remain valid. */
@@ -1010,7 +1063,8 @@ async function readCompilationLog(path: string, maxBytes: number): Promise<strin
 /**
  * Compile a complete deck once, then group its physical PDF pages by logical
  * frame. The original input is only read; a same-basename marked copy is kept
- * under an OS temporary directory and removed on every exit path.
+ * under an OS temporary directory and removed on every exit path. Tectonic
+ * searches the original input directory for its relative dependencies.
  */
 export async function compileDeckFrames(
   request: CompileDeckFramesRequest,
@@ -1060,6 +1114,7 @@ export async function compileDeckFrames(
     throw new PdfExportError("E_INPUT", "入力 TeX に frame 環境がありません");
   if (frames.length > 999_999)
     throw new PdfExportError("E_LIMIT", "frame 数が marker の上限を超えています");
+  const selectedNumbers = selectedFrameNumbers(request.frameSelectors, frames);
 
   const tectonic = request.tectonicPath ?? "tectonic";
   let versionResult: ProcessResult;
@@ -1104,7 +1159,16 @@ export async function compileDeckFrames(
     try {
       compileResult = await runner.run(
         tectonic,
-        ["-X", "compile", "--keep-logs", "--outdir", temporaryDirectory, measuredInput],
+        [
+          "-X",
+          "compile",
+          "-Z",
+          `search-path=${dirname(inputPath)}`,
+          "--keep-logs",
+          "--outdir",
+          temporaryDirectory,
+          measuredInput,
+        ],
         runnerOptions(
           dirname(inputPath),
           signal,
@@ -1144,7 +1208,15 @@ export async function compileDeckFrames(
       join(temporaryDirectory, compiledLogName(inputPath)),
       maxLogBytes,
     );
-    const groups = groupFramePages(log, frames, maxPages);
+    const groups = groupFramePages(log, frames);
+    if (selectedNumbers === undefined) {
+      const totalPages = Array.from(groups.values()).reduce(
+        (total, pages) => total + pages.length,
+        0,
+      );
+      if (totalPages > maxPages)
+        throw new PdfExportError("E_LIMIT", `PDF page 数が上限 ${maxPages} を超えています`);
+    }
     const warnings = parseOverfullWarnings(log, frames);
     const layoutDiagnostics = analyzeCanvasGeometry(log, frames);
     if (signal?.aborted)
@@ -1167,13 +1239,34 @@ export async function compileDeckFrames(
         "E_RASTERIZE",
         "frame PNG を生成する rasterizer が設定されていません",
       );
+    const pageNumbers =
+      selectedNumbers === undefined
+        ? undefined
+        : Array.from(groups.entries())
+            .filter(([number]) => selectedNumbers.has(number))
+            .flatMap(([, pages]) => pages);
+    if (pageNumbers !== undefined && pageNumbers.length > maxPages)
+      throw new PdfExportError("E_LIMIT", `PDF page 数が上限 ${maxPages} を超えています`);
     let images: readonly FrameImage[];
     try {
       images = await rasterizer.rasterize(
         pdfPath,
         signal === undefined
-          ? { maxPages, maxPngBytes, maxPixelsPerPage, maxImageDimension }
-          : { signal, maxPages, maxPngBytes, maxPixelsPerPage, maxImageDimension },
+          ? {
+              maxPages,
+              maxPngBytes,
+              maxPixelsPerPage,
+              maxImageDimension,
+              ...(pageNumbers === undefined ? {} : { pageNumbers }),
+            }
+          : {
+              signal,
+              maxPages,
+              maxPngBytes,
+              maxPixelsPerPage,
+              maxImageDimension,
+              ...(pageNumbers === undefined ? {} : { pageNumbers }),
+            },
       );
     } catch (error) {
       if (error instanceof PdfExportError) throw error;
@@ -1213,7 +1306,8 @@ export async function compileDeckFrames(
       imageByPage.set(image.page, image);
     }
     let expectedPageCount = 0;
-    for (const pages of groups.values()) {
+    for (const [number, pages] of groups) {
+      if (selectedNumbers !== undefined && !selectedNumbers.has(number)) continue;
       expectedPageCount += pages.length;
       if (pages.some((page) => !imageByPage.has(page)))
         throw new PdfExportError(
@@ -1232,8 +1326,9 @@ export async function compileDeckFrames(
         address: frame.address,
         span: frame.span,
         images:
-          groups.get(frame.address.number)?.map((page) => imageByPage.get(page) as FrameImage) ??
-          [],
+          (selectedNumbers === undefined || selectedNumbers.has(frame.address.number)
+            ? groups.get(frame.address.number)?.map((page) => imageByPage.get(page) as FrameImage)
+            : []) ?? [],
       })),
       warnings,
       layoutDiagnostics,
@@ -1248,3 +1343,104 @@ export async function compileDeckFrames(
       await rm(temporaryDirectory, { recursive: true, force: true }).catch(() => undefined);
   }
 }
+
+export interface FragmentCompileRequest {
+  /** buildFragmentDocument で組み立てた standalone 文書の全文。 */
+  document: string;
+  tectonicPath?: string;
+  /** \\includegraphics などの相対パスを解く作業ディレクトリ(デッキのディレクトリ)。無ければ一時ディレクトリ。 */
+  cwd?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  /** 生成 PDF のバイト数の上限。超えたら読み込まずに E_COMPILE にする(巨大な出力でメモリを使い切らない)。 */
+  maxOutputBytes?: number;
+}
+
+export interface FragmentCompileResult {
+  pdf: Uint8Array;
+  engineVersion: string;
+}
+
+/**
+ * 生ブロックの standalone 文書を一時ディレクトリでコンパイルし、PDF のバイト列を返す(#81)。
+ * ファイルは残さない(キャッシュは呼び出し側が持つ)。失敗は exportPdf と同じ PdfExportError。
+ */
+export async function compileFragment(
+  request: FragmentCompileRequest,
+  dependencies: PdfExportDependencies = {},
+): Promise<FragmentCompileResult> {
+  const runner = dependencies.runner ?? nodeProcessRunner;
+  const tectonic = request.tectonicPath ?? "tectonic";
+  const signal = request.signal;
+  const timeoutMs =
+    request.timeoutMs && request.timeoutMs > 0 ? request.timeoutMs : DEFAULT_COMPILE_TIMEOUT_MS;
+  throwIfCancelled(signal);
+  const makeTemp =
+    dependencies.temporaryDirectory ?? ((prefix: string) => mkdtemp(join(tmpdir(), prefix)));
+  let tempDirectory: string | undefined;
+  try {
+    tempDirectory = await makeTemp("beamer-editor-fragment-");
+    const engineVersion = await ensureTectonic(runner, tectonic, tempDirectory, signal);
+    const inputPath = join(tempDirectory, "fragment.tex");
+    await writeFile(inputPath, request.document, "utf8");
+    throwIfCancelled(signal);
+    let compileResult: ProcessResult;
+    try {
+      compileResult = await runner.run(
+        tectonic,
+        ["-X", "compile", "--outdir", tempDirectory, inputPath],
+        runnerOptions(request.cwd ?? tempDirectory, signal, timeoutMs),
+      );
+    } catch (error) {
+      if (isAbort(error, signal))
+        throw new PdfExportError("E_CANCELLED", "部分コンパイルはキャンセルされました", error);
+      if (error instanceof ProcessNotFoundError || isNotFound(error))
+        throw new PdfExportError("E_TECTONIC_NOT_FOUND", errorMessage(error), error);
+      throw new PdfExportError(
+        "E_COMPILE",
+        `Tectonic の実行に失敗しました: ${String(error)}`,
+        error,
+      );
+    }
+    if (compileResult.cancelled || signal?.aborted)
+      throw new PdfExportError("E_CANCELLED", "部分コンパイルはキャンセルされました");
+    if (compileResult.timedOut)
+      throw new PdfExportError(
+        "E_COMPILE",
+        `部分コンパイルが ${timeoutMs / 1000} 秒でタイムアウトしました${processDetail(compileResult)}`,
+      );
+    const compiledPdf = join(tempDirectory, "fragment.pdf");
+    if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(compiledPdf)))
+      throw new PdfExportError(
+        "E_COMPILE",
+        `部分コンパイルに失敗しました${processDetail(compileResult)}`,
+      );
+    const { size } = await stat(compiledPdf);
+    if (request.maxOutputBytes !== undefined && size > request.maxOutputBytes)
+      throw new PdfExportError(
+        "E_COMPILE",
+        `生成された PDF が大きすぎます(${size} バイト、上限 ${request.maxOutputBytes} バイト)`,
+      );
+    const pdf = new Uint8Array(await readFile(compiledPdf));
+    return { pdf, engineVersion };
+  } catch (error) {
+    if (error instanceof PdfExportError) throw error;
+    if (isAbort(error, signal))
+      throw new PdfExportError("E_CANCELLED", "部分コンパイルはキャンセルされました", error);
+    throw new PdfExportError(
+      "E_IO",
+      `部分コンパイルの入出力に失敗しました: ${String(error)}`,
+      error,
+    );
+  } finally {
+    if (tempDirectory)
+      await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+export {
+  buildFragmentDocument,
+  FRAGMENT_DOCUMENT_VERSION,
+  fragmentDependencies,
+  fragmentGraphicsPaths,
+} from "./fragment.js";
