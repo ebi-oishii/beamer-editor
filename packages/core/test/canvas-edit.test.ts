@@ -6,8 +6,7 @@ import {
   canvasPositionReplacement,
   canvasWidthReplacement,
   clampCanvasPlacement,
-  clampCanvasPosition,
-  clampCanvasWidth,
+  normalizeCanvasWidth,
   updateCanvasPosition,
 } from "../src/canvas-edit.js";
 
@@ -53,52 +52,6 @@ describe("updateCanvasPosition", () => {
   });
 });
 
-describe("clampCanvasPosition", () => {
-  it("左上へはみ出した位置を本文領域の端で止める", () => {
-    expect(clampCanvasPosition(-0.002, -0.5, 1)).toEqual({ x: 0, y: 0 });
-  });
-  it("右端は x + width が 1 を超えない位置で止める", () => {
-    expect(clampCanvasPosition(0.9, 0.2, 0.4)).toEqual({ x: 0.6, y: 0.2 });
-    expect(clampCanvasPosition(0.3, 0.2, 1)).toEqual({ x: 0, y: 0.2 });
-  });
-  it("height 未指定時は下端を y=1 で止める", () => {
-    expect(clampCanvasPosition(0.1, 1.25, 0.4)).toEqual({ x: 0.1, y: 1 });
-  });
-  it("既知かつ本文より小さい高さを含めて右下端へ収める", () => {
-    expect(clampCanvasPosition(0.1, 0.9, 0.4, 0.3)).toEqual({ x: 0.1, y: 0.7 });
-  });
-  it("高さが不明・ゼロ・本文以上なら anchor だけを 0..1 に収める", () => {
-    for (const height of [undefined, 0, Number.NaN, Number.POSITIVE_INFINITY, 1, 1.1]) {
-      expect(clampCanvasPosition(0.1, 0.9, 0.4, height)).toEqual({ x: 0.1, y: 0.9 });
-      expect(clampCanvasPosition(0.1, 1.2, 0.4, height)).toEqual({ x: 0.1, y: 1 });
-    }
-  });
-  it("範囲内の位置は変えない", () => {
-    expect(clampCanvasPosition(0.05, 0.15, 0.5)).toEqual({ x: 0.05, y: 0.15 });
-  });
-  it("未丸めの幅に対して安全な3桁 x 上限を返す", () => {
-    for (const [width, expected] of [
-      [0.3335, 0.666],
-      [0.0001, 0.999],
-      [0.666, 0.334],
-      [0.6660000000000001, 0.333],
-      [0.6667, 0.333],
-      [0.9995, 0],
-    ]) {
-      const point = clampCanvasPosition(2, 0, width);
-      expect(point.x).toBe(expected);
-      expect(point.x + width).toBeLessThanOrEqual(1);
-    }
-  });
-  it("不正な座標・寸法は 0 相当として扱い -0 を返さない", () => {
-    expect(clampCanvasPosition(Number.NaN, Number.NEGATIVE_INFINITY, Number.NaN, -1)).toEqual({
-      x: 0,
-      y: 0,
-    });
-    expect(Object.is(clampCanvasPosition(-0, -0, 0, 0).x, -0)).toBe(false);
-  });
-});
-
 describe("clampCanvasPlacement", () => {
   it("位置と幅の両方を本文領域内へ収める", () => {
     expect(clampCanvasPlacement({ x: -0.2, y: -0.1, width: 1.5 })).toEqual({
@@ -132,14 +85,8 @@ describe("clamp の結果はそのまま lint L012 を通る", () => {
     { x: 1.4, y: -0.3, width: 0.333 },
     { x: 0.9995, y: 1.9, width: 0.667 },
   ];
-  it("移動でも自由配置化でも x >= 0 / y in [0,1] / x + width <= 1 を満たす", () => {
+  it("自由配置化は x >= 0 / y in [0,1] / x + width <= 1 を満たす", () => {
     for (const { x, y, width } of cases) {
-      const moved = clampCanvasPosition(x, y, width);
-      expect(moved.x).toBeGreaterThanOrEqual(0);
-      expect(moved.y).toBeGreaterThanOrEqual(0);
-      expect(moved.y).toBeLessThanOrEqual(1);
-      expect(moved.x + width).toBeLessThanOrEqual(1);
-
       const placed = clampCanvasPlacement({ x, y, width });
       expect(placed.x).toBeGreaterThanOrEqual(0);
       expect(placed.y).toBeGreaterThanOrEqual(0);
@@ -165,16 +112,11 @@ describe("canvas width", () => {
       expect(canvasWidthReplacement(options, 0.4)).toBeNull();
     expect(canvasWidthReplacement("[w=.3]", NaN)).toBeNull();
   });
-  it("keeps the fixed anchor and width within the right edge at three-decimal precision", () => {
-    expect(clampCanvasWidth(0.1, 2)).toBe(0.9);
-    expect(clampCanvasWidth(0.1, 0)).toBe(0.05);
-    expect(clampCanvasWidth(0.999, 1)).toBe(0.001);
-    expect(clampCanvasWidth(-0.1, 0.3)).toBeNull();
-    for (const x of [0.1, 0.333, 0.666, 0.0001, 0.12345]) {
-      const width = clampCanvasWidth(x, 2);
-      expect(width).not.toBeNull();
-      expect(x + (width ?? 0)).toBeLessThanOrEqual(1);
-    }
+  it("幅は 3 桁に丸めて最小幅より細くしないだけで、右端では止めない(#152)", () => {
+    expect(normalizeCanvasWidth(2)).toBe(2);
+    expect(normalizeCanvasWidth(0)).toBe(0.05);
+    expect(normalizeCanvasWidth(0.12345)).toBe(0.123);
+    expect(normalizeCanvasWidth(Number.NaN)).toBeNull();
   });
 });
 

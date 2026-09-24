@@ -644,7 +644,7 @@ function lintCanvas(canvas: CanvasNode): LintDiagnostic[] {
         diagnostic(
           "L012",
           "warning",
-          "キャンバスの x, y, w は本文領域内に収まる必要があります",
+          "キャンバス要素が本文領域からはみ出しています(x, y, w が 0〜1 の範囲外)",
           span,
         ),
       );
