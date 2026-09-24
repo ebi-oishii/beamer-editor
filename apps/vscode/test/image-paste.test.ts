@@ -88,7 +88,7 @@ describe("imagePasteInsertion", () => {
     );
     const end = "\\end{decktext}";
     expect(imagePasteInsertion(source, offset, "assets/image.png")).toEqual({
-      text: "\\deckimage[x=0.100,y=0.100,w=0.400]{assets/image.png}",
+      text: "\n    \\deckimage[x=0.100,y=0.100,w=0.400]{assets/image.png}",
       offset: source.indexOf(end) + end.length,
     });
   });
@@ -149,6 +149,38 @@ describe("imagePasteInsertion", () => {
         .replace(/\n/g, "\r\n"),
     );
     expect(imagePasteInsertion(source, offset, "assets/image.png")?.text).toMatch(/^\\deckimage\[/);
+  });
+
+  it("フレームの見出し(タイトル・オプション)では入れない", () => {
+    const title = withCursor(
+      `${PREAMBLE}\n\\begin{frame}{Ti|tle}\n  body\n\\end{frame}\n\\end{document}\n`,
+    );
+    expect(imagePasteInsertion(title.source, title.offset, "assets/image.png")).toBeNull();
+    const option = withCursor(
+      `${PREAMBLE}\n\\begin{frame}[label=a|b]{Title}\n  body\n\\end{frame}\n\\end{document}\n`,
+    );
+    expect(imagePasteInsertion(option.source, option.offset, "assets/image.png")).toBeNull();
+  });
+
+  it("\\end{frame} の行末・次のフレームの行頭では入れない", () => {
+    const deck = (cursor: string) =>
+      withCursor(
+        [
+          PREAMBLE,
+          "\\begin{frame}{One}",
+          "  body",
+          `\\end{frame}${cursor === "tail" ? "|" : ""}`,
+          `${cursor === "head" ? "|" : ""}\\begin{frame}{Two}`,
+          "  body",
+          "\\end{frame}",
+          "\\end{document}",
+          "",
+        ].join("\n"),
+      );
+    const tail = deck("tail");
+    expect(imagePasteInsertion(tail.source, tail.offset, "assets/image.png")).toBeNull();
+    const head = deck("head");
+    expect(imagePasteInsertion(head.source, head.offset, "assets/image.png")).toBeNull();
   });
 
   it("プリアンブルでは入れない", () => {

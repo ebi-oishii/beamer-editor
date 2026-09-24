@@ -37,9 +37,11 @@ export class ImagePasteEditProvider implements vscode.DocumentPasteEditProvider 
     const insertion = imagePasteInsertion(document.getText(), offset, relativePath);
     // 参照を置けない位置(フレームの外)では画像を保存せず、通常の貼り付けに任せる。
     if (!insertion) return undefined;
+    const moved = insertion.offset !== offset;
+    // 挿入先を寄せるとき、insertText は全カーソルに入ってしまう。複数カーソルでは貼り付けない。
+    if (moved && ranges.length > 1) return undefined;
     const data = await image.file.data();
     if (token.isCancellationRequested) return undefined;
-    const moved = insertion.offset !== offset;
     const edit = new vscode.DocumentPasteEdit(
       // 挿入先を寄せるときは貼り付け範囲を書き換えない(選択中の文字を消さない)。
       moved ? document.getText(range) : insertion.text,

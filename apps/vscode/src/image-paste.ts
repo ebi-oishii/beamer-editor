@@ -1,4 +1,4 @@
-import { type CanvasNode, framesOf, parseDeck } from "@beamer-editor/core";
+import { type CanvasNode, type FrameNode, framesOf, parseDeck } from "@beamer-editor/core";
 
 /**
  * エディタへの画像の貼り付け(#153)。クリップボードの画像を文書と同じ場所の `assets/` に
@@ -55,30 +55,56 @@ export function imagePasteInsertion(
 ): ImagePasteInsertion | null {
   const target = insertTarget(source, offset);
   if (!target) return null;
-  return {
-    text: target.canvas
-      ? `\\deckimage[${CANVAS_IMAGE_POSITION}]{${relativePath}}`
-      : `\\includegraphics[width=${FLOW_IMAGE_WIDTH}\\textwidth]{${relativePath}}`,
-    offset: target.offset,
-  };
+  const reference = target.canvas
+    ? `\\deckimage[${CANVAS_IMAGE_POSITION}]{${relativePath}}`
+    : `\\includegraphics[width=${FLOW_IMAGE_WIDTH}\\textwidth]{${relativePath}}`;
+  // 寄せた先は直前のアイテムの終わりなので、改行とそのアイテムのインデントを付ける。
+  if (target.offset === offset) return { text: reference, offset };
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  return { text: `${newline}${target.indent}${reference}`, offset: target.offset };
+}
+
+interface InsertTarget {
+  canvas: boolean;
+  offset: number;
+  /** 挿入先を寄せたときの、寄せ先の行のインデント。 */
+  indent: string;
 }
 
 /**
- * フレームの中だけを挿入先にする。プリアンブルへ入るとビルドが落ち、フレームの間へ入ると
- * どのスライドにも出ないため、どちらも貼り付けない。
+ * フレーム本文の中だけを挿入先にする。プリアンブルへ入るとビルドが落ち、フレームの間・
+ * 見出し(オプション・タイトル)へ入ると壊れるため、どれも貼り付けない。
  */
-function insertTarget(source: string, offset: number): { canvas: boolean; offset: number } | null {
+function insertTarget(source: string, offset: number): InsertTarget | null {
   for (const frame of framesOf(parseDeck(source))) {
     if (offset < frame.span.start || offset > frame.span.end) continue;
-    if (frame.type !== "frame") return { canvas: false, offset };
+    if (frame.type !== "frame") return { canvas: false, offset, indent: "" };
+    const body = frameBodyRange(frame);
+    if (offset < body.start || offset > body.end) return null;
     const canvas = frame.body.find(
       (block): block is CanvasNode =>
         block.type === "canvas" && offset > block.span.start && offset < block.span.end,
     );
-    if (!canvas) return { canvas: false, offset };
+    if (!canvas) return { canvas: false, offset, indent: "" };
     // decktext の中に画像は置けない(L014)ので、そのアイテムの直後を挿入先にする。
     const item = canvas.items.find((i) => offset > i.span.start && offset < i.span.end);
-    return { canvas: true, offset: item ? item.span.end : offset };
+    if (!item) return { canvas: true, offset, indent: "" };
+    return { canvas: true, offset: item.span.end, indent: indentOf(source, item.span.start) };
   }
   return null;
+}
+
+/** `\begin{frame}` の見出しの終わりから `\end{frame}` の直前まで。 */
+function frameBodyRange(frame: FrameNode): { start: number; end: number } {
+  let start = frame.span.start + "\\begin{frame}".length;
+  if (frame.options.span) start = Math.max(start, frame.options.span.end);
+  const title = frame.title?.at(-1);
+  // タイトルのノードは `{...}` の中身なので、閉じ括弧の分を足す。
+  if (title) start = Math.max(start, title.span.end + 1);
+  return { start, end: frame.span.end - "\\end{frame}".length };
+}
+
+function indentOf(source: string, offset: number): string {
+  const line = source.lastIndexOf("\n", offset - 1) + 1;
+  return /^[ \t]*/.exec(source.slice(line, offset))?.[0] ?? "";
 }
