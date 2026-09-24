@@ -44,3 +44,67 @@ export class PreviewHistory<Target extends { panel: unknown }> {
     return operation;
   }
 }
+
+/** 1 回の undo / redo を実行するための、文書とエディタへの操作。 */
+export interface HistoryCommandHost {
+  /** 対象の文書を表示し、エディタグループへキーボードフォーカスを移す。 */
+  focusEditor(): Promise<void>;
+  /** undo / redo コマンドを実行する。 */
+  execute(kind: HistoryKind): Promise<void>;
+  /** 文書の version。内容が変わるたびに増える。 */
+  version(): number;
+  /** 文書の変更イベントを購読する。 */
+  onDidChange(listener: () => void): { dispose(): void };
+}
+
+export interface HistoryCommandOptions {
+  /** コマンドを試す回数。 */
+  attempts: number;
+  /** 効かなかったと判断するまでに変更を待つ時間(ms)。 */
+  retryDelayMs: number;
+}
+
+/**
+ * フォーカスを移して undo / redo を 1 回実行する。効かなければ短く待ってやり直す。
+ *
+ * undo / redo はキーボードフォーカスのあるエディタに効く。Webview からフォーカスを戻した直後は、
+ * エディタが表示されていてもフォーカスがまだ移っていないことがある(Linux の CI で再現)。一方、
+ * コマンドの完了より文書の version の更新が遅れて見えることもあるので、await の境目ごとに version
+ * を確かめ、変更を観測したらそれ以後はコマンドを実行しない(1 回の操作で履歴を 2 件消費しない)。
+ * 取り消すものが無いときは attempts 回試し、短い待ちの後に終わる。
+ */
+export async function executeHistoryCommand(
+  kind: HistoryKind,
+  host: HistoryCommandHost,
+  options: HistoryCommandOptions,
+): Promise<void> {
+  const before = host.version();
+  const changed = () => host.version() !== before;
+  let wake: (() => void) | undefined;
+  const subscription = host.onDidChange(() => wake?.());
+  // 変更イベントで待ちを打ち切る。version が変わらないイベント(dirty 状態の変化など)では起きない。
+  const waitForChange = () =>
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, options.retryDelayMs);
+      wake = () => {
+        if (!changed()) return;
+        clearTimeout(timer);
+        resolve();
+      };
+    }).finally(() => {
+      wake = undefined;
+    });
+  try {
+    for (let attempt = 0; attempt < options.attempts; attempt++) {
+      await host.focusEditor();
+      // 表示とフォーカスを待つ間に前回のコマンドの変更が届いていたら、ここで終える。
+      if (changed()) return;
+      await host.execute(kind);
+      if (changed()) return;
+      await waitForChange();
+      if (changed()) return;
+    }
+  } finally {
+    subscription.dispose();
+  }
+}

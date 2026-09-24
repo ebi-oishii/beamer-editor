@@ -17,16 +17,18 @@
  * | 3 | 操作失敗 (E_USAGE / E_IO / E_INTERNAL / 取得不能な font など) |
  */
 
-import { readFile, writeFile } from "node:fs/promises";
-import { dirname, extname, resolve } from "node:path";
+import { lstat, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   type CanvasGeometry,
   type CanvasLayoutDiagnostic,
+  type CompileDeckFramesRequest,
   type CompileWarning,
   compileDeckFrames,
   type DeckFramesResult,
   exportPdf,
+  frameSelectorFromAddress,
   type PdfExportErrorCode,
   type PdfExportResult,
 } from "@beamer-editor/compiler";
@@ -49,6 +51,7 @@ import {
   nodeFontIO,
   resolveFont,
 } from "./fonts.ts";
+import { nodePdfRasterizer } from "./pdf-rasterizer.ts";
 
 import { skillLintOptions } from "./skill.ts";
 
@@ -219,6 +222,7 @@ export const USAGE = `使い方: deck <command> ...
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示
   deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査
+  deck snapshot <file> -o <directory> [--frame <N|LABEL|label:LABEL>] [--tectonic <path>] [--json]
   deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]
   deck fonts status [--json]          フォントカタログ全 family の解決状態
   deck fonts fetch [family] [--json]  family(既定 "${DEFAULT_FAMILY}")を取得・配置
@@ -662,17 +666,228 @@ export function parseExportArgs(argv: readonly string[]): ParsedExportArgs {
 }
 
 export interface CliDependencies {
-  compileDeckFrames?: (request: {
-    inputPath: string;
-    tectonicPath?: string;
-    includeImages: false;
-  }) => Promise<DeckFramesResult>;
+  compileDeckFrames?: (request: CompileDeckFramesRequest) => Promise<DeckFramesResult>;
   exportPdf?: (request: {
     inputPath: string;
     outputPath?: string;
     overwrite?: boolean;
     tectonicPath?: string;
   }) => Promise<PdfExportResult>;
+  /** Test seams for snapshot publication and cleanup failures. */
+  writeSnapshotFile?: (
+    path: string,
+    data: Uint8Array | string,
+    options: { flag: "wx" },
+  ) => Promise<void>;
+  cleanupSnapshotDirectory?: (path: string) => Promise<void>;
+}
+
+export interface ParsedSnapshotArgs {
+  input: string | undefined;
+  output: string | undefined;
+  frame: string | undefined;
+  tectonic: string | undefined;
+  json: boolean;
+  error: string | undefined;
+}
+
+export function parseSnapshotArgs(argv: readonly string[]): ParsedSnapshotArgs {
+  let input: string | undefined,
+    output: string | undefined,
+    frame: string | undefined,
+    tectonic: string | undefined;
+  let json = false,
+    error: string | undefined;
+  const seen = new Set<string>();
+  const value = (name: string, next: string | undefined) => {
+    if (seen.has(name)) {
+      error ??= `オプションを重複して指定できません: ${name}`;
+      return undefined;
+    }
+    seen.add(name);
+    if (!next || next.startsWith("-")) {
+      error ??= `オプションには値が必要です: ${name}`;
+      return undefined;
+    }
+    return next;
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "-o" || arg === "--output" || arg === "--frame" || arg === "--tectonic") {
+      const name = arg === "-o" ? "--output" : arg;
+      const v = value(name, argv[i + 1]);
+      if (v !== undefined) {
+        if (name === "--output") output = v;
+        else if (name === "--frame") frame = v;
+        else tectonic = v;
+        i++;
+      }
+    } else if (arg === "--json") {
+      if (seen.has(arg)) error ??= "オプションを重複して指定できません: --json";
+      seen.add(arg);
+      json = true;
+    } else if (arg?.startsWith("-")) error ??= `不明なオプション: ${arg}`;
+    else if (!input) input = arg;
+    else error ??= "snapshot には入力ファイルを 1 つ指定してください";
+  }
+  if (!error && !input) error = "snapshot には入力ファイルを指定してください";
+  if (!error && !output) error = "snapshot には --output を指定してください";
+  return { input, output, frame, tectonic, json, error };
+}
+
+/** A snapshot directory is published only after this marker has been created. */
+const COMPLETE_MARKER = ".deck-snapshot-complete";
+
+function snapshotFileName(frame: number, page: number): string {
+  return `frame-${String(frame).padStart(6, "0")}-page-${String(page).padStart(6, "0")}.png`;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runSnapshot(
+  parsed: ParsedSnapshotArgs,
+  dependencies: CliDependencies,
+): Promise<number> {
+  if (parsed.error) return usageError(parsed.error, parsed.json);
+  const input = parsed.input as string,
+    displayOutput = parsed.output as string,
+    output = resolve(displayOutput);
+  // An early, readable rejection. mkdir below stays the authority on existence.
+  if (await pathExists(output)) {
+    writeError("E_OUTPUT_EXISTS", `出力先は既に存在します: ${output}`, parsed.json);
+    return 3;
+  }
+  let filesystemOutput: string;
+  try {
+    const parent = await realpath(dirname(output));
+    const parentInfo = await stat(parent);
+    if (!parentInfo.isDirectory()) throw new Error("出力先の親はディレクトリである必要があります");
+    filesystemOutput = join(parent, basename(output));
+  } catch (error) {
+    writeError("E_IO", `出力先を作成できません: ${errorMessage(error)}`, parsed.json);
+    return 3;
+  }
+  // Only a successful mkdir makes this process the owner of `filesystemOutput`, and only an owner
+  // may remove it on failure. Its parent is canonicalized above so a retargeted symlink cannot
+  // redirect writes or cleanup after the reservation.
+  let reserved = false;
+  let published = false;
+  try {
+    const writeSnapshotFile = dependencies.writeSnapshotFile ?? writeFile;
+    const compiler =
+      dependencies.compileDeckFrames ??
+      ((request: CompileDeckFramesRequest) =>
+        compileDeckFrames(request, { rasterizer: nodePdfRasterizer }));
+    const compiled = await compiler({
+      inputPath: input,
+      ...(parsed.tectonic ? { tectonicPath: parsed.tectonic } : {}),
+      includeImages: true,
+      ...(parsed.frame === undefined
+        ? {}
+        : {
+            frameSelectors: [frameSelectorFromAddress(parsed.frame)],
+          }),
+    });
+    // selector 指定時は compiler が選択外 frame の images を空にして返す。
+    // 全 frame の snapshot では、空の frame も結果 JSON に残す。
+    const frames =
+      parsed.frame === undefined
+        ? compiled.frames
+        : compiled.frames.filter((frame) => frame.images.length > 0);
+    const outputs = frames.flatMap((item) =>
+      item.images.map((image) => ({
+        frame: item.address.number,
+        label: item.address.label,
+        image,
+        file: snapshotFileName(item.address.number, image.page),
+      })),
+    );
+    if (!outputs.length)
+      throw Object.assign(new Error("snapshot 可能な PDF page がありません"), {
+        code: "E_COMPILE",
+      });
+    // mkdir is atomic and never replaces an existing directory, so it doubles as the publication
+    // reservation: a concurrent creator wins and we leave their entry untouched.
+    try {
+      await mkdir(filesystemOutput);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST")
+        throw Object.assign(new Error(`出力先は既に存在します: ${output}`), {
+          code: "E_OUTPUT_EXISTS",
+        });
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+        code: "E_IO",
+      });
+    }
+    reserved = true;
+    try {
+      for (const item of outputs)
+        await writeSnapshotFile(join(filesystemOutput, item.file), item.image.png, { flag: "wx" });
+      // マーカーがないディレクトリは未完成として扱う。全 PNG の保存後に公開する。
+      await writeSnapshotFile(join(filesystemOutput, COMPLETE_MARKER), "", { flag: "wx" });
+    } catch (error) {
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+        code: "E_IO",
+      });
+    }
+    published = true;
+    if (parsed.json)
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            file: input,
+            output: displayOutput,
+            frames: frames.map((item) => ({
+              number: item.address.number,
+              label: item.address.label,
+              images: item.images.map((image) => ({
+                page: image.page,
+                file: snapshotFileName(item.address.number, image.page),
+                width: image.width,
+                height: image.height,
+                bytes: image.png.byteLength,
+              })),
+            })),
+            engine: { name: "tectonic", version: compiled.engineVersion },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    else
+      for (const item of outputs)
+        process.stdout.write(
+          `${input}: frame ${item.frame}${item.label === null ? "" : ` (${item.label})`} page ${item.image.page} -> ${join(displayOutput, item.file)}\n`,
+        );
+    return 0;
+  } catch (error) {
+    if (reserved && !published)
+      try {
+        await (
+          dependencies.cleanupSnapshotDirectory ??
+          ((path: string) => rm(path, { recursive: true, force: true }))
+        )(filesystemOutput);
+      } catch {
+        // cleanup 失敗時は marker なしの未完成 directory が残り得る。
+      }
+    const candidate: unknown =
+      error && typeof error === "object" && "code" in error && typeof error.code === "string"
+        ? error.code
+        : undefined;
+    const code: CliErrorCode =
+      typeof candidate === "string" && Object.hasOwn(ERROR_EXIT_CODE, candidate)
+        ? (candidate as CliErrorCode)
+        : "E_INTERNAL";
+    writeError(code, errorMessage(error), parsed.json);
+    return exitCodeForError(code);
+  }
 }
 
 function defaultPdfOutputForDisplay(input: string): string {
@@ -739,6 +954,7 @@ export async function run(
 ): Promise<number> {
   if (argv[0] === "export") return runExport(parseExportArgs(argv.slice(1)), dependencies);
   if (argv[0] === "check") return runCheck(parseCheckArgs(argv.slice(1)), dependencies);
+  if (argv[0] === "snapshot") return runSnapshot(parseSnapshotArgs(argv.slice(1)), dependencies);
   const { command, sub, family, json, write, unknownOptions } = parseArgs(argv);
   if (unknownOptions.length > 0) return usageError(`不明なオプション: ${unknownOptions[0]}`, json);
   if (command === "lint") {

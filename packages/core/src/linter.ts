@@ -658,7 +658,7 @@ function lintCanvas(canvas: CanvasNode): LintDiagnostic[] {
     }
     const visitTextBlocks = (blocks: BlockNode[], listDepth: number): void => {
       for (const block of blocks) {
-        if (block.type === "paragraph") {
+        if (block.type === "paragraph" || block.type === "displayMath") {
           continue;
         }
         if (block.type === "rawBlock") {

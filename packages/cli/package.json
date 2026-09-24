@@ -10,8 +10,10 @@
     "build:skills": "tsx scripts/build-skills.ts"
   },
   "dependencies": {
+    "@napi-rs/canvas": "1.0.8",
     "@beamer-editor/compiler": "workspace:*",
-    "@beamer-editor/core": "workspace:*"
+    "@beamer-editor/core": "workspace:*",
+    "pdfjs-dist": "6.3.289"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

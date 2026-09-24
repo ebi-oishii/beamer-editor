@@ -22,11 +22,13 @@
 5. deck lint <file>             エラー 0 になるまで修正
 6. deck check <file>            内容量・レイアウトを変えた場合は実コンパイル検証
    (Overfull 警告・コンパイルエラーがフレームアドレス付きで返る)
-7. `deck snapshot` が提供されている場合だけ、`deck snapshot <file> --frame <addr>` で画像を目視確認する。未提供なら `deck export <file> -o <pdf>` で PDF を確認し、実施できなかった検証を報告する
+7. deck snapshot <file> -o <new-directory> --frame <addr> 見た目に確信が持てないときは画像で目視(vision)
 8. 報告                          変更フレームのアドレス + 一行説明 + lint/check 結果
 ```
 
 完了条件: フォーマット済み・lint エラー 0・(内容量を変えた場合)check 通過。これを満たすまで「完了」と報告しない。
+
+`deck snapshot` は complete marker 作成前だけ予約済み出力 directory を cleanup する。marker 作成時点で公開済みとし、以後の失敗時も PNG・marker を削除しない。
 
 ## 3. アドレッシング(スライドの指し方)
 
@@ -50,13 +52,15 @@
 | `deck lint <file>` | 語彙・規則の検証(L001〜) | ソース位置付き指摘(text / `--json`) |
 | `deck format <file> --write` | 正規形化 | 差分の有無 |
 | `deck check <file> [--tectonic <path>] [--json]` | 実コンパイルによる検証 | lint、Overfull、キャンバスのはみ出し・重なりをフレームアドレスに割り付けて報告。入力・出力は変更しない |
-| `deck snapshot <file> --frame <addr> -o <png>` | 提供されている場合のフレーム見た目確認 | 実コンパイル画像 |
+| `deck snapshot <file> -o <directory> [--frame <N\|LABEL\|label:LABEL>]` | フレームの見た目の自己確認 | 実コンパイル PNG。出力先は新規ディレクトリ |
 | `deck export <file> -o <pdf>` | 最終出力 | PDF |
 | `deck init` | 新規デッキプロジェクトの雛形生成(スキル同梱。§8) | 生成ファイル一覧 |
 
 `deck check` はキャンバスフレーム([subset-spec.md](subset-spec.md) §2.8)について、savepos 実測による本文領域外へのはみ出し・オブジェクト重なりの検出も報告する(絶対配置は Overfull 警告が出ないため)。
 
-`check` と、提供されている場合の `snapshot` は tectonic を使うため数秒かかるが、エージェントの検証は対話的操作ではないので許容する(人間のプレビューは常に即時の HTML 側)。`snapshot` が未提供なら `deck export <file> -o <pdf>` により PDF を確認し、実施できなかった検証を報告する。`check` は診断なし（または情報のみ）を 0、警告を 1、lint エラーを 2、Tectonic・入出力・使用法などの操作失敗を 3 で終了する。`--json` の操作失敗は stderr に出る。
+`snapshot` の出力先は新規ディレクトリのみを受け付ける。既存のパス(ディレクトリ・通常ファイル・壊れたシンボリックリンクを含む)は `E_OUTPUT_EXISTS` で拒否し、その中身には一切触れない。全 PNG の書き込み後に空の `.deck-snapshot-complete` を作成して公開する。このマーカーがないディレクトリは書き込み中・クラッシュ・失敗後の残留として未完成扱いにし、消費者はマーカーの存在を確認してから JSON または `*.png` だけを読む。失敗した場合は自分が作成した出力ディレクトリだけを削除するので、既存のディレクトリが消えることはない。
+
+`check` と `snapshot` は tectonic を使うため数秒かかるが、エージェントの検証は対話的操作ではないので許容する(人間のプレビューは常に即時の HTML 側)。`check` は診断なし（または情報のみ）を 0、警告を 1、lint エラーを 2、Tectonic・入出力・使用法などの操作失敗を 3 で終了する。`--json` の操作失敗は stderr に出る。
 
 ## 5. 行動規約(ガードレール)
 
@@ -176,7 +180,7 @@ references/subset-cheatsheet.md を参照。範囲外の LaTeX も書けるが�
 2. 編集する
 3. `deck format <file> --write` → `deck lint <file>` をエラー 0 まで
 4. 内容量やレイアウトを変えたら `deck check <file>`(溢れ検出)
-5. `deck snapshot` が提供されていれば `deck snapshot <file> --frame <addr>` で画像確認。未提供なら `deck export <file> -o <pdf>` で確認し、実施できなかった検証を報告
+5. 見た目に確信がなければ `deck snapshot <file> -o <new-directory> --frame <addr>` で画像確認
 6. 変更フレームのアドレス + 一行説明 + lint/check 結果を報告
 
 ## 規約
