@@ -2,7 +2,13 @@ import { lstat, mkdir, open, readdir, readFile, rename, rmdir, unlink } from "no
 import { dirname, join, resolve } from "node:path";
 import { CURRENT_DECK_SOURCE_VERSION } from "@beamer-editor/core";
 import { GENERATED_SKILL_FINGERPRINT } from "./generated-skill-fingerprint.ts";
-import { SKILL_FILE_PATHS, type SkillFilePath, skillFingerprint } from "./skill-generator.ts";
+import {
+  PROJECT_INSTRUCTIONS_PATH,
+  PROJECT_SKILL_DIRECTORIES,
+  SKILL_FILE_PATHS,
+  type SkillFilePath,
+  skillFingerprint,
+} from "./skill-generator.ts";
 
 export class InitError extends Error {
   constructor(
@@ -27,6 +33,28 @@ async function generatedSkillFiles(): Promise<Record<SkillFilePath, string>> {
   }
   if (skillFingerprint(files) !== GENERATED_SKILL_FINGERPRINT)
     throw new InitError("E_IO", "同梱スキルの生成物が古いため中止しました (pnpm build:skills)");
+  return files;
+}
+
+/**
+ * Always-read agent instructions: AGENTS.md for Codex, and a CLAUDE.md that imports it so the
+ * rules live in one file. Users may extend both, so they are never fingerprinted or overwritten.
+ */
+async function projectInstructionFiles(): Promise<Record<string, string>> {
+  return {
+    "AGENTS.md": await readFile(
+      new URL(`../../../${PROJECT_INSTRUCTIONS_PATH}`, import.meta.url),
+      "utf8",
+    ),
+    "CLAUDE.md": "@AGENTS.md\n",
+  };
+}
+
+/** Every agent's skill directory receives the same generated files. */
+function projectSkillFiles(skill: Record<SkillFilePath, string>): Record<string, string> {
+  const files: Record<string, string> = {};
+  for (const root of PROJECT_SKILL_DIRECTORIES)
+    for (const [name, content] of Object.entries(skill)) files[`${root}/${name}`] = content;
   return files;
 }
 
@@ -97,9 +125,11 @@ export async function initDeck(
 ): Promise<{ directory: string; files: string[] }> {
   const target = resolve(directory);
   if (options.updateSkill) return updateSkill(target);
-  const files: Record<string, string> = { "main.slide.tex": await initialDeckSource() };
-  for (const [name, content] of Object.entries(await generatedSkillFiles()))
-    files[`.claude/skills/beamer-deck/${name}`] = content;
+  const files: Record<string, string> = {
+    "main.slide.tex": await initialDeckSource(),
+    ...(await projectInstructionFiles()),
+    ...projectSkillFiles(await generatedSkillFiles()),
+  };
   let exists = false;
   try {
     const info = await lstat(target);
@@ -159,8 +189,9 @@ export async function initDeck(
 }
 
 /**
- * Refresh generated skill files only; decks, assets, and unrelated project data stay untouched.
- * The target is the project directory that owns (or will own) `.claude/skills/beamer-deck/`,
+ * Refresh generated skill files in every agent's skill directory; decks, assets, and unrelated
+ * project data stay untouched. Missing project instructions are created, existing ones are kept.
+ * The target is the project directory that owns (or will own) the skill directories,
  * i.e. the directory L010 names. It need not contain a particular deck file.
  */
 async function updateSkill(target: string): Promise<{ directory: string; files: string[] }> {
@@ -178,10 +209,11 @@ async function updateSkill(target: string): Promise<{ directory: string; files: 
       `対象ディレクトリを確認できません: ${target}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const files = await generatedSkillFiles();
-  const root = join(target, ".claude/skills/beamer-deck");
-  const directories = new Set([join(target, ".claude"), join(target, ".claude/skills"), root]);
-  for (const name of Object.keys(files)) directories.add(dirname(join(root, name)));
+  const files = projectSkillFiles(await generatedSkillFiles());
+  const directories = new Set<string>();
+  for (const name of Object.keys(files))
+    for (let parent = dirname(name); parent !== "."; parent = dirname(parent))
+      directories.add(join(target, parent));
   const createdDirectories: string[] = [];
   for (const directory of [...directories].sort((a, b) => a.length - b.length)) {
     try {
@@ -220,9 +252,10 @@ async function updateSkill(target: string): Promise<{ directory: string; files: 
     existed: boolean;
     installed: boolean;
   }> = [];
+  const createdInstructions: string[] = [];
   try {
     for (const [name, content] of Object.entries(files)) {
-      const path = join(root, name);
+      const path = join(target, name);
       let existed = false;
       try {
         const info = await lstat(path);
@@ -257,12 +290,28 @@ async function updateSkill(target: string): Promise<{ directory: string; files: 
         throw error;
       }
     }
+    for (const [name, content] of Object.entries(await projectInstructionFiles())) {
+      const path = join(target, name);
+      let handle: Awaited<ReturnType<typeof open>>;
+      try {
+        handle = await open(path, "wx");
+      } catch (error) {
+        // Any existing entry (even a symlink) belongs to the user: keep it as is.
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+        throw error;
+      }
+      createdInstructions.push(path);
+      try {
+        await handle.writeFile(content);
+      } finally {
+        await handle.close();
+      }
+      files[name] = content;
+    }
     for (const entry of entries) if (entry.existed) await unlink(entry.backup).catch(() => {});
-    return {
-      directory: target,
-      files: Object.keys(files).map((name) => `.claude/skills/beamer-deck/${name}`),
-    };
+    return { directory: target, files: Object.keys(files) };
   } catch (error) {
+    for (const path of createdInstructions.reverse()) await unlink(path).catch(() => {});
     for (const entry of [...entries].reverse()) {
       await unlink(entry.staged).catch(() => {});
       if (entry.installed) await unlink(entry.path).catch(() => {});

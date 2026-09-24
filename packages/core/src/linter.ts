@@ -51,7 +51,7 @@ export interface LintOptions {
   /** undefined: no bundled skill; null: bundled files could not be verified. */
   skillContentFingerprint?: string | null;
   expectedSkillFingerprint?: string;
-  /** Directory containing the discovered `.claude/skills/beamer-deck/`; used only in the L010 message. */
+  /** Directory containing the discovered `.claude/` or `.agents/` skill; used only in the L010 message. */
   skillProjectDirectory?: string;
   /** 対応する `%% deck-source-version`。 */
   expectedSourceVersion?: number;

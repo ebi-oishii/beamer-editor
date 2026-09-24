@@ -34,9 +34,60 @@ it("generates a portable, formatted, lint-clean deck and the complete skill", as
   expect(lintSource(source, await skillLintOptions(join(directory, "main.slide.tex")))).toEqual([]);
   expect(source).not.toMatch(/\\input\{/);
   expect(await readdir(join(directory, "assets"))).toEqual([]);
-  expect(result.files).toHaveLength(5);
+  expect(result.files).toHaveLength(3 + 2 * SKILL_FILE_PATHS.length);
   for (const file of result.files)
     expect((await readFile(join(directory, file), "utf8")).length).toBeGreaterThan(0);
+});
+
+it("installs the skill for Claude Code and Codex with always-read project instructions", async () => {
+  const directory = join(await temp(), "project");
+  await initDeck(directory);
+  for (const name of SKILL_FILE_PATHS) {
+    expect(await readFile(join(directory, ".agents/skills/beamer-deck", name), "utf8")).toBe(
+      await readFile(join(directory, ".claude/skills/beamer-deck", name), "utf8"),
+    );
+  }
+  const agents = await readFile(join(directory, "AGENTS.md"), "utf8");
+  expect(agents).toBe(
+    await readFile(new URL("../../../skills/deck-project/AGENTS.md", import.meta.url), "utf8"),
+  );
+  for (const phrase of ["decktext", "deck export <file> --format pdf", "pptx"])
+    expect(agents).toContain(phrase);
+  expect(await readFile(join(directory, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
+});
+
+it("--update-skill refreshes both skill copies, creates missing instructions and keeps edited ones", async () => {
+  const directory = join(await temp(), "project");
+  await initDeck(directory);
+  await writeFile(join(directory, ".agents/skills/beamer-deck/SKILL.md"), "stale");
+  await writeFile(join(directory, "AGENTS.md"), "user rules\n");
+  await rm(join(directory, "CLAUDE.md"));
+  const result = await initDeck(directory, { updateSkill: true });
+  expect(result.files).toEqual(
+    expect.arrayContaining([
+      ".claude/skills/beamer-deck/SKILL.md",
+      ".agents/skills/beamer-deck/SKILL.md",
+      "CLAUDE.md",
+    ]),
+  );
+  expect(result.files).not.toContain("AGENTS.md");
+  expect(await readFile(join(directory, ".agents/skills/beamer-deck/SKILL.md"), "utf8")).toBe(
+    await readFile(join(directory, ".claude/skills/beamer-deck/SKILL.md"), "utf8"),
+  );
+  expect(await readFile(join(directory, "AGENTS.md"), "utf8")).toBe("user rules\n");
+  expect(await readFile(join(directory, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
+});
+
+it("L010 reports a stale Codex skill even when the Claude Code copy is current", async () => {
+  const directory = join(await temp(), "project");
+  await initDeck(directory);
+  const deck = join(directory, "main.slide.tex");
+  const source = await readFile(deck, "utf8");
+  expect(lintSource(source, await skillLintOptions(deck))).toEqual([]);
+  await writeFile(join(directory, ".agents/skills/beamer-deck/references/cli.md"), "tampered");
+  expect(lintSource(source, await skillLintOptions(deck)).map((d) => d.code)).toEqual(["L010"]);
+  await initDeck(directory, { updateSkill: true });
+  expect(lintSource(source, await skillLintOptions(deck))).toEqual([]);
 });
 
 it("inlines the canonical non-fixture managed preamble", async () => {
