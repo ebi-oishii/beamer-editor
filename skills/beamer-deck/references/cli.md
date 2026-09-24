@@ -14,6 +14,7 @@ CLI 0.0.1 の実装済みコマンド（実際のヘルプから生成）:
   deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査
   deck snapshot <file> -o <directory> [--frame <N|LABEL|label:LABEL>] [--tectonic <path>] [--json]
   deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]
+  deck export <file> --format html [-o <directory>] [--overwrite] [--json]
   deck fonts status [--json]          フォントカタログ全 family の解決状態
   deck fonts fetch [family] [--json]  family(既定 "Noto Sans CJK JP")を取得・配置
 ```
