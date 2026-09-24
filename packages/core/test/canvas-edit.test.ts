@@ -156,6 +156,11 @@ describe("canvas width", () => {
     expect(canvasWidthReplacement("[x=0,y=.2,size=small]", 0.5)).toBe(
       "[x=0,y=.2,size=small,w=0.500]",
     );
+    expect(canvasWidthReplacement("[ ]", 0.5)).toBe("[w=0.500]");
+    expect(canvasWidthReplacement("[x=.1,y=.2,]", 0.5)).toBe("[x=.1,y=.2,w=0.500]");
+    expect(canvasWidthReplacement("[\n  x=.1,\n  y=.2\n]", 0.5)).toBe(
+      "[\n  x=.1,\n  y=.2,w=0.500\n]",
+    );
     for (const options of ["[w=.2,w=.3]", "[w=.3junk]", "[w=NaN]"])
       expect(canvasWidthReplacement(options, 0.4)).toBeNull();
     expect(canvasWidthReplacement("[w=.3]", NaN)).toBeNull();
@@ -180,6 +185,12 @@ describe("canvas font size", () => {
     );
     expect(canvasFontSizeReplacement("[x=.1,y=.2,w=.3]", size)).toBe(
       `[x=.1,y=.2,w=.3,size=${size}]`,
+    );
+    expect(canvasFontSizeReplacement("[x=.1,y=.2,w=.3,]", size)).toBe(
+      `[x=.1,y=.2,w=.3,size=${size}]`,
+    );
+    expect(canvasFontSizeReplacement("[\n  x=.1,\n  y=.2\n]", size)).toBe(
+      `[\n  x=.1,\n  y=.2,size=${size}\n]`,
     );
     expect(canvasFontSizeReplacement("[]", size)).toBe(`[size=${size}]`);
     expect(canvasFontSizeReplacement("[ ]", size)).toBe(`[size=${size}]`);

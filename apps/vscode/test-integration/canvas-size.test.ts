@@ -52,10 +52,13 @@ ${element}
           size: "Large",
         };
         receive(request);
-        await wait(() => doc.getText() === source.replace(options, "[x=.1,y=.2,w=.3,size=Large]"));
-        const moved = doc.getText();
-        // A stale request cannot overwrite the new document.
         receive({ ...request, size: "tiny" });
+        const resized = source.replace(options, "[x=.1,y=.2,w=.3,size=Large]");
+        await wait(() => doc.getText() === resized && doc.version !== request.version);
+        const moved = doc.getText();
+        // 適用中の要求はロックされ、適用後の古い version も書き込めない。
+        receive({ ...request, size: "tiny" });
+        await wait(() => controller.latestOutcome?.version === doc.version);
         assert.equal(doc.getText(), moved);
         await vscode.window.showTextDocument(doc);
         await vscode.commands.executeCommand("undo");

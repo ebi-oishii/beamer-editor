@@ -54,14 +54,16 @@ ${element}
           width: 0.5,
         };
         receive(request);
+        receive({ ...request, width: 0.7 });
         const resized =
           kind === "image"
             ? source.replace("w=.3", "w=0.500")
             : source.replace("size=small]", "size=small,w=0.500]");
-        await wait(() => doc.getText() === resized);
+        await wait(() => doc.getText() === resized && doc.version !== request.version);
         const moved = doc.getText();
-        // A stale request cannot overwrite the new document.
+        // 適用中の要求はロックされ、適用後の古い version も書き込めない。
         receive({ ...request, width: 0.7 });
+        await wait(() => controller.latestOutcome?.version === doc.version);
         assert.equal(doc.getText(), moved);
         await vscode.window.showTextDocument(doc);
         await vscode.commands.executeCommand("undo");

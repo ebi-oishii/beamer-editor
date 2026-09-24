@@ -166,9 +166,7 @@ export function canvasWidthReplacement(options: string, width: number): string |
   const parts = options.slice(1, -1).split(",");
   const indices = parts.flatMap((part, index) => (/^\s*w\s*=/.test(part) ? [index] : []));
   if (indices.length === 0)
-    return options === "[]"
-      ? `[w=${formatCanvasCoordinate(width)}]`
-      : `${options.slice(0, -1)},w=${formatCanvasCoordinate(width)}]`;
+    return appendCanvasOption(options, `w=${formatCanvasCoordinate(width)}`);
   if (indices.length !== 1) return null;
   const index = indices[0];
   if (index === undefined) return null;
@@ -178,6 +176,27 @@ export function canvasWidthReplacement(options: string, width: number): string |
   if (!match) return null;
   parts[index] = `${match[1]}${formatCanvasCoordinate(width)}${match[3]}`;
   return `[${parts.join(",")}]`;
+}
+
+/**
+ * 省略された option を最後の内容を持つパートの直後へ追加する。
+ *
+ * 末尾の空パートはそのままカンマを増やすと `,,` になるため捨て、最後のパートの
+ * 改行・空白は閉じ角括弧の前に残す。空白だけの options は意味を持つ宣言が無いので
+ * 通常の空 options と同じ形に正規化する。
+ */
+function appendCanvasOption(options: string, option: string): string {
+  const parts = options.slice(1, -1).split(",");
+  let index = parts.length - 1;
+  while (index >= 0 && parts[index]?.trim() === "") index -= 1;
+  if (index < 0) return `[${option}]`;
+  const part = parts[index];
+  if (part === undefined) return `[${option}]`;
+  const contentEnd = part.search(/\s*$/);
+  const suffix = `${part.slice(contentEnd)}${parts.slice(index + 1).join("")}`;
+  const before = parts.slice(0, index).join(",");
+  const separator = index === 0 ? "" : ",";
+  return `[${before}${separator}${part.slice(0, contentEnd)},${option}${suffix}]`;
 }
 
 export function isCanvasFontSize(value: unknown): value is CanvasFontSize {
@@ -192,9 +211,7 @@ export function canvasFontSizeReplacement(options: string, size: CanvasFontSize)
   if (indices.length > 1) return null;
   const index = indices[0];
   if (index === undefined)
-    return options.slice(1, -1).trim() === ""
-      ? `[size=${size}]`
-      : `${options.slice(0, -1)},size=${size}]`;
+    return appendCanvasOption(options, `size=${size}`);
   const match = /^(\s*size\s*=\s*)([^\s,]+)(\s*)$/.exec(parts[index] ?? "");
   if (!match) return null;
   parts[index] = `${match[1]}${size}${match[3]}`;
