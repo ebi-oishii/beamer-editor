@@ -202,6 +202,78 @@ describe("imagePasteInsertion", () => {
     expect(at(`${RAW}\n  body\n\\end{frame}\n|${RAW}\n  body\n\\end{frame}`)).toBeNull();
   });
 
+  it("サブタイトルの中では入れず、その後の本文には入れる", () => {
+    const at = (frame: string) => {
+      const { source, offset } = withCursor(`${PREAMBLE}\n${frame}\n\\end{document}\n`);
+      return imagePasteInsertion(source, offset, "assets/image.png");
+    };
+    expect(at("\\begin{frame}{T}{Su|b}\n  body\n\\end{frame}")).toBeNull();
+    expect(at("\\begin{frame}{T}{Sub}\n  bo|dy\n\\end{frame}")?.text).toMatch(
+      /^\\includegraphics\[/,
+    );
+  });
+
+  it("タイトルの中の \\} や % コメントを閉じ括弧と見なさない", () => {
+    const at = (frame: string) => {
+      const { source, offset } = withCursor(`${PREAMBLE}\n${frame}\n\\end{document}\n`);
+      return imagePasteInsertion(source, offset, "assets/image.png");
+    };
+    expect(at("\\begin{frame}{A \\} B|}\n  body\n\\end{frame}")).toBeNull();
+    expect(at("\\begin{frame}{A % }\n  B|}\n  body\n\\end{frame}")).toBeNull();
+  });
+
+  it("空行の後の {...} は見出しではなく本文として扱う", () => {
+    const { source, offset } = withCursor(
+      `${PREAMBLE}\n\\begin{frame}{Title}\n\n  {gro|up}\n\\end{frame}\n\\end{document}\n`,
+    );
+    expect(imagePasteInsertion(source, offset, "assets/image.png")?.text).toMatch(
+      /^\\includegraphics\[/,
+    );
+  });
+
+  it("raw frame で見出しが 2 行にまたがっても、見出しには入れず本文には入れる", () => {
+    const at = (frame: string) => {
+      const { source, offset } = withCursor(`${PREAMBLE}\n${frame}\n\\end{document}\n`);
+      return imagePasteInsertion(source, offset, "assets/image.png");
+    };
+    expect(at("\\begin{frame}[unknownopt]\n{Ti|tle}\n  body\n\\end{frame}")).toBeNull();
+    expect(at("\\begin{frame}[unknownopt]\n{Title}\n  bo|dy\n\\end{frame}")?.text).toMatch(
+      /^\\includegraphics\[/,
+    );
+  });
+
+  it("1 行の raw frame でも見出しの後の本文には入れる", () => {
+    const { source, offset } = withCursor(
+      `${PREAMBLE}\n\\begin{frame}[unknownopt]{T} bo|dy \\end{frame}\n\\end{document}\n`,
+    );
+    expect(imagePasteInsertion(source, offset, "assets/image.png")?.text).toMatch(
+      /^\\includegraphics\[/,
+    );
+  });
+
+  it("raw frame の deckcanvas の中では入れず、その外の本文には入れる", () => {
+    const deck = (inside: boolean) =>
+      withCursor(
+        [
+          PREAMBLE,
+          "\\begin{frame}[unknownopt]{Canvas}",
+          `  flow${inside ? "" : "|"}`,
+          "  \\begin{deckcanvas}",
+          `    \\deckimage[x=0.520,y=0.140,w=0.400]{assets/chart.pdf}${inside ? "|" : ""}`,
+          "  \\end{deckcanvas}",
+          "\\end{frame}",
+          "\\end{document}",
+          "",
+        ].join("\n"),
+      );
+    const inside = deck(true);
+    expect(imagePasteInsertion(inside.source, inside.offset, "assets/image.png")).toBeNull();
+    const outside = deck(false);
+    expect(imagePasteInsertion(outside.source, outside.offset, "assets/image.png")?.text).toMatch(
+      /^\\includegraphics\[/,
+    );
+  });
+
   it("プリアンブルでは入れない", () => {
     const { source, offset } = withCursor(
       `${PREAMBLE.replace("\\usepackage{graphicx}", "\\usepackage{graphicx}\n|")}\n\\end{document}\n`,
