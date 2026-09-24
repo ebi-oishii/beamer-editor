@@ -1,4 +1,13 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { lintSource } from "@beamer-editor/core";
@@ -197,6 +206,16 @@ it("never fails lint because skill discovery fails, and ignores a user-level ski
   expect(await run(["lint", deck])).not.toBe(3);
 
   await rm(join(directory, ".claude"));
+  // 権限で辿れない .claude も「同梱なし」。root では chmod が効かないので飛ばす。
+  if (process.getuid?.() !== 0) {
+    await mkdir(join(directory, ".claude"));
+    await chmod(join(directory, ".claude"), 0o000);
+    expect(await skillLintOptions(deck)).toEqual({});
+    expect(await run(["lint", deck])).not.toBe(3);
+    await chmod(join(directory, ".claude"), 0o755);
+    await rm(join(directory, ".claude"), { recursive: true });
+  }
+
   await writeBundle(join(directory, ".claude/skills/beamer-deck"), "0".repeat(64));
   vi.stubEnv("HOME", directory);
   expect(await skillLintOptions(deck)).toEqual({});

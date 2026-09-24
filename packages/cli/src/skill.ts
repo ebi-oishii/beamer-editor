@@ -25,10 +25,10 @@ async function readBundledSkill(projectDirectory: string): Promise<LintOptions |
   const skillDirectory = join(projectDirectory, skillRelativeDirectory);
   try {
     await stat(skillDirectory);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
-    return skillOptions(projectDirectory, null, null);
+  } catch {
+    // 同梱物の有無を確かめられない(存在しない・種類が違う・辿れない)。同梱なしとして扱う。
+    // ここで「古い同梱物あり」にすると、スキルを持たないデッキに L010 が出て lint が 1 で終わる。
+    return undefined;
   }
 
   try {
