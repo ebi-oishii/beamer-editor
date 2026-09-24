@@ -1,5 +1,7 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { frameLabel, framesOf, type SlideEditAction } from "../src/index.js";
+import { formatDeck, frameLabel, framesOf, type SlideEditAction } from "../src/index.js";
 import { parseDeck } from "../src/parser.js";
 import { editSlide } from "../src/slide-edit.js";
 
@@ -54,7 +56,7 @@ describe("slide source edits", () => {
     expect(next).toContain("<2->\n[fragile, label=old]\n{A}");
 
     const unlabeled = deck("\\begin{frame}\n% header note\n<1>\n{A}\nA body\n\\end{frame}");
-    expect(apply(unlabeled, "duplicate", 0)).toContain("<1>\n[label=slide-1]{A}");
+    expect(apply(unlabeled, "duplicate", 0)).toContain("<1>[label=slide-1]\n{A}");
   });
   it("adds a label to an unlabeled copy and supports adjacent frames without newlines", () => {
     const source = deck(frame("A") + frame("B"));
@@ -320,5 +322,198 @@ describe("slide source edits", () => {
     const next = apply(source, "duplicate", 0);
     expect(next.match(/\\custom\{keep\}/g)).toHaveLength(2);
     expect(next.match(/ {2}% text 😀/g)).toHaveLength(2);
+  });
+
+  const withPreamble = (preamble: string, body: string) =>
+    `%% deck-source-version: 1\n\\documentclass{beamer}\n${preamble}\n\\begin{document}\n${body}\n\\end{document}\n`;
+  const frameTexts = (source: string) =>
+    framesOf(parseDeck(source)).map((frame) => source.slice(frame.span.start, frame.span.end));
+
+  describe("uses the same frame segmentation as the slide list", () => {
+    const tricky: Array<[string, string, number]> = [
+      [
+        "verb with frame tags in a fragile frame",
+        deck(
+          `${frame("A", "[fragile]").replace("A body", "\\verb|\\end{frame} \\begin{frame}|")}\n${frame("B")}`,
+        ),
+        2,
+      ],
+      ...[
+        "verbatim",
+        "lstlisting",
+        "minted",
+        "Verbatim",
+        "Verbatim*",
+        "BVerbatim",
+        "LVerbatim",
+      ].map((environment): [string, string, number] => [
+        `${environment} with frame tags`,
+        deck(
+          `${frame("A", "[fragile]").replace(
+            "A body",
+            `\\begin{${environment}}\n\\end{frame}\n\\begin{frame}{Fake}\n\\end{${environment}}`,
+          )}\n${frame("B")}`,
+        ),
+        2,
+      ]),
+      [
+        "commented-out frames",
+        deck(
+          `% \\begin{frame}{Old}\n% old\n% \\end{frame}\n${frame("A")} % \\end{frame}\n${frame("B")}`,
+        ),
+        2,
+      ],
+      [
+        "macro bodies with frame tags",
+        withPreamble(
+          "\\newcommand{\\mkframe}{\\begin{frame}{M}\\end{frame}}",
+          `${frame("A").replace("A body", "\\newcommand{\\inner}{\\end{frame}\\begin{frame}}")}\n\\newcommand{\\between}{%\n\\begin{frame}{Fake}\n\\end{frame}\n}\n${frame("B")}`,
+        ),
+        2,
+      ],
+    ];
+    for (const [name, source, count] of tricky) {
+      it(`${name}: every listed frame is a target and delete removes exactly it`, () => {
+        const listed = framesOf(parseDeck(source));
+        expect(listed).toHaveLength(count);
+        const texts = frameTexts(source);
+        listed.forEach((frame, index) => {
+          const result = editSlide(source, "delete", frame.span.start);
+          expect(result).toEqual(expect.objectContaining({ ok: true }));
+          const next = apply(source, "delete", index);
+          expect(frameTexts(next)).toEqual(texts.filter((_, i) => i !== index));
+          expect(next).toContain("\\end{document}");
+        });
+      });
+    }
+  });
+
+  it("refuses a frame end after the document end on the same line", () => {
+    const broken = deck("\\begin{frame}{A}\nA body\n\\end{document}\\end{frame}").replace(
+      /\n\\end\{document\}\n$/,
+      "\n",
+    );
+    expect(editSlide(broken, "insert")).toEqual({
+      ok: false,
+      reason: "閉じていない、または入れ子になったフレームがあります。ソースを確認してください。",
+    });
+    const valid = `${deck(frame("A")).replace(/\n\\end\{document\}\n$/, "")}\\end{document}\n`;
+    expect(valid).toContain("\\end{frame}\\end{document}");
+    expect(labels(apply(valid, "duplicate", 0))).toEqual([null, "slide-1"]);
+  });
+
+  it("does not treat body text after a line break as frame options", () => {
+    const blank = deck("\\begin{frame}\n\n[1] Author, 2020.\n\\end{frame}");
+    const copied = apply(blank, "duplicate", 0);
+    expect(copied).toContain("\\begin{frame}[label=slide-1]\n\n[1] Author, 2020.\n\\end{frame}");
+    expect(copied.match(/\n\[1\] Author, 2020\./g)).toHaveLength(2);
+
+    // TeX reads `[1]` as frame options here; its header is not a plain option list.
+    const newline = deck("\\begin{frame}\n[1] Author, 2020.\n\\end{frame}");
+    expect(editSlide(newline, "duplicate", newline.indexOf("\\begin{frame}"))).toEqual({
+      ok: false,
+      reason: "フレームのlabelを安全に変更できません。ソースを確認してください。",
+    });
+  });
+
+  it("labels a title-less copy whose header is followed by a blank line", () => {
+    const source = deck("\\begin{frame}\n\n\\frametitle{T}\nbody\n\\end{frame}");
+    const next = apply(source, "duplicate", 0);
+    expect(next).toContain("\\begin{frame}[label=slide-1]\n\n\\frametitle{T}");
+    expect(labels(next)).toEqual([null, "slide-1"]);
+  });
+
+  it("replaces existing labels in every header form the parser recognizes", () => {
+    for (const [header, expected] of [
+      ["<2->[label=old]{A}", "<2->[label=slide-1]{A}"],
+      ["[fragile, label = old ]{A}", "[fragile, label = slide-1 ]{A}"],
+      ["\n[label=old]\n{A}", "\n[label=slide-1]\n{A}"],
+      ["% note\n[plain,label=old]{A}", "% note\n[plain,label=slide-1]{A}"],
+      ["<2->{A}", "<2->[label=slide-1]{A}"],
+    ]) {
+      const source = deck(`\\begin{frame}${header}\nA body\n\\end{frame}`);
+      const next = apply(source, "duplicate", 0);
+      expect(next).toContain(`\\begin{frame}${header}\n`);
+      expect(next).toContain(`\\begin{frame}${expected}\n`);
+      expect(labels(next)).toContain("slide-1");
+    }
+  });
+
+  it("refuses opaque frame headers it cannot read safely", () => {
+    for (const header of ["[<+->][label=a]{A}", "[t,label={a,b}]{A}", "[t,%\nlabel=a]{A}"]) {
+      const source = deck(`\\begin{frame}${header}\nA body\n\\end{frame}`);
+      expect(editSlide(source, "duplicate", source.indexOf("\\begin{frame}")).ok).toBe(false);
+    }
+    const opaque = deck(frame("T", "[t]"));
+    expect(apply(opaque, "duplicate", 0)).toContain(frame("T", "[t,label=slide-1]"));
+  });
+
+  it("refuses labels emitted by preamble macros of any definition form, transitively", () => {
+    for (const [preamble, call] of [
+      ["\\newcommand{\\keypoint}[2]{\\textbf{#1}\\label{#2}}", "\\keypoint{Main}{pt:one}"],
+      ["\\renewcommand*\\keypoint[1]{\\label{#1}}", "\\keypoint{a}"],
+      ["\\providecommand{\\keypoint}{\\label{a}}", "\\keypoint"],
+      ["\\DeclareRobustCommand{\\keypoint}{\\label{a}}", "\\keypoint"],
+      ["\\def\\keypoint#1{\\label{#1}}", "\\keypoint{a}"],
+      ["\\NewDocumentCommand{\\keypoint}{m}{\\label{#1}}", "\\keypoint{a}"],
+      ["\\NewDocumentCommand\\keypoint{m}{\\label{#1}}", "\\keypoint{a}"],
+      ["\\let\\keypoint\\label", "\\keypoint{a}"],
+      ["\\def\\inner{\\label{a}}\n\\newcommand{\\keypoint}{\\inner}", "\\keypoint"],
+      ["\\newenvironment{anchored}{\\label{a}}{}", "\\begin{anchored}x\\end{anchored}"],
+      [
+        "\\NewDocumentEnvironment{anchored}{}{}{\\keypoint}\n\\def\\keypoint{\\label{a}}",
+        "\\begin{anchored}x\\end{anchored}",
+      ],
+    ]) {
+      const source = withPreamble(preamble, `${frame("A").replace("A body", call)}\n${frame("B")}`);
+      expect(editSlide(source, "duplicate", source.indexOf("\\begin{frame}"))).toEqual({
+        ok: false,
+        reason: "本文に\\labelがあるスライドは、参照先を確認してソース上で複製してください。",
+      });
+      expect(labels(apply(source, "duplicate", 1))).toEqual([null, null, "slide-1"]);
+    }
+  });
+
+  it("does not count macro labels hidden by comments, verb, or verbatim", () => {
+    for (const [preamble, call] of [
+      ["% \\newcommand{\\keypoint}{\\label{a}}\n\\newcommand{\\keypoint}{text}", "\\keypoint"],
+      ["\\newcommand{\\keypoint}{\\verb|\\label{a}|}", "\\keypoint"],
+      ["\\newcommand{\\keypoint}{\\label{a}}", "% \\keypoint"],
+      ["\\newcommand{\\keypoint}{\\label{a}}", "\\verb|\\keypoint|"],
+      ["\\newcommand{\\keypoint}{\\label{a}}", "\\begin{Verbatim}\n\\keypoint\n\\end{Verbatim}"],
+    ]) {
+      const source = withPreamble(preamble, frame("A", "[fragile]").replace("A body", call));
+      expect(labels(apply(source, "duplicate", 0))).toEqual([null, "slide-1"]);
+    }
+  });
+
+  it("keeps every fixture editable or refused, with idempotent formatting", () => {
+    const directory = join(__dirname, "../../../fixtures");
+    const fixtures = readdirSync(directory).filter((name) => name.endsWith(".slide.tex"));
+    expect(fixtures.length).toBeGreaterThan(0);
+    for (const name of fixtures) {
+      const source = readFileSync(join(directory, name), "utf8");
+      const frames = framesOf(parseDeck(source));
+      for (const [index, frame] of frames.entries()) {
+        for (const action of ["moveUp", "moveDown", "duplicate", "delete", "insert"] as const) {
+          const result = editSlide(source, action, frame.span.start);
+          if (!result.ok) {
+            expect(action, `${name} #${index} ${action}: ${result.reason}`).toBe("duplicate");
+            continue;
+          }
+          let next = source;
+          for (const edit of [...result.edits].sort((a, b) => b.span.start - a.span.start))
+            next = next.slice(0, edit.span.start) + edit.text + next.slice(edit.span.end);
+          const delta =
+            action === "delete" ? -1 : action === "duplicate" || action === "insert" ? 1 : 0;
+          const moved = result.edits.length > 0 || delta !== 0;
+          expect(framesOf(parseDeck(next)), `${name} #${index} ${action}`).toHaveLength(
+            frames.length + (moved ? delta : 0),
+          );
+          const formatted = formatDeck(next);
+          expect(formatDeck(formatted), `${name} #${index} ${action}`).toBe(formatted);
+        }
+      }
+    }
   });
 });

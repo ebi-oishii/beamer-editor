@@ -9,3 +9,4 @@ export * from "./linter.js";
 export * from "./parser.js";
 export * from "./slide-edit.js";
 export * from "./template.js";
+export { VERBATIM_ENVS } from "./tex-scan.js";

@@ -1,4 +1,4 @@
-import { framesOf, parseDeck } from "@beamer-editor/core";
+import { framesOf, parseDeck, VERBATIM_ENVS } from "@beamer-editor/core";
 
 /** VS Code に依存しない折りたたみ範囲。行番号は 0 始まりで両端を含む。 */
 export interface FrameFoldRange {
@@ -22,7 +22,6 @@ export interface FrameFoldCancellation {
 
 const FRAME_BEGIN = "\\begin{frame}";
 const FRAME_END = "\\end{frame}";
-const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlisting", "minted"]);
 
 /** 直前にある連続バックスラッシュ数が奇数なら、その位置の文字は TeX でエスケープされる。 */
 function isEscaped(source: string, position: number): boolean {

@@ -38,6 +38,7 @@ import type {
   StyleColorRole,
   TableRow,
 } from "./ast.js";
+import { documentTags, texTokens, VERBATIM_ENVS, verbArgumentEnd } from "./tex-scan.js";
 
 const BLOCK_ENVS = new Set([
   "itemize",
@@ -56,8 +57,6 @@ const BLOCK_ENVS = new Set([
   "deckcanvas",
   "decktext",
 ]);
-
-const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlisting", "minted"]);
 
 const STYLE_COMMANDS = new Set(["textbf", "emph", "textit", "texttt", "alert"]);
 
@@ -94,63 +93,22 @@ function readBalanced(src: string, open: number, o = "{", c = "}"): number | nul
   return null;
 }
 
-/** `\begin{name}` に対応する `\end{name}` の開始位置を返す(同名ネスト対応)。 */
+/**
+ * `\begin{name}` に対応する `\end{name}` の開始位置を返す(同名ネスト対応)。
+ * コメント・`\verb`・verbatim 系・マクロ定義本体の中のタグは tex-scan と同じ規則で数えない。
+ */
 function findEnvEnd(src: string, name: string, from: number): number | null {
-  const begin = `\\begin{${name}}`;
-  const end = `\\end{${name}}`;
   // verbatim 自身では本文を解釈しない。最初の literal end tag が終端になる。
   if (VERBATIM_ENVS.has(name)) {
-    const endPos = src.indexOf(end, from);
+    const endPos = src.indexOf(`\\end{${name}}`, from);
     return endPos === -1 ? null : endPos;
   }
   let depth = 1;
-  let slashes = 0;
-  for (let pos = from; pos < src.length; pos++) {
-    const char = src[pos] as string;
-    if (char === "%" && slashes % 2 === 0) {
-      while (pos < src.length && src[pos] !== "\n" && src[pos] !== "\r") pos++;
-      slashes = 0;
-      continue;
-    }
-    if (slashes % 2 === 0 && src.startsWith("\\begin{", pos)) {
-      let close = pos + 7;
-      while (
-        close < src.length &&
-        src[close] !== "}" &&
-        src[close] !== "\\" &&
-        src[close] !== "\n" &&
-        src[close] !== "\r"
-      )
-        close++;
-      if (src[close] !== "}") {
-        pos += "\\begin{".length - 1;
-        slashes = 0;
-        continue;
-      }
-      const environment = src.slice(pos + 7, close);
-      if (VERBATIM_ENVS.has(environment)) {
-        const verbatimEnd = `\\end{${environment}}`;
-        const endPos = src.indexOf(verbatimEnd, close + 1);
-        if (endPos === -1) return null;
-        pos = endPos + verbatimEnd.length - 1;
-        slashes = 0;
-        continue;
-      }
-    }
-    if (slashes % 2 === 0 && src.startsWith(begin, pos)) {
-      depth++;
-      pos += begin.length - 1;
-      slashes = 0;
-      continue;
-    }
-    if (slashes % 2 === 0 && src.startsWith(end, pos)) {
-      depth--;
-      if (depth === 0) return pos;
-      pos += end.length - 1;
-      slashes = 0;
-      continue;
-    }
-    slashes = char === "\\" ? slashes + 1 : 0;
+  for (const token of texTokens(src, from)) {
+    if (token.kind === "unterminated") return null;
+    if ((token.kind !== "begin" && token.kind !== "end") || token.name !== name) continue;
+    if (token.kind === "begin") depth++;
+    else if (--depth === 0) return token.start;
   }
   return null;
 }
@@ -242,6 +200,99 @@ function parseOverlayAt(src: string, pos: number): { overlay: OverlaySpec | null
     ranges.push({ from, to });
   }
   return { overlay: { ranges, span: span(pos, close + 1) }, next: close + 1 };
+}
+
+/** `\begin{frame}` の見出し(`<overlay>[options]{title}`)の位置。 */
+export interface FrameHeader {
+  /** `<…>`(フレームのオーバーレイ指定)。 */
+  overlay: SourceSpan | null;
+  /** `[…]`。 */
+  options: SourceSpan | null;
+  /** `{…}`(波括弧を含む)。 */
+  title: SourceSpan | null;
+  /** options が無いときに `[…]` を新設する位置(overlay の直後、無ければ開始タグの直後)。 */
+  insertAt: number;
+  /** 本文の開始位置。 */
+  next: number;
+  /** `<` `[` `{` を開いたまま閉じられなかった。見出しの範囲は確定できない。 */
+  incomplete: boolean;
+}
+
+/**
+ * Beamer(`\@ifnextchar`)と同じく、見出しの各部の間では空白・改行 1 つ・コメントを読み飛ばす。
+ * 空行(TeX の `\par`)は越えない。越えられないときは null。
+ */
+function skipFrameHeaderSpace(src: string, at: number, limit: number): number | null {
+  let i = at;
+  let lineStart = false;
+  while (i < limit) {
+    const ch = src[i];
+    if (ch === " " || ch === "\t") {
+      i++;
+      continue;
+    }
+    if (ch === "\r" || ch === "\n") {
+      if (lineStart) return null;
+      lineStart = true;
+      i += ch === "\r" && src[i + 1] === "\n" ? 2 : 1;
+      continue;
+    }
+    if (ch === "%") {
+      while (i < limit && src[i] !== "\r" && src[i] !== "\n") i++;
+      if (src[i] === "\r" && src[i + 1] === "\n") i++;
+      i++;
+      lineStart = true;
+      continue;
+    }
+    return i;
+  }
+  return null;
+}
+
+/**
+ * `begin` にある `\begin{frame}` の見出しを読む。パーサと編集操作(slide-edit)が
+ * 同じ見出し範囲を使うための唯一の実装。`limit` は `\end{frame}` の位置。
+ */
+export function readFrameHeader(src: string, begin: number, limit: number): FrameHeader {
+  const header: FrameHeader = {
+    overlay: null,
+    options: null,
+    title: null,
+    insertAt: begin + "\\begin{frame}".length,
+    next: begin + "\\begin{frame}".length,
+    incomplete: false,
+  };
+  let at = skipFrameHeaderSpace(src, header.next, limit);
+  if (at !== null && src[at] === "<") {
+    const close = src.indexOf(">", at + 1);
+    if (close === -1 || close >= limit || /[\r\n%{}\\<]/.test(src.slice(at + 1, close))) {
+      header.incomplete = true;
+      return header;
+    }
+    header.overlay = span(at, close + 1);
+    header.insertAt = header.next = close + 1;
+    at = skipFrameHeaderSpace(src, header.next, limit);
+  }
+  if (at !== null && src[at] === "[") {
+    const close = readBalanced(src, at, "[", "]");
+    if (close === null || close >= limit) {
+      header.incomplete = true;
+      return header;
+    }
+    header.options = span(at, close + 1);
+    header.next = close + 1;
+    at = skipFrameHeaderSpace(src, header.next, limit);
+  }
+  if (at !== null && src[at] === "{") {
+    const close = readBalanced(src, at);
+    if (close === null || close >= limit) {
+      header.incomplete = true;
+      return header;
+    }
+    header.title = span(at, close + 1);
+    header.next = close + 1;
+  }
+  return header;
 }
 
 function parseDimFactor(text: string, offset: number): DimFactor | null {
@@ -379,6 +430,21 @@ class Parser {
     limit: number,
   ): { node: InlineNode; next: number } {
     const argStart = pos + 1 + name.length;
+    if (name === "verb" || name === "verb*") {
+      // \verb の引数は TeX として読まない(tex-scan と同じ区切り規則)。
+      const verbEnd = verbArgumentEnd(this.src, pos + "\\verb".length, limit);
+      if (verbEnd !== null) {
+        return {
+          node: {
+            type: "rawInline",
+            tex: this.src.slice(pos, verbEnd),
+            reason: "unknown-command",
+            span: span(pos, verbEnd),
+          },
+          next: verbEnd,
+        };
+      }
+    }
     const group = (from: number): { body: [number, number]; next: number } | null => {
       let i = from;
       while (i < limit && /\s/.test(this.src[i] as string)) i++;
@@ -1054,79 +1120,56 @@ class Parser {
   // フレームと文書
   // ---------------------------------------------------------------------
 
-  private parseFrame(
-    pos: number,
-    bodyStart: number,
-    bodyEnd: number,
-    next: number,
-  ): FrameNode | RawFrameNode {
-    let cursor = bodyStart;
+  private parseFrame(pos: number, bodyEnd: number, next: number): FrameNode | RawFrameNode {
+    const header = readFrameHeader(this.src, pos, bodyEnd);
     const options: FrameOptions = {
       fragile: false,
       plain: false,
       allowframebreaks: false,
       label: null,
-      span: null,
+      span: header.options,
     };
+    // keyval と同じく `key = value` の前後の空白は無視する。
+    const optionParts = (
+      header.options
+        ? this.src.slice(header.options.start + 1, header.options.end - 1).split(",")
+        : []
+    ).map((part) => {
+      const eq = part.indexOf("=");
+      return eq === -1
+        ? { key: part.trim(), value: null }
+        : { key: part.slice(0, eq).trim(), value: part.slice(eq + 1).trim() };
+    });
     const rawFrame = (): RawFrameNode => {
-      let headerCursor = bodyStart;
       let label: string | null = null;
-      if (this.src[headerCursor] === "[") {
-        const close = readBalanced(this.src, headerCursor, "[", "]");
-        if (close !== null && close <= bodyEnd) {
-          for (const part of this.src.slice(headerCursor + 1, close).split(",")) {
-            const option = part.trim();
-            if (option.startsWith("label=")) label = option.slice("label=".length).trim();
-          }
-          headerCursor = close + 1;
-        }
-      }
-      while (headerCursor < bodyEnd && /[ \t]/.test(this.src[headerCursor] as string))
-        headerCursor++;
-      let title: string | null = null;
-      if (this.src[headerCursor] === "{") {
-        const close = readBalanced(this.src, headerCursor);
-        if (close !== null && close <= bodyEnd) {
-          title = this.src.slice(headerCursor + 1, close);
-        }
-      }
+      for (const option of optionParts) if (option.key === "label") label = option.value;
       return {
         type: "rawFrame",
         tex: this.src.slice(pos, next),
-        title,
+        title: header.title ? this.src.slice(header.title.start + 1, header.title.end - 1) : null,
         label,
         span: span(pos, next),
       };
     };
 
-    if (this.src[cursor] === "[") {
-      const close = readBalanced(this.src, cursor, "[", "]");
-      if (close === null || close > bodyEnd) return rawFrame();
-      options.span = span(cursor, close + 1);
-      for (const part of this.src.slice(cursor + 1, close).split(",")) {
-        const opt = part.trim();
-        if (opt === "") continue;
-        if (opt === "fragile") options.fragile = true;
-        else if (opt === "plain") options.plain = true;
-        else if (opt === "allowframebreaks") options.allowframebreaks = true;
-        else if (opt.startsWith("label=")) options.label = opt.slice("label=".length).trim();
-        else return rawFrame(); // 未知オプション → 生フレーム(§3-3)
-      }
-      cursor = close + 1;
+    // 閉じない見出し・フレームのオーバーレイ指定(サブセット外)は生フレーム。
+    if (header.incomplete || header.overlay) return rawFrame();
+    for (const { key, value } of optionParts) {
+      if (key === "" && value === null) continue;
+      if (value === null && key === "fragile") options.fragile = true;
+      else if (value === null && key === "plain") options.plain = true;
+      else if (value === null && key === "allowframebreaks") options.allowframebreaks = true;
+      else if (value !== null && key === "label") options.label = value;
+      else return rawFrame(); // 未知オプション → 生フレーム(§3-3)
     }
-    let title: InlineNode[] | null = null;
-    while (cursor < bodyEnd && /[ \t]/.test(this.src[cursor] as string)) cursor++;
-    if (this.src[cursor] === "{") {
-      const close = readBalanced(this.src, cursor);
-      if (close === null || close > bodyEnd) return rawFrame();
-      title = this.parseInlines(cursor + 1, close);
-      cursor = close + 1;
-    }
+    const title = header.title
+      ? this.parseInlines(header.title.start + 1, header.title.end - 1)
+      : null;
     return {
       type: "frame",
       options,
       title,
-      body: this.parseBlocks(cursor, bodyEnd),
+      body: this.parseBlocks(header.next, bodyEnd),
       span: span(pos, next),
     };
   }
@@ -1349,8 +1392,8 @@ class Parser {
     const styleRegion = region("style");
     const extraRegion = region("preamble-extra");
 
-    const docBegin = src.indexOf("\\begin{document}");
-    const docEnd = src.lastIndexOf("\\end{document}");
+    // コメント・verbatim・マクロ定義本体の中の文書タグは数えない(tex-scan と同じ規則)。
+    const { begin: docBegin, end: docEnd } = documentTags(src);
     const bodyStart = docBegin === -1 ? 0 : docBegin + "\\begin{document}".length;
     const bodyEnd = docEnd === -1 ? src.length : docEnd;
     const preambleEnd = docBegin === -1 ? 0 : docBegin;
@@ -1371,67 +1414,55 @@ class Parser {
       metadata[key] = field;
     }
 
-    // 本文
+    // 本文: フレームとセクションだけを拾う。フレーム外の未知コンテンツは読み飛ばす。
     const body: DeckElement[] = [];
     let cursor = bodyStart;
-    while (cursor < bodyEnd) {
-      const ch = src[cursor] as string;
-      if (/\s/.test(ch)) {
-        cursor++;
-        continue;
-      }
-      if (ch === "%") {
-        const eol = src.indexOf("\n", cursor);
-        cursor = eol === -1 ? bodyEnd : eol + 1;
-        continue;
-      }
-      const secMatch = /^\\(section|subsection)\{/.exec(src.slice(cursor, cursor + 20));
-      if (secMatch) {
-        const open = cursor + secMatch[0].length - 1;
-        const close = readBalanced(src, open);
-        if (close !== null) {
+    scan: while (cursor < bodyEnd) {
+      for (const token of texTokens(src, cursor, bodyEnd)) {
+        if (
+          token.kind === "command" &&
+          (token.name === "section" || token.name === "subsection") &&
+          src[token.end] === "{"
+        ) {
+          const close = readBalanced(src, token.end);
+          if (close === null) continue;
           body.push({
             type: "section",
-            level: secMatch[1] as "section" | "subsection",
-            title: this.parseInlines(open + 1, close),
-            span: span(cursor, close + 1),
+            level: token.name,
+            title: this.parseInlines(token.end + 1, close),
+            span: span(token.start, close + 1),
           });
           cursor = close + 1;
-          continue;
+          continue scan;
         }
-      }
-      if (src.startsWith("\\begin{frame}", cursor)) {
-        const frameBodyStart = cursor + "\\begin{frame}".length;
-        const endPos = findEnvEnd(src, "frame", frameBodyStart);
+        if (token.kind !== "begin" || token.name !== "frame") continue;
+        const endPos = findEnvEnd(src, "frame", token.end);
         if (endPos === null) {
           body.push({
             type: "rawFrame",
-            tex: src.slice(cursor, bodyEnd),
+            tex: src.slice(token.start, bodyEnd),
             title: null,
             label: null,
-            span: span(cursor, bodyEnd),
+            span: span(token.start, bodyEnd),
           });
-          cursor = bodyEnd;
-          continue;
+          break scan;
         }
         const next = endPos + "\\end{frame}".length;
         try {
-          body.push(this.parseFrame(cursor, frameBodyStart, endPos, next));
+          body.push(this.parseFrame(token.start, endPos, next));
         } catch {
           body.push({
             type: "rawFrame",
-            tex: src.slice(cursor, next),
+            tex: src.slice(token.start, next),
             title: null,
             label: null,
-            span: span(cursor, next),
+            span: span(token.start, next),
           });
         }
         cursor = next;
-        continue;
+        continue scan;
       }
-      // フレーム外の未知コンテンツは読み飛ばす
-      const eol = src.indexOf("\n", cursor);
-      cursor = eol === -1 ? bodyEnd : eol + 1;
+      break;
     }
 
     return {
