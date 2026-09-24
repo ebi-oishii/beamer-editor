@@ -1,4 +1,10 @@
-import { type CanvasNode, type FrameNode, framesOf, parseDeck } from "@beamer-editor/core";
+import {
+  type CanvasNode,
+  type FrameNode,
+  framesOf,
+  parseDeck,
+  type RawFrameNode,
+} from "@beamer-editor/core";
 
 /**
  * エディタへの画像の貼り付け(#153)。クリップボードの画像を文書と同じ場所の `assets/` に
@@ -12,6 +18,9 @@ const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
 };
 
 export const IMAGE_PASTE_MIME_TYPES: readonly string[] = Object.keys(IMAGE_EXTENSIONS);
+
+const BEGIN_FRAME = "\\begin{frame}";
+const END_FRAME = "\\end{frame}";
 
 /** 保存先のディレクトリ(文書からの相対)。fixture と同じ `assets/`。 */
 export const IMAGE_PASTE_DIRECTORY = "assets";
@@ -78,9 +87,10 @@ interface InsertTarget {
 function insertTarget(source: string, offset: number): InsertTarget | null {
   for (const frame of framesOf(parseDeck(source))) {
     if (offset < frame.span.start || offset > frame.span.end) continue;
-    if (frame.type !== "frame") return { canvas: false, offset, indent: "" };
-    const body = frameBodyRange(frame);
+    const body =
+      frame.type === "frame" ? frameBodyRange(source, frame) : rawFrameBodyRange(source, frame);
     if (offset < body.start || offset > body.end) return null;
+    if (frame.type !== "frame") return { canvas: false, offset, indent: "" };
     const canvas = frame.body.find(
       (block): block is CanvasNode =>
         block.type === "canvas" && offset > block.span.start && offset < block.span.end,
@@ -95,13 +105,28 @@ function insertTarget(source: string, offset: number): InsertTarget | null {
 }
 
 /** `\begin{frame}` の見出しの終わりから `\end{frame}` の直前まで。 */
-function frameBodyRange(frame: FrameNode): { start: number; end: number } {
-  let start = frame.span.start + "\\begin{frame}".length;
+function frameBodyRange(source: string, frame: FrameNode): { start: number; end: number } {
+  let start = frame.span.start + BEGIN_FRAME.length;
   if (frame.options.span) start = Math.max(start, frame.options.span.end);
-  const title = frame.title?.at(-1);
-  // タイトルのノードは `{...}` の中身なので、閉じ括弧の分を足す。
-  if (title) start = Math.max(start, title.span.end + 1);
-  return { start, end: frame.span.end - "\\end{frame}".length };
+  if (frame.title) {
+    // タイトルのノードは `{...}` の中身。空のタイトルもあるので閉じ括弧は原文から探す。
+    const close = source.indexOf("}", frame.title.at(-1)?.span.end ?? start);
+    if (close >= 0) start = Math.max(start, close + 1);
+  }
+  return { start, end: frameBodyEnd(frame) };
+}
+
+/**
+ * raw frame は中身を解釈できないので、見出しの行を丸ごと避ける。1 行で書かれた raw frame は
+ * 本文の始まりを決められないため、どこにも挿入しない。
+ */
+function rawFrameBodyRange(source: string, frame: RawFrameNode): { start: number; end: number } {
+  const lineEnd = source.indexOf("\n", frame.span.start);
+  return { start: lineEnd < 0 ? frame.span.end : lineEnd + 1, end: frameBodyEnd(frame) };
+}
+
+function frameBodyEnd(frame: FrameNode | RawFrameNode): number {
+  return frame.span.end - END_FRAME.length;
 }
 
 function indentOf(source: string, offset: number): string {

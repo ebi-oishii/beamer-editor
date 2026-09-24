@@ -183,6 +183,25 @@ describe("imagePasteInsertion", () => {
     expect(imagePasteInsertion(head.source, head.offset, "assets/image.png")).toBeNull();
   });
 
+  it("空のタイトルの中では入れない", () => {
+    const empty = withCursor(
+      `${PREAMBLE}\n\\begin{frame}{|}\n  body\n\\end{frame}\n\\end{document}\n`,
+    );
+    expect(imagePasteInsertion(empty.source, empty.offset, "assets/image.png")).toBeNull();
+  });
+
+  it("raw frame では本文にだけ入れる", () => {
+    const at = (body: string) => {
+      const { source, offset } = withCursor(`${PREAMBLE}\n${body}\n\\end{document}\n`);
+      return imagePasteInsertion(source, offset, "assets/image.png");
+    };
+    const RAW = "\\begin{frame}[unknownopt]{Title}";
+    expect(at(`${RAW}\n  bo|dy\n\\end{frame}`)?.text).toMatch(/^\\includegraphics\[/);
+    expect(at(`\\begin{frame}[unknownopt]{Ti|tle}\n  body\n\\end{frame}`)).toBeNull();
+    expect(at(`${RAW}\n  body\n\\end{frame}|\n${RAW}\n  body\n\\end{frame}`)).toBeNull();
+    expect(at(`${RAW}\n  body\n\\end{frame}\n|${RAW}\n  body\n\\end{frame}`)).toBeNull();
+  });
+
   it("プリアンブルでは入れない", () => {
     const { source, offset } = withCursor(
       `${PREAMBLE.replace("\\usepackage{graphicx}", "\\usepackage{graphicx}\n|")}\n\\end{document}\n`,

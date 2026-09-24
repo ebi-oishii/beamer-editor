@@ -26,6 +26,9 @@ export class ImagePasteEditProvider implements vscode.DocumentPasteEditProvider 
     token: vscode.CancellationToken,
   ): Promise<vscode.DocumentPasteEdit[] | undefined> {
     if (document.uri.scheme !== "file") return undefined;
+    // 挿入する参照は 1 つ目のカーソルだけで決まり、それが全カーソルに入る。複数カーソルでは
+    // 2 つ目以降に誤った参照が入りうるので、通常の貼り付けに任せる。
+    if (ranges.length > 1) return undefined;
     const image = firstImage(dataTransfer);
     if (!image) return undefined;
     const directory = vscode.Uri.joinPath(document.uri, "..", IMAGE_PASTE_DIRECTORY);
@@ -38,8 +41,6 @@ export class ImagePasteEditProvider implements vscode.DocumentPasteEditProvider 
     // 参照を置けない位置(フレームの外)では画像を保存せず、通常の貼り付けに任せる。
     if (!insertion) return undefined;
     const moved = insertion.offset !== offset;
-    // 挿入先を寄せるとき、insertText は全カーソルに入ってしまう。複数カーソルでは貼り付けない。
-    if (moved && ranges.length > 1) return undefined;
     const data = await image.file.data();
     if (token.isCancellationRequested) return undefined;
     const edit = new vscode.DocumentPasteEdit(
