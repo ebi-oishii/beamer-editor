@@ -21,6 +21,7 @@ pnpm --dir apps/vscode package -- --target linux-x64 --out x.vsix  # 別ター�
 - `packages/renderer` — AST → HTML(KaTeX 同期描画)
 - `packages/ui` — 共有プレビュー UI(React + ShellHost 契約)
 - `packages/cli` — `deck` CLI(lint / format / fonts)
+- `packages/html-export` — プレビュー相当の自己完結 HTML export。既存出力は `--overwrite` 時だけ staging / backup を経て置換する
 - `apps/web` — 開発用ビューア。製品 UI ではない(VS Code 移植計画 §3)
 - `apps/vscode` — VS Code 拡張(Extension Host + Webview)
 - `fixtures/` — ゴールデンサンプル。全フェーズのテストデータ兼受け入れ基準
@@ -28,6 +29,8 @@ pnpm --dir apps/vscode package -- --target linux-x64 --out x.vsix  # 別ター�
 依存方向は `ui → renderer → core` の一方向に固定。`core` / `renderer` / `ui` に `vscode` API を import しない。シェル固有 API を知るのは `apps/*` だけ。
 
 CLI の subprocess テストは `tsx` を `--import` して workspace TypeScript と `.js` specifier の ESM 解決を実行する。Node 組み込みの strip-types は `node_modules` 配下の TypeScript を拒否し、pnpm link 経由の workspace `@beamer-editor/core` もこの制約に当たるためである。
+
+HTML export の相対画像はデッキ配下に実体がある PNG/JPEG だけを複製する。欠落・非ファイル・未対応形式は該当画像だけプレースホルダーにし、traversal、絶対パス、`file:` URL、デッキ外へ出る symlink は `E_ASSET` とする。
 
 ## PR・ブランチ運用
 

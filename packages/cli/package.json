@@ -13,6 +13,7 @@
     "@napi-rs/canvas": "1.0.8",
     "@beamer-editor/compiler": "workspace:*",
     "@beamer-editor/core": "workspace:*",
+    "@beamer-editor/html-export": "workspace:*",
     "pdfjs-dist": "6.3.289"
   },
   "devDependencies": {
