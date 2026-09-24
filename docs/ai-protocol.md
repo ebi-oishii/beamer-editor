@@ -172,7 +172,7 @@ description: >
 # Beamer デッキの編集
 
 このプロジェクトの .tex は Beamer のサブセットで書く。語彙の範囲は
-references/subset-cheatsheet.md を参照。範囲外の LaTeX も書けるが、
+[語彙・制約](references/subset-cheatsheet.md)を参照。範囲外の LaTeX も書けるが、
 エディタでの編集性が落ちるため、必要な場合のみ使い、報告に明記する。
 
 ## 作業ループ(必ず従う)

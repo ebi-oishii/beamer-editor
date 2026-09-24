@@ -48,6 +48,8 @@ export interface LintDiagnostic {
 export interface LintOptions {
   /** undefined: no bundled skill; null: present but missing fingerprint metadata. */
   skillFingerprint?: string | null;
+  /** undefined: no bundled skill; null: bundled files could not be verified. */
+  skillContentFingerprint?: string | null;
   expectedSkillFingerprint?: string;
   /** 対応する `%% deck-source-version`。 */
   expectedSourceVersion?: number;
@@ -924,12 +926,13 @@ export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiag
   const diagnostics = [
     ...(options.skillFingerprint !== undefined &&
     options.expectedSkillFingerprint !== undefined &&
-    options.skillFingerprint !== options.expectedSkillFingerprint
+    (options.skillFingerprint !== options.expectedSkillFingerprint ||
+      options.skillContentFingerprint !== options.expectedSkillFingerprint)
       ? [
           diagnostic(
             "L010",
             "warning",
-            `同梱スキルのfingerprint(${options.skillFingerprint ?? "不明"})がCLIの期待値(${options.expectedSkillFingerprint})と一致しません。スキルを再生成してください`,
+            `同梱スキルがCLIの期待値(${options.expectedSkillFingerprint})と一致しません。配布元の最新版へ更新してください。このリポジトリでは pnpm build:skills を実行します。`,
             { start: 0, end: 0 },
           ),
         ]

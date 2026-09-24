@@ -68,4 +68,4 @@ pnpm --dir packages/cli deck check talk.slide.tex --tectonic /path/to/tectonic -
 
 ### デッキ編集スキルの生成
 
-`pnpm build:skills` は仕様・AIプロトコル・実装のCLIヘルプから `skills/beamer-deck/` とリポジトリ用 `.claude/skills/beamer-deck/` を生成します。生成物は直接編集せず、元文書を更新して再生成します。`pnpm check:skills` は更新漏れを検出し、CIでも実行します。生成 SKILL の metadata には CLI 版と4生成物の SHA-256 fingerprint を記録します。`deck lint` / `deck check` は入力デッキからホームディレクトリまたはGitリポジトリ境界までにある最寄りの `.claude/skills/beamer-deck/SKILL.md` を探し、fingerprint の不一致をL010で警告します。スキル未同梱の既存デッキは警告しません。
+`pnpm build:skills` は仕様・AIプロトコル・実装のCLIヘルプから `skills/beamer-deck/` とリポジトリ用 `.claude/skills/beamer-deck/` を生成します。生成物は直接編集せず、元文書を更新して再生成します。`pnpm check:skills` は更新漏れを検出し、CIでも実行します。生成 SKILL の metadata には CLI 版と4生成物の SHA-256 fingerprint を記録します。`deck lint` / `deck check` は入力デッキからホームディレクトリまたはGitリポジトリ境界までにある最寄りの `.claude/skills/beamer-deck/` を探し、記録値と4生成物の内容ハッシュの両方をCLIの期待値と照合してL010で警告します。ホームディレクトリの候補は読まず、スキル未同梱の既存デッキは警告しません。

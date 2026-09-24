@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { USAGE } from "../src/cli.ts";
-import { buildSkillFiles } from "../src/skill-generator.ts";
+import { buildSkillFiles, SKILL_FILE_PATHS } from "../src/skill-generator.ts";
 import { CLI_VERSION } from "../src/version.ts";
 
 const root = resolve(import.meta.dirname, "../../..");
@@ -29,7 +29,8 @@ if (process.argv.includes("--check")) {
   await writeFile(fingerprintPath, fingerprintSource);
 }
 for (const directory of ["skills/beamer-deck", ".claude/skills/beamer-deck"]) {
-  for (const [name, content] of Object.entries(files)) {
+  for (const name of SKILL_FILE_PATHS) {
+    const content = files[name];
     const path = resolve(root, directory, name);
     if (process.argv.includes("--check")) {
       if ((await readFile(path, "utf8").catch(() => null)) !== content) {
