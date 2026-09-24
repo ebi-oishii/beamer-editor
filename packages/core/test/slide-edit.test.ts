@@ -98,6 +98,26 @@ describe("slide source edits", () => {
     );
     expect(labels(apply(source, "moveUp", 0))).toHaveLength(1);
   });
+  it("does not duplicate hyperlink anchors or global register allocations", () => {
+    for (const body of [
+      "\\hypertarget{ht}{x}",
+      "\\newcounter{mycnt}",
+      "\\newlength{\\mylen}",
+      "\\newtheorem{claim}{Claim}",
+    ]) {
+      const source = deck(frame("A").replace("A body", body));
+      expect(editSlide(source, "duplicate", source.indexOf("\\begin{frame}")).ok, body).toBe(false);
+    }
+    const producer = deck(frame("A").replace("A body", "\\anchor")).replace(
+      "\\begin{document}",
+      "\\newcommand{\\anchor}{\\hypertarget{ht}{x}}\n\\begin{document}",
+    );
+    expect(editSlide(producer, "duplicate", producer.indexOf("\\begin{frame}")).ok).toBe(false);
+    for (const body of ["\\hyperlink{ht}{go}", "\\newcommand{\\local}{x}", "\\def\\local{x}"]) {
+      const source = deck(frame("A").replace("A body", body));
+      expect(labels(apply(source, "duplicate", 0)), body).toEqual([null, "slide-1"]);
+    }
+  });
   it("does not treat a commented internal label as a reference target", () => {
     const source = deck(frame("A").replace("A body", "% \\label{example}"));
     expect(labels(apply(source, "duplicate", 0))).toEqual([null, "slide-1"]);
@@ -468,7 +488,8 @@ describe("slide source edits", () => {
       const source = withPreamble(preamble, `${frame("A").replace("A body", call)}\n${frame("B")}`);
       expect(editSlide(source, "duplicate", source.indexOf("\\begin{frame}"))).toEqual({
         ok: false,
-        reason: "本文に\\labelがあるスライドは、参照先を確認してソース上で複製してください。",
+        reason:
+          "本文に\\label・\\hypertarget・\\newcounterなど文書内で一意な定義があるスライドは、参照先を確認してソース上で複製してください。",
       });
       expect(labels(apply(source, "duplicate", 1))).toEqual([null, null, "slide-1"]);
     }

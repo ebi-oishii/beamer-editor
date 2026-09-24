@@ -89,18 +89,48 @@ function unusedLabel(source: string): string {
 }
 
 /**
- * Commands and environments whose replacement text (transitively) reaches `\label`.
+ * Commands that define a document-wide unique name. Duplicating them either breaks
+ * references (`\label`, `\hypertarget`) or fails to compile (`\newcounter` etc.).
+ * Macro definitions are left out: a frame is a TeX group, so `\newcommand` inside it is local.
+ */
+const UNIQUE_NAME_COMMANDS = [
+  "label",
+  "hypertarget",
+  "newcounter",
+  "newlength",
+  "newsavebox",
+  "newtheorem",
+  "newcount",
+  "newdimen",
+  "newskip",
+  "newmuskip",
+  "newtoks",
+  "newbox",
+  "newread",
+  "newwrite",
+];
+
+interface UniqueNameProducers {
+  commands: Set<string>;
+  environments: Set<string>;
+}
+
+/**
+ * Commands and environments whose replacement text (transitively) defines a unique name.
  * Definitions anywhere in the source count, including the preamble outside `%% macros`.
  */
-function labelProducers(source: string): { commands: Set<string>; environments: Set<string> } {
+function uniqueNameProducers(source: string): UniqueNameProducers {
   const definitions = macroDefinitions(source);
-  const producers = { commands: new Set(["label"]), environments: new Set<string>() };
+  const producers = {
+    commands: new Set(UNIQUE_NAME_COMMANDS),
+    environments: new Set<string>(),
+  };
   for (let changed = true; changed; ) {
     changed = false;
     for (const definition of definitions) {
       const known = definition.target === "command" ? producers.commands : producers.environments;
       if (known.has(definition.name)) continue;
-      if (definition.bodies.some((body) => emitsLabel(source, body, producers))) {
+      if (definition.bodies.some((body) => definesUniqueName(source, body, producers))) {
         known.add(definition.name);
         changed = true;
       }
@@ -109,10 +139,10 @@ function labelProducers(source: string): { commands: Set<string>; environments: 
   return producers;
 }
 
-function emitsLabel(
+function definesUniqueName(
   source: string,
   span: SourceSpan,
-  producers: { commands: Set<string>; environments: Set<string> },
+  producers: UniqueNameProducers,
 ): boolean {
   for (const token of texTokens(source, span.start, span.end)) {
     if (token.kind === "command" && producers.commands.has(token.name)) return true;
@@ -189,10 +219,13 @@ export function editSlide(
   } else if (action === "delete") {
     edits = [{ span, text: "" }];
   } else if (action === "duplicate") {
-    // An internal TeX label can be referenced anywhere, including opaque commands.
-    // Do not silently duplicate those targets or rewrite unknown TeX references.
-    if (emitsLabel(source, frame.span, labelProducers(source)))
-      return fail("本文に\\labelがあるスライドは、参照先を確認してソース上で複製してください。");
+    // An internal TeX label can be referenced anywhere, including opaque commands, and
+    // global registers such as counters cannot be allocated twice. Do not silently duplicate those
+    // definitions or rewrite unknown TeX references.
+    if (definesUniqueName(source, frame.span, uniqueNameProducers(source)))
+      return fail(
+        "本文に\\label・\\hypertarget・\\newcounterなど文書内で一意な定義があるスライドは、参照先を確認してソース上で複製してください。",
+      );
     const copy = duplicateFrame(source, frame, span, unusedLabel(source));
     if (copy === null)
       return fail("フレームのlabelを安全に変更できません。ソースを確認してください。");
