@@ -28,6 +28,7 @@ import {
   normalizeTectonicPath,
   resolveExportDocument,
 } from "./export-controller";
+import { canvasHoverAt } from "./canvas-hover";
 import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
 import { ImagePasteEditProvider } from "./image-paste-provider";
 import {
@@ -506,6 +507,24 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   );
 
   context.subscriptions.push(
+    vscode.languages.registerHoverProvider(
+      { scheme: "file", language: "latex" },
+      {
+        provideHover(document, position, _token) {
+          if (!isManaged(document)) return undefined;
+          const hover = canvasHoverAt(document, position);
+          if (!hover) return undefined;
+          const markdown = new vscode.MarkdownString(hover.documentation.markdown);
+          return new vscode.Hover(
+            markdown,
+            new vscode.Range(
+              document.positionAt(hover.range.start),
+              document.positionAt(hover.range.end),
+            ),
+          );
+        },
+      },
+    ),
     vscode.languages.registerFoldingRangeProvider(
       { scheme: "file", language: "latex" },
       {
