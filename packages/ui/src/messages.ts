@@ -11,7 +11,14 @@ import { type CanvasFontSize, isCanvasFontSize } from "@beamer-editor/core";
 import type { RenderedDeck } from "@beamer-editor/renderer";
 
 export type ExtensionToWebview =
-  | { type: "deckUpdated"; deck: RenderedDeck; version: number; activeFrame: number }
+  | {
+      type: "deckUpdated";
+      deck: RenderedDeck;
+      version: number;
+      activeFrame: number;
+      /** 元ソースに明示された frame の index。マクロ展開だけの仮想 frame は含めない。 */
+      editableFrameIndexes?: number[];
+    }
   | { type: "activeFrameChanged"; frameIndex: number; version: number }
   /** 生ブロックの部分コンパイル結果(#81)。key はプレースホルダの data-raw-key。pdfBase64 は standalone の PDF。 */
   | { type: "rawBlockReady"; key: string; pdfBase64: string }
@@ -21,6 +28,7 @@ export type ExtensionToWebview =
   | { type: "error"; message: string };
 
 export type WebviewToExtension =
+  | { type: "editSlide"; action: "moveUp" | "moveDown"; frameIndex: number; version: number }
   | {
       type: "setCanvasFontSize";
       frameIndex: number;
@@ -83,11 +91,15 @@ export function parseExtensionToWebview(raw: unknown): ExtensionToWebview | null
         typeof raw.version === "number" &&
         typeof raw.activeFrame === "number"
       ) {
+        const editableFrameIndexes = Array.isArray(raw.editableFrameIndexes)
+          ? raw.editableFrameIndexes.filter(isNonNegativeInteger)
+          : undefined;
         return {
           type: "deckUpdated",
           deck: raw.deck as unknown as RenderedDeck,
           version: raw.version,
           activeFrame: raw.activeFrame,
+          ...(editableFrameIndexes ? { editableFrameIndexes } : {}),
         };
       }
       return null;
@@ -122,6 +134,12 @@ export function parseExtensionToWebview(raw: unknown): ExtensionToWebview | null
 export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null {
   if (!isRecord(raw)) return null;
   switch (raw.type) {
+    case "editSlide":
+      return (raw.action === "moveUp" || raw.action === "moveDown") &&
+        isNonNegativeInteger(raw.frameIndex) &&
+        isNonNegativeInteger(raw.version)
+        ? { type: raw.type, action: raw.action, frameIndex: raw.frameIndex, version: raw.version }
+        : null;
     case "ready":
       return { type: "ready" };
     case "jumpToSource":

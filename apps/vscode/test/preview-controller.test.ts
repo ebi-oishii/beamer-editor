@@ -138,6 +138,82 @@ describe("rewriteImageSources", () => {
     const html = '<img src="https://a/b.png"><img src="data:x"><img src="vscode-webview://x/y">';
     expect(rewriteImageSources(html, () => "BOOM")).toBe(html);
   });
+
+  it("preview slide reorder serializes requests and reveals the moved slide", async () => {
+    const reorderRender = (_text: string, version: number): RenderOutcome => ({
+      deck: {
+        title: "t",
+        css: "",
+        frames: [
+          {
+            index: 1,
+            label: null,
+            titleText: "one",
+            html: "",
+            stepCount: 1,
+            isRaw: false,
+            sourceSpan: { start: 0, end: 20 },
+          },
+          {
+            index: 2,
+            label: null,
+            titleText: "two",
+            html: "",
+            stepCount: 1,
+            isRaw: false,
+            sourceSpan: { start: 20, end: 40 },
+          },
+        ],
+      },
+      version,
+      expansionMap: [
+        { expandedStart: 0, expandedEnd: 100, sourceStart: 0, sourceEnd: 100, exact: true },
+      ],
+      expandDiagnostics: [],
+    });
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const editSlide = vi.fn(async () => {
+      doc.edit(doc.getText());
+      return { applied: true, newFrameStart: 20 };
+    });
+    new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: reorderRender,
+      editSlide,
+      isSlideEditable: () => true,
+    });
+    fire({ type: "ready" });
+    fire({ type: "editSlide", action: "moveDown", frameIndex: 0, version: 7 });
+    fire({ type: "editSlide", action: "moveDown", frameIndex: 0, version: 7 });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(editSlide).toHaveBeenCalledOnce();
+    expect(posted.at(-1)).toEqual({ type: "activeFrameChanged", frameIndex: 1, version: 8 });
+  });
+
+  it("does not report or post when a pending preview slide reorder completes after disposal", async () => {
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    let settle: ((value: { applied: boolean; newFrameStart?: number }) => void) | undefined;
+    const pending = new Promise<{ applied: boolean; newFrameStart?: number }>((resolve) => {
+      settle = resolve;
+    });
+    const error = vi.fn();
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      editSlide: () => pending,
+      isSlideEditable: () => true,
+      onError: error,
+    });
+    fire({ type: "ready" });
+    fire({ type: "editSlide", action: "moveDown", frameIndex: 0, version: 7 });
+    controller.dispose();
+    settle?.({ applied: true, newFrameStart: 0 });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(error).not.toHaveBeenCalled();
+    expect(posted).toHaveLength(1);
+  });
 });
 
 describe("PreviewController", () => {

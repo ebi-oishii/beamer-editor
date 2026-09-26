@@ -17,6 +17,7 @@ Beamer サブセットの `.tex` を編集しながら、LaTeX コンパイル�
 - Webview にフォーカスしているとき、Ctrl/Cmd+`Z` でソースの取り消し、Shift+Ctrl/Cmd+`Z`(または Ctrl+`Y`)でやり直し。ドラッグや「自由配置にする」の編集をプレビューから戻せる
 - ソースからスライドへ: 各 `\begin{frame}` の上の CodeLens「プレビューで表示」、または `Cmd/Ctrl+K V`(Beamer Editor: Reveal Current Slide in Preview)でカーソルのあるフレームを表示。ソースのカーソル移動にプレビューを追従させる設定(`beamerEditor.preview.followCursor`、既定 ON)はプレビュータブのボタンで切り替え
 - Explorer の **Beamer Slides** には、現在の managed slide のフレーム一覧を表示。項目を選ぶと対応するソースへ移動する。View は VS Code の標準機能で Side Bar、Secondary Side Bar、Panel の任意の場所へ移動できる
+- プレビューのスライド一覧では、キャプションを右クリック（またはカードにフォーカスして Shift+F10 / Context Menu キー）すると順序メニューを開き、スライドを上下へ移動できる
 - プレビューのエディタグループは、プレビューが初めてフォーカスされたときにロックされ、他のファイルはソース側のグループに開きます(`beamerEditor.preview.lockGroup` で無効化可)
 
 ## 開発版のインストール

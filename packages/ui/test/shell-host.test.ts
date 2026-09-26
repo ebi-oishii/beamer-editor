@@ -25,6 +25,27 @@ function deck(title: string): RenderedDeck {
 }
 
 describe("createMessageShellHost", () => {
+  it("forwards editable frame metadata and slide reorder requests", () => {
+    const { transport, posted, receive } = makeTransport();
+    const host = createMessageShellHost(transport);
+    const listener = vi.fn();
+    host.subscribe(listener);
+    receive({
+      type: "deckUpdated",
+      deck: deck("x"),
+      version: 1,
+      activeFrame: 0,
+      editableFrameIndexes: [1],
+    });
+    expect(listener).toHaveBeenLastCalledWith(expect.anything(), 1, [1]);
+    host.editSlide?.("moveDown", 1, 1);
+    expect(posted).toContainEqual({
+      type: "editSlide",
+      action: "moveDown",
+      frameIndex: 1,
+      version: 1,
+    });
+  });
   it("現在値より古い version の deckUpdated を捨てる(移植計画 §6)", () => {
     const { transport, receive } = makeTransport();
     const host = createMessageShellHost(transport);

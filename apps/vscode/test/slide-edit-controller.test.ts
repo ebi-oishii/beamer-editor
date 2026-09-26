@@ -60,6 +60,32 @@ it("does not write readonly documents, invalid sources or edge no-ops", async ()
   expect(await controller.execute("insert", entry)).toBe(false);
   expect(host.apply).not.toHaveBeenCalled();
 });
+it("accepts preview moves only for the current explicit outline entry", async () => {
+  const { controller, host, entry, document } = setup();
+  expect(entry).toBeDefined();
+  if (!entry) throw new Error("missing outline entry");
+  expect(
+    (await controller.executeAt("moveDown", document, document.version, entry.start)).applied,
+  ).toBe(false);
+  expect(host.apply).not.toHaveBeenCalled();
+  const twoSlides = {
+    ...document,
+    getText: () =>
+      "\\begin{document}\\n\\begin{frame}{A}body\\end{frame}\\n\\begin{frame}{B}body\\end{frame}\\n\\end{document}",
+  };
+  const state = new SlideOutlineState<typeof twoSlides>();
+  state.setDocument(twoSlides);
+  const moving = new SlideEditController(state, host);
+  const target = state.getEntries()[0];
+  expect(target).toBeDefined();
+  if (!target) throw new Error("missing outline entry");
+  expect(
+    (await moving.executeAt("moveDown", twoSlides, twoSlides.version, target.start)).applied,
+  ).toBe(true);
+  expect(
+    (await moving.executeAt("moveUp", twoSlides, twoSlides.version + 1, target.start)).applied,
+  ).toBe(false);
+});
 it("palette commands pick a slide; palette insert inserts after the chosen slide", async () => {
   const { entry, state } = setup();
   const entries = state.getEntries();

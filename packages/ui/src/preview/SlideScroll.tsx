@@ -6,7 +6,15 @@ import type { CanvasFontSize } from "@beamer-editor/core";
  */
 
 import type { RenderedFrame } from "@beamer-editor/renderer";
-import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { clampMenuPosition } from "./detach.js";
 import { type DetachRequest, type SlideSize, Stage } from "./Stage.js";
 import { fitWidthScale, frameAtScrollTop, trailingSpace } from "./scroll-layout.js";
 import type { ZoomState } from "./zoom.js";
@@ -60,6 +68,8 @@ function SlideCard({
   version,
   onSelect,
   onJump,
+  onOpenOrderMenu,
+  cardRef,
   onSetCanvasFontSize,
   onResizeCanvasElement,
   onMoveCanvasElement,
@@ -74,6 +84,8 @@ function SlideCard({
   version: number;
   onSelect: (index: number) => void;
   onJump: (index: number) => void;
+  onOpenOrderMenu?: ((index: number, x: number, y: number) => void) | undefined;
+  cardRef?: (element: HTMLElement | null) => void;
   onSetCanvasFontSize?:
     | ((frameIndex: number, elementId: string, size: CanvasFontSize) => void)
     | undefined;
@@ -84,6 +96,15 @@ function SlideCard({
   onDetachToCanvas: ((frameIndex: number, request: DetachRequest) => void) | undefined;
 }): JSX.Element {
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (
+      onOpenOrderMenu &&
+      (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))
+    ) {
+      event.preventDefault();
+      const rect = event.currentTarget.getBoundingClientRect();
+      onOpenOrderMenu(index, rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return;
+    }
     if (event.key !== "Enter") return;
     event.preventDefault();
     // Ctrl/Cmd+Enter はダブルクリックと等価のソースジャンプ。
@@ -98,34 +119,45 @@ function SlideCard({
       data-index={index}
       role="button"
       tabIndex={0}
+      ref={cardRef}
       aria-current={active ? true : undefined}
       aria-label={`フレーム ${frame.index}: ${frame.titleText}（Enter で選択、${MODIFIER_LABEL}+Enter でソースへ移動）`}
       onClick={() => onSelect(index)}
       onDoubleClick={() => onJump(index)}
       onKeyDown={handleKeyDown}
     >
-      <Stage
-        frame={frame}
-        step={step}
-        scale={scale}
-        slideSize={slideSize}
-        version={version}
-        onSetCanvasFontSize={
-          onSetCanvasFontSize
-            ? (elementId, size) => onSetCanvasFontSize(index, elementId, size)
-            : undefined
-        }
-        onResizeCanvasElement={
-          onResizeCanvasElement
-            ? (elementId, width) => onResizeCanvasElement(index, elementId, width)
-            : undefined
-        }
-        onMoveCanvasElement={(elementId, x, y) => onMoveCanvasElement(index, elementId, x, y)}
-        onDetachToCanvas={
-          onDetachToCanvas ? (request) => onDetachToCanvas(index, request) : undefined
-        }
-      />
-      <div className="slide-caption">
+      <div className="slide-card-select">
+        <Stage
+          frame={frame}
+          step={step}
+          scale={scale}
+          slideSize={slideSize}
+          version={version}
+          onSetCanvasFontSize={
+            onSetCanvasFontSize
+              ? (elementId, size) => onSetCanvasFontSize(index, elementId, size)
+              : undefined
+          }
+          onResizeCanvasElement={
+            onResizeCanvasElement
+              ? (elementId, width) => onResizeCanvasElement(index, elementId, width)
+              : undefined
+          }
+          onMoveCanvasElement={(elementId, x, y) => onMoveCanvasElement(index, elementId, x, y)}
+          onDetachToCanvas={
+            onDetachToCanvas ? (request) => onDetachToCanvas(index, request) : undefined
+          }
+        />
+      </div>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: keyboard access is provided by the focused slide card via Shift+F10/ContextMenu. */}
+      <div
+        className="slide-caption"
+        onContextMenu={(event) => {
+          if (!onOpenOrderMenu) return;
+          event.preventDefault();
+          onOpenOrderMenu(index, event.clientX, event.clientY);
+        }}
+      >
         {frame.index}. {frame.titleText}
         {frame.label ? `（label=${frame.label}）` : ""}
         {frame.isRaw ? " ⚠" : ""}
@@ -143,6 +175,10 @@ export function SlideScroll({
   reveal,
   onSelect,
   onJump,
+  onEditSlide,
+  editableFrameIndexes,
+  focusFrame,
+  onFocusFrameHandled,
   onScrollActive,
   onSetCanvasFontSize,
   onResizeCanvasElement,
@@ -158,6 +194,11 @@ export function SlideScroll({
   reveal: RevealRequest | undefined;
   onSelect: (index: number) => void;
   onJump: (index: number) => void;
+  onEditSlide?: ((action: "moveUp" | "moveDown", index: number) => void) | undefined;
+  editableFrameIndexes: number[];
+  /** スライド移動後、ホストが確認した移動先カードだけへフォーカスを戻す。 */
+  focusFrame?: number | undefined;
+  onFocusFrameHandled: () => void;
   /** スクロールで表示領域の上端に来たフレームが変わった通知。 */
   onScrollActive: (index: number) => void;
   onSetCanvasFontSize?:
@@ -187,6 +228,74 @@ export function SlideScroll({
   const lastResizeAnchor = useRef<{ frameIndex: number; ratio: number }>();
   const restoredScrollTop = useRef<number | undefined>();
   const restoringScroll = useRef(false);
+  const [orderMenu, setOrderMenu] = useState<{ index: number; x: number; y: number }>();
+  const menuRef = useRef<HTMLDivElement>(null);
+  const cardRefs = useRef(new Map<number, HTMLElement>());
+  const editableSet = new Set(editableFrameIndexes);
+  const closeOrderMenu = useCallback(
+    (restoreFocus = false) => {
+      const open = orderMenu;
+      setOrderMenu(undefined);
+      if (restoreFocus && open !== undefined)
+        requestAnimationFrame(() => cardRefs.current.get(open.index)?.focus());
+    },
+    [orderMenu],
+  );
+  const openOrderMenu = (index: number, x: number, y: number) => {
+    if (!onEditSlide || !editableSet.has(index)) return;
+    onSelect(index);
+    const viewport = {
+      width: window.innerWidth || document.documentElement.clientWidth,
+      height: window.innerHeight || document.documentElement.clientHeight,
+    };
+    const position = clampMenuPosition(x, y, { width: 160, height: 72 }, viewport);
+    setOrderMenu({ index, ...position });
+  };
+
+  useEffect(() => {
+    if (!orderMenu) return;
+    const first = menuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+    (first ?? menuRef.current)?.focus();
+    const onPointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) closeOrderMenu();
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [orderMenu, closeOrderMenu]);
+
+  // 描画結果が差し替わった後に、前の deck の frame index で操作しない。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: frames/version identify a replacement deck.
+  useEffect(() => {
+    setOrderMenu(undefined);
+  }, [frames, version]);
+
+  useEffect(() => {
+    if (focusFrame === undefined) return;
+    requestAnimationFrame(() => {
+      cardRefs.current.get(focusFrame)?.focus();
+      onFocusFrameHandled();
+    });
+  }, [focusFrame, onFocusFrameHandled]);
+
+  const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const buttons = [
+      ...(menuRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []),
+    ].filter((button) => !button.disabled);
+    const currentButton = event.target instanceof HTMLButtonElement ? event.target : undefined;
+    const currentIndex = currentButton ? buttons.indexOf(currentButton) : -1;
+    let next: number | undefined;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeOrderMenu(true);
+    } else if (event.key === "ArrowDown") next = (currentIndex + 1) % buttons.length;
+    else if (event.key === "ArrowUp") next = (currentIndex + buttons.length - 1) % buttons.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = buttons.length - 1;
+    if (next !== undefined) {
+      event.preventDefault();
+      buttons[next]?.focus();
+    }
+  };
 
   // 表示領域のサイズ。初回は描画前に同期計測して、極小倍率で一瞬描かれるのを避ける。
   useLayoutEffect(() => {
@@ -355,12 +464,53 @@ export function SlideScroll({
           version={version}
           onSelect={onSelect}
           onJump={onJump}
+          onOpenOrderMenu={onEditSlide && editableSet.has(i) ? openOrderMenu : undefined}
+          cardRef={(element) => {
+            if (element) cardRefs.current.set(i, element);
+            else cardRefs.current.delete(i);
+          }}
           onSetCanvasFontSize={onSetCanvasFontSize}
           onResizeCanvasElement={onResizeCanvasElement}
           onMoveCanvasElement={onMoveCanvasElement}
           onDetachToCanvas={onDetachToCanvas}
         />
       ))}
+      {orderMenu ? (
+        <div
+          ref={menuRef}
+          className="slide-order-menu"
+          role="menu"
+          tabIndex={-1}
+          aria-label="スライドの順序"
+          style={{ left: orderMenu.x, top: orderMenu.y }}
+          onKeyDown={handleMenuKeyDown}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!editableFrameIndexes.some((index) => index < orderMenu.index)}
+            onClick={() => {
+              const index = orderMenu.index;
+              closeOrderMenu();
+              onEditSlide?.("moveUp", index);
+            }}
+          >
+            上へ移動
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!editableFrameIndexes.some((index) => index > orderMenu.index)}
+            onClick={() => {
+              const index = orderMenu.index;
+              closeOrderMenu();
+              onEditSlide?.("moveDown", index);
+            }}
+          >
+            下へ移動
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
