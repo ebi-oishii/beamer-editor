@@ -19,6 +19,7 @@ import {
 } from "@beamer-editor/core";
 import { MAX_RAW_PDF_BYTES } from "@beamer-editor/ui";
 import * as vscode from "vscode";
+import { canvasHoverAt } from "./canvas-hover";
 import { LintController } from "./diagnostics";
 import { renderDocument } from "./document-controller";
 import {
@@ -506,6 +507,24 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   );
 
   context.subscriptions.push(
+    vscode.languages.registerHoverProvider(
+      { scheme: "file", language: "latex" },
+      {
+        provideHover(document, position, _token) {
+          if (!isManaged(document)) return undefined;
+          const hover = canvasHoverAt(document, position);
+          if (!hover) return undefined;
+          const markdown = new vscode.MarkdownString(hover.documentation.markdown);
+          return new vscode.Hover(
+            markdown,
+            new vscode.Range(
+              document.positionAt(hover.range.start),
+              document.positionAt(hover.range.end),
+            ),
+          );
+        },
+      },
+    ),
     vscode.languages.registerFoldingRangeProvider(
       { scheme: "file", language: "latex" },
       {

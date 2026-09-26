@@ -74,6 +74,7 @@ vi.mock("vscode", () => {
       createDiagnosticCollection: disposable,
       registerCodeActionsProvider: disposable,
       registerFoldingRangeProvider: disposable,
+      registerHoverProvider: disposable,
       registerCodeLensProvider: disposable,
       registerDocumentPasteEditProvider: disposable,
     },
