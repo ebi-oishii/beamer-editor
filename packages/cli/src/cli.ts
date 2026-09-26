@@ -230,7 +230,7 @@ async function runFontsFetch(family: string, json: boolean): Promise<number> {
 export const USAGE = `使い方: deck <command> ...
 
   deck init [directory] [--json]      新規または空のディレクトリへ新規デッキを生成
-  deck init <directory> --update-skill [--json]  既存ディレクトリの .claude/skills/beamer-deck/ を更新
+  deck init <directory> --update-skill [--json]  既存ディレクトリの .claude と .agents 配下の skills/beamer-deck/ を更新
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示

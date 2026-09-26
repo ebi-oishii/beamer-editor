@@ -186,7 +186,7 @@ describe("pasteCanvasObjects", () => {
     expect(lintSource(twice).filter(({ severity }) => severity === "error")).toEqual([]);
   });
 
-  it("右端で止まり、ずらしても本文領域からはみ出さない", () => {
+  it("右端でも重なりを避けてずらし、範囲外は L012 に委ねる", () => {
     const wide = "\\deckimage[x=0.700,y=0.900,w=0.300]{assets/w.png}";
     const source = deck(`\\begin{frame}[label=c]{T}
   \\begin{deckcanvas}
@@ -194,9 +194,42 @@ describe("pasteCanvasObjects", () => {
   \\end{deckcanvas}
 \\end{frame}`);
     const pasted = apply(source, must(pasteCanvasObjects(source, frameOffsetOf(source, 0), wide)));
-    // x は 1 - w=0.300 が上限(0.700)で動けないので、y だけ下がる。
-    expect(pasted).toContain("\\deckimage[x=0.700,y=0.920,w=0.300]{assets/w.png}");
-    expect(lintSource(pasted).filter(({ code }) => code === "L012")).toEqual([]);
+    expect(pasted).toContain("\\deckimage[x=0.720,y=0.920,w=0.300]{assets/w.png}");
+    expect(lintSource(pasted).map(({ code }) => code)).toContain("L012");
+  });
+
+  it("51個以上の衝突候補を越えて、空いた位置を必ず選ぶ", () => {
+    const image = "\\deckimage[x=0.000,y=0.000,w=0.200]{assets/a.png}";
+    const occupied = Array.from({ length: 51 }, (_, index) => {
+      const coordinate = (index * 0.02).toFixed(3);
+      return `    \\deckimage[x=${coordinate},y=${coordinate},w=0.200]{assets/${index}.png}`;
+    }).join("\n");
+    const source = deck(`\\begin{frame}[label=c]{T}
+  \\begin{deckcanvas}
+${occupied}
+  \\end{deckcanvas}
+\\end{frame}`);
+    const pasted = apply(source, must(pasteCanvasObjects(source, frameOffsetOf(source, 0), image)));
+    expect(pasted).toContain("\\deckimage[x=1.020,y=1.020,w=0.200]{assets/a.png}");
+  });
+
+  it("x/y が省略された要素も、衝突時は位置を補って貼り付ける", () => {
+    const source = deck(`\\begin{frame}[label=c]{T}
+  \\begin{deckcanvas}
+    \\deckimage[x=0,y=0,w=0.200]{assets/existing.png}
+  \\end{deckcanvas}
+\\end{frame}`);
+    const pasted = apply(
+      source,
+      must(
+        pasteCanvasObjects(
+          source,
+          frameOffsetOf(source, 0),
+          "\\deckimage[w=0.200]{assets/clipboard.png}",
+        ),
+      ),
+    );
+    expect(pasted).toContain("\\deckimage[w=0.200,x=0.020,y=0.020]{assets/clipboard.png}");
   });
 
   it("deckcanvas の無いフレームには新設し、label が無ければ付ける", () => {

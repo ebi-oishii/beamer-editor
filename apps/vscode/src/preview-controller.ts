@@ -1,9 +1,9 @@
 import {
   type CanvasFontSize,
-  clampCanvasPosition,
-  clampCanvasWidth,
   isCanvasFontSize,
   mapExpandedRangeToSourceExact,
+  normalizeCanvasWidth,
+  roundCanvasCoordinate,
 } from "@beamer-editor/core";
 import { DEFAULT_THEME, type RenderedCanvasElement } from "@beamer-editor/renderer";
 import type { ExtensionToWebview } from "@beamer-editor/ui";
@@ -289,6 +289,11 @@ export class PreviewController implements vscode.Disposable {
   private editApplyPending = false;
   private editAwaitingVersion: number | undefined;
   /**
+   * Clipboard API は非同期なので、同じ Webview tick で届いた copy / cut / paste を
+   * 旧 sourceSpan のまま並行実行しない。失敗した要求も後続を止めない。
+   */
+  private clipboardQueue: Promise<void> = Promise.resolve();
+  /**
    * 描画前、または文書の version が最新の描画より進んでいる間(debounce 中)に届いた
    * ソース位置の表示要求。古い ExpansionMap で解かず、次の描画後に適用する。
    */
@@ -406,9 +411,9 @@ export class PreviewController implements vscode.Disposable {
     } else if (msg.type === "deleteCanvasElement") {
       await this.handleDelete(msg);
     } else if (msg.type === "copyCanvasElement") {
-      await this.handleCopy(msg);
+      await this.enqueueClipboard(() => this.handleCopy(msg));
     } else if (msg.type === "pasteCanvasElements") {
-      await this.handlePaste(msg);
+      await this.enqueueClipboard(() => this.handlePaste(msg));
     } else if (msg.type === "undoRedo") {
       // 注入された処理は同期で呼び出し、同期の例外も非同期の rejection も onError へ回す。
       const report = () => this.onError(`failed to ${msg.kind} the source document.`);
@@ -419,6 +424,13 @@ export class PreviewController implements vscode.Disposable {
       }
     }
     // activeFrameChanged はソース側カーソル追従(VS-5 以降)で使う予定(現状 no-op)。
+  }
+
+  private enqueueClipboard(operation: () => Promise<void>): Promise<void> {
+    const queued = this.clipboardQueue.then(operation);
+    // 各 operation は通常内部で例外を処理するが、将来の例外でもキューを恒久的に壊さない。
+    this.clipboardQueue = queued.catch(() => {});
+    return queued;
   }
 
   private async handleCanvasStyle(
@@ -448,7 +460,7 @@ export class PreviewController implements vscode.Disposable {
       this.sendDeck();
       return;
     }
-    const width = "width" in move ? clampCanvasWidth(element.position.x, move.width) : null;
+    const width = "width" in move ? normalizeCanvasWidth(move.width) : null;
     if (
       "width" in move
         ? width === null || element.position.width === width
@@ -536,9 +548,10 @@ export class PreviewController implements vscode.Disposable {
       this.sendDeck();
       return;
     }
-    // 書き込む座標は必ず本文領域内に収める(lint L012)。webview 側でも同じ位置で
-    // 止めているが、拡張が自分で lint を通らないソースを書かないための最終防御。
-    const { x, y } = clampCanvasPosition(move.x, move.y, element.position.width);
+    // 座標は本文領域で止めない(余白・ページ外へのはみ出しは許容し、L012 が警告する。#152)。
+    // 書く値は正規形の小数 3 桁で、丸めて現在位置と同じなら書かない。
+    const x = roundCanvasCoordinate(move.x);
+    const y = roundCanvasCoordinate(move.y);
     if (element.position.x === x && element.position.y === y) return;
     const { frameIndex, elementId, version } = move;
     const document = this.document;

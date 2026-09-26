@@ -348,3 +348,81 @@ describe("parseDeck: styled.slide.tex(%% style 領域)", () => {
     expect(doc2.style.entries).toHaveLength(0);
   });
 });
+
+describe("parseDeck: TeX と同じ境界規則(tex-scan)", () => {
+  const deck = (body: string, preamble = "") =>
+    `\\documentclass{beamer}\n${preamble}\\begin{document}\n${body}\n\\end{document}\n`;
+  const frames = (source: string) => framesOf(parseDeck(source));
+
+  it("閉じていない verbatim 系があっても後続のフレームを失わない", () => {
+    const a = "\\begin{frame}{A}\na\n\\end{frame}";
+    const b = "\\begin{frame}{B}\nb\n\\end{frame}";
+    const c = "\\begin{frame}{C}\nc\n\\end{frame}";
+    expect(frames(deck(`${a}\n\\begin{lstlisting}\n${b}\n${c}`))).toHaveLength(3);
+    expect(frames(deck(`${a}\n${b}`, "\\begin{minted}{python}\n"))).toHaveLength(2);
+    const inside = frames(deck(`\\begin{frame}{A}\n\\begin{verbatim}\n\\end{frame}\n${b}`));
+    expect(inside).toHaveLength(2);
+  });
+
+  it("fragile フレームの \\verb と fancyvrb 系 verbatim の中の frame タグで分割しない", () => {
+    for (const body of [
+      "\\verb|\\end{frame} \\begin{frame}|",
+      "\\begin{Verbatim}\n\\end{frame}\n\\begin{frame}\n\\end{Verbatim}",
+      "\\begin{BVerbatim}\n\\end{frame}\n\\end{BVerbatim}",
+      "\\begin{LVerbatim}\n\\end{frame}\n\\end{LVerbatim}",
+    ]) {
+      const source = deck(
+        `\\begin{frame}[fragile]{A}\n${body}\n\\end{frame}\n\\begin{frame}{B}\n\\end{frame}`,
+      );
+      expect(frames(source).map((frame) => frame.type)).toEqual(["frame", "frame"]);
+    }
+  });
+
+  it("コメント・マクロ定義本体の中の frame / document タグを数えない", () => {
+    const source = deck(
+      "\\newcommand{\\between}{%\n\\begin{frame}{Fake}\n\\end{frame}\n}\n% \\begin{frame}{Old}\n\\begin{frame}{A}\n\\newcommand{\\x}{\\end{frame}}\n\\end{frame}",
+      "% \\begin{document}\n\\newcommand{\\y}{\\end{document}}\n",
+    );
+    const doc = parseDeck(source);
+    expect(doc.managedPreamble.tex).toContain("\\newcommand{\\y}");
+    expect(framesOf(doc)).toHaveLength(1);
+  });
+
+  it("見出しの各部は空白・改行 1 つ・コメントを挟めるが、空行は越えない", () => {
+    const [header] = frames(
+      deck("\\begin{frame}\n% note\n[label=a, fragile]\n{Title}\nbody\n\\end{frame}"),
+    );
+    expect(header).toMatchObject({ type: "frame", options: { label: "a", fragile: true } });
+    if (header?.type !== "frame") throw new Error("expected frame");
+    expect(header.title).toEqual([expect.objectContaining({ value: "Title" })]);
+
+    const [blank] = frames(deck("\\begin{frame}\n\n[1] Author, 2020.\n\\end{frame}"));
+    expect(blank).toMatchObject({ type: "frame", title: null, options: { span: null } });
+  });
+
+  it("フレームのオーバーレイ指定と keyval の空白", () => {
+    expect(frames(deck("\\begin{frame}<2->[label=a]{A}\n\\end{frame}"))[0]).toMatchObject({
+      type: "rawFrame",
+      label: "a",
+      title: "A",
+    });
+    expect(frames(deck("\\begin{frame}[label = a ]{A}\n\\end{frame}"))[0]).toMatchObject({
+      type: "frame",
+      options: { label: "a" },
+    });
+  });
+
+  it("\\verb の引数はインライン生ブロックになる", () => {
+    const [frame] = frames(
+      deck("\\begin{frame}[fragile]{A}\n\\verb|\\begin{itemize}| x\n\\end{frame}"),
+    );
+    if (frame?.type !== "frame") throw new Error("expected frame");
+    expect(frame.body[0]).toMatchObject({
+      type: "paragraph",
+      children: [
+        expect.objectContaining({ type: "rawInline", tex: "\\verb|\\begin{itemize}|" }),
+        expect.anything(),
+      ],
+    });
+  });
+});

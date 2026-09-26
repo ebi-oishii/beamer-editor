@@ -630,6 +630,15 @@ describe("キャンバスフレームの label(L011)", () => {
     expect(detach(source)).toContain("\\begin{frame}[label=canvas-1]\n");
   });
 
+  it("見出し内のコメントをまたぐ場合も parser と同じ位置に label を入れる", () => {
+    const source = deck(`\\begin{frame}
+% header note
+{T}
+  ${image}
+\\end{frame}`);
+    expect(detach(source)).toContain("\\begin{frame}[label=canvas-1]\n% header note\n{T}");
+  });
+
   it("使われている番号は飛ばして一意にする", () => {
     const unlabeled = `${PREAMBLE}\\begin{frame}[label=canvas-1]{A}
   text

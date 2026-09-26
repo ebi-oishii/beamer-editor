@@ -16,7 +16,7 @@ import {
 } from "./ast.js";
 import {
   canvasPositionReplacement,
-  clampCanvasPosition,
+  formatCanvasCoordinate,
   roundCanvasCoordinate,
 } from "./canvas-edit.js";
 import {
@@ -134,6 +134,47 @@ function positionKey(x: number, y: number): string {
 }
 
 /**
+ * 衝突を避けるため x/y を書き換える。通常は既存の局所置換を使い、片方または両方が
+ * 省略されている場合だけ、安全に読める key/value 列へ補う。重複・未知の形式は原文を
+ * 曖昧に書き換えず拒否する。
+ */
+function pastedPositionReplacement(options: string, x: number, y: number): string | null {
+  const direct = canvasPositionReplacement(options, x, y);
+  if (direct !== null) return direct;
+  if (!options.startsWith("[") || !options.endsWith("]")) return null;
+  const values = new Set<string>();
+  const parts = options.slice(1, -1).split(",");
+  const rewritten: string[] = [];
+  for (const part of parts) {
+    if (part.trim() === "") continue;
+    const match = /^(\s*)(x|y|w|size)(\s*=\s*)(\S+)(\s*)$/.exec(part);
+    if (!match) return null;
+    const [, prefix, key, separator, value, suffix] = match;
+    if (
+      prefix === undefined ||
+      key === undefined ||
+      separator === undefined ||
+      value === undefined ||
+      suffix === undefined ||
+      values.has(key)
+    )
+      return null;
+    values.add(key);
+    if (key === "x" || key === "y") {
+      if (!Number.isFinite(Number(value))) return null;
+      rewritten.push(
+        `${prefix}${key}${separator}${formatCanvasCoordinate(key === "x" ? x : y)}${suffix}`,
+      );
+    } else {
+      rewritten.push(part);
+    }
+  }
+  if (!values.has("x")) rewritten.push(`x=${formatCanvasCoordinate(x)}`);
+  if (!values.has("y")) rewritten.push(`y=${formatCanvasCoordinate(y)}`);
+  return `[${rewritten.join(",")}]`;
+}
+
+/**
  * クリップボードの要素を、frameOffset(元ソース上の位置)を含むフレームの deckcanvas へ貼り付ける。
  * 位置は元のまま。同じ位置に既に要素があれば、重ならない位置まで右下へ少しずつずらす
  * (PowerPoint の同じスライドへの貼り付けと同じ)。deckcanvas が無ければ新設し、フレームに label が
@@ -162,29 +203,34 @@ export function pasteCanvasObjects(
   for (const item of canvas?.items ?? []) {
     if (item.type !== "rawBlock") occupied.add(positionKey(item.position.x, item.position.y));
   }
-  const texts = objects.map((object) => {
+  const texts: string[] = [];
+  for (const object of objects) {
     let { x, y } = object.position;
-    for (let attempt = 0; attempt < 50 && occupied.has(positionKey(x, y)); attempt++) {
-      // 幅は変えず、右端・下端で止める(ドラッグ移動と同じ clamp)。
-      const next = clampCanvasPosition(
-        x + CANVAS_PASTE_OFFSET,
-        y + CANVAS_PASTE_OFFSET,
-        object.position.width,
-      );
-      if (next.x === x && next.y === y) break;
-      x = next.x;
-      y = next.y;
+    for (let attempt = 0; occupied.has(positionKey(x, y)); attempt++) {
+      // occupied が n 個なら、異なる n + 1 個の候補のいずれかは空く。固定回数ではなく
+      // 現在の占有数を上限にすることで、51 個以上の同じ貼り付け位置にも対応する。
+      if (attempt >= occupied.size) return null;
+      // GUI は位置を本文領域へ clamp しない。範囲外の配置は L012 / deck check が通知する。
+      const nextX = roundCanvasCoordinate(x + CANVAS_PASTE_OFFSET);
+      const nextY = roundCanvasCoordinate(y + CANVAS_PASTE_OFFSET);
+      if (positionKey(nextX, nextY) === positionKey(x, y)) return null;
+      x = nextX;
+      y = nextY;
     }
     occupied.add(positionKey(x, y));
-    if (x === object.position.x && y === object.position.y) return object.text;
+    if (x === object.position.x && y === object.position.y) {
+      texts.push(object.text);
+      continue;
+    }
     const options = object.text.slice(object.options.start, object.options.end);
-    const replaced = canvasPositionReplacement(options, x, y);
-    return replaced === null
-      ? object.text
-      : `${object.text.slice(0, object.options.start)}${replaced}${object.text.slice(object.options.end)}`;
-  });
+    const replaced = pastedPositionReplacement(options, x, y);
+    if (replaced === null) return null;
+    texts.push(
+      `${object.text.slice(0, object.options.start)}${replaced}${object.text.slice(object.options.end)}`,
+    );
+  }
   const edits: Edit[] = [];
-  if (frameLabel(frame) === null) edits.push(addLabelEdit(frame, nextCanvasLabel(doc)));
+  if (frameLabel(frame) === null) edits.push(addLabelEdit(source, frame, nextCanvasLabel(doc)));
   edits.push(
     ...insertIntoCanvasEdits(
       source,

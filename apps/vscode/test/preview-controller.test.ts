@@ -455,16 +455,16 @@ describe("PreviewController", () => {
       frameIndex: 0,
       elementId: "canvas-image-0",
       version: 7,
-      // 範囲外は本文領域の端へ収めてから渡す(幅 1 の箱なので x は 0 に固定)。
-      x: 0,
-      y: 1,
+      // 範囲外もそのまま渡す(はみ出しは L012 が警告する。#152)。
+      x: -0.25,
+      y: 1.5,
       sourceSpan: { start: 10, end: 25 },
       document: doc,
       expectedOptions: doc.getText().slice(10, 25),
     });
   });
 
-  it("moveCanvasElement: 範囲外の座標を本文領域内へ収めてから callback へ渡す", async () => {
+  it("moveCanvasElement: 範囲外の座標も丸めてそのまま callback へ渡す(#152)", async () => {
     const { panel, fire } = makePanel();
     const { events } = makeEvents();
     const doc = makeDoc();
@@ -474,7 +474,7 @@ describe("PreviewController", () => {
       moveCanvasElement,
     });
     fire({ type: "ready" });
-    // 幅 0.4 の decktext を右下へ振り切る。x は 1 - 0.4、y は 1 で止まる。
+    // 幅 0.4 の decktext を右下の余白の外へ。本文領域で止めず、そのまま書く。
     fire({
       type: "moveCanvasElement",
       frameIndex: 0,
@@ -485,11 +485,11 @@ describe("PreviewController", () => {
     });
     await Promise.resolve();
     expect(moveCanvasElement).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ x: 0.6, y: 1 }),
+      expect.objectContaining({ x: 0.95, y: 1.4 }),
     );
   });
 
-  it("moveCanvasElement: clamp 後に現在位置と同じになる move は書き込まない", async () => {
+  it("moveCanvasElement: 丸めた後に現在位置と同じになる move は書き込まない", async () => {
     const { panel, fire } = makePanel();
     const { events } = makeEvents();
     const moveCanvasElement = vi.fn(async () => "applied" as const);
@@ -498,13 +498,13 @@ describe("PreviewController", () => {
       moveCanvasElement,
     });
     fire({ type: "ready" });
-    // 幅 1 の画像は x=0 から動かせないので、左へはみ出す move は no-op になる。
+    // 小数 3 桁に丸めると (0, 0) のまま。
     fire({
       type: "moveCanvasElement",
       frameIndex: 0,
       elementId: "canvas-image-0",
       version: 7,
-      x: -0.002,
+      x: 0.0004,
       y: 0,
     });
     await Promise.resolve();
@@ -1101,7 +1101,7 @@ describe("PreviewController", () => {
 });
 
 describe("canvas image width edits", () => {
-  it("validates version and element identity, clamps width, and locks pending edits", async () => {
+  it("validates version and element identity, rounds width, and locks pending edits", async () => {
     const { panel, fire } = makePanel();
     const { events } = makeEvents();
     const doc = makeDoc();
@@ -1129,7 +1129,8 @@ describe("canvas image width edits", () => {
     await Promise.resolve();
     expect(resizeCanvasElement).toHaveBeenCalledOnce();
     expect(resizeCanvasElement.mock.calls[0]?.[0]).toMatchObject({
-      width: 0.9,
+      // 右端で止めない(#152)。
+      width: 2,
       expectedOptions: "[x=.1,y=.2,w=.3]",
       document: doc,
     });
@@ -1324,6 +1325,50 @@ describe("PreviewController: canvas clipboard(#148)", () => {
     await controller.handleMessageForTest(request("copyCanvasElement", { cut: true }));
     expect(onError).toHaveBeenCalledOnce();
     expect(deleteCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("copy / paste は非同期の失敗後も到着順に直列化する", async () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const onError = vi.fn();
+    let rejectCopy: ((reason: unknown) => void) | undefined;
+    const copyCanvasElement = vi.fn(
+      () =>
+        new Promise<boolean>((_resolve, reject) => {
+          rejectCopy = reject;
+        }),
+    );
+    const pasteCanvasElements = vi.fn(async () => "cancelled" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      copyCanvasElement,
+      pasteCanvasElements,
+      onError,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+
+    const copy = controller.handleMessageForTest(request("copyCanvasElement", { cut: false }));
+    const paste = controller.handleMessageForTest({
+      type: "pasteCanvasElements",
+      frameIndex: 0,
+      version: 7,
+    });
+    await Promise.resolve();
+    expect(copyCanvasElement).toHaveBeenCalledOnce();
+    expect(pasteCanvasElements).not.toHaveBeenCalled();
+
+    rejectCopy?.(new Error("clipboard unavailable"));
+    await copy;
+    await paste;
+
+    expect(onError).toHaveBeenCalledWith("failed to copy the canvas element.");
+    expect(pasteCanvasElements).toHaveBeenCalledExactlyOnceWith({
+      frameIndex: 0,
+      version: 7,
+      frameOffset: 0,
+      document: doc,
+    });
   });
 
   it("pasteCanvasElements: フレームの元ソース位置を添えて callback へ渡し、要素でなければ警告する", async () => {

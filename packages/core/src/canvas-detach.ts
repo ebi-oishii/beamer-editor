@@ -317,7 +317,7 @@ function rewriteFrame({
 
   // 0. キャンバスフレームには一意な label が要る(L011)。GUI 操作の結果が
   //    そのまま lint を通るよう、label の無いフレームにはここで付ける。
-  if (addLabel !== null) edits.push(addLabelEdit(frame, addLabel));
+  if (addLabel !== null) edits.push(addLabelEdit(source, frame, addLabel));
 
   // 1. 対象の原文(唯一の内容なら \\item やリストごと)を取り除く。行を占有していれば改行ごと消す。
   //    広げた範囲にあったコメントは、行を占有して消せるときは同じ位置に行として残す(§2.4)。

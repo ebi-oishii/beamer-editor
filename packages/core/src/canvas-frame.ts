@@ -12,6 +12,7 @@ import {
   framesOf,
   type SourceSpan,
 } from "./ast.js";
+import { readFrameHeader } from "./parser.js";
 import { isBlank, lineStart } from "./source-text.js";
 
 /** 元ソースの span をこのテキストで置き換える、という結果。 */
@@ -25,8 +26,6 @@ export interface Edit {
   end: number;
   text: string;
 }
-
-const BEGIN_FRAME = "\\begin{frame}";
 
 /** キャンバスフレームへ自動で付ける label の接頭辞(L011 の「一意な label」)。 */
 const CANVAS_LABEL_PREFIX = "canvas";
@@ -47,10 +46,11 @@ export function nextCanvasLabel(doc: DeckDocument): string {
  * frame へ `label=` を足す編集。options が無ければ `[label=...]` を新設し、
  * あれば既知 option を既定順に組み直す。空の label は置換し、空 option や末尾カンマも正規化する。
  */
-export function addLabelEdit(frame: FrameNode, label: string): Edit {
+export function addLabelEdit(source: string, frame: FrameNode, label: string): Edit {
   const options = frame.options.span;
   if (options === null) {
-    const at = frame.span.start + BEGIN_FRAME.length;
+    // frame 見出しの空白・コメント・overlay の読み方は parser / slide-edit と共有する。
+    const at = readFrameHeader(source, frame.span.start, frame.span.end).insertAt;
     return { start: at, end: at, text: `[label=${label}]` };
   }
   const normalized = [

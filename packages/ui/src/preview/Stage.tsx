@@ -3,9 +3,10 @@ import { CANVAS_FONT_SIZES, type CanvasFontSize, isCanvasFontSize } from "@beame
  * 1 フレームの描画ステージ。renderer が escape 済みの html を .slide-scale へ流し込み、
  * 親(SlideScroll)が決めた倍率で transform: scale し、オーバーレイ(step に応じた covered
  * トグル)とキャンバス画像のドラッグを適用する。倍率の計算は持たない。
+ * ドラッグの位置と幅は本文領域で止めない(余白・ページ外へのはみ出しは許容し、L012 が警告する。#152)。
  */
 
-import { clampCanvasPosition, clampCanvasWidth, roundCanvasCoordinate } from "@beamer-editor/core";
+import { normalizeCanvasWidth, roundCanvasCoordinate } from "@beamer-editor/core";
 import type { RenderedFrame } from "@beamer-editor/renderer";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { canvasPointFromPointer } from "./canvas-drag.js";
@@ -51,10 +52,8 @@ interface DragState {
   id: string;
   x: number;
   y: number;
-  /** 本文領域内へ収めるとき右端の余地になる箱の幅。移動では変わらない。 */
+  /** 幅ハンドルの位置に使う箱の幅。移動では変わらない。 */
   width: number;
-  /** pointerdown 時点の実測高さ。drag 中の再描画・load では再測定せず、次 gesture で更新する。 */
-  height: number;
   grabX: number;
   grabY: number;
   pointerId: number;
@@ -179,8 +178,7 @@ export function Stage({
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       event.preventDefault();
       event.stopPropagation();
-      const width = clampCanvasWidth(
-        descriptor.position.x,
+      const width = normalizeCanvasWidth(
         descriptor.position.width + (event.key === "ArrowRight" ? 0.01 : -0.01),
       );
       if (width !== null && width !== descriptor.position.width)
@@ -341,7 +339,6 @@ export function Stage({
         ?.classList.remove("canvas-selected");
     }
     const bounds = element.getBoundingClientRect();
-    const canvasBounds = canvas.getBoundingClientRect();
     dragRef.current = {
       resize: Boolean(handleId),
       startClientX: event.clientX,
@@ -351,12 +348,6 @@ export function Stage({
       x: descriptor.position.x,
       y: descriptor.position.y,
       width: descriptor.position.width,
-      height:
-        Number.isFinite(bounds.height) &&
-        Number.isFinite(canvasBounds.height) &&
-        canvasBounds.height > 0
-          ? bounds.height / canvasBounds.height
-          : 0,
       grabX: event.clientX - bounds.left,
       grabY: event.clientY - bounds.top,
       pointerId: event.pointerId,
@@ -371,10 +362,7 @@ export function Stage({
     const canvas = drag.element.closest<HTMLElement>(".canvas");
     const bounds = canvas?.getBoundingClientRect();
     if (!bounds || !Number.isFinite(bounds.width) || bounds.width <= 0) return null;
-    return clampCanvasWidth(
-      drag.x,
-      drag.width + (event.clientX - drag.startClientX) / bounds.width,
-    );
+    return normalizeCanvasWidth(drag.width + (event.clientX - drag.startClientX) / bounds.width);
   };
   const move = (event: PointerEvent) => {
     const drag = dragRef.current;
@@ -409,9 +397,8 @@ export function Stage({
         drag.grabY,
       );
     if (!raw) return;
-    const point = clampCanvasPosition(raw.x, raw.y, drag.width, drag.height);
-    drag.element.style.left = `${point.x * 100}%`;
-    drag.element.style.top = `${point.y * 100}%`;
+    drag.element.style.left = `${raw.x * 100}%`;
+    drag.element.style.top = `${raw.y * 100}%`;
   };
   const finish = (event: PointerEvent, commit: boolean) => {
     const drag = dragRef.current;
@@ -440,8 +427,8 @@ export function Stage({
       drag.element.style.left = `${drag.x * 100}%`;
       drag.element.style.top = `${drag.y * 100}%`;
     } else {
-      // 選択クリックでは既存の領域外配置まで黙って書き換えない。pointer 由来の
-      // 座標が実際に動いた gesture だけを clamp して source へ commit する。
+      // 選択クリック(座標が動いていない gesture)では source を書き換えない。動いたときは
+      // pointer の位置をそのまま commit する(本文領域の外も許容。#152)。
       if (
         roundCanvasCoordinate(raw.x) === roundCanvasCoordinate(drag.x) &&
         roundCanvasCoordinate(raw.y) === roundCanvasCoordinate(drag.y)
@@ -449,8 +436,7 @@ export function Stage({
         drag.element.style.left = `${drag.x * 100}%`;
         drag.element.style.top = `${drag.y * 100}%`;
       } else {
-        const point = clampCanvasPosition(raw.x, raw.y, drag.width, drag.height);
-        onMoveCanvasElement(drag.id, point.x, point.y);
+        onMoveCanvasElement(drag.id, raw.x, raw.y);
       }
     }
     dragRef.current = undefined;

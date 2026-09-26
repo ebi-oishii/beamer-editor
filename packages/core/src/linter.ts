@@ -13,6 +13,7 @@ import {
 import type { FileExistsProbe, ImageFormat, ImageProbe } from "./image.js";
 import { parseDeck } from "./parser.js";
 import type { TemplateStatus } from "./template.js";
+import { VERBATIM_ENVS } from "./tex-scan.js";
 
 export type LintCode =
   | "L001"
@@ -51,7 +52,7 @@ export interface LintOptions {
   /** undefined: no bundled skill; null: bundled files could not be verified. */
   skillContentFingerprint?: string | null;
   expectedSkillFingerprint?: string;
-  /** Directory containing the discovered `.claude/skills/beamer-deck/`; used only in the L010 message. */
+  /** Directory containing the discovered `.claude/` or `.agents/` skill; used only in the L010 message. */
   skillProjectDirectory?: string;
   /** 対応する `%% deck-source-version`。 */
   expectedSourceVersion?: number;
@@ -68,7 +69,6 @@ export interface LintOptions {
 
 export const CURRENT_DECK_SOURCE_VERSION = 1;
 
-const VERBATIM_ENVS = new Set(["verbatim", "verbatim*", "semiverbatim", "lstlisting", "minted"]);
 const VERBATIM_DELIMITERS = [...VERBATIM_ENVS].map((environment) => ({
   begin: `\\begin{${environment}}`,
   end: `\\end{${environment}}`,
@@ -644,7 +644,7 @@ function lintCanvas(canvas: CanvasNode): LintDiagnostic[] {
         diagnostic(
           "L012",
           "warning",
-          "キャンバスの x, y, w は本文領域内に収まる必要があります",
+          "キャンバス要素が本文領域からはみ出しています(x, y, w が 0〜1 の範囲外)",
           span,
         ),
       );

@@ -138,7 +138,7 @@ describe("deck lint", () => {
         {
           code: "L012",
           severity: "warning",
-          message: "キャンバスの x, y, w は本文領域内に収まる必要があります",
+          message: "キャンバス要素が本文領域からはみ出しています(x, y, w が 0〜1 の範囲外)",
           location: { line: 6, column: 17, endLine: 6, endColumn: 46 },
         },
       ],
@@ -262,7 +262,7 @@ describe("deck lint", () => {
       "不明なコマンド: unknown-command\n" +
         "使い方: deck <command> ...\n\n" +
         "  deck init [directory] [--json]      新規または空のディレクトリへ新規デッキを生成\n" +
-        "  deck init <directory> --update-skill [--json]  既存ディレクトリの .claude/skills/beamer-deck/ を更新\n" +
+        "  deck init <directory> --update-skill [--json]  既存ディレクトリの .claude と .agents 配下の skills/beamer-deck/ を更新\n" +
         "  deck lint <file> [--json]           デッキを検査\n" +
         "  deck format <file> [--write] [--json]  デッキを正規化\n" +
         "  deck outline <file> [--json]        フレーム一覧を表示\n" +
