@@ -1,4 +1,10 @@
-import { editSlide, type SlideEditAction, type SlideSourceEdit } from "@beamer-editor/core";
+import {
+  editSlide,
+  framesOf,
+  parseDeck,
+  type SlideEditAction,
+  type SlideSourceEdit,
+} from "@beamer-editor/core";
 import type { SlideOutlineDocument, SlideOutlineEntry, SlideOutlineState } from "./slide-outline";
 
 export interface SlideEditHost<Document extends SlideOutlineDocument> {
@@ -55,6 +61,42 @@ export class SlideEditController<Document extends SlideOutlineDocument> {
     } finally {
       this.pending.delete(document);
     }
+  }
+
+  /**
+   * Webview からの操作用。描画時の version と source offset を、現在の outline entry
+   * に照合してから既存の一回だけの WorkspaceEdit 経路へ流す。
+   */
+  async executeAt(
+    action: Extract<SlideEditAction, "moveUp" | "moveDown">,
+    document: Document,
+    version: number,
+    start: number,
+  ): Promise<{ applied: boolean; newFrameStart?: number }> {
+    if (document.version !== version || !this.state.hasDocument(document))
+      return { applied: false };
+    const entry = this.state
+      .getEntries()
+      .find(
+        (candidate) =>
+          candidate.document === document &&
+          candidate.version === version &&
+          candidate.start === start,
+      );
+    if (!entry) return { applied: false };
+    const source = document.getText();
+    const result = editSlide(source, action, start);
+    if (!result.ok || result.edits.length === 0) return { applied: false };
+    let next = source;
+    for (const edit of [...result.edits].sort((a, b) => b.span.start - a.span.start))
+      next = next.slice(0, edit.span.start) + edit.text + next.slice(edit.span.end);
+    const oldIndex = framesOf(parseDeck(source)).findIndex((frame) => frame.span.start === start);
+    const nextFrame = framesOf(parseDeck(next))[oldIndex + (action === "moveUp" ? -1 : 1)];
+    if (oldIndex < 0 || !nextFrame) return { applied: false };
+    return {
+      applied: await this.execute(action, entry),
+      newFrameStart: nextFrame.span.start,
+    };
   }
 }
 

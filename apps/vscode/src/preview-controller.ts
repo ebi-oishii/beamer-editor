@@ -144,6 +144,15 @@ export interface PreviewControllerOptions {
     placement: CanvasPlacement;
     document: PreviewDocument;
   }) => Promise<CanvasEditResult>;
+  /** プレビューのカードから順序を変える。既存の SlideEditController が一回の WorkspaceEdit を所有する。 */
+  editSlide?: (request: {
+    action: "moveUp" | "moveDown";
+    frameIndex: number;
+    version: number;
+    frameOffset: number;
+    document: PreviewDocument;
+  }) => Promise<{ applied: boolean; newFrameStart?: number }>;
+  isSlideEditable?: (document: PreviewDocument, version: number, sourceOffset: number) => boolean;
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -243,6 +252,12 @@ export class PreviewController implements vscode.Disposable {
   private readonly onWebviewReady: () => void;
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
   private readonly detachToCanvas: PreviewControllerOptions["detachToCanvas"];
+  private readonly editSlide: PreviewControllerOptions["editSlide"];
+  private readonly isSlideEditable: PreviewControllerOptions["isSlideEditable"];
+  private slideEditPending = false;
+  private pendingMovedSlide:
+    | { document: PreviewDocument; uri: string; version: number; newFrameStart: number }
+    | undefined;
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
@@ -293,6 +308,8 @@ export class PreviewController implements vscode.Disposable {
     this.onWebviewReady = options.onWebviewReady ?? (() => {});
     this.moveCanvasElement = options.moveCanvasElement;
     this.detachToCanvas = options.detachToCanvas;
+    this.editSlide = options.editSlide;
+    this.isSlideEditable = options.isSlideEditable;
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
@@ -369,6 +386,8 @@ export class PreviewController implements vscode.Disposable {
       await this.handleMove(msg);
     } else if (msg.type === "detachToCanvas") {
       await this.handleDetach(msg);
+    } else if (msg.type === "editSlide") {
+      await this.handleSlideEdit(msg);
     } else if (msg.type === "undoRedo") {
       // 注入された処理は同期で呼び出し、同期の例外も非同期の rejection も onError へ回す。
       const report = () => this.onError(`failed to ${msg.kind} the source document.`);
@@ -388,7 +407,13 @@ export class PreviewController implements vscode.Disposable {
       version: number;
     } & ({ width: number } | { size: CanvasFontSize }),
   ): Promise<void> {
-    if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
+    if (
+      this.editApplyPending ||
+      this.editAwaitingVersion !== undefined ||
+      this.slideEditPending ||
+      this.pendingMovedSlide
+    )
+      return;
     const latest = this.latest;
     const frame = latest?.deck.frames[move.frameIndex];
     const element = frame?.canvasElements?.find(
@@ -477,7 +502,13 @@ export class PreviewController implements vscode.Disposable {
     x: number;
     y: number;
   }): Promise<void> {
-    if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
+    if (
+      this.editApplyPending ||
+      this.editAwaitingVersion !== undefined ||
+      this.slideEditPending ||
+      this.pendingMovedSlide
+    )
+      return;
     const latest = this.latest;
     const frame = latest?.deck.frames[move.frameIndex];
     const element = frame?.canvasElements?.find(
@@ -556,7 +587,13 @@ export class PreviewController implements vscode.Disposable {
     sourceSpan: { start: number; end: number };
     rect: { x: number; y: number; width: number };
   }): Promise<void> {
-    if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
+    if (
+      this.editApplyPending ||
+      this.editAwaitingVersion !== undefined ||
+      this.slideEditPending ||
+      this.pendingMovedSlide
+    )
+      return;
     const latest = this.latest;
     if (
       !latest ||
@@ -610,6 +647,99 @@ export class PreviewController implements vscode.Disposable {
     }
   }
 
+  private async handleSlideEdit(request: {
+    action: "moveUp" | "moveDown";
+    frameIndex: number;
+    version: number;
+  }): Promise<void> {
+    if (
+      this.slideEditPending ||
+      this.editApplyPending ||
+      this.editAwaitingVersion !== undefined ||
+      this.pendingMovedSlide
+    )
+      return;
+    const latest = this.latest;
+    if (
+      !latest ||
+      this.latestDocument !== this.document ||
+      request.version !== this.document.version ||
+      latest.version !== this.document.version
+    ) {
+      this.onWarning(
+        "プレビューが古いためスライドを移動できませんでした。更新して選び直してください。",
+      );
+      this.sendDeck();
+      return;
+    }
+    const frameOffset = resolveJumpOffset(latest, request.frameIndex);
+    if (frameOffset === null) return;
+    const document = this.document;
+    this.slideEditPending = true;
+    try {
+      const result = await this.editSlide?.({ ...request, frameOffset, document });
+      this.slideEditPending = false;
+      if (this.disposed) {
+        this.pendingMovedSlide = undefined;
+        return;
+      }
+      if (result?.applied && result.newFrameStart !== undefined) {
+        this.pendingMovedSlide = {
+          document,
+          uri: document.uri.toString(),
+          version: request.version,
+          newFrameStart: result.newFrameStart,
+        };
+        this.revealMovedSlide();
+        if (
+          !this.disposed &&
+          this.pendingMovedSlide &&
+          (!this.latest ||
+            this.latestDocument !== document ||
+            this.latest.version !== document.version)
+        ) {
+          this.sendDeck();
+        }
+      } else {
+        this.pendingMovedSlide = undefined;
+        this.sendDeck();
+      }
+    } catch {
+      this.pendingMovedSlide = undefined;
+      if (!this.disposed) {
+        this.onError("failed to move the slide.");
+        this.sendDeck();
+      }
+    } finally {
+      this.slideEditPending = false;
+    }
+  }
+
+  private revealMovedSlide(): void {
+    const pending = this.pendingMovedSlide;
+    const latest = this.latest;
+    if (!pending || !latest || latest.version <= pending.version) return;
+    if (
+      pending.document !== this.document ||
+      pending.uri !== this.document.uri.toString() ||
+      this.latestDocument !== this.document ||
+      latest.version !== this.document.version
+    ) {
+      this.pendingMovedSlide = undefined;
+      return;
+    }
+    const frameIndex = latest.deck.frames.findIndex(
+      (_, index) => resolveJumpOffset(latest, index) === pending.newFrameStart,
+    );
+    this.pendingMovedSlide = undefined;
+    if (frameIndex < 0) return;
+    void this.panel.webview.postMessage({
+      type: "activeFrameChanged",
+      frameIndex,
+      version: latest.version,
+    });
+  }
+
   /**
    * プレビューからのソースジャンプ(VS-4)。プレビューが古い文書バージョンを参照して
    * いた場合(未 debounce の編集が保留中の場合を含む)は移動せず、再描画だけを送る。
@@ -632,6 +762,7 @@ export class PreviewController implements vscode.Disposable {
   private handleDocumentChange(event: PreviewDocumentChangeEvent): void {
     if (this.disposed) return;
     if (event.document.uri.toString() !== this.document.uri.toString()) return;
+    if (event.document !== this.document) this.pendingMovedSlide = undefined;
     // close → 再オープンで新しい TextDocument になっても追従できるよう差し替える。
     this.document = event.document;
     if (event.contentChanges.length === 0) return;
@@ -675,8 +806,16 @@ export class PreviewController implements vscode.Disposable {
         deck,
         version: outcome.version,
         activeFrame: 0,
+        editableFrameIndexes: outcome.deck.frames.flatMap((_, index) => {
+          const offset = resolveJumpOffset(outcome, index);
+          return offset !== null &&
+            this.isSlideEditable?.(renderedDocument, outcome.version, offset)
+            ? [index]
+            : [];
+        }),
       };
     } catch (err) {
+      this.pendingMovedSlide = undefined;
       const text = String(err);
       this.onError(text);
       message = { type: "error", message: text };
@@ -685,6 +824,7 @@ export class PreviewController implements vscode.Disposable {
     if (message.type === "deckUpdated") {
       // フレーム番号は描画ごとに変わり得るので、追従の既読は描画単位でリセットする。
       this.lastRevealedFrame = undefined;
+      this.revealMovedSlide();
       if (this.pendingReveal !== undefined) {
         const { offset, onlyIfChanged } = this.pendingReveal;
         this.pendingReveal = undefined;
@@ -736,6 +876,7 @@ export class PreviewController implements vscode.Disposable {
     }
 
     this.disposed = true;
+    this.pendingMovedSlide = undefined;
     clearTimeout(this.debounceTimer);
     this.debounceTimer = undefined;
     for (const disposable of this.disposables.splice(0)) {

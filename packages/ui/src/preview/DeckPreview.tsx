@@ -20,6 +20,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const [deck, setDeck] = useState<RenderedDeck>(EMPTY_DECK);
   // 表示中 deck の document version。jumpToSource に添えて古い版からのジャンプを検出させる。
   const [version, setVersion] = useState(Number.NEGATIVE_INFINITY);
+  const [editableFrameIndexes, setEditableFrameIndexes] = useState<number[]>([]);
   const [restoredNav] = useState(() => host.loadNavState?.());
   // 生ブロックの部分コンパイル画像(#81)。ホストから届いた PDF を画像にして箱にはめ込む。
   const [rawImages] = useState(() => new RawImageStore(host.rasterizePdf?.bind(host)));
@@ -48,6 +49,9 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   // クリックやスクロール追従による選択では出さない(見ている場所を動かさない)。
   const [reveal, setReveal] = useState<RevealRequest | undefined>();
   const revealToken = useRef(0);
+  const reorderFocusRequestVersion = useRef<number | undefined>();
+  const reorderFocusVersion = useRef<number | undefined>();
+  const [reorderFocusFrame, setReorderFocusFrame] = useState<number | undefined>();
   const requestReveal = useCallback((index: number) => {
     revealToken.current += 1;
     setReveal({ index, token: revealToken.current });
@@ -64,10 +68,16 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const versionRef = useRef(Number.NEGATIVE_INFINITY);
   useEffect(
     () =>
-      host.subscribe((next, nextVersion) => {
+      host.subscribe((next, nextVersion, editable) => {
         versionRef.current = nextVersion;
+        const requestedVersion = reorderFocusRequestVersion.current;
+        if (requestedVersion !== undefined) {
+          if (nextVersion > requestedVersion) reorderFocusVersion.current = nextVersion;
+          else if (nextVersion === requestedVersion) reorderFocusRequestVersion.current = undefined;
+        }
         setDeck(next);
         setVersion(nextVersion);
+        setEditableFrameIndexes(editable ?? []);
       }),
     [host],
   );
@@ -80,6 +90,11 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         if (requestVersion !== versionRef.current) return;
         dispatch({ type: "goto", index: frameIndex });
         requestReveal(frameIndex);
+        if (reorderFocusVersion.current === requestVersion) {
+          reorderFocusRequestVersion.current = undefined;
+          reorderFocusVersion.current = undefined;
+          setReorderFocusFrame(frameIndex);
+        }
       }),
     [host, requestReveal],
   );
@@ -257,6 +272,17 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         reveal={reveal}
         onSelect={(i) => dispatch({ type: "goto", index: i })}
         onJump={(i) => host.jumpToSource(i, version)}
+        onEditSlide={
+          host.editSlide
+            ? (action, i) => {
+                reorderFocusRequestVersion.current = version;
+                host.editSlide?.(action, i, version);
+              }
+            : undefined
+        }
+        editableFrameIndexes={editableFrameIndexes}
+        focusFrame={reorderFocusFrame}
+        onFocusFrameHandled={() => setReorderFocusFrame(undefined)}
         onScrollActive={(i) => dispatch({ type: "goto", index: i })}
         onSetCanvasFontSize={
           host.setCanvasFontSize

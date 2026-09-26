@@ -929,6 +929,21 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           );
           return (await vscode.workspace.applyEdit(edit)) ? "applied" : "failed";
         },
+        editSlide: async (request) => {
+          const target = vscode.workspace.textDocuments.find(
+            (candidate) => candidate === request.document,
+          );
+          if (!target || target.version !== request.version) return { applied: false };
+          return slideEdits.executeAt(request.action, target, request.version, request.frameOffset);
+        },
+        isSlideEditable: (target, version, start) =>
+          target.version === version &&
+          slideOutlineState
+            .getEntries()
+            .some(
+              (entry) =>
+                entry.document === target && entry.version === version && entry.start === start,
+            ),
       },
     );
     const refreshTemplates = () => {

@@ -35,7 +35,9 @@ export interface RasterImage {
 
 export interface ShellHost {
   /** ホストからの deck 更新を購読する。unsubscribe を返す。 */
-  subscribe(listener: (deck: RenderedDeck, version: number) => void): () => void;
+  subscribe(
+    listener: (deck: RenderedDeck, version: number, editableFrameIndexes?: number[]) => void,
+  ): () => void;
   /**
    * ホスト → ui: 指定フレームを表示する要求(ソース側の CodeLens・コマンド・カーソル追従)。
    * version は要求の基になった deck の document version。表示中の版と違えば ui は無視する。
@@ -84,6 +86,7 @@ export interface ShellHost {
     x: number,
     y: number,
   ): void;
+  editSlide?(action: "moveUp" | "moveDown", frameIndex: number, version: number): void;
   /**
    * ui → ホスト: フロー要素(段落・リスト・画像)を同じフレームの deckcanvas へ移す要求
    * (「自由配置にする」)。sourceSpan は展開後ソース、rect はスライド全体を 1 とした
@@ -135,7 +138,7 @@ export function createMessageShellHost(
         if (msg.type === "deckUpdated") {
           if (msg.version < lastVersion) return;
           lastVersion = msg.version;
-          listener(msg.deck, msg.version);
+          listener(msg.deck, msg.version, msg.editableFrameIndexes);
         }
       });
     },
@@ -172,6 +175,9 @@ export function createMessageShellHost(
     },
     moveCanvasElement(frameIndex, elementId, version, x, y) {
       transport.post({ type: "moveCanvasElement", frameIndex, elementId, version, x, y });
+    },
+    editSlide(action, frameIndex, version) {
+      transport.post({ type: "editSlide", action, frameIndex, version });
     },
     detachToCanvas(frameIndex, version, sourceSpan, rect) {
       transport.post({ type: "detachToCanvas", frameIndex, version, sourceSpan, rect });
