@@ -11,10 +11,8 @@
 import {
   type BlockNode,
   type CanvasNode,
-  type DeckDocument,
   type FrameNode,
   frameLabel,
-  framesOf,
   type ListItemNode,
   type ListNode,
   type SourceSpan,
@@ -24,13 +22,18 @@ import {
   clampCanvasPlacement,
   formatCanvasCoordinate,
 } from "./canvas-edit.js";
-import { parseDeck, readFrameHeader } from "./parser.js";
+import {
+  addLabelEdit,
+  applyFrameEdits,
+  type Edit,
+  insertIntoCanvasEdits,
+  nextCanvasLabel,
+  type SourceReplacement,
+} from "./canvas-frame.js";
+import { parseDeck } from "./parser.js";
+import { detectEol, isBlank, lineEnd, lineStart, reindent, trimmedSpan } from "./source-text.js";
 
-/** 元ソースの span をこのテキストで置き換える、という結果。 */
-export interface SourceReplacement {
-  span: SourceSpan;
-  text: string;
-}
+export type { SourceReplacement } from "./canvas-frame.js";
 
 /** decktext 内のリストは本文と同じ 3 段までネスト可(L014 と同じ条件)。項目のオーバーレイは不可。 */
 function listFitsDecktext(list: ListNode, depth: number): boolean {
@@ -239,26 +242,6 @@ export function detachableBlocksOf(frame: FrameNode): Set<BlockNode> {
   return eligible;
 }
 
-function lineStart(source: string, offset: number): number {
-  return source.lastIndexOf("\n", offset - 1) + 1;
-}
-
-function lineEnd(source: string, offset: number): number {
-  const index = source.indexOf("\n", offset);
-  return index === -1 ? source.length : index;
-}
-
-/** 行内の空白判定。CRLF 文書では行末の CR も空白として扱う。 */
-function isBlank(text: string): boolean {
-  return /^[ \t\r]*$/.test(text);
-}
-
-/** 文書の改行コード。生成・再インデント・行削除をこれに揃える(混在文書は最初に見つかった方)。 */
-function detectEol(source: string): string {
-  const index = source.indexOf("\n");
-  return index > 0 && source[index - 1] === "\r" ? "\r\n" : "\n";
-}
-
 /** 行内で `%` コメント(エスケープ `\\%` を除く)が始まる位置。無ければ -1。 */
 function commentIndex(line: string): number {
   const match = /(^|[^\\])(\\\\)*(%)/.exec(line);
@@ -292,28 +275,6 @@ function commentsOutsideBlock(
   return kept;
 }
 
-/** 段落の span は次の環境の直前まで(改行・字下げ込み)伸びることがあるので、末尾の空白を落とす。 */
-function trimmedSpan(source: string, span: SourceSpan): SourceSpan {
-  let end = span.end;
-  while (end > span.start && /\s/.test(source[end - 1] as string)) end--;
-  return { start: span.start, end };
-}
-
-/** 複数行の原文を、先頭行の位置に合わせて indent で揃え直す。改行は eol に統一する。 */
-function reindent(text: string, indent: string, eol: string): string {
-  const lines = text.split(/\r?\n/);
-  const rest = lines.slice(1).filter((line) => line.trim() !== "");
-  const common =
-    rest.length === 0 ? 0 : Math.min(...rest.map((line) => /^[ \t]*/.exec(line)?.[0].length ?? 0));
-  return lines
-    .map((line, index) => {
-      if (line.trim() === "") return "";
-      const body = index === 0 ? line.trimStart() : line.slice(common);
-      return `${indent}${body}`;
-    })
-    .join(eol);
-}
-
 function buildObject(
   source: string,
   block: BlockNode,
@@ -330,47 +291,6 @@ function buildObject(
   // center の中にあった要素は箱の中で中央寄せを保つ。
   const centering = center ? `${indent}  \\centering${eol}` : "";
   return `${indent}\\begin{decktext}[${position},size=normal]${eol}${centering}${content}${eol}${indent}\\end{decktext}`;
-}
-
-interface Edit {
-  start: number;
-  end: number;
-  text: string;
-}
-
-/** キャンバスフレームへ自動で付ける label の接頭辞(L011 の「一意な label」)。 */
-const CANVAS_LABEL_PREFIX = "canvas";
-
-/**
- * 文書内で未使用の `canvas-N` を返す。ラベルは永続アドレス(ai-protocol §3)なので
- * フレーム位置ではなく空き番号で決め、あとから並べ替えても意味が変わらないようにする。
- */
-function nextCanvasLabel(doc: DeckDocument): string {
-  const used = new Set(framesOf(doc).map(frameLabel));
-  for (let n = 1; ; n++) {
-    const candidate = `${CANVAS_LABEL_PREFIX}-${n}`;
-    if (!used.has(candidate)) return candidate;
-  }
-}
-
-/**
- * frame へ `label=` を足す編集。options が無ければ `[label=...]` を新設し、
- * あれば既知 option を既定順に組み直す。空の label は置換し、空 option や末尾カンマも正規化する。
- */
-function addLabelEdit(source: string, frame: FrameNode, label: string): Edit {
-  const options = frame.options.span;
-  if (options === null) {
-    // overlay や見出しの空白・コメントの後ろでも、パーサが読んだ見出しの直後に入れる。
-    const at = readFrameHeader(source, frame.span.start, frame.span.end).insertAt;
-    return { start: at, end: at, text: `[label=${label}]` };
-  }
-  const normalized = [
-    frame.options.fragile ? "fragile" : null,
-    frame.options.plain ? "plain" : null,
-    frame.options.allowframebreaks ? "allowframebreaks" : null,
-    `label=${label}`,
-  ].filter((option): option is string => option !== null);
-  return { start: options.start, end: options.end, text: `[${normalized.join(",")}]` };
 }
 
 interface RewriteFrameRequest {
@@ -433,36 +353,18 @@ function rewriteFrame({
   });
 
   // 2. deckcanvas へ入れる。既存があれば \end{deckcanvas} の直前、無ければ \end{frame} の直前に新設。
-  if (canvas) {
-    const endIndex = source.lastIndexOf("\\end{deckcanvas}", canvas.span.end);
-    const endLineStart = lineStart(source, endIndex);
-    if (isBlank(source.slice(endLineStart, endIndex))) {
-      const canvasIndent = source.slice(endLineStart, endIndex);
-      const object = buildObject(source, block, placement, `${canvasIndent}  `, eol, target.center);
-      edits.push({ start: endLineStart, end: endLineStart, text: `${object}${eol}` });
-    } else {
-      const object = buildObject(source, block, placement, "    ", eol, target.center);
-      edits.push({ start: endIndex, end: endIndex, text: `${eol}${object}${eol}  ` });
-    }
-  } else {
-    const endIndex = source.lastIndexOf("\\end{frame}", frame.span.end);
-    const endLineStart = lineStart(source, endIndex);
-    const ownsLine = isBlank(source.slice(endLineStart, endIndex));
-    const frameIndent = ownsLine ? source.slice(endLineStart, endIndex) : "";
-    const bodyIndent = `${frameIndent}  `;
-    const object = buildObject(source, block, placement, `${bodyIndent}  `, eol, target.center);
-    const text = `${bodyIndent}\\begin{deckcanvas}${eol}${object}${eol}${bodyIndent}\\end{deckcanvas}${eol}`;
-    if (ownsLine) edits.push({ start: endLineStart, end: endLineStart, text });
-    else edits.push({ start: endIndex, end: endIndex, text: `${eol}${text}` });
-  }
+  edits.push(
+    ...insertIntoCanvasEdits(
+      source,
+      frame,
+      canvas,
+      (indent) => buildObject(source, block, placement, indent, eol, target.center),
+      eol,
+    ),
+  );
 
   // 3. フレーム範囲内で後ろから適用し、フレーム全体の置換として返す(1 操作 = 1 undo)。
-  const base = frame.span.start;
-  let text = source.slice(frame.span.start, frame.span.end);
-  for (const edit of [...edits].sort((a, b) => b.start - a.start)) {
-    text = `${text.slice(0, edit.start - base)}${edit.text}${text.slice(edit.end - base)}`;
-  }
-  return { span: frame.span, text };
+  return applyFrameEdits(source, frame, edits);
 }
 
 /**

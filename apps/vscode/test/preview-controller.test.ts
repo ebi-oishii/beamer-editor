@@ -1230,3 +1230,200 @@ describe("canvas text size edits", () => {
     );
   });
 });
+
+describe("PreviewController: canvas clipboard(#148)", () => {
+  const request = (type: string, extra: Record<string, unknown> = {}) => ({
+    type,
+    frameIndex: 0,
+    elementId: "canvas-text-0",
+    version: 7,
+    ...extra,
+  });
+
+  it("deleteCanvasElement: 最新・editable な要素の options span と原文を callback へ渡す", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const deleteCanvasElement = vi.fn(async () => "applied" as const);
+    new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      deleteCanvasElement,
+    });
+    fire({ type: "ready" });
+    fire(request("deleteCanvasElement"));
+    await Promise.resolve();
+    expect(deleteCanvasElement).toHaveBeenCalledExactlyOnceWith({
+      frameIndex: 0,
+      elementId: "canvas-text-0",
+      version: 7,
+      sourceSpan: { start: 30, end: 45 },
+      document: doc,
+      expectedOptions: doc.getText().slice(30, 45),
+    });
+  });
+
+  it("deleteCanvasElement: 古い version・未知の要素では callback を呼ばず再描画を送る", async () => {
+    const { panel, fire, posted } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const deleteCanvasElement = vi.fn(async () => "applied" as const);
+    new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      deleteCanvasElement,
+    });
+    fire({ type: "ready" });
+    const before = posted.length;
+    fire(request("deleteCanvasElement", { version: 6 }));
+    fire(request("deleteCanvasElement", { elementId: "canvas-text-9" }));
+    await Promise.resolve();
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+    expect(posted.length).toBe(before + 2);
+  });
+
+  it("copyCanvasElement: コピーだけなら削除せず、cut なら写した後に同じ要素を削除する", async () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const copyCanvasElement = vi.fn(async () => true);
+    const deleteCanvasElement = vi.fn(async () => "applied" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      copyCanvasElement,
+      deleteCanvasElement,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    await controller.handleMessageForTest(request("copyCanvasElement", { cut: false }));
+    expect(copyCanvasElement).toHaveBeenCalledExactlyOnceWith({
+      frameIndex: 0,
+      elementId: "canvas-text-0",
+      version: 7,
+      sourceSpan: { start: 30, end: 45 },
+      document: doc,
+      expectedOptions: doc.getText().slice(30, 45),
+    });
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+    await controller.handleMessageForTest(request("copyCanvasElement", { cut: true }));
+    expect(copyCanvasElement).toHaveBeenCalledTimes(2);
+    expect(deleteCanvasElement).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ elementId: "canvas-text-0", sourceSpan: { start: 30, end: 45 } }),
+    );
+  });
+
+  it("copyCanvasElement: 写せなかったら onError を出し、cut でも削除しない", async () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const onError = vi.fn();
+    const deleteCanvasElement = vi.fn(async () => "applied" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      copyCanvasElement: async () => false,
+      deleteCanvasElement,
+      onError,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    await controller.handleMessageForTest(request("copyCanvasElement", { cut: true }));
+    expect(onError).toHaveBeenCalledOnce();
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("copy / paste は非同期の失敗後も到着順に直列化する", async () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const onError = vi.fn();
+    let rejectCopy: ((reason: unknown) => void) | undefined;
+    const copyCanvasElement = vi.fn(
+      () =>
+        new Promise<boolean>((_resolve, reject) => {
+          rejectCopy = reject;
+        }),
+    );
+    const pasteCanvasElements = vi.fn(async () => "cancelled" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      copyCanvasElement,
+      pasteCanvasElements,
+      onError,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+
+    const copy = controller.handleMessageForTest(request("copyCanvasElement", { cut: false }));
+    const paste = controller.handleMessageForTest({
+      type: "pasteCanvasElements",
+      frameIndex: 0,
+      version: 7,
+    });
+    await Promise.resolve();
+    expect(copyCanvasElement).toHaveBeenCalledOnce();
+    expect(pasteCanvasElements).not.toHaveBeenCalled();
+
+    rejectCopy?.(new Error("clipboard unavailable"));
+    await copy;
+    await paste;
+
+    expect(onError).toHaveBeenCalledWith("failed to copy the canvas element.");
+    expect(pasteCanvasElements).toHaveBeenCalledExactlyOnceWith({
+      frameIndex: 0,
+      version: 7,
+      frameOffset: 0,
+      document: doc,
+    });
+  });
+
+  it("pasteCanvasElements: フレームの元ソース位置を添えて callback へ渡し、要素でなければ警告する", async () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const onWarning = vi.fn();
+    const outcome: "applied" | "cancelled" = "applied";
+    const pasteCanvasElements = vi.fn(async () => outcome);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      pasteCanvasElements,
+      onWarning,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    await controller.handleMessageForTest({
+      type: "pasteCanvasElements",
+      frameIndex: 0,
+      version: 7,
+    });
+    expect(pasteCanvasElements).toHaveBeenCalledExactlyOnceWith({
+      frameIndex: 0,
+      version: 7,
+      frameOffset: 0,
+      document: doc,
+    });
+    expect(onWarning).not.toHaveBeenCalled();
+    // 適用済みの要求は文書が進むまでロックされる。文書が進んだあとは次の貼り付けが通る。
+    doc.edit("\\begin{document}\\begin{frame}{Hi}B\\end{frame}\\end{document}");
+    await controller.handleMessageForTest({
+      type: "pasteCanvasElements",
+      frameIndex: 0,
+      version: 7,
+    });
+    expect(pasteCanvasElements).toHaveBeenCalledTimes(1);
+  });
+
+  it("pasteCanvasElements: クリップボードが要素でないときは警告だけ出す", async () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const onWarning = vi.fn();
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      pasteCanvasElements: async () => "cancelled" as const,
+      onWarning,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    await controller.handleMessageForTest({
+      type: "pasteCanvasElements",
+      frameIndex: 0,
+      version: 7,
+    });
+    expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+      "クリップボードにキャンバスの要素(decktext / deckimage)がありません。",
+    );
+  });
+});

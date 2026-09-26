@@ -169,6 +169,13 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   moveRef.current = move;
   const hostRef = useRef(host);
   hostRef.current = host;
+  // 選択中のキャンバス要素(#148)。Stage から通知され、Delete / Cmd+C / Cmd+X の対象になる。
+  // 別フレームの選択解除で、後から選んだ別フレームの選択を消さない。
+  const selectionRef = useRef<{ frameIndex: number; elementId: string } | null>(null);
+  const handleSelectionChange = useCallback((frameIndex: number, elementId: string | null) => {
+    if (elementId !== null) selectionRef.current = { frameIndex, elementId };
+    else if (selectionRef.current?.frameIndex === frameIndex) selectionRef.current = null;
+  }, []);
 
   useEffect(
     () => host.onRawBlockImage?.((key, result) => rawImages.receive(key, result)),
@@ -214,6 +221,25 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
           hostRef.current.undoRedo(key === "y" || event.shiftKey ? "redo" : "undo");
           return;
         }
+        // 選択中のキャンバス要素の Cmd/Ctrl+C(コピー)/ +X(切り取り)、表示中フレームへの +V(貼り付け)。#148
+        if (!event.shiftKey) {
+          const selection = selectionRef.current;
+          if ((key === "c" || key === "x") && selection && hostRef.current.copyCanvasElement) {
+            event.preventDefault();
+            hostRef.current.copyCanvasElement(
+              selection.frameIndex,
+              selection.elementId,
+              versionRef.current,
+              key === "x",
+            );
+            return;
+          }
+          if (key === "v" && hostRef.current.pasteCanvasElements) {
+            event.preventDefault();
+            hostRef.current.pasteCanvasElements(currentRef.current, versionRef.current);
+            return;
+          }
+        }
         if (event.key === "+" || event.key === "=") {
           event.preventDefault();
           setZoom((current) => stepZoom(current, fitScaleRef.current, 1));
@@ -223,6 +249,27 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         } else if (event.key === "0") {
           event.preventDefault();
           setZoom("fit");
+        }
+        return;
+      }
+      // 選択中のキャンバス要素を Delete / Backspace で取り除く(#148)。文字入力のある部品では奪わない。
+      if ((event.key === "Delete" || event.key === "Backspace") && !event.altKey) {
+        const selection = selectionRef.current;
+        if (
+          selection &&
+          hostRef.current.deleteCanvasElement &&
+          !(
+            target instanceof HTMLInputElement ||
+            target instanceof HTMLSelectElement ||
+            target instanceof HTMLTextAreaElement
+          )
+        ) {
+          event.preventDefault();
+          hostRef.current.deleteCanvasElement(
+            selection.frameIndex,
+            selection.elementId,
+            versionRef.current,
+          );
         }
         return;
       }
@@ -279,6 +326,9 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
                 host.detachToCanvas?.(frameIndex, version, request.sourceSpan, request.rect);
               }
             : undefined
+        }
+        onSelectionChange={
+          host.deleteCanvasElement || host.copyCanvasElement ? handleSelectionChange : undefined
         }
         onFitScaleChange={handleFitScaleChange}
       />

@@ -155,3 +155,46 @@ describe("parseWebviewToExtension", () => {
     ).toBeNull();
   });
 });
+
+describe("parseWebviewToExtension: canvas clipboard(#148)", () => {
+  it("deleteCanvasElement / copyCanvasElement / pasteCanvasElements を受理する", () => {
+    const base = { frameIndex: 0, elementId: "canvas-text-0", version: 3 };
+    expect(parseWebviewToExtension({ type: "deleteCanvasElement", ...base })).toEqual({
+      type: "deleteCanvasElement",
+      ...base,
+    });
+    expect(parseWebviewToExtension({ type: "copyCanvasElement", ...base, cut: true })).toEqual({
+      type: "copyCanvasElement",
+      ...base,
+      cut: true,
+    });
+    expect(
+      parseWebviewToExtension({ type: "pasteCanvasElements", frameIndex: 2, version: 3 }),
+    ).toEqual({ type: "pasteCanvasElements", frameIndex: 2, version: 3 });
+  });
+
+  it("elementId の欠落・cut の欠落・負の frameIndex は null", () => {
+    expect(
+      parseWebviewToExtension({ type: "deleteCanvasElement", frameIndex: 0, version: 3 }),
+    ).toBeNull();
+    expect(
+      parseWebviewToExtension({
+        type: "deleteCanvasElement",
+        frameIndex: 0,
+        elementId: "",
+        version: 3,
+      }),
+    ).toBeNull();
+    expect(
+      parseWebviewToExtension({
+        type: "copyCanvasElement",
+        frameIndex: 0,
+        elementId: "x",
+        version: 3,
+      }),
+    ).toBeNull();
+    expect(
+      parseWebviewToExtension({ type: "pasteCanvasElements", frameIndex: -1, version: 3 }),
+    ).toBeNull();
+  });
+});

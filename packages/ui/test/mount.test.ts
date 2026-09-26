@@ -1934,3 +1934,121 @@ it("shows a disallowed size as unset so choosing the fallback rewrites it", () =
   });
   expect(setCanvasFontSize).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, "normal");
 });
+
+describe("canvas clipboard keys(#148)", () => {
+  /** canvas text 1 つのデッキを描き、その箱をクリックで選択した状態まで作る。 */
+  function mountSelected(host: ReturnType<typeof fakeHost>) {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const deck: RenderedDeck = {
+      title: "canvas-text",
+      css: "",
+      frames: [
+        {
+          index: 1,
+          label: "text",
+          titleText: "text",
+          html: `<div class="slide"><div class="slide-body"><div class="canvas">
+            <div class="canvas-item canvas-text" data-canvas-element-id="canvas-text-0" data-canvas-element-kind="text" style="left:10%;top:20%;width:40%">hello</div>
+          </div></div></div>`,
+          stepCount: 1,
+          isRaw: false,
+          sourceSpan: { start: 0, end: 100 },
+          canvasElements: [
+            {
+              id: "canvas-text-0",
+              kind: "text",
+              position: { x: 0.1, y: 0.2, width: 0.4 },
+              sourceSpan: { start: 10, end: 30 },
+              editable: true,
+            },
+          ],
+        },
+      ],
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(deck, 5);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    const scale = container.querySelector<HTMLElement>(".slide-scale");
+    const canvas = scale?.querySelector<HTMLElement>(".canvas");
+    const text = scale?.querySelector<HTMLElement>('[data-canvas-element-id="canvas-text-0"]');
+    if (!preview || !scale || !canvas || !text) throw new Error("canvas text fixture missing");
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue(domRect(100, 50, 400, 200));
+    vi.spyOn(text, "getBoundingClientRect").mockReturnValue(domRect(140, 90, 160, 40));
+    Object.defineProperties(text, {
+      setPointerCapture: { configurable: true, value: vi.fn() },
+      hasPointerCapture: { configurable: true, value: () => true },
+      releasePointerCapture: { configurable: true, value: vi.fn() },
+    });
+    const press = (init: KeyboardEventInit) => {
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+      act(() => {
+        preview.dispatchEvent(event);
+      });
+      return event;
+    };
+    const select = () => {
+      act(() => {
+        firePointer(text, "pointerdown", 150, 100);
+        firePointer(scale, "pointerup", 150, 100);
+      });
+      expect(text.classList.contains("canvas-selected")).toBe(true);
+    };
+    return { press, select, scale, text };
+  }
+
+  it("選択中の箱を Delete / Backspace で削除要求し、選択が無ければキーを奪わない", () => {
+    const deleteCanvasElement = vi.fn();
+    const host = { ...fakeHost(), deleteCanvasElement };
+    const { press, select } = mountSelected(host);
+    expect(press({ key: "Delete" }).defaultPrevented).toBe(false);
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+    select();
+    expect(press({ key: "Delete" }).defaultPrevented).toBe(true);
+    expect(press({ key: "Backspace" }).defaultPrevented).toBe(true);
+    expect(deleteCanvasElement.mock.calls).toEqual([
+      [0, "canvas-text-0", 5],
+      [0, "canvas-text-0", 5],
+    ]);
+  });
+
+  it("Cmd/Ctrl+C はコピー、+X は切り取り(cut)として選択中の箱を送り、+V は表示中フレームへの貼り付けを送る", () => {
+    const copyCanvasElement = vi.fn();
+    const pasteCanvasElements = vi.fn();
+    const host = { ...fakeHost(), copyCanvasElement, pasteCanvasElements };
+    const { press, select } = mountSelected(host);
+    // 選択が無いときのコピーは奪わない。貼り付けは選択に関係なく表示中フレームへ。
+    expect(press({ key: "c", metaKey: true }).defaultPrevented).toBe(false);
+    expect(press({ key: "v", ctrlKey: true }).defaultPrevented).toBe(true);
+    select();
+    expect(press({ key: "c", metaKey: true }).defaultPrevented).toBe(true);
+    expect(press({ key: "x", ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(copyCanvasElement.mock.calls).toEqual([
+      [0, "canvas-text-0", 5, false],
+      [0, "canvas-text-0", 5, true],
+    ]);
+    expect(pasteCanvasElements).toHaveBeenCalledExactlyOnceWith(0, 5);
+  });
+
+  it("背景クリックで選択を外すと Delete は奪わず、ホストが対応しなければキーも奪わない", () => {
+    const deleteCanvasElement = vi.fn();
+    const { press, select, scale } = mountSelected({ ...fakeHost(), deleteCanvasElement });
+    select();
+    act(() => {
+      firePointer(scale, "pointerdown", 5, 5);
+      firePointer(scale, "pointerup", 5, 5);
+    });
+    expect(press({ key: "Delete" }).defaultPrevented).toBe(false);
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+
+    const bare = mountSelected(fakeHost());
+    bare.select();
+    expect(bare.press({ key: "Delete" }).defaultPrevented).toBe(false);
+    expect(bare.press({ key: "c", metaKey: true }).defaultPrevented).toBe(false);
+    expect(bare.press({ key: "v", metaKey: true }).defaultPrevented).toBe(false);
+  });
+});
