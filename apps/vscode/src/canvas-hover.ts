@@ -100,8 +100,7 @@ export function canvasHoverAt(
             (token.kind === "begin" || token.kind === "end")
           ? { start: token.end - name.length - 1, end: token.end - 1 }
           : undefined;
-    if (range && offset >= range.start && offset < range.end)
-      return { documentation, range };
+    if (range && offset >= range.start && offset < range.end) return { documentation, range };
   }
   return undefined;
 }

@@ -19,6 +19,7 @@ import {
 } from "@beamer-editor/core";
 import { MAX_RAW_PDF_BYTES } from "@beamer-editor/ui";
 import * as vscode from "vscode";
+import { canvasHoverAt } from "./canvas-hover";
 import { LintController } from "./diagnostics";
 import { renderDocument } from "./document-controller";
 import {
@@ -28,7 +29,6 @@ import {
   normalizeTectonicPath,
   resolveExportDocument,
 } from "./export-controller";
-import { canvasHoverAt } from "./canvas-hover";
 import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
 import { ImagePasteEditProvider } from "./image-paste-provider";
 import {
