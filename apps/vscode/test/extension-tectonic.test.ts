@@ -35,6 +35,9 @@ vi.mock("vscode", () => {
     RelativePattern: class {},
     DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2 },
     CodeActionKind: { QuickFix: "quickfix" },
+    DocumentDropOrPasteEditKind: {
+      Empty: { append: (...parts: string[]) => ({ value: parts.join(".") }) },
+    },
     ViewColumn: { One: 1, Beside: -2 },
     window: {
       get activeTextEditor() {
@@ -72,6 +75,7 @@ vi.mock("vscode", () => {
       registerCodeActionsProvider: disposable,
       registerFoldingRangeProvider: disposable,
       registerCodeLensProvider: disposable,
+      registerDocumentPasteEditProvider: disposable,
     },
     commands: {
       executeCommand: vi.fn(),

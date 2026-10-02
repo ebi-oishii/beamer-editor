@@ -58,6 +58,19 @@ text`;
     expect(ranges(evenBackslashes)).toEqual([]);
   });
 
+  it("folds fragile frames whose verb argument contains frame delimiters", () => {
+    const source = `\\begin{frame}[fragile]{verb}
+\\verb|\\end{frame}|
+\\end{frame}
+\\begin{frame}{next}
+two
+\\end{frame}`;
+    expect(ranges(source)).toEqual([
+      { start: 0, end: 2 },
+      { start: 3, end: 5 },
+    ]);
+  });
+
   it("requires the outer frame to close even when an inner frame is balanced", () => {
     const nested = `\\begin{frame}{outer}
 \\begin{frame}{inner}

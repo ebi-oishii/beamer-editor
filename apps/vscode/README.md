@@ -52,6 +52,12 @@ LaTeX Workshop が入っている環境で managed file を初めて開くと、
 
 TikZ などサブセット外のブロックは、プレビューではまず環境名だけの箱(プレースホルダ)で場所を確保し、裏で Tectonic により standalone 文書としてコンパイルして、できた画像を箱に差し込みます。結果は内容とプリアンブル(preamble-extra とマクロ定義)のハッシュでキャッシュされるので、変えていないブロックは再コンパイルされません。キャッシュはデッキのディレクトリごとに分かれ、ブロックが参照する画像や .sty(`\graphicspath` の下も含む)が更新されると作り直します。Tectonic が見つからないときは箱をそのまま残して通知を 1 回出し、「設定を開く」から `beamerEditor.tectonicPath` を直せばプレビューを開き直さずに再試行します。失敗したブロックは赤い枠の箱として残り、ホバーで Tectonic のエラーを確認できます(生成 PDF が 8 MB を超えるものや、極端に大きなページも箱のまま失敗扱いになります)。Tectonic の場所は `beamerEditor.tectonicPath`、無効にするには `beamerEditor.preview.compileRawBlocks` を false にします。Restricted Mode では動きません。
 
+## 画像の貼り付け
+
+managed な `.tex` エディターで、クリップボードの画像(PNG / JPEG)を Cmd/Ctrl+V で貼り付けると、デッキと同じディレクトリの `assets/` に `image.png`(既にあれば `image-1.png`、…)として保存し、カーソル位置に `\includegraphics` を挿入します。カーソルが `deckcanvas` の中なら `\deckimage` になります。`decktext` などアイテムの中にカーソルがあるときは、そのアイテムの直後に入ります。保存と挿入は 1 回の undo で戻ります。
+
+フレーム本文の外(プリアンブル・フレームの間・フレームの見出し)と、解釈できないフレーム(raw frame)の `deckcanvas` の中では貼り付けず、通常のテキストの貼り付けに任せます。テキストと画像を同時にコピーしたときも、既定はテキストの貼り付けです(画像として貼るには **Paste As...** から選びます)。
+
 ## PDF 書き出し
 
 コマンドパレット、`.tex` エディター、または対応するプレビューのタイトルから **Beamer Editor: Export...** を実行すると、保存先を選んで PDF を書き出せます。コンパイルには [Tectonic](https://tectonic-typesetting.github.io/) を使います。Tectonic は拡張に同梱されているので(macOS arm64 / x86_64、Linux x64 / arm64、Windows x64)、別途インストールする必要はありません。初回のコンパイル時に TeX のパッケージを Tectonic が必要な分だけダウンロードします。対象外の環境や別の版を使いたいときは `beamerEditor.tectonicPath` で実行ファイルを指定してください(同梱の無い環境では PATH の `tectonic` を使います)。
@@ -61,3 +67,9 @@ TikZ などサブセット外のブロックは、プレビューではまず環
 Export の形式で **HTML（プレビュー相当）** を選ぶと、保存済みの内容から `index.html` を含むフォルダーを作成します。これは `file:` で直接開ける高速プレビューの固定スナップショットであり、正式な TeX 出力ではありません。PDF 画像と raw TeX はプレースホルダーのまま、外部 URL の画像は開いたブラウザーでネットワークを必要とします。HTML は外部プロセスを使わないため Restricted Mode でも利用できます。
 
 このリポジトリで LaTeX Workshop を併用する場合の、混在 workspace と専用 workspace の設定方針は[エディタセットアップ](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/editor-setup.md)を参照してください。
+
+### スライド一覧からの編集
+
+Beamer Slides の項目を右クリックすると、Move Slide Up / Down、Duplicate Slide、Delete Slide、Insert New Slide を使えます。挿入は選択スライドの直後、一覧タイトルの「+」からは末尾です。空のデッキにも挿入できます。各操作は1回のundoで戻り、プレビューとソースへ反映されます。
+
+移動時は直前の連続したコメント行と末尾の行コメントも一緒に移動します。sectionやフレーム間のその他のTeXはその位置に保持するため、section境界を越える移動では所属するsectionが変わります。複製はframe labelを未使用の `slide-N` に変更します。本文に `\label`・`\hypertarget`・`\newcounter` など文書内で一意な定義(それを生成するマクロを含む)や安全に解釈できないframeオプションがある場合は、参照先やコンパイルを壊さないため複製を拒否し、ソース上での編集を案内します。マクロが生成した仮想フレームは一覧操作の対象外です。

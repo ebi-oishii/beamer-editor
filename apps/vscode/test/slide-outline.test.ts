@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { editSlide } from "@beamer-editor/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   hasSlideOutlineContentChanges,
@@ -14,6 +15,43 @@ function document(source: string, version = 1) {
 }
 
 describe("slideOutlineEntries", () => {
+  it("lists exactly the frames that slide edits target, and delete removes one listed slide", () => {
+    const deck = (preamble: string, body: string) =>
+      `\\documentclass{beamer}\n${preamble}\n\\begin{document}\n${body}\n\\end{document}\n`;
+    const sources = [
+      deck(
+        "",
+        "\\begin{frame}[fragile]{A}\n\\verb|\\end{frame} \\begin{frame}|\n\\end{frame}\n\\begin{frame}{B}\n\\end{frame}",
+      ),
+      deck(
+        "",
+        "\\begin{frame}[fragile]{A}\n\\begin{Verbatim}\n\\end{frame}\n\\begin{frame}{X}\n\\end{Verbatim}\n\\end{frame}\n\\begin{frame}{B}\n\\end{frame}",
+      ),
+      deck(
+        "",
+        "% \\begin{frame}{Old}\n% \\end{frame}\n\\begin{frame}{A}\n\\end{frame}\n\\begin{frame}{B}\n\\end{frame}",
+      ),
+      deck(
+        "\\newcommand{\\mk}{\\begin{frame}{M}\\end{frame}}",
+        "\\newcommand{\\between}{%\n\\begin{frame}{Fake}\n\\end{frame}\n}\n\\begin{frame}{A}\n\\end{frame}\n\\begin{frame}{B}\n\\end{frame}",
+      ),
+    ];
+    for (const source of sources) {
+      const entries = slideOutlineEntries(document(source));
+      expect(entries.map((entry) => entry.title)).toEqual(["A", "B"]);
+      for (const entry of entries) {
+        const result = editSlide(source, "delete", entry.start);
+        if (!result.ok) throw new Error(result.reason);
+        let next = source;
+        for (const { span, text } of result.edits)
+          next = next.slice(0, span.start) + text + next.slice(span.end);
+        expect(slideOutlineEntries(document(next)).map((e) => e.title)).toEqual(
+          entries.filter((e) => e !== entry).map((e) => e.title),
+        );
+      }
+    }
+  });
+
   it("lists explicit source frames in source order with titles, labels, and raw context", () => {
     const source = String.raw`\newcommand{\madeframe}{\begin{frame}{virtual}\end{frame}}
 \begin{frame}[label=intro]{\textbf{Intro} $x$}
