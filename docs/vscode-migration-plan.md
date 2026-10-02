@@ -431,7 +431,7 @@ formatterやlinterへ依存するPRはbase branchを明記し、無関係な差�
 | #6 editor内でTabが効かない | VS Code標準エディタで期待どおりか確認する。Web独自実装はしない |
 | #8 円記号とbackslash | core の L021 warning と、managed local LaTeX 文書向けの限定 Quick Fix で扱う |
 | #9 編集画面幅などの調整 | エディタグループとWebviewPanelで満たせるか実機確認する |
-| #10 syntax highlight | VS Code 組み込みの LaTeX grammar で対象構文を確認済み。Phase 5では独自highlighterを作らない（[editor-setup.md](editor-setup.md)参照） |
+| #10 syntax highlight | VS Code 組み込みの LaTeX grammar を基盤とし、deck 固有の語彙だけを上乗せして色分けする（#181。[editor-setup.md](editor-setup.md)参照） |
 | #12 表のWYSIWYG編集 | Phase 7以降 |
 | #13 フォント管理 | 既存CLIとrendererを利用し、任意フォント管理GUIは作らない |
 
