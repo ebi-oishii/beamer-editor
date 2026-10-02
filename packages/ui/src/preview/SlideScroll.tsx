@@ -64,6 +64,7 @@ function SlideCard({
   onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
+  selectedElementId,
   onSelectionChange,
 }: {
   frame: RenderedFrame;
@@ -83,7 +84,8 @@ function SlideCard({
     | undefined;
   onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
   onDetachToCanvas: ((frameIndex: number, request: DetachRequest) => void) | undefined;
-  onSelectionChange: ((frameIndex: number, elementId: string | null) => void) | undefined;
+  selectedElementId: string | null;
+  onSelectionChange: (frameIndex: number, elementId: string | null) => void;
 }): JSX.Element {
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter") return;
@@ -126,9 +128,8 @@ function SlideCard({
         onDetachToCanvas={
           onDetachToCanvas ? (request) => onDetachToCanvas(index, request) : undefined
         }
-        onSelectionChange={
-          onSelectionChange ? (elementId) => onSelectionChange(index, elementId) : undefined
-        }
+        selectedElementId={selectedElementId}
+        onSelectionChange={(elementId) => onSelectionChange(index, elementId)}
       />
       <div className="slide-caption">
         {frame.index}. {frame.titleText}
@@ -153,6 +154,7 @@ export function SlideScroll({
   onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
+  selection,
   onSelectionChange,
   onFitScaleChange,
 }: {
@@ -175,8 +177,9 @@ export function SlideScroll({
   onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
   /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
   onDetachToCanvas?: ((frameIndex: number, request: DetachRequest) => void) | undefined;
-  /** 選択中のキャンバス要素が変わった通知(#148)。 */
-  onSelectionChange?: ((frameIndex: number, elementId: string | null) => void) | undefined;
+  /** 選択中のキャンバス要素(#148)。持ち主は呼び出し側で、各フレームはこの値から枠を描く。 */
+  selection: { frameIndex: number; elementId: string } | null;
+  onSelectionChange: (frameIndex: number, elementId: string | null) => void;
   onFitScaleChange: (scale: number) => void;
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -367,6 +370,7 @@ export function SlideScroll({
           onResizeCanvasElement={onResizeCanvasElement}
           onMoveCanvasElement={onMoveCanvasElement}
           onDetachToCanvas={onDetachToCanvas}
+          selectedElementId={selection?.frameIndex === i ? selection.elementId : null}
           onSelectionChange={onSelectionChange}
         />
       ))}

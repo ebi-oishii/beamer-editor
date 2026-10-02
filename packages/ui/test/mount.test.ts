@@ -2070,3 +2070,163 @@ describe("canvas clipboard keys(#148)", () => {
     expect(bare.press({ key: "v", metaKey: true }).defaultPrevented).toBe(false);
   });
 });
+
+describe("canvas selection across frames(#148)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+  });
+
+  const frameWithText = (index: number, start: number) => ({
+    index,
+    label: `f${index}`,
+    titleText: `frame ${index}`,
+    html: `<div class="slide"><div class="slide-body"><div class="canvas">
+      <div class="canvas-item canvas-text" data-canvas-element-id="canvas-text-0" data-canvas-element-kind="text" style="left:10%;top:20%;width:40%">text ${index}</div>
+    </div></div></div>`,
+    stepCount: 1,
+    isRaw: false,
+    sourceSpan: { start: start - 10, end: start + 90 },
+    canvasElements: [
+      {
+        id: "canvas-text-0",
+        kind: "text" as const,
+        position: { x: 0.1, y: 0.2, width: 0.4 },
+        sourceSpan: { start, end: start + 20 },
+        editable: true,
+      },
+    ],
+  });
+  const TWO_FRAMES: RenderedDeck = {
+    title: "two",
+    css: "",
+    frames: [frameWithText(1, 10), frameWithText(2, 110)],
+  };
+
+  /** 2 フレームのスクロール表示を描き、各フレームの箱・背景を押す操作を返す。 */
+  function mountTwoFrames(host: ReturnType<typeof fakeHost>) {
+    const container = document.createElement("div");
+    document.body.append(container);
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(TWO_FRAMES, 5);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    const scales = [...container.querySelectorAll<HTMLElement>(".slide-scale")];
+    if (!preview || scales.length !== 2) throw new Error("two-frame fixture missing");
+    const textOf = (i: number) => {
+      const text = scales[i]?.querySelector<HTMLElement>(
+        '[data-canvas-element-id="canvas-text-0"]',
+      );
+      if (!text) throw new Error("text missing");
+      return text;
+    };
+    const prepare = () => {
+      scales.forEach((scale, i) => {
+        const canvas = scale.querySelector<HTMLElement>(".canvas");
+        const text = textOf(i);
+        if (!canvas) throw new Error("canvas missing");
+        vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue(domRect(100, 50, 400, 200));
+        vi.spyOn(text, "getBoundingClientRect").mockReturnValue(domRect(140, 90, 160, 40));
+        Object.defineProperties(text, {
+          setPointerCapture: { configurable: true, value: vi.fn() },
+          hasPointerCapture: { configurable: true, value: () => true },
+          releasePointerCapture: { configurable: true, value: vi.fn() },
+        });
+      });
+    };
+    prepare();
+    const clickText = (i: number) => {
+      firePointer(textOf(i), "pointerdown", 150, 100);
+      firePointer(scales[i] as HTMLElement, "pointerup", 150, 100);
+    };
+    const clickBackground = (i: number) => {
+      firePointer(scales[i] as HTMLElement, "pointerdown", 5, 5);
+      firePointer(scales[i] as HTMLElement, "pointerup", 5, 5);
+    };
+    const press = (init: KeyboardEventInit) => {
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+      act(() => {
+        preview.dispatchEvent(event);
+      });
+      return event;
+    };
+    const outlined = () => [0, 1].filter((i) => textOf(i).classList.contains("canvas-selected"));
+    return { preview, clickText, clickBackground, press, outlined, prepare };
+  }
+
+  it("別フレームを選んでから戻ると、最後に押した要素が Delete の対象になる", () => {
+    const deleteCanvasElement = vi.fn();
+    const ui = mountTwoFrames({ ...fakeHost(), deleteCanvasElement });
+    ui.clickText(0);
+    ui.clickText(1);
+    ui.clickText(0);
+    expect(ui.outlined()).toEqual([0]);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(true);
+    expect(deleteCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-text-0", 5);
+  });
+
+  it("別フレームの背景を押すと選択が外れ、元の要素を押し直せば再び選択される", () => {
+    const deleteCanvasElement = vi.fn();
+    const ui = mountTwoFrames({ ...fakeHost(), deleteCanvasElement });
+    ui.clickText(0);
+    ui.clickBackground(1);
+    expect(ui.outlined()).toEqual([]);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(false);
+    ui.clickText(0);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(true);
+    expect(deleteCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-text-0", 5);
+  });
+
+  it("矢印キーで表示中のフレームを移ると、前のフレームの選択は外れる", () => {
+    const deleteCanvasElement = vi.fn();
+    const ui = mountTwoFrames({ ...fakeHost(), deleteCanvasElement });
+    ui.clickText(0);
+    ui.press({ key: "ArrowRight" });
+    expect(ui.outlined()).toEqual([]);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(false);
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("新しい deck が届いた時点で選択が外れ、枠も残らない", () => {
+    const deleteCanvasElement = vi.fn();
+    const host = { ...fakeHost(), deleteCanvasElement };
+    const ui = mountTwoFrames(host);
+    ui.clickText(0);
+    // 描画を待たずに Delete が届いても、古い番号で別の要素を消さない。
+    host.push(TWO_FRAMES, 6);
+    const early = new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true });
+    ui.preview.dispatchEvent(early);
+    expect(early.defaultPrevented).toBe(false);
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+    act(() => {
+      host.push(TWO_FRAMES, 7);
+    });
+    expect(ui.outlined()).toEqual([]);
+    // 同じ HTML の deck を再送しても、選択と一緒に枠が外れる。
+    ui.clickText(0);
+    expect(ui.outlined()).toEqual([0]);
+    act(() => {
+      host.push(TWO_FRAMES, 8);
+    });
+    expect(ui.outlined()).toEqual([]);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(false);
+  });
+
+  it("文字選択が残っていても、箱を押せば Cmd/Ctrl+C は箱のコピーになる", () => {
+    const copyCanvasElement = vi.fn();
+    const ui = mountTwoFrames({ ...fakeHost(), copyCanvasElement });
+    const caption = ui.preview.querySelector(".slide-caption");
+    const textNode = caption?.firstChild;
+    if (!textNode) throw new Error("caption missing");
+    const range = document.createRange();
+    range.selectNodeContents(textNode);
+    document.getSelection()?.addRange(range);
+    expect(document.getSelection()?.isCollapsed).toBe(false);
+    ui.clickText(0);
+    expect(ui.press({ key: "c", metaKey: true }).defaultPrevented).toBe(true);
+    expect(copyCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-text-0", 5, false);
+  });
+});

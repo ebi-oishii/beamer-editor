@@ -84,6 +84,7 @@ export function Stage({
   onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
+  selectedElementId,
   onSelectionChange,
 }: {
   frame: RenderedFrame;
@@ -96,26 +97,29 @@ export function Stage({
   onMoveCanvasElement: (elementId: string, x: number, y: number) => void;
   /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
   onDetachToCanvas?: ((request: DetachRequest) => void) | undefined;
-  /** 選択中のキャンバス要素が変わった通知(null は選択解除)。Delete / コピーの対象を親が知るために使う。 */
-  onSelectionChange?: ((elementId: string | null) => void) | undefined;
+  /** このフレームで選択中のキャンバス要素。選択の持ち主は親で、Stage はこの値から枠を描く。 */
+  selectedElementId: string | null;
+  /** 選択の要求(null は選択解除)。押された要素か、要素の無い所を押したことを親へ伝える。 */
+  onSelectionChange: (elementId: string | null) => void;
 }): JSX.Element {
   const scaleRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState>();
-  const [selected, setSelected] = useState<string | null>(null);
+  const selected = selectedElementId;
   const onSelectionChangeRef = useRef(onSelectionChange);
   onSelectionChangeRef.current = onSelectionChange;
-  const selectedRef = useRef<string | null>(null);
-  selectedRef.current = selected;
+  // 選択枠は親から渡された選択だけで描く。frame の HTML を差し替えた直後にも付け直す。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: frame の html 差し替えで DOM が作り直されるので frame を依存に含める
   useEffect(() => {
-    onSelectionChangeRef.current?.(selected);
-  }, [selected]);
-  // フレームごと消えたときも、親に残った選択を外す(自分が選んでいたときだけ)。
-  useEffect(
-    () => () => {
-      if (selectedRef.current) onSelectionChangeRef.current?.(null);
-    },
-    [],
-  );
+    const root = scaleRef.current;
+    if (!root) return;
+    for (const element of root.querySelectorAll<HTMLElement>(".canvas-selected")) {
+      if (element.dataset.canvasElementId !== selected) element.classList.remove("canvas-selected");
+    }
+    if (selected)
+      root
+        .querySelector(`[data-canvas-element-id="${selected}"]`)
+        ?.classList.add("canvas-selected");
+  }, [frame, selected]);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const highlightRef = useRef<HTMLElement | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -265,10 +269,8 @@ export function Stage({
     const drag = dragRef.current;
     if (drag) {
       cancelDrag(drag);
-      drag.element.classList.remove("canvas-selected");
       dragRef.current = undefined;
     }
-    setSelected(null);
     closeMenu();
   }, [frame, version]);
   useEffect(() => {
@@ -299,16 +301,7 @@ export function Stage({
   const onPointerDown = (event: PointerEvent) => {
     const clearSelection = () => {
       if (dragRef.current) return;
-      if (!selected) {
-        // 自分は選んでいないが、このフレームが操作された。別フレームに残った選択を外させる
-        // (そのままだと画面外の要素が Delete / Cmd+X の対象になる)。
-        onSelectionChangeRef.current?.(null);
-        return;
-      }
-      scaleRef.current
-        ?.querySelector(`[data-canvas-element-id="${selected}"]`)
-        ?.classList.remove("canvas-selected");
-      setSelected(null);
+      onSelectionChangeRef.current(null);
     };
     const handleId = (event.target as HTMLElement).closest<HTMLElement>("[data-resize-element-id]")
       ?.dataset.resizeElementId;
@@ -346,11 +339,6 @@ export function Stage({
       return;
     }
     if (handleId && !onResizeCanvasElement) return;
-    if (selected) {
-      scaleRef.current
-        ?.querySelector(`[data-canvas-element-id="${selected}"]`)
-        ?.classList.remove("canvas-selected");
-    }
     const bounds = element.getBoundingClientRect();
     dragRef.current = {
       resize: Boolean(handleId),
@@ -367,8 +355,10 @@ export function Stage({
       pointerType: event.pointerType,
     };
     element.setPointerCapture(event.pointerId);
-    element.classList.add("canvas-selected", "canvas-dragging");
-    setSelected(id);
+    element.classList.add("canvas-dragging");
+    // 箱は文字選択を解除しない作りなので、ここで外す。残すと Cmd+C が文字コピーに譲ってしまう。
+    element.ownerDocument.getSelection()?.removeAllRanges();
+    onSelectionChangeRef.current(id);
     event.preventDefault();
   };
   const resizeWidth = (drag: DragState, event: PointerEvent): number | null => {

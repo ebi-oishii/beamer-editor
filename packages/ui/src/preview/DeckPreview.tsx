@@ -60,16 +60,43 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     host.saveNavState?.({ current: state.current, step: state.step, zoom: persistedZoom });
   }, [host, state.current, state.step, persistedZoom]);
 
+  // 選択中のキャンバス要素(#148)。持ち主はここだけで、各フレームはこの値から枠を描く。
+  // Delete / Cmd+C / Cmd+X の対象。キー操作から同期的に読めるよう ref にも写す。
+  const [selection, setSelection] = useState<{ frameIndex: number; elementId: string } | null>(
+    null,
+  );
+  const selectionRef = useRef(selection);
+  const select = useCallback((next: { frameIndex: number; elementId: string } | null) => {
+    selectionRef.current = next;
+    setSelection(next);
+  }, []);
+  const handleSelectionChange = useCallback(
+    (frameIndex: number, elementId: string | null) => {
+      select(elementId === null ? null : { frameIndex, elementId });
+    },
+    [select],
+  );
+  // 矢印キー・スクロール・見出しのクリックで表示中のフレームが移ったら、前のフレームの選択を外す
+  // (画面外の要素を Delete / Cmd+X の対象に残さない)。別フレームの箱を押したときは、
+  // 選択が先にそのフレームへ移ってから表示中のフレームが追いつくので外れない。
+  useEffect(() => {
+    const current = selectionRef.current;
+    if (current && current.frameIndex !== state.current) select(null);
+  }, [state.current, select]);
+
   // ホストからの deck 更新を購読する。version は同期的に読めるよう ref にも写す。
+  // 新しい deck では要素の番号が振り直されるので、同じ同期処理の中で選択も外す
+  // (外れる前に Delete が届くと、古い番号が別の要素に当たる)。
   const versionRef = useRef(Number.NEGATIVE_INFINITY);
   useEffect(
     () =>
       host.subscribe((next, nextVersion) => {
+        select(null);
         versionRef.current = nextVersion;
         setDeck(next);
         setVersion(nextVersion);
       }),
-    [host],
+    [host, select],
   );
 
   // ソース側(CodeLens・コマンド・カーソル追従)からの表示要求。表示中の版と違えば無視する
@@ -169,13 +196,6 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   moveRef.current = move;
   const hostRef = useRef(host);
   hostRef.current = host;
-  // 選択中のキャンバス要素(#148)。Stage から通知され、Delete / Cmd+C / Cmd+X の対象になる。
-  // null は「そのフレームが操作されて選択が無くなった」という意味なので、どのフレームから
-  // 来ても捨てる。Stage は自分が選んでいたときだけアンマウント時に null を送る。
-  const selectionRef = useRef<{ frameIndex: number; elementId: string } | null>(null);
-  const handleSelectionChange = useCallback((frameIndex: number, elementId: string | null) => {
-    selectionRef.current = elementId === null ? null : { frameIndex, elementId };
-  }, []);
 
   useEffect(
     () => host.onRawBlockImage?.((key, result) => rawImages.receive(key, result)),
@@ -335,9 +355,8 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
               }
             : undefined
         }
-        onSelectionChange={
-          host.deleteCanvasElement || host.copyCanvasElement ? handleSelectionChange : undefined
-        }
+        selection={selection}
+        onSelectionChange={handleSelectionChange}
         onFitScaleChange={handleFitScaleChange}
       />
       <div className="preview-status" aria-live="polite" aria-atomic="true">
