@@ -143,7 +143,8 @@ it("keeps canvas warnings from counting as done, since lint exits with only a wa
       "\\documentclass[aspectratio=43]{beamer}",
       "%% deck-source-version: 1",
       "\\begin{document}",
-      "\\begin{frame}{Title}",
+      // 明示改行のタイトルで L019 も出す。
+      "\\begin{frame}{Title \\\\ two}",
       "\\begin{deckcanvas}",
       "\\begin{decktext}[x=0.800,y=0.100,w=0.400]",
       "\\begin{block}{B}x\\end{block}",
@@ -154,7 +155,7 @@ it("keeps canvas warnings from counting as done, since lint exits with only a wa
       "",
     ].join("\n"),
   );
-  for (const code of ["L011", "L012", "L014", "L018"])
+  for (const code of ["L011", "L012", "L014", "L018", "L019"])
     expect(severities.find((d) => d.code === code)?.severity).toBe("warning");
 });
 
