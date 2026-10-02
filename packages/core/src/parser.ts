@@ -193,6 +193,12 @@ function lineBreakEnd(src: string, pos: number, limit: number): number {
   return spacing ? i + spacing[0].length : i;
 }
 
+/** from 以降で最初の空行(段落の区切り)の手前の改行の位置。無ければ limit。CRLF も扱う。 */
+function blankLineAt(src: string, from: number, limit: number): number {
+  const match = /\r?\n[ \t]*\r?\n/.exec(src.slice(from, limit));
+  return match ? from + match.index : limit;
+}
+
 function parseOverlayAt(src: string, pos: number): { overlay: OverlaySpec | null; next: number } {
   if (src[pos] !== "<") return { overlay: null, next: pos };
   const close = src.indexOf(">", pos);
@@ -587,8 +593,8 @@ class Parser {
       }
       if (this.src.startsWith("\\[", pos)) {
         flushPara(pos);
-        const close = this.src.indexOf("\\]", pos + 2);
-        if (close === -1 || close > end) {
+        const close = this.displayMathClose(pos + 2, end);
+        if (close === null) {
           // 閉じが見つからない数式は、段落の区切り(空行か次の環境)までを生ブロックにし、
           // 後続のブロックを飲み込まない(#154)。
           const stop = this.paragraphBoundary(pos + 2, end);
@@ -646,28 +652,27 @@ class Parser {
   }
 
   /**
+   * `\[` の閉じ `\]` の位置。TeX と同じく空行(段落の区切り)を越えては探さない。
+   * コメント・`\verb` の中の `\]` は tex-scan と同じ規則で数えない(#154)。
+   */
+  private displayMathClose(from: number, limit: number): number | null {
+    for (const token of texTokens(this.src, from, blankLineAt(this.src, from, limit))) {
+      if (token.kind === "command" && token.name === "]") return token.start;
+    }
+    return null;
+  }
+
+  /**
    * from 以降で段落が切れる位置: 空行の直前、または次の `\begin{` の直前(末尾の空白を除く)。
-   * 無ければ limit。コメント行の中は見ない。
+   * 無ければ limit。コメント・`\verb` の中の `\begin{` は tex-scan と同じ規則で数えない。
    */
   private paragraphBoundary(from: number, limit: number): number {
-    let stop = limit;
-    let i = from;
-    while (i < limit) {
-      const ch = this.src[i] as string;
-      if (ch === "%") {
-        const eol = this.src.indexOf("\n", i);
-        i = eol === -1 || eol > limit ? limit : eol;
-        continue;
-      }
-      if (ch === "\n" && /^[ \t]*\n/.test(this.src.slice(i + 1, limit))) {
-        stop = i;
+    let stop = blankLineAt(this.src, from, limit);
+    for (const token of texTokens(this.src, from, stop)) {
+      if (token.kind === "begin" || token.kind === "verbatim" || token.kind === "unterminated") {
+        stop = token.start;
         break;
       }
-      if (this.src.startsWith("\\begin{", i)) {
-        stop = i;
-        break;
-      }
-      i++;
     }
     while (stop > from && /\s/.test(this.src[stop - 1] as string)) stop--;
     return stop;
