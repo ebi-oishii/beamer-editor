@@ -360,6 +360,9 @@ export function Stage({
     element.ownerDocument.getSelection()?.removeAllRanges();
     onSelectionChangeRef.current(id);
     event.preventDefault();
+    // 既定動作を止めるとフォーカスも移らず、続く Delete / Cmd+X がソースエディタ側に届いて
+    // ソースを書き換えてしまう。箱を含むスライドへ明示的にフォーカスを移す。
+    element.closest<HTMLElement>("[tabindex]")?.focus({ preventScroll: true });
   };
   const resizeWidth = (drag: DragState, event: PointerEvent): number | null => {
     const canvas = drag.element.closest<HTMLElement>(".canvas");

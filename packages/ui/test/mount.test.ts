@@ -2229,4 +2229,70 @@ describe("canvas selection across frames(#148)", () => {
     expect(ui.press({ key: "c", metaKey: true }).defaultPrevented).toBe(true);
     expect(copyCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-text-0", 5, false);
   });
+
+  it("箱を押すと、キー入力の宛先がプレビューへ移る", () => {
+    const outside = document.createElement("textarea");
+    document.body.append(outside);
+    const ui = mountTwoFrames(fakeHost());
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+    ui.clickText(0);
+    // ここが外のままだと、続く Delete / Cmd+X がソースエディタ側を書き換える。
+    expect(ui.preview.contains(document.activeElement)).toBe(true);
+  });
+
+  it("別フレームの見出しを押すと、前のフレームの選択は外れる", () => {
+    const deleteCanvasElement = vi.fn();
+    const ui = mountTwoFrames({ ...fakeHost(), deleteCanvasElement });
+    ui.clickText(0);
+    const caption = ui.preview.querySelectorAll<HTMLElement>(".slide-caption")[1];
+    if (!caption) throw new Error("caption missing");
+    act(() => {
+      caption.click();
+    });
+    expect(ui.outlined()).toEqual([]);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(false);
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("スクロールで上端のフレームが変わっても、見えている箱の選択は残る", () => {
+    const deleteCanvasElement = vi.fn();
+    const ui = mountTwoFrames({ ...fakeHost(), deleteCanvasElement });
+    const scroll = ui.preview.querySelector<HTMLElement>(".slide-scroll");
+    const cards = ui.preview.querySelectorAll<HTMLElement>(".slide-card");
+    if (!scroll || cards.length !== 2) throw new Error("scroll fixture missing");
+    let scrollTop = 0;
+    Object.defineProperties(scroll, {
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value;
+        },
+      },
+      clientWidth: { configurable: true, value: 600 },
+      clientHeight: { configurable: true, value: 600 },
+    });
+    cards.forEach((card, i) => {
+      Object.defineProperties(card, {
+        offsetTop: { configurable: true, value: 12 + i * 400 },
+        offsetHeight: { configurable: true, value: 400 },
+      });
+    });
+    // 上端にフレーム 1 があるまま、下に見えているフレーム 2 の箱を押す(click で表示中も 2 へ)。
+    ui.clickText(1);
+    act(() => {
+      cards[1]?.querySelector<HTMLElement>('[data-canvas-element-id="canvas-text-0"]')?.click();
+    });
+    expect(cards[1]?.classList.contains("active")).toBe(true);
+    // 少しスクロールすると、上端のフレーム 1 が表示中に戻る。
+    scrollTop = 30;
+    act(() => {
+      scroll.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    expect(cards[0]?.classList.contains("active")).toBe(true);
+    expect(ui.outlined()).toEqual([1]);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(true);
+    expect(deleteCanvasElement).toHaveBeenCalledExactlyOnceWith(1, "canvas-text-0", 5);
+  });
 });

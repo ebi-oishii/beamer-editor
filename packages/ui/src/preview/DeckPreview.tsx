@@ -76,13 +76,16 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     },
     [select],
   );
-  // 矢印キー・スクロール・見出しのクリックで表示中のフレームが移ったら、前のフレームの選択を外す
-  // (画面外の要素を Delete / Cmd+X の対象に残さない)。別フレームの箱を押したときは、
-  // 選択が先にそのフレームへ移ってから表示中のフレームが追いつくので外れない。
-  useEffect(() => {
-    const current = selectionRef.current;
-    if (current && current.frameIndex !== state.current) select(null);
-  }, [state.current, select]);
+  // 矢印キーや見出しのクリックで別のフレームへ移ったら、前のフレームの選択を外す
+  // (画面外の要素を Delete / Cmd+X の対象に残さない)。スクロールで上端のフレームが
+  // 変わるだけでは外さない。選んだ箱が見えたまま選び直しになってしまうため。
+  const leaveSelectionFor = useCallback(
+    (frameIndex: number) => {
+      const current = selectionRef.current;
+      if (current && current.frameIndex !== frameIndex) select(null);
+    },
+    [select],
+  );
 
   // ホストからの deck 更新を購読する。version は同期的に読めるよう ref にも写す。
   // 新しい deck では要素の番号が振り直されるので、同じ同期処理の中で選択も外す
@@ -190,7 +193,10 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const move = (action: PreviewAction) => {
     const next = previewReducer(state, action, deck.frames.length);
     dispatch(action);
-    if (next.current !== state.current) requestReveal(next.current);
+    if (next.current !== state.current) {
+      leaveSelectionFor(next.current);
+      requestReveal(next.current);
+    }
   };
   const moveRef = useRef(move);
   moveRef.current = move;
@@ -330,7 +336,11 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         zoom={zoom}
         version={version}
         reveal={reveal}
-        onSelect={(i) => dispatch({ type: "goto", index: i })}
+        onSelect={(i) => {
+          // 別フレームの箱を押したときは、選択が先にそのフレームへ移っているので外れない。
+          leaveSelectionFor(i);
+          dispatch({ type: "goto", index: i });
+        }}
         onJump={(i) => host.jumpToSource(i, version)}
         onScrollActive={(i) => dispatch({ type: "goto", index: i })}
         onSetCanvasFontSize={
