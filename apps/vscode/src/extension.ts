@@ -51,6 +51,7 @@ import {
 import { frameLensPositions, sourceHasFrameAt } from "./reveal-slide";
 import { resolveSlideCommandTarget, SlideEditController } from "./slide-edit-controller";
 import {
+  explicitFrameStarts,
   hasSlideOutlineContentChanges,
   managedOutlineDocument,
   type SlideOutlineEntry,
@@ -936,14 +937,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           if (!target || target.version !== request.version) return { applied: false };
           return slideEdits.executeAt(request.action, target, request.version, request.frameOffset);
         },
+        // スライド一覧が別の文書を表示していても、プレビュー自身の文書で判定する。
         isSlideEditable: (target, version, start) =>
-          target.version === version &&
-          slideOutlineState
-            .getEntries()
-            .some(
-              (entry) =>
-                entry.document === target && entry.version === version && entry.start === start,
-            ),
+          target.version === version && explicitFrameStarts(target).has(start),
       },
     );
     const refreshTemplates = () => {

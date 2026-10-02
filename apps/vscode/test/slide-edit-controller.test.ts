@@ -86,6 +86,55 @@ it("accepts preview moves only for the current explicit outline entry", async ()
     (await moving.executeAt("moveUp", twoSlides, twoSlides.version + 1, target.start)).applied,
   ).toBe(false);
 });
+it("moves the preview's document even when the slide list shows another document", async () => {
+  const deck = {
+    version: 3,
+    uri: { toString: () => "file:///deck.slide.tex" },
+    getText: () =>
+      "\\begin{document}\n\\begin{frame}{A}a\\end{frame}\n\\begin{frame}{B}b\\end{frame}\n\\end{document}",
+  };
+  const other = { ...deck, uri: { toString: () => "file:///theme.slide.tex" } };
+  const state = new SlideOutlineState<typeof deck>();
+  state.setDocument(other);
+  const host = {
+    isEditable: () => true,
+    apply: vi.fn(async () => true),
+    changed: vi.fn(),
+    warn: vi.fn(),
+  };
+  const controller = new SlideEditController(state, host);
+  const start = deck.getText().indexOf("\\begin{frame}{A}");
+  const result = await controller.executeAt("moveDown", deck, deck.version, start);
+  // A と B は同じ長さなので、入れ替え後の A の位置は元の B の位置になる。
+  expect(result).toEqual({
+    applied: true,
+    newFrameStart: deck.getText().indexOf("\\begin{frame}{B}"),
+  });
+  expect(host.apply).toHaveBeenCalledTimes(1);
+  expect(host.warn).not.toHaveBeenCalled();
+});
+it("does not apply a swap of identical frames, whose text and version would not change", async () => {
+  const frame = "\\begin{frame}{Outline}\\tableofcontents\\end{frame}";
+  const deck = {
+    version: 1,
+    uri: { toString: () => "file:///deck.slide.tex" },
+    getText: () => `\\begin{document}\n${frame}\n${frame}\n\\end{document}`,
+  };
+  const state = new SlideOutlineState<typeof deck>();
+  state.setDocument(deck);
+  const host = {
+    isEditable: () => true,
+    apply: vi.fn(async () => true),
+    changed: vi.fn(),
+    warn: vi.fn(),
+  };
+  const controller = new SlideEditController(state, host);
+  const start = deck.getText().indexOf(frame);
+  expect(await controller.executeAt("moveDown", deck, deck.version, start)).toEqual({
+    applied: false,
+  });
+  expect(host.apply).not.toHaveBeenCalled();
+});
 it("palette commands pick a slide; palette insert inserts after the chosen slide", async () => {
   const { entry, state } = setup();
   const entries = state.getEntries();
