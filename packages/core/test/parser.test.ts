@@ -433,6 +433,18 @@ describe("parseDeck: 閉じのない \\[ と改行 \\\\(#154)", () => {
     ]);
   });
 
+  it("閉じのない \\[ の後ろに空行なしで別の \\[ … \\] があっても、間のリストが残る", () => {
+    const body = frameBody(
+      deck("\\[\n\\begin{itemize}\n\\item a\n\\end{itemize}\nSee below:\n\\[ E = mc^2 \\]"),
+    );
+    expect(body.map((block) => block.type)).toEqual([
+      "rawBlock",
+      "list",
+      "paragraph",
+      "displayMath",
+    ]);
+  });
+
   it("コメントの中の \\] は閉じとして数えない", () => {
     const source = deck("\\[ x = 1\n% TODO close with \\]\n\nnext paragraph");
     expect(frameBody(source).map((block) => block.type)).toEqual(["rawBlock", "paragraph"]);

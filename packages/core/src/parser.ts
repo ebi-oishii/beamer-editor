@@ -652,12 +652,14 @@ class Parser {
   }
 
   /**
-   * `\[` の閉じ `\]` の位置。TeX と同じく空行(段落の区切り)を越えては探さない。
+   * `\[` の閉じ `\]` の位置。TeX と同じく空行(段落の区切り)と次の `\[` を越えては探さない。
    * コメント・`\verb` の中の `\]` は tex-scan と同じ規則で数えない(#154)。
    */
   private displayMathClose(from: number, limit: number): number | null {
     for (const token of texTokens(this.src, from, blankLineAt(this.src, from, limit))) {
-      if (token.kind === "command" && token.name === "]") return token.start;
+      if (token.kind !== "command") continue;
+      if (token.name === "]") return token.start;
+      if (token.name === "[") return null;
     }
     return null;
   }
