@@ -9,6 +9,7 @@ import {
 } from "@beamer-editor/compiler";
 import {
   canvasFontSizeReplacement,
+  canvasObjectSource,
   canvasPositionReplacement,
   canvasWidthReplacement,
   detachBlockToCanvas,
@@ -16,9 +17,12 @@ import {
   type LintDiagnostic,
   type LintSeverity,
   parseDeck,
+  pasteCanvasObjects,
+  removeCanvasObject,
 } from "@beamer-editor/core";
 import { MAX_RAW_PDF_BYTES } from "@beamer-editor/ui";
 import * as vscode from "vscode";
+import { canvasHoverAt } from "./canvas-hover";
 import { LintController } from "./diagnostics";
 import { renderDocument } from "./document-controller";
 import {
@@ -507,6 +511,24 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   );
 
   context.subscriptions.push(
+    vscode.languages.registerHoverProvider(
+      { scheme: "file", language: "latex" },
+      {
+        provideHover(document, position, _token) {
+          if (!isManaged(document)) return undefined;
+          const hover = canvasHoverAt(document, position);
+          if (!hover) return undefined;
+          const markdown = new vscode.MarkdownString(hover.documentation.markdown);
+          return new vscode.Hover(
+            markdown,
+            new vscode.Range(
+              document.positionAt(hover.range.start),
+              document.positionAt(hover.range.end),
+            ),
+          );
+        },
+      },
+    ),
     vscode.languages.registerFoldingRangeProvider(
       { scheme: "file", language: "latex" },
       {
@@ -940,6 +962,41 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         // スライド一覧が別の文書を表示していても、プレビュー自身の文書で判定する。
         isSlideEditable: (target, version, start) =>
           target.version === version && explicitFrameStarts(target).has(start),
+        // プレビューからの削除・コピー・貼り付け(#148)。対象は要求時の version の文書だけ。
+        deleteCanvasElement: async (request) => {
+          const target = liveDocument(request.document, request.version);
+          if (!target) return "cancelled";
+          const text = target.getText();
+          if (
+            text.slice(request.sourceSpan.start, request.sourceSpan.end) !== request.expectedOptions
+          )
+            return "cancelled";
+          const result = removeCanvasObject(text, request.sourceSpan);
+          if (result === null) return "cancelled";
+          return (await applyReplacement(target, result)) ? "applied" : "failed";
+        },
+        copyCanvasElement: async (request) => {
+          const target = liveDocument(request.document, request.version);
+          if (!target) return false;
+          const text = target.getText();
+          if (
+            text.slice(request.sourceSpan.start, request.sourceSpan.end) !== request.expectedOptions
+          )
+            return false;
+          const source = canvasObjectSource(text, request.sourceSpan);
+          if (source === null) return false;
+          await vscode.env.clipboard.writeText(source);
+          return true;
+        },
+        pasteCanvasElements: async (request) => {
+          const clipboard = await vscode.env.clipboard.readText();
+          // クリップボードを読む間に文書が進んでいたら書かない。
+          const target = liveDocument(request.document, request.version);
+          if (!target) return "cancelled";
+          const result = pasteCanvasObjects(target.getText(), request.frameOffset, clipboard);
+          if (result === null) return "notCanvas";
+          return (await applyReplacement(target, result)) ? "applied" : "failed";
+        },
       },
     );
     const refreshTemplates = () => {
@@ -1150,6 +1207,34 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       slideOutlineState.getEntries().map((entry) => new SlideOutlineItem(entry)),
     _imagePasteProviderForTest: () => imagePaste,
   };
+}
+
+/** プレビューが編集要求の基にした文書が、今も同じ version で開かれていればそれを返す。 */
+function liveDocument(
+  document: { uri: { toString(): string } },
+  version: number,
+): vscode.TextDocument | undefined {
+  const target = vscode.workspace.textDocuments.find((candidate) => candidate === document);
+  return target && target.uri.toString() === document.uri.toString() && target.version === version
+    ? target
+    : undefined;
+}
+
+/** span をテキストで置き換える 1 つの WorkspaceEdit を適用する(1 操作 = 1 undo)。 */
+async function applyReplacement(
+  target: vscode.TextDocument,
+  replacement: { span: { start: number; end: number }; text: string },
+): Promise<boolean> {
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(
+    target.uri,
+    new vscode.Range(
+      target.positionAt(replacement.span.start),
+      target.positionAt(replacement.span.end),
+    ),
+    replacement.text,
+  );
+  return vscode.workspace.applyEdit(edit);
 }
 
 export function deactivate(): void {

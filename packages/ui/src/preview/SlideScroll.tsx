@@ -74,6 +74,8 @@ function SlideCard({
   onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
+  selectedElementId,
+  onSelectionChange,
 }: {
   frame: RenderedFrame;
   index: number;
@@ -94,6 +96,8 @@ function SlideCard({
     | undefined;
   onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
   onDetachToCanvas: ((frameIndex: number, request: DetachRequest) => void) | undefined;
+  selectedElementId: string | null;
+  onSelectionChange: (frameIndex: number, elementId: string | null) => void;
 }): JSX.Element {
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (
@@ -147,6 +151,8 @@ function SlideCard({
           onDetachToCanvas={
             onDetachToCanvas ? (request) => onDetachToCanvas(index, request) : undefined
           }
+          selectedElementId={selectedElementId}
+          onSelectionChange={(elementId) => onSelectionChange(index, elementId)}
         />
       </div>
       {/* biome-ignore lint/a11y/noStaticElementInteractions: keyboard access is provided by the focused slide card via Shift+F10/ContextMenu. */}
@@ -184,6 +190,8 @@ export function SlideScroll({
   onResizeCanvasElement,
   onMoveCanvasElement,
   onDetachToCanvas,
+  selection,
+  onSelectionChange,
   onFitScaleChange,
 }: {
   frames: RenderedFrame[];
@@ -210,6 +218,9 @@ export function SlideScroll({
   onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
   /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
   onDetachToCanvas?: ((frameIndex: number, request: DetachRequest) => void) | undefined;
+  /** 選択中のキャンバス要素(#148)。持ち主は呼び出し側で、各フレームはこの値から枠を描く。 */
+  selection: { frameIndex: number; elementId: string } | null;
+  onSelectionChange: (frameIndex: number, elementId: string | null) => void;
   onFitScaleChange: (scale: number) => void;
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -473,6 +484,8 @@ export function SlideScroll({
           onResizeCanvasElement={onResizeCanvasElement}
           onMoveCanvasElement={onMoveCanvasElement}
           onDetachToCanvas={onDetachToCanvas}
+          selectedElementId={selection?.frameIndex === i ? selection.elementId : null}
+          onSelectionChange={onSelectionChange}
         />
       ))}
       {orderMenu ? (

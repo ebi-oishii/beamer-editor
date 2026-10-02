@@ -54,6 +54,8 @@ export function canvasPositionReplacement(options: string, x: number, y: number)
         ),
       ),
     ];
+    // 省略されたキーは追加する(貼り付けた原文に x / y が無くても位置をずらせる)。
+    if (matches.length === 0) return appendCanvasOption(text, `${key}=${next}`);
     if (matches.length !== 1) return null;
     const match = matches[0] as RegExpMatchArray;
     const prefix = match[1];
@@ -71,7 +73,7 @@ export function canvasPositionReplacement(options: string, x: number, y: number)
     return `${text.slice(0, at)}${next}${text.slice(at + previous.length)}`;
   };
   const withX = replace("x", value(x), options);
-  if (withX === null) return null; // x/y の欠落は安全に拒否する。
+  if (withX === null) return null; // 同じキーが複数ある原文は安全に拒否する。
   const withY = replace("y", value(y), withX);
   if (withY === null) return null;
   return withY;
