@@ -595,11 +595,10 @@ class Parser {
         flushPara(pos);
         const close = this.displayMathClose(pos + 2, end);
         if (close === null) {
-          // 閉じが見つからない数式は、段落の区切り(空行か次の環境)までを生ブロックにし、
-          // 後続のブロックを飲み込まない(#154)。
-          const stop = this.paragraphBoundary(pos + 2, end);
-          out.push(this.rawBlock(pos, stop, null, "unknown-command"));
-          pos = stop;
+          // 閉じが見つからない `\[` は、その 2 文字だけを生ブロックにする。続きはこのループが
+          // 通常どおり読むので、後続のブロックを飲み込まない(#154)。
+          out.push(this.rawBlock(pos, pos + 2, null, "unknown-command"));
+          pos += 2;
           continue;
         }
         out.push({
@@ -662,22 +661,6 @@ class Parser {
       if (token.name === "[") return null;
     }
     return null;
-  }
-
-  /**
-   * from 以降で段落が切れる位置: 空行の直前、または次の `\begin{` の直前(末尾の空白を除く)。
-   * 無ければ limit。コメント・`\verb` の中の `\begin{` は tex-scan と同じ規則で数えない。
-   */
-  private paragraphBoundary(from: number, limit: number): number {
-    let stop = blankLineAt(this.src, from, limit);
-    for (const token of texTokens(this.src, from, stop)) {
-      if (token.kind === "begin" || token.kind === "verbatim" || token.kind === "unterminated") {
-        stop = token.start;
-        break;
-      }
-    }
-    while (stop > from && /\s/.test(this.src[stop - 1] as string)) stop--;
-    return stop;
   }
 
   private parseIncludeGraphics(pos: number, limit: number): { node: BlockNode; next: number } {

@@ -105,16 +105,11 @@ describe("decktext display math", () => {
     const text = canvas?.type === "canvas" ? canvas.items[0] : undefined;
     if (text?.type !== "canvasText") throw new Error("canvas text missing");
 
-    expect(text.children).toEqual([
-      expect.objectContaining({
-        type: "rawBlock",
-        // 生ブロックは数式の原文まで(末尾の改行は含めない。#154)。
-        span: {
-          start: source.indexOf("\\[x = 1"),
-          end: source.indexOf("\\[x = 1") + "\\[x = 1".length,
-        },
-      }),
-    ]);
+    // 生ブロックは閉じのない `\[` の 2 文字だけで、続きは段落として読む(#154)。
+    const start = source.indexOf("\\[x = 1");
+    expect(text.children[0]).toEqual(
+      expect.objectContaining({ type: "rawBlock", span: { start, end: start + 2 } }),
+    );
     expect(text.children.some((node) => node.type === "displayMath")).toBe(false);
     expect(lintSource(source).map(({ code }) => code)).toEqual(
       expect.arrayContaining(["L001", "L014"]),

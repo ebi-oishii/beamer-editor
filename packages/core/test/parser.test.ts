@@ -392,84 +392,69 @@ describe("parseDeck: 閉じのない \\[ と改行 \\\\(#154)", () => {
     expect((tail?.type === "text" ? tail.value : "").trim()).toBe("[note] b");
   });
 
-  it("閉じのない \\[ は空行までの生ブロックになり、後続の段落とリストが残る", () => {
+  it("閉じのない \\[ は \\[ の 2 文字だけが生ブロックになり、続きと後続のブロックは構造として残る", () => {
     const source = deck(
       "\\[ x = 1\nstill math?\n\nnext paragraph\n\\begin{itemize}\n\\item q\n\\end{itemize}",
     );
     const body = frameBody(source);
-    expect(body.map((block) => block.type)).toEqual(["rawBlock", "paragraph", "list"]);
+    expect(body.map((block) => block.type)).toEqual(["rawBlock", "paragraph", "paragraph", "list"]);
     const raw = body[0];
     if (raw?.type !== "rawBlock") throw new Error("raw missing");
-    expect(source.slice(raw.span.start, raw.span.end)).toBe("\\[ x = 1\nstill math?");
+    expect(source.slice(raw.span.start, raw.span.end)).toBe("\\[");
   });
 
-  it("閉じのない \\[ の直後に環境が続けば、環境の前で生ブロックを切る", () => {
-    const source = deck("\\[ x = 1\n\\begin{itemize}\n\\item q\n\\end{itemize}");
-    const body = frameBody(source);
-    expect(body.map((block) => block.type)).toEqual(["rawBlock", "list"]);
-    const raw = body[0];
-    if (raw?.type !== "rawBlock") throw new Error("raw missing");
-    expect(source.slice(raw.span.start, raw.span.end)).toBe("\\[ x = 1");
+  it("後ろにある別の \\[ … \\] の閉じを借りず、その数式も間のブロックも残る", () => {
+    expect(
+      frameBody(
+        deck("We have\n\\[\nWe know\n\\[ E = mc^2 \\]\nwhere E is energy.\n\nNext para"),
+      ).map((block) => block.type),
+    ).toEqual(["paragraph", "rawBlock", "paragraph", "displayMath", "paragraph", "paragraph"]);
+    expect(
+      frameBody(
+        deck("\\[\n\\begin{itemize}\n\\item a\n\\end{itemize}\nSee below:\n\\[ E = mc^2 \\]"),
+      ).map((block) => block.type),
+    ).toEqual(["rawBlock", "list", "paragraph", "displayMath"]);
+    expect(
+      frameBody(
+        deck("\\[ x = 1\n\nnext paragraph\n\\begin{itemize}\n\\item q\n\\end{itemize}\n\\[ y \\]"),
+      ).map((block) => block.type),
+    ).toEqual(["rawBlock", "paragraph", "paragraph", "list", "displayMath"]);
+  });
+
+  it("閉じのない \\[ の後ろの \\pause と \\includegraphics もブロックとして残る", () => {
+    expect(frameBody(deck("\\[ x = 1\n\\pause\nSecond")).map((block) => block.type)).toEqual([
+      "rawBlock",
+      "paragraph",
+      "pause",
+      "paragraph",
+    ]);
+    expect(
+      frameBody(deck("\\[ x = 1\n\\includegraphics[width=0.5\\textwidth]{a.png}")).map(
+        (block) => block.type,
+      ),
+    ).toEqual(["rawBlock", "paragraph", "image"]);
   });
 
   it("\\] は空行を越えて探さない(TeX でも空行の入った数式はエラー)", () => {
-    const source = deck("\\[\nx = 1\n\ny = 2\n\\]\nafter");
-    const body = frameBody(source);
-    expect(body.map((block) => block.type)).toEqual(["rawBlock", "paragraph"]);
-    const raw = body[0];
-    if (raw?.type !== "rawBlock") throw new Error("raw missing");
-    expect(source.slice(raw.span.start, raw.span.end)).toBe("\\[\nx = 1");
+    const body = frameBody(deck("\\[\nx = 1\n\ny = 2\n\\]\nafter"));
+    expect(body[0]?.type).toBe("rawBlock");
+    expect(body.some((block) => block.type === "displayMath")).toBe(false);
   });
 
-  it("閉じのない \\[ の後ろに別の数式があっても、間の段落とリストが残る", () => {
-    const body = frameBody(
-      deck("\\[ x = 1\n\nnext paragraph\n\\begin{itemize}\n\\item q\n\\end{itemize}\n\\[ y \\]"),
-    );
-    expect(body.map((block) => block.type)).toEqual([
-      "rawBlock",
-      "paragraph",
-      "list",
-      "displayMath",
-    ]);
+  it("コメント・\\verb の中の \\] や \\begin{ を閉じや区切りと読まない", () => {
+    const comment = frameBody(deck("\\[ x = 1\n% TODO close with \\]\n\nnext paragraph"));
+    expect(comment[0]?.type).toBe("rawBlock");
+    expect(comment.some((block) => block.type === "displayMath")).toBe(false);
+    expect(
+      frameBody(deck("\\[ x = 1 \\verb|\\begin{x}| y\n\nafter")).map((block) => block.type),
+    ).toEqual(["rawBlock", "paragraph", "paragraph"]);
   });
 
-  it("閉じのない \\[ の後ろに空行なしで別の \\[ … \\] があっても、間のリストが残る", () => {
-    const body = frameBody(
-      deck("\\[\n\\begin{itemize}\n\\item a\n\\end{itemize}\nSee below:\n\\[ E = mc^2 \\]"),
-    );
-    expect(body.map((block) => block.type)).toEqual([
-      "rawBlock",
-      "list",
-      "paragraph",
-      "displayMath",
-    ]);
-  });
-
-  it("コメントの中の \\] は閉じとして数えない", () => {
-    const source = deck("\\[ x = 1\n% TODO close with \\]\n\nnext paragraph");
-    expect(frameBody(source).map((block) => block.type)).toEqual(["rawBlock", "paragraph"]);
-  });
-
-  it("CRLF でも空行で生ブロックを切る", () => {
+  it("CRLF でも閉じのない \\[ の後続ブロックが残る", () => {
     const source = deck(
       "\\[ x = 1\n\nnext paragraph\n\\begin{itemize}\n\\item q\n\\end{itemize}",
     ).replaceAll("\n", "\r\n");
-    const body = frameBody(source);
-    expect(body.map((block) => block.type)).toEqual(["rawBlock", "paragraph", "list"]);
-    const raw = body[0];
-    if (raw?.type !== "rawBlock") throw new Error("raw missing");
-    expect(source.slice(raw.span.start, raw.span.end)).toBe("\\[ x = 1");
-  });
-
-  it("\\verb の中の \\begin{ と \\% では生ブロックを切らない", () => {
-    const verb = deck("\\[ x = 1 \\verb|\\begin{x}| y\n\nafter");
-    expect(frameBody(verb).map((block) => block.type)).toEqual(["rawBlock", "paragraph"]);
-    const percent = deck("\\[ 50\\% \\begin{itemize}\\item q\\end{itemize}");
-    const body = frameBody(percent);
-    expect(body.map((block) => block.type)).toEqual(["rawBlock", "list"]);
-    const raw = body[0];
-    if (raw?.type !== "rawBlock") throw new Error("raw missing");
-    expect(percent.slice(raw.span.start, raw.span.end)).toBe("\\[ 50\\%");
+    expect(frameBody(source).map((block) => block.type)).toEqual(["rawBlock", "paragraph", "list"]);
   });
 
   it("閉じのある \\[ ... \\] は中の環境や \\\\] を含めて 1 つの数式", () => {
