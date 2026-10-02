@@ -2016,6 +2016,24 @@ describe("canvas clipboard keys(#148)", () => {
     ]);
   });
 
+  it("本文をドラッグ選択しているときの Cmd/Ctrl+C は、文字コピーに譲る", () => {
+    const copyCanvasElement = vi.fn();
+    const host = { ...fakeHost(), copyCanvasElement };
+    const { press, select } = mountSelected(host);
+    select();
+    const selection = { isCollapsed: false } as Selection;
+    const getSelection = vi.spyOn(document, "getSelection").mockReturnValue(selection);
+    try {
+      expect(press({ key: "c", metaKey: true }).defaultPrevented).toBe(false);
+      expect(copyCanvasElement).not.toHaveBeenCalled();
+    } finally {
+      getSelection.mockRestore();
+    }
+    // 文字選択が無ければ、これまでどおり箱をコピーする。
+    expect(press({ key: "c", metaKey: true }).defaultPrevented).toBe(true);
+    expect(copyCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-text-0", 5, false);
+  });
+
   it("Cmd/Ctrl+C はコピー、+X は切り取り(cut)として選択中の箱を送り、+V は表示中フレームへの貼り付けを送る", () => {
     const copyCanvasElement = vi.fn();
     const pasteCanvasElements = vi.fn();

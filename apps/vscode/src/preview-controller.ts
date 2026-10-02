@@ -58,6 +58,8 @@ export const RENDER_DEBOUNCE_MS = 120;
 
 /** 編集 host が canvas の移動・自由配置化の要求を処理した結果。 */
 export type CanvasEditResult = "applied" | "unchanged" | "cancelled" | "failed";
+/** 貼り付けは、版ずれ("cancelled")とクリップボード・フレーム側の理由を区別する。 */
+export type PasteResult = CanvasEditResult | "notCanvas";
 
 /** 本文領域に対する正規化座標での箱の位置と幅(core の CanvasPlacement と同じ)。 */
 export interface CanvasPlacement {
@@ -171,7 +173,7 @@ export interface PreviewControllerOptions {
     version: number;
     frameOffset: number;
     document: PreviewDocument;
-  }) => Promise<CanvasEditResult>;
+  }) => Promise<PasteResult>;
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -748,6 +750,13 @@ export class PreviewController implements vscode.Disposable {
     version: number;
     cut: boolean;
   }): Promise<void> {
+    // 切り取りは削除まで一続きの操作。削除を受け付けられない状態でコピーだけ通すと、
+    // 貼り付けが「移動」でなく「複製」になる。削除と同じガードで先に弾く。
+    if (request.cut && (this.editApplyPending || this.editAwaitingVersion !== undefined)) {
+      this.onWarning("Canvas element was not cut. Try again.");
+      this.sendDeck();
+      return;
+    }
     const element = this.currentCanvasElement(request);
     if (!element) {
       this.sendDeck();
@@ -774,7 +783,8 @@ export class PreviewController implements vscode.Disposable {
     }
     if (this.disposed) return;
     if (!copied) {
-      this.onError("failed to copy the canvas element.");
+      this.onWarning("Canvas element was not copied. Try selecting it again.");
+      this.sendDeck();
       return;
     }
     if (request.cut) await this.handleDelete(request);
@@ -817,7 +827,15 @@ export class PreviewController implements vscode.Disposable {
         return;
       }
       if (result === "cancelled") {
-        this.onWarning("クリップボードにキャンバスの要素(decktext / deckimage)がありません。");
+        this.onWarning("編集が重なったため貼り付けを中止しました。もう一度試してください。");
+        this.sendDeck();
+        return;
+      }
+      if (result === "notCanvas") {
+        this.onWarning(
+          "貼り付けられませんでした。クリップボードがキャンバスの要素(decktext / deckimage)でないか、対象のフレームが受け付けられない形です。",
+        );
+        this.sendDeck();
         return;
       }
     } catch {

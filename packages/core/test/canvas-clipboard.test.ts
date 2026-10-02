@@ -108,6 +108,18 @@ describe("removeCanvasObject", () => {
     );
   });
 
+  it("行頭側の要素を消しても字下げを残す", () => {
+    const source = deck(`\\begin{frame}[label=c]{T}
+  \\begin{deckcanvas}
+    \\deckimage[x=0.100,y=0.100,w=0.200]{a.png} \\deckimage[x=0.500,y=0.100,w=0.200]{b.png}
+  \\end{deckcanvas}
+\\end{frame}`);
+    const removed = apply(source, must(removeCanvasObject(source, optionsSpanOf(source, 0))));
+    expect(removed).toContain(
+      "    \\deckimage[x=0.500,y=0.100,w=0.200]{b.png}\n  \\end{deckcanvas}",
+    );
+  });
+
   it("CRLF 文書でも行ごと消す", () => {
     const source = deck(CANVAS_FRAME).replace(/\n/g, "\r\n");
     const removed = apply(source, must(removeCanvasObject(source, optionsSpanOf(source, 1))));

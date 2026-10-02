@@ -104,11 +104,18 @@ export function Stage({
   const [selected, setSelected] = useState<string | null>(null);
   const onSelectionChangeRef = useRef(onSelectionChange);
   onSelectionChangeRef.current = onSelectionChange;
+  const selectedRef = useRef<string | null>(null);
+  selectedRef.current = selected;
   useEffect(() => {
     onSelectionChangeRef.current?.(selected);
   }, [selected]);
-  // フレームごと消えたときも、親に残った選択を外す。
-  useEffect(() => () => onSelectionChangeRef.current?.(null), []);
+  // フレームごと消えたときも、親に残った選択を外す(自分が選んでいたときだけ)。
+  useEffect(
+    () => () => {
+      if (selectedRef.current) onSelectionChangeRef.current?.(null);
+    },
+    [],
+  );
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const highlightRef = useRef<HTMLElement | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -291,7 +298,13 @@ export function Stage({
   }, []);
   const onPointerDown = (event: PointerEvent) => {
     const clearSelection = () => {
-      if (dragRef.current || !selected) return;
+      if (dragRef.current) return;
+      if (!selected) {
+        // 自分は選んでいないが、このフレームが操作された。別フレームに残った選択を外させる
+        // (そのままだと画面外の要素が Delete / Cmd+X の対象になる)。
+        onSelectionChangeRef.current?.(null);
+        return;
+      }
       scaleRef.current
         ?.querySelector(`[data-canvas-element-id="${selected}"]`)
         ?.classList.remove("canvas-selected");

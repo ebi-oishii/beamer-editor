@@ -89,6 +89,12 @@ export function removeCanvasObject(
   }
   let removeStart = span.start;
   while (removeStart > start && /[ \t]/.test(source[removeStart - 1] as string)) removeStart--;
+  if (removeStart === start) {
+    // 行頭側の要素。手前を消すと字下げまで失うので、代わりに直後の空白を詰める。
+    let removeEnd = span.end;
+    while (removeEnd < end && /[ \t]/.test(source[removeEnd] as string)) removeEnd++;
+    return { span: { start: span.start, end: removeEnd }, text: "" };
+  }
   return { span: { start: removeStart, end: span.end }, text: "" };
 }
 

@@ -170,11 +170,11 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const hostRef = useRef(host);
   hostRef.current = host;
   // 選択中のキャンバス要素(#148)。Stage から通知され、Delete / Cmd+C / Cmd+X の対象になる。
-  // 別フレームの選択解除で、後から選んだ別フレームの選択を消さない。
+  // null は「そのフレームが操作されて選択が無くなった」という意味なので、どのフレームから
+  // 来ても捨てる。Stage は自分が選んでいたときだけアンマウント時に null を送る。
   const selectionRef = useRef<{ frameIndex: number; elementId: string } | null>(null);
   const handleSelectionChange = useCallback((frameIndex: number, elementId: string | null) => {
-    if (elementId !== null) selectionRef.current = { frameIndex, elementId };
-    else if (selectionRef.current?.frameIndex === frameIndex) selectionRef.current = null;
+    selectionRef.current = elementId === null ? null : { frameIndex, elementId };
   }, []);
 
   useEffect(
@@ -224,7 +224,15 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         // 選択中のキャンバス要素の Cmd/Ctrl+C(コピー)/ +X(切り取り)、表示中フレームへの +V(貼り付け)。#148
         if (!event.shiftKey) {
           const selection = selectionRef.current;
-          if ((key === "c" || key === "x") && selection && hostRef.current.copyCanvasElement) {
+          // 本文をドラッグ選択しているときは、ブラウザ既定の文字コピーに譲る。
+          const textSelection = ownerDocument.getSelection();
+          const copyingText = textSelection !== null && !textSelection.isCollapsed;
+          if (
+            (key === "c" || key === "x") &&
+            selection &&
+            !copyingText &&
+            hostRef.current.copyCanvasElement
+          ) {
             event.preventDefault();
             hostRef.current.copyCanvasElement(
               selection.frameIndex,

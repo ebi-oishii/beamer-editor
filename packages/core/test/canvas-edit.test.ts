@@ -19,15 +19,35 @@ describe("updateCanvasPosition", () => {
       "\\deckimage[ x = 0.000 , y=1.235, w = .4 ]{same.png}",
     );
   });
-  it("範囲外座標を clamp せず、x/y 欠落・不正 span は拒否する", () => {
+  it("範囲外座標を clamp せず、欠けた x/y は補い、不正 span は拒否する", () => {
     const source = "\\deckimage[x=0,y=0,w=.4]{a.png}";
     const span = { start: source.indexOf("["), end: source.indexOf("]") + 1 };
     expect(updateCanvasPosition(source, span, -0.5, 1.25)).toContain("x=-0.500,y=1.250,w=.4");
+    // 省略されたキーは追加する(貼り付けた原文に x / y が無くても位置をずらせる)。
     const missing = "\\deckimage[x=0,w=.4]{a.png}";
     expect(
       updateCanvasPosition(
         missing,
         { start: missing.indexOf("["), end: missing.indexOf("]") + 1 },
+        0.1,
+        0.2,
+      ),
+    ).toContain("[x=0.100,w=.4,y=0.200]");
+    const none = "\\deckimage[w=.4]{a.png}";
+    expect(
+      updateCanvasPosition(
+        none,
+        { start: none.indexOf("["), end: none.indexOf("]") + 1 },
+        0.1,
+        0.2,
+      ),
+    ).toContain("[w=.4,x=0.100,y=0.200]");
+    // 同じキーが複数ある原文は書き換えない。
+    const duplicated = "\\deckimage[x=0,x=1,y=0,w=.4]{a.png}";
+    expect(
+      updateCanvasPosition(
+        duplicated,
+        { start: duplicated.indexOf("["), end: duplicated.indexOf("]") + 1 },
         0,
         0,
       ),

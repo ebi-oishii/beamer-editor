@@ -964,7 +964,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           const target = liveDocument(request.document, request.version);
           if (!target) return "cancelled";
           const result = pasteCanvasObjects(target.getText(), request.frameOffset, clipboard);
-          if (result === null) return "cancelled";
+          if (result === null) return "notCanvas";
           return (await applyReplacement(target, result)) ? "applied" : "failed";
         },
       },
