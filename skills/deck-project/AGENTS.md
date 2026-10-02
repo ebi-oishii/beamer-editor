@@ -8,7 +8,7 @@
   プレビューで編集できる状態を指し、pptx に置き換えない
 - 新しく書く本文と、依頼で触るフレームの本文は `deckcanvas` の `decktext` / `deckimage`
   で書く。依頼で触らない既存フレームは変換しない
-- キャンバスを書いた・触ったら `deck check` まで実行し、触ったフレームに lint の
+- キャンバスを書いた・触ったら `deck check` まで実行し、書いた・触ったフレームに lint の
   L011・L012・L014・L018・L019 か check の `canvas-overflow` が残っていたら
   完了にしないで、残ったものを報告する
 - PDF は `deck export <file> --format pdf -o <pdf>`(どちらも絶対パス)で書き出し、

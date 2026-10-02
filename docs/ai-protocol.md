@@ -26,7 +26,7 @@
 8. 報告                          変更フレームのアドレス + 一行説明 + lint/check 結果
 ```
 
-完了条件: フォーマット済み・lint エラー 0・(内容量を変えた場合)check 通過。キャンバス(`deckcanvas`)を書いた・触った場合は、さらに check を必ず実行する。触ったフレームにキャンバスの warning(lint の L011・L012・L014・L018・L019 と、check の `canvas-overflow`(実測で本文領域外))が残っていたら「完了」と報告せず、残っているものを報告する。重なり `canvas-overlap` は意図的な場合がある info なので対象外。これらは warning なので「lint エラー 0」には数えない(warning が残ると lint / check の終了コードは 1)。人間が GUI で意図的にはみ出させた配置もあるため、severity は上げず、直すことも求めない。残っていることを人間に知らせる(#168)。
+完了条件: フォーマット済み・lint エラー 0・(内容量を変えた場合)check 通過。キャンバス(`deckcanvas`)を書いた・触った場合は、さらに check を必ず実行する。書いた・触ったフレームにキャンバスの warning(lint の L011・L012・L014・L018・L019 と、check の `canvas-overflow`(実測で本文領域外))が残っていたら「完了」と報告せず、残っているものを報告する。重なり `canvas-overlap` は意図的な場合がある info なので対象外。これらは warning なので「lint エラー 0」には数えない(warning が残ると lint / check の終了コードは 1)。人間が GUI で意図的にはみ出させた配置もあるため、severity は上げず、直すことも求めない。残っていることを人間に知らせる(#168)。
 
 `deck snapshot` は complete marker 作成前だけ予約済み出力 directory を cleanup する。marker 作成時点で公開済みとし、以後の失敗時も PNG・marker を削除しない。
 
@@ -73,7 +73,7 @@ SKILL.md に埋め込む規範。lint が機械的に検出できるものは括
 5. 新規デッキや大規模改編は、いきなり全文を書かずに**まずアウトライン(フレームタイトル一覧)をチャットで提案し、合意してから生成する**。アウトラインのレビューは安く、全文のレビューは高い。
 6. git 管理下では 1 指示 = 1 コミットを目安にする。人間のレビューと巻き戻しの単位を指示単位に揃える。
 7. 報告は「変更したフレームのアドレス+何をしたか一行」の列挙と、lint / check の結果で締める。人間はそれを見てエディタのプレビュー(自動反映済み)で確認する。
-8. **新しく書く本文と依頼で触るフレームの本文は、既定で `deckcanvas` の `decktext` / `deckimage` にする**([subset-spec.md](subset-spec.md) §2.8)。人間がプレビューで直接動かせるので、「位置をずらして」の往復が減る。依頼で触らない既存フレームは canvas 化しない(3 と同じ理由)。decktext に入らない内容(オーバーレイ・block・columns・表・TikZ・生 LaTeX、4:3 デッキ)は通常フローで書き、報告に明記する。触ったフレームにキャンバスの warning(L011 label なし・L012 本文領域外・L014 許容外の要素・L018 4:3 での使用・L019 タイトル 2 行以上)か check の `canvas-overflow` が残ったら、完了にせず報告する(§2 の完了条件)。
+8. **新しく書く本文と依頼で触るフレームの本文は、既定で `deckcanvas` の `decktext` / `deckimage` にする**([subset-spec.md](subset-spec.md) §2.8)。人間がプレビューで直接動かせるので、「位置をずらして」の往復が減る。依頼で触らない既存フレームは canvas 化しない(3 と同じ理由)。decktext に入らない内容(オーバーレイ・block・columns・表・TikZ・生 LaTeX、4:3 デッキ)は通常フローで書き、報告に明記する。書いた・触ったフレームにキャンバスの warning(L011 label なし・L012 本文領域外・L014 許容外の要素・L018 4:3 での使用・L019 タイトル 2 行以上)か check の `canvas-overflow` が残ったら、完了にせず報告する(§2 の完了条件)。
 9. **成果物の正本は .tex。** 「GUI で操作できるように」「プレビューで動かせるように」は 8 の canvas 化を指し、pptx への変換ではない。pptx / PowerPoint はユーザーが形式を明示したときだけ、.tex を残したまま別の成果物として作る。
 10. **PDF は `deck export <file> --format pdf -o <pdf>` で書き出し、PDF のパスを報告する。** 入力も出力先も絶対パスで明示し、`-o` を省略しない(CLI は checkout 内の `packages/cli` を作業ディレクトリにして動くため。出力先の指定がなければ入力の隣の `<name>.pdf` にする)。TeX エンジンを直接呼ばず、.tex や中間生成物を PDF の代わりに渡さない。出力先が既にある場合は上書き(`--overwrite`)の前に確認する。
 
@@ -190,7 +190,7 @@ description: >
 2. 編集する
 3. `deck format <file> --write` → `deck lint <file>` をエラー 0 まで
 4. 内容量やレイアウトを変えたら `deck check <file>`(溢れ検出)。キャンバスを
-   書いた・触ったら必ず check する。触ったフレームに lint の L011・L012・L014・
+   書いた・触ったら必ず check する。書いた・触ったフレームに lint の L011・L012・L014・
    L018・L019 か check の `canvas-overflow` が残っていたら完了にしない。どれも
    warning(終了コード 1)で「エラー 0」には数えないので、残ったものを報告に書く
 5. 見た目に確信がなければ `deck snapshot <file> -o <new-directory> --frame <addr>` で画像確認
@@ -246,7 +246,7 @@ description: >
   プレビューで編集できる状態を指し、pptx に置き換えない
 - 新しく書く本文と、依頼で触るフレームの本文は `deckcanvas` の `decktext` / `deckimage`
   で書く。依頼で触らない既存フレームは変換しない
-- キャンバスを書いた・触ったら `deck check` まで実行し、触ったフレームに lint の
+- キャンバスを書いた・触ったら `deck check` まで実行し、書いた・触ったフレームに lint の
   L011・L012・L014・L018・L019 か check の `canvas-overflow` が残っていたら
   完了にしないで、残ったものを報告する
 - PDF は `deck export <file> --format pdf -o <pdf>`(どちらも絶対パス)で書き出し、
