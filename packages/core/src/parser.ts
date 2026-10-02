@@ -178,6 +178,27 @@ function commandNameAt(src: string, backslash: number): string {
   return name;
 }
 
+/**
+ * pos の `\\`(改行)の終端。`\\*` と、`\\[2ex]` のような間隔指定も改行の一部として含める
+ * (間隔指定の `[` を数式 `\[` と誤認しない。#154)。
+ */
+function lineBreakEnd(src: string, pos: number, limit: number): number {
+  let i = pos + 2;
+  if (src[i] === "*") i++;
+  // `[2ex]` `[1.5\\baselineskip]` `[\\baselineskip]` のような TeX の長さだけを間隔指定と見る。
+  const spacing =
+    /^\[\s*(?:[-+]?(?:\d+\.?\d*|\.\d+)\s*(?:pt|mm|cm|in|ex|em|bp|pc|dd|cc|sp|mu|\\[a-zA-Z]+)|[-+]?\\[a-zA-Z]+)\s*\]/.exec(
+      src.slice(i, limit),
+    );
+  return spacing ? i + spacing[0].length : i;
+}
+
+/** from 以降で最初の空行(段落の区切り)の手前の改行の位置。無ければ limit。CRLF も扱う。 */
+function blankLineAt(src: string, from: number, limit: number): number {
+  const match = /\r?\n[ \t]*\r?\n/.exec(src.slice(from, limit));
+  return match ? from + match.index : limit;
+}
+
 function parseOverlayAt(src: string, pos: number): { overlay: OverlaySpec | null; next: number } {
   if (src[pos] !== "<") return { overlay: null, next: pos };
   const close = src.indexOf(">", pos);
@@ -372,8 +393,9 @@ class Parser {
         const nextCh = this.src[pos + 1] ?? "";
         if (nextCh === "\\") {
           flush(pos);
-          out.push({ type: "lineBreak", span: span(pos, pos + 2) });
-          pos += 2;
+          const next = lineBreakEnd(this.src, pos, end);
+          out.push({ type: "lineBreak", span: span(pos, next) });
+          pos = next;
           continue;
         }
         if ("%&_#{}".includes(nextCh)) {
@@ -563,13 +585,20 @@ class Parser {
         pos = parsed.next;
         continue;
       }
+      if (this.src.startsWith("\\\\", pos)) {
+        // 改行 `\\`(間隔指定込み)は段落の一部。2 文字目の `\` を `\[` と読まないよう、まとめて進める(#154)。
+        if (paraStart === -1) paraStart = pos;
+        pos = lineBreakEnd(this.src, pos, end);
+        continue;
+      }
       if (this.src.startsWith("\\[", pos)) {
         flushPara(pos);
-        const close = this.src.indexOf("\\]", pos + 2);
-        if (close === -1 || close > end) {
-          // 閉じが見つからない数式は、後続の環境終端まで飲み込まず生ブロックにする。
-          out.push(this.rawBlock(pos, end, null, "unknown-command"));
-          pos = end;
+        const close = this.displayMathClose(pos + 2, end);
+        if (close === null) {
+          // 閉じが見つからない `\[` は、その 2 文字だけを生ブロックにする。続きはこのループが
+          // 通常どおり読むので、後続のブロックを飲み込まない(#154)。
+          out.push(this.rawBlock(pos, pos + 2, null, "unknown-command"));
+          pos += 2;
           continue;
         }
         out.push({
@@ -619,6 +648,19 @@ class Parser {
     }
     flushPara(end);
     return out;
+  }
+
+  /**
+   * `\[` の閉じ `\]` の位置。TeX と同じく空行(段落の区切り)と次の `\[` を越えては探さない。
+   * コメント・`\verb` の中の `\]` は tex-scan と同じ規則で数えない(#154)。
+   */
+  private displayMathClose(from: number, limit: number): number | null {
+    for (const token of texTokens(this.src, from, blankLineAt(this.src, from, limit))) {
+      if (token.kind !== "command") continue;
+      if (token.name === "]") return token.start;
+      if (token.name === "[") return null;
+    }
+    return null;
   }
 
   private parseIncludeGraphics(pos: number, limit: number): { node: BlockNode; next: number } {
