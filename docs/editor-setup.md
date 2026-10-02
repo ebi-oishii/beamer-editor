@@ -1,11 +1,12 @@
 # VS Code エディタセットアップ
 
-更新日: 2026-08-05
+更新日: 2026-10-03
 
 ## 結論
 
 Beamer Editor の `.tex` は、VS Code に組み込まれた LaTeX 言語サポートだけで基本的な
-構文強調を利用できる。これを必須の文法基盤とし、プロジェクト固有の highlighter は実装しない。
+構文強調を利用できる。これを必須の文法基盤とし、Beamer Editor は deck 固有の語彙の色分けだけを
+組み込みの文法に上乗せする。
 
 [LaTeX Workshop](https://marketplace.visualstudio.com/items?itemName=James-Yu.latex-workshop)
 は、補完、アウトライン、参照移動などの編集支援が必要な場合の任意の追加機能とする。
@@ -24,8 +25,11 @@ Beamer Editor の `.tex` は、VS Code に組み込まれた LaTeX 言語サポ�
 - `$...$` などの数式
 - `deckcanvas`、`decktext` などの独自環境と、`\deckimage` などの独自コマンド
 
-独自環境と独自コマンドは一般的な LaTeX 構文として強調される。Beamer Editor 固有の意味に応じた色分けは
-行わず、誤りや未対応構文は Beamer Editor の Diagnostics で示す。
+`deck` で始まる環境とコマンド(`deckcanvas` / `decktext` / `\deckimage` / `\deckcolor` など)と、
+その `[x=…,w=…,size=…]` のキーと値は、Beamer Editor が組み込みの LaTeX 文法に上乗せして
+色分けする。`deck` は予約された接頭辞(L016)なので、他の LaTeX の構文強調とは重ならない。
+それ以外の独自環境・独自コマンドは一般的な LaTeX 構文として強調され、誤りや未対応構文は
+Beamer Editor の Diagnostics で示す。
 
 ## 任意の編集支援: LaTeX Workshop
 
