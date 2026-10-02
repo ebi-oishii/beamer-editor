@@ -60,16 +60,46 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     host.saveNavState?.({ current: state.current, step: state.step, zoom: persistedZoom });
   }, [host, state.current, state.step, persistedZoom]);
 
+  // 選択中のキャンバス要素(#148)。持ち主はここだけで、各フレームはこの値から枠を描く。
+  // Delete / Cmd+C / Cmd+X の対象。キー操作から同期的に読めるよう ref にも写す。
+  const [selection, setSelection] = useState<{ frameIndex: number; elementId: string } | null>(
+    null,
+  );
+  const selectionRef = useRef(selection);
+  const select = useCallback((next: { frameIndex: number; elementId: string } | null) => {
+    selectionRef.current = next;
+    setSelection(next);
+  }, []);
+  const handleSelectionChange = useCallback(
+    (frameIndex: number, elementId: string | null) => {
+      select(elementId === null ? null : { frameIndex, elementId });
+    },
+    [select],
+  );
+  // 矢印キーや見出しのクリックで別のフレームへ移ったら、前のフレームの選択を外す
+  // (画面外の要素を Delete / Cmd+X の対象に残さない)。スクロールで上端のフレームが
+  // 変わるだけでは外さない。選んだ箱が見えたまま選び直しになってしまうため。
+  const leaveSelectionFor = useCallback(
+    (frameIndex: number) => {
+      const current = selectionRef.current;
+      if (current && current.frameIndex !== frameIndex) select(null);
+    },
+    [select],
+  );
+
   // ホストからの deck 更新を購読する。version は同期的に読めるよう ref にも写す。
+  // 新しい deck では要素の番号が振り直されるので、同じ同期処理の中で選択も外す
+  // (外れる前に Delete が届くと、古い番号が別の要素に当たる)。
   const versionRef = useRef(Number.NEGATIVE_INFINITY);
   useEffect(
     () =>
       host.subscribe((next, nextVersion) => {
+        select(null);
         versionRef.current = nextVersion;
         setDeck(next);
         setVersion(nextVersion);
       }),
-    [host],
+    [host, select],
   );
 
   // ソース側(CodeLens・コマンド・カーソル追従)からの表示要求。表示中の版と違えば無視する
@@ -163,7 +193,10 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const move = (action: PreviewAction) => {
     const next = previewReducer(state, action, deck.frames.length);
     dispatch(action);
-    if (next.current !== state.current) requestReveal(next.current);
+    if (next.current !== state.current) {
+      leaveSelectionFor(next.current);
+      requestReveal(next.current);
+    }
   };
   const moveRef = useRef(move);
   moveRef.current = move;
@@ -214,6 +247,33 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
           hostRef.current.undoRedo(key === "y" || event.shiftKey ? "redo" : "undo");
           return;
         }
+        // 選択中のキャンバス要素の Cmd/Ctrl+C(コピー)/ +X(切り取り)、表示中フレームへの +V(貼り付け)。#148
+        if (!event.shiftKey) {
+          const selection = selectionRef.current;
+          // 本文をドラッグ選択しているときは、ブラウザ既定の文字コピーに譲る。
+          const textSelection = ownerDocument.getSelection();
+          const copyingText = textSelection !== null && !textSelection.isCollapsed;
+          if (
+            (key === "c" || key === "x") &&
+            selection &&
+            !copyingText &&
+            hostRef.current.copyCanvasElement
+          ) {
+            event.preventDefault();
+            hostRef.current.copyCanvasElement(
+              selection.frameIndex,
+              selection.elementId,
+              versionRef.current,
+              key === "x",
+            );
+            return;
+          }
+          if (key === "v" && hostRef.current.pasteCanvasElements) {
+            event.preventDefault();
+            hostRef.current.pasteCanvasElements(currentRef.current, versionRef.current);
+            return;
+          }
+        }
         if (event.key === "+" || event.key === "=") {
           event.preventDefault();
           setZoom((current) => stepZoom(current, fitScaleRef.current, 1));
@@ -223,6 +283,27 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         } else if (event.key === "0") {
           event.preventDefault();
           setZoom("fit");
+        }
+        return;
+      }
+      // 選択中のキャンバス要素を Delete / Backspace で取り除く(#148)。文字入力のある部品では奪わない。
+      if ((event.key === "Delete" || event.key === "Backspace") && !event.altKey) {
+        const selection = selectionRef.current;
+        if (
+          selection &&
+          hostRef.current.deleteCanvasElement &&
+          !(
+            target instanceof HTMLInputElement ||
+            target instanceof HTMLSelectElement ||
+            target instanceof HTMLTextAreaElement
+          )
+        ) {
+          event.preventDefault();
+          hostRef.current.deleteCanvasElement(
+            selection.frameIndex,
+            selection.elementId,
+            versionRef.current,
+          );
         }
         return;
       }
@@ -255,7 +336,11 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         zoom={zoom}
         version={version}
         reveal={reveal}
-        onSelect={(i) => dispatch({ type: "goto", index: i })}
+        onSelect={(i) => {
+          // 別フレームの箱を押したときは、選択が先にそのフレームへ移っているので外れない。
+          leaveSelectionFor(i);
+          dispatch({ type: "goto", index: i });
+        }}
         onJump={(i) => host.jumpToSource(i, version)}
         onScrollActive={(i) => dispatch({ type: "goto", index: i })}
         onSetCanvasFontSize={
@@ -280,6 +365,8 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
               }
             : undefined
         }
+        selection={selection}
+        onSelectionChange={handleSelectionChange}
         onFitScaleChange={handleFitScaleChange}
       />
       <div className="preview-status" aria-live="polite" aria-atomic="true">

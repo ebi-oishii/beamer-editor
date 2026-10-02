@@ -49,6 +49,18 @@ export type WebviewToExtension =
       x: number;
       y: number;
     }
+  /** 選択中のキャンバス要素を取り除く(Delete / Backspace。#148)。 */
+  | { type: "deleteCanvasElement"; frameIndex: number; elementId: string; version: number }
+  /** 選択中のキャンバス要素のソースをクリップボードへ写す(Cmd/Ctrl+C。cut なら続けて取り除く)。 */
+  | {
+      type: "copyCanvasElement";
+      frameIndex: number;
+      elementId: string;
+      version: number;
+      cut: boolean;
+    }
+  /** クリップボードのキャンバス要素を、表示中のフレームへ貼り付ける(Cmd/Ctrl+V)。 */
+  | { type: "pasteCanvasElements"; frameIndex: number; version: number }
   /** フロー要素を deckcanvas へ移す(「自由配置にする」)。 */
   | {
       type: "detachToCanvas";
@@ -193,6 +205,24 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
           y: raw.y,
         };
       }
+      return null;
+    case "deleteCanvasElement":
+    case "copyCanvasElement":
+      if (
+        isNonNegativeInteger(raw.frameIndex) &&
+        typeof raw.elementId === "string" &&
+        raw.elementId.length > 0 &&
+        isNonNegativeInteger(raw.version)
+      ) {
+        const base = { frameIndex: raw.frameIndex, elementId: raw.elementId, version: raw.version };
+        if (raw.type === "deleteCanvasElement") return { type: "deleteCanvasElement", ...base };
+        if (typeof raw.cut === "boolean")
+          return { type: "copyCanvasElement", ...base, cut: raw.cut };
+      }
+      return null;
+    case "pasteCanvasElements":
+      if (isNonNegativeInteger(raw.frameIndex) && isNonNegativeInteger(raw.version))
+        return { type: "pasteCanvasElements", frameIndex: raw.frameIndex, version: raw.version };
       return null;
     case "detachToCanvas": {
       const { sourceSpan, rect } = raw;

@@ -1934,3 +1934,365 @@ it("shows a disallowed size as unset so choosing the fallback rewrites it", () =
   });
   expect(setCanvasFontSize).toHaveBeenCalledExactlyOnceWith(0, "canvas-image-0", 1, "normal");
 });
+
+describe("canvas clipboard keys(#148)", () => {
+  /** canvas text 1 つのデッキを描き、その箱をクリックで選択した状態まで作る。 */
+  function mountSelected(host: ReturnType<typeof fakeHost>) {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const deck: RenderedDeck = {
+      title: "canvas-text",
+      css: "",
+      frames: [
+        {
+          index: 1,
+          label: "text",
+          titleText: "text",
+          html: `<div class="slide"><div class="slide-body"><div class="canvas">
+            <div class="canvas-item canvas-text" data-canvas-element-id="canvas-text-0" data-canvas-element-kind="text" style="left:10%;top:20%;width:40%">hello</div>
+          </div></div></div>`,
+          stepCount: 1,
+          isRaw: false,
+          sourceSpan: { start: 0, end: 100 },
+          canvasElements: [
+            {
+              id: "canvas-text-0",
+              kind: "text",
+              position: { x: 0.1, y: 0.2, width: 0.4 },
+              sourceSpan: { start: 10, end: 30 },
+              editable: true,
+            },
+          ],
+        },
+      ],
+    };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(deck, 5);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    const scale = container.querySelector<HTMLElement>(".slide-scale");
+    const canvas = scale?.querySelector<HTMLElement>(".canvas");
+    const text = scale?.querySelector<HTMLElement>('[data-canvas-element-id="canvas-text-0"]');
+    if (!preview || !scale || !canvas || !text) throw new Error("canvas text fixture missing");
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue(domRect(100, 50, 400, 200));
+    vi.spyOn(text, "getBoundingClientRect").mockReturnValue(domRect(140, 90, 160, 40));
+    Object.defineProperties(text, {
+      setPointerCapture: { configurable: true, value: vi.fn() },
+      hasPointerCapture: { configurable: true, value: () => true },
+      releasePointerCapture: { configurable: true, value: vi.fn() },
+    });
+    const press = (init: KeyboardEventInit) => {
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+      act(() => {
+        preview.dispatchEvent(event);
+      });
+      return event;
+    };
+    const select = () => {
+      act(() => {
+        firePointer(text, "pointerdown", 150, 100);
+        firePointer(scale, "pointerup", 150, 100);
+      });
+      expect(text.classList.contains("canvas-selected")).toBe(true);
+    };
+    return { press, select, scale, text };
+  }
+
+  it("選択中の箱を Delete / Backspace で削除要求し、選択が無ければキーを奪わない", () => {
+    const deleteCanvasElement = vi.fn();
+    const host = { ...fakeHost(), deleteCanvasElement };
+    const { press, select } = mountSelected(host);
+    expect(press({ key: "Delete" }).defaultPrevented).toBe(false);
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+    select();
+    expect(press({ key: "Delete" }).defaultPrevented).toBe(true);
+    expect(press({ key: "Backspace" }).defaultPrevented).toBe(true);
+    expect(deleteCanvasElement.mock.calls).toEqual([
+      [0, "canvas-text-0", 5],
+      [0, "canvas-text-0", 5],
+    ]);
+  });
+
+  it("本文をドラッグ選択しているときの Cmd/Ctrl+C は、文字コピーに譲る", () => {
+    const copyCanvasElement = vi.fn();
+    const host = { ...fakeHost(), copyCanvasElement };
+    const { press, select } = mountSelected(host);
+    select();
+    const selection = { isCollapsed: false } as Selection;
+    const getSelection = vi.spyOn(document, "getSelection").mockReturnValue(selection);
+    try {
+      expect(press({ key: "c", metaKey: true }).defaultPrevented).toBe(false);
+      expect(copyCanvasElement).not.toHaveBeenCalled();
+    } finally {
+      getSelection.mockRestore();
+    }
+    // 文字選択が無ければ、これまでどおり箱をコピーする。
+    expect(press({ key: "c", metaKey: true }).defaultPrevented).toBe(true);
+    expect(copyCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-text-0", 5, false);
+  });
+
+  it("Cmd/Ctrl+C はコピー、+X は切り取り(cut)として選択中の箱を送り、+V は表示中フレームへの貼り付けを送る", () => {
+    const copyCanvasElement = vi.fn();
+    const pasteCanvasElements = vi.fn();
+    const host = { ...fakeHost(), copyCanvasElement, pasteCanvasElements };
+    const { press, select } = mountSelected(host);
+    // 選択が無いときのコピーは奪わない。貼り付けは選択に関係なく表示中フレームへ。
+    expect(press({ key: "c", metaKey: true }).defaultPrevented).toBe(false);
+    expect(press({ key: "v", ctrlKey: true }).defaultPrevented).toBe(true);
+    select();
+    expect(press({ key: "c", metaKey: true }).defaultPrevented).toBe(true);
+    expect(press({ key: "x", ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(copyCanvasElement.mock.calls).toEqual([
+      [0, "canvas-text-0", 5, false],
+      [0, "canvas-text-0", 5, true],
+    ]);
+    expect(pasteCanvasElements).toHaveBeenCalledExactlyOnceWith(0, 5);
+  });
+
+  it("背景クリックで選択を外すと Delete は奪わず、ホストが対応しなければキーも奪わない", () => {
+    const deleteCanvasElement = vi.fn();
+    const { press, select, scale } = mountSelected({ ...fakeHost(), deleteCanvasElement });
+    select();
+    act(() => {
+      firePointer(scale, "pointerdown", 5, 5);
+      firePointer(scale, "pointerup", 5, 5);
+    });
+    expect(press({ key: "Delete" }).defaultPrevented).toBe(false);
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+
+    const bare = mountSelected(fakeHost());
+    bare.select();
+    expect(bare.press({ key: "Delete" }).defaultPrevented).toBe(false);
+    expect(bare.press({ key: "c", metaKey: true }).defaultPrevented).toBe(false);
+    expect(bare.press({ key: "v", metaKey: true }).defaultPrevented).toBe(false);
+  });
+});
+
+describe("canvas selection across frames(#148)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+  });
+
+  const frameWithText = (index: number, start: number) => ({
+    index,
+    label: `f${index}`,
+    titleText: `frame ${index}`,
+    html: `<div class="slide"><div class="slide-body"><div class="canvas">
+      <div class="canvas-item canvas-text" data-canvas-element-id="canvas-text-0" data-canvas-element-kind="text" style="left:10%;top:20%;width:40%">text ${index}</div>
+    </div></div></div>`,
+    stepCount: 1,
+    isRaw: false,
+    sourceSpan: { start: start - 10, end: start + 90 },
+    canvasElements: [
+      {
+        id: "canvas-text-0",
+        kind: "text" as const,
+        position: { x: 0.1, y: 0.2, width: 0.4 },
+        sourceSpan: { start, end: start + 20 },
+        editable: true,
+      },
+    ],
+  });
+  const TWO_FRAMES: RenderedDeck = {
+    title: "two",
+    css: "",
+    frames: [frameWithText(1, 10), frameWithText(2, 110)],
+  };
+
+  /** 2 フレームのスクロール表示を描き、各フレームの箱・背景を押す操作を返す。 */
+  function mountTwoFrames(host: ReturnType<typeof fakeHost>) {
+    const container = document.createElement("div");
+    document.body.append(container);
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(TWO_FRAMES, 5);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    const scales = [...container.querySelectorAll<HTMLElement>(".slide-scale")];
+    if (!preview || scales.length !== 2) throw new Error("two-frame fixture missing");
+    const textOf = (i: number) => {
+      const text = scales[i]?.querySelector<HTMLElement>(
+        '[data-canvas-element-id="canvas-text-0"]',
+      );
+      if (!text) throw new Error("text missing");
+      return text;
+    };
+    const prepare = () => {
+      scales.forEach((scale, i) => {
+        const canvas = scale.querySelector<HTMLElement>(".canvas");
+        const text = textOf(i);
+        if (!canvas) throw new Error("canvas missing");
+        vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue(domRect(100, 50, 400, 200));
+        vi.spyOn(text, "getBoundingClientRect").mockReturnValue(domRect(140, 90, 160, 40));
+        Object.defineProperties(text, {
+          setPointerCapture: { configurable: true, value: vi.fn() },
+          hasPointerCapture: { configurable: true, value: () => true },
+          releasePointerCapture: { configurable: true, value: vi.fn() },
+        });
+      });
+    };
+    prepare();
+    const clickText = (i: number) => {
+      firePointer(textOf(i), "pointerdown", 150, 100);
+      firePointer(scales[i] as HTMLElement, "pointerup", 150, 100);
+    };
+    const clickBackground = (i: number) => {
+      firePointer(scales[i] as HTMLElement, "pointerdown", 5, 5);
+      firePointer(scales[i] as HTMLElement, "pointerup", 5, 5);
+    };
+    const press = (init: KeyboardEventInit) => {
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+      act(() => {
+        preview.dispatchEvent(event);
+      });
+      return event;
+    };
+    const outlined = () => [0, 1].filter((i) => textOf(i).classList.contains("canvas-selected"));
+    return { preview, clickText, clickBackground, press, outlined, prepare };
+  }
+
+  it("別フレームを選んでから戻ると、最後に押した要素が Delete の対象になる", () => {
+    const deleteCanvasElement = vi.fn();
+    const ui = mountTwoFrames({ ...fakeHost(), deleteCanvasElement });
+    ui.clickText(0);
+    ui.clickText(1);
+    ui.clickText(0);
+    expect(ui.outlined()).toEqual([0]);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(true);
+    expect(deleteCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-text-0", 5);
+  });
+
+  it("別フレームの背景を押すと選択が外れ、元の要素を押し直せば再び選択される", () => {
+    const deleteCanvasElement = vi.fn();
+    const ui = mountTwoFrames({ ...fakeHost(), deleteCanvasElement });
+    ui.clickText(0);
+    ui.clickBackground(1);
+    expect(ui.outlined()).toEqual([]);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(false);
+    ui.clickText(0);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(true);
+    expect(deleteCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-text-0", 5);
+  });
+
+  it("矢印キーで表示中のフレームを移ると、前のフレームの選択は外れる", () => {
+    const deleteCanvasElement = vi.fn();
+    const ui = mountTwoFrames({ ...fakeHost(), deleteCanvasElement });
+    ui.clickText(0);
+    ui.press({ key: "ArrowRight" });
+    expect(ui.outlined()).toEqual([]);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(false);
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("新しい deck が届いた時点で選択が外れ、枠も残らない", () => {
+    const deleteCanvasElement = vi.fn();
+    const host = { ...fakeHost(), deleteCanvasElement };
+    const ui = mountTwoFrames(host);
+    ui.clickText(0);
+    // 描画を待たずに Delete が届いても、古い番号で別の要素を消さない。
+    host.push(TWO_FRAMES, 6);
+    const early = new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true });
+    ui.preview.dispatchEvent(early);
+    expect(early.defaultPrevented).toBe(false);
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+    act(() => {
+      host.push(TWO_FRAMES, 7);
+    });
+    expect(ui.outlined()).toEqual([]);
+    // 同じ HTML の deck を再送しても、選択と一緒に枠が外れる。
+    ui.clickText(0);
+    expect(ui.outlined()).toEqual([0]);
+    act(() => {
+      host.push(TWO_FRAMES, 8);
+    });
+    expect(ui.outlined()).toEqual([]);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(false);
+  });
+
+  it("文字選択が残っていても、箱を押せば Cmd/Ctrl+C は箱のコピーになる", () => {
+    const copyCanvasElement = vi.fn();
+    const ui = mountTwoFrames({ ...fakeHost(), copyCanvasElement });
+    const caption = ui.preview.querySelector(".slide-caption");
+    const textNode = caption?.firstChild;
+    if (!textNode) throw new Error("caption missing");
+    const range = document.createRange();
+    range.selectNodeContents(textNode);
+    document.getSelection()?.addRange(range);
+    expect(document.getSelection()?.isCollapsed).toBe(false);
+    ui.clickText(0);
+    expect(ui.press({ key: "c", metaKey: true }).defaultPrevented).toBe(true);
+    expect(copyCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-text-0", 5, false);
+  });
+
+  it("箱を押すと、キー入力の宛先がプレビューへ移る", () => {
+    const outside = document.createElement("textarea");
+    document.body.append(outside);
+    const ui = mountTwoFrames(fakeHost());
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+    ui.clickText(0);
+    // ここが外のままだと、続く Delete / Cmd+X がソースエディタ側を書き換える。
+    expect(ui.preview.contains(document.activeElement)).toBe(true);
+  });
+
+  it("別フレームの見出しを押すと、前のフレームの選択は外れる", () => {
+    const deleteCanvasElement = vi.fn();
+    const ui = mountTwoFrames({ ...fakeHost(), deleteCanvasElement });
+    ui.clickText(0);
+    const caption = ui.preview.querySelectorAll<HTMLElement>(".slide-caption")[1];
+    if (!caption) throw new Error("caption missing");
+    act(() => {
+      caption.click();
+    });
+    expect(ui.outlined()).toEqual([]);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(false);
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("スクロールで上端のフレームが変わっても、見えている箱の選択は残る", () => {
+    const deleteCanvasElement = vi.fn();
+    const ui = mountTwoFrames({ ...fakeHost(), deleteCanvasElement });
+    const scroll = ui.preview.querySelector<HTMLElement>(".slide-scroll");
+    const cards = ui.preview.querySelectorAll<HTMLElement>(".slide-card");
+    if (!scroll || cards.length !== 2) throw new Error("scroll fixture missing");
+    let scrollTop = 0;
+    Object.defineProperties(scroll, {
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value;
+        },
+      },
+      clientWidth: { configurable: true, value: 600 },
+      clientHeight: { configurable: true, value: 600 },
+    });
+    cards.forEach((card, i) => {
+      Object.defineProperties(card, {
+        offsetTop: { configurable: true, value: 12 + i * 400 },
+        offsetHeight: { configurable: true, value: 400 },
+      });
+    });
+    // 上端にフレーム 1 があるまま、下に見えているフレーム 2 の箱を押す(click で表示中も 2 へ)。
+    ui.clickText(1);
+    act(() => {
+      cards[1]?.querySelector<HTMLElement>('[data-canvas-element-id="canvas-text-0"]')?.click();
+    });
+    expect(cards[1]?.classList.contains("active")).toBe(true);
+    // 少しスクロールすると、上端のフレーム 1 が表示中に戻る。
+    scrollTop = 30;
+    act(() => {
+      scroll.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    expect(cards[0]?.classList.contains("active")).toBe(true);
+    expect(ui.outlined()).toEqual([1]);
+    expect(ui.press({ key: "Delete" }).defaultPrevented).toBe(true);
+    expect(deleteCanvasElement).toHaveBeenCalledExactlyOnceWith(1, "canvas-text-0", 5);
+  });
+});
