@@ -415,6 +415,12 @@ export type InlineNode =
   | HrefNode
   | LineBreakNode
   | InlineMathNode
+  | GroupNode
+  | DeclarationNode
+  | SpaceNode
+  | FootnoteNode
+  | CiteNode
+  | LogoNode
   | RawInlineNode;
 
 /** 地のテキスト。特殊文字(`\%`、`---` 等)はデコード済みの値を持ち、正規形再出力時に再エンコードする。 */
@@ -425,7 +431,20 @@ export interface TextNode extends BaseNode {
 
 export interface StyledTextNode extends BaseNode {
   type: "styled";
-  style: "textbf" | "emph" | "textit" | "texttt" | "alert";
+  style:
+    | "textbf"
+    | "emph"
+    | "textit"
+    | "texttt"
+    | "alert"
+    | "underline"
+    | "textsc"
+    | "textsf"
+    | "textrm"
+    | "textsl"
+    | "textup"
+    | "textmd"
+    | "textnormal";
   children: InlineNode[];
 }
 
@@ -449,6 +468,79 @@ export interface HrefNode extends BaseNode {
 
 export interface LineBreakNode extends BaseNode {
   type: "lineBreak";
+}
+
+/** 波括弧のグループ `{…}`。中の宣言(`\small` など)はグループの終わりまで効く。 */
+export interface GroupNode extends BaseNode {
+  type: "group";
+  children: InlineNode[];
+}
+
+/** 文字の位置揃え。段落単位で効き、同じ環境の後続の段落にも引き継がれる。 */
+export type AlignmentDeclaration = "centering" | "raggedright" | "raggedleft";
+/** 文字サイズの宣言。 */
+export type SizeDeclaration =
+  | "tiny"
+  | "scriptsize"
+  | "footnotesize"
+  | "small"
+  | "normalsize"
+  | "large"
+  | "Large"
+  | "LARGE"
+  | "huge"
+  | "Huge";
+/** 書体の宣言。 */
+export type FontDeclaration =
+  | "bfseries"
+  | "mdseries"
+  | "itshape"
+  | "slshape"
+  | "upshape"
+  | "scshape"
+  | "ttfamily"
+  | "sffamily"
+  | "rmfamily"
+  | "normalfont";
+
+/**
+ * 引数を取らず、後に続く内容へ効く宣言(`\centering`、`\small`、`\bfseries`、`\color{…}`)。
+ * 効く範囲は TeX と同じく、囲むグループか環境の終わりまで。
+ */
+export type DeclarationNode = BaseNode & { type: "declaration" } & (
+    | { name: AlignmentDeclaration | SizeDeclaration | FontDeclaration }
+    | { name: "color"; color: string }
+  );
+
+/** 長さ。`linewidth` は行幅に対する比(`0.5\textwidth` など)。 */
+export interface SpaceLength {
+  value: number;
+  unit: "pt" | "bp" | "mm" | "cm" | "in" | "pc" | "em" | "ex" | "linewidth";
+}
+
+/** 空白の命令。`hspace` / `vspace` は長さを持ち、`hfill` は行の残りを埋める。 */
+export interface SpaceNode extends BaseNode {
+  type: "space";
+  kind: "hspace" | "vspace" | "hfill" | "quad" | "qquad";
+  length: SpaceLength | null;
+}
+
+/** 脚注 `\footnote{…}`。 */
+export interface FootnoteNode extends BaseNode {
+  type: "footnote";
+  children: InlineNode[];
+}
+
+/** 文献参照 `\cite{…}`。参考文献リストは扱わないので、キーをそのまま持つ。 */
+export interface CiteNode extends BaseNode {
+  type: "cite";
+  keys: string[];
+}
+
+/** ロゴの命令 `\LaTeX` / `\TeX`。 */
+export interface LogoNode extends BaseNode {
+  type: "logo";
+  name: "LaTeX" | "TeX";
 }
 
 export interface InlineMathNode extends BaseNode {
@@ -527,6 +619,7 @@ export function frameTitleText(frame: FrameNode | RawFrameNode, frameNumber: num
         case "styled":
         case "colorText":
         case "href":
+        case "group":
           append(node.children);
           break;
         case "url":
@@ -539,7 +632,17 @@ export function frameTitleText(frame: FrameNode | RawFrameNode, frameNumber: num
           text += node.tex;
           break;
         case "lineBreak":
+        case "space":
           text += " ";
+          break;
+        case "cite":
+          text += `[${node.keys.join(", ")}]`;
+          break;
+        case "logo":
+          text += node.name;
+          break;
+        case "declaration":
+        case "footnote":
           break;
       }
     }

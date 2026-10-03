@@ -542,3 +542,74 @@ describe("parseDeck: TeX と同じ境界規則(tex-scan)", () => {
     });
   });
 });
+
+describe("parseDeck: よく使う整形命令(#180)", () => {
+  const inlines = (body: string) => {
+    const doc = parseDeck(
+      `\\documentclass{beamer}\n\\begin{document}\n\\begin{frame}[label=a]{T}\n${body}\n\\end{frame}\n\\end{document}\n`,
+    );
+    const frame = framesOf(doc)[0];
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    const paragraph = frame.body[0];
+    if (paragraph?.type !== "paragraph") throw new Error("paragraph missing");
+    return paragraph.children;
+  };
+  const types = (body: string) => inlines(body).map((node) => node.type);
+
+  it("揃え・サイズ・書体の宣言と \\color を宣言として読む", () => {
+    expect(inlines("\\centering \\small \\bfseries \\color{red} A")).toMatchObject([
+      { type: "declaration", name: "centering" },
+      { type: "declaration", name: "small" },
+      { type: "declaration", name: "bfseries" },
+      { type: "declaration", name: "color", color: "red" },
+      { type: "text" },
+    ]);
+  });
+
+  it("波括弧をグループとして読み、括弧を本文に残さない", () => {
+    const [before, group] = inlines("Before {\\color{red} A} after");
+    expect(before).toMatchObject({ type: "text", value: "Before " });
+    expect(group).toMatchObject({
+      type: "group",
+      children: [
+        { type: "declaration", name: "color" },
+        { type: "text", value: " A" },
+      ],
+    });
+  });
+
+  it("寸法にできる長さの \\hspace / \\vspace と、\\hfill / \\quad / \\qquad を空白として読む", () => {
+    expect(inlines("\\hspace{1.5em}\\vspace*{-2mm}\\hspace{0.5\\textwidth}")).toMatchObject([
+      { type: "space", kind: "hspace", length: { value: 1.5, unit: "em" } },
+      { type: "space", kind: "vspace", length: { value: -2, unit: "mm" } },
+      { type: "space", kind: "hspace", length: { value: 0.5, unit: "linewidth" } },
+    ]);
+    expect(types("A\\hfill B\\quad C\\qquad D")).toEqual([
+      "text",
+      "space",
+      "text",
+      "space",
+      "text",
+      "space",
+      "text",
+    ]);
+    // 寸法にできない長さは、これまでどおり生ブロックに残す。
+    expect(types("\\hspace{\\stretch{1}}")).toEqual(["rawInline"]);
+  });
+
+  it("\\footnote・\\cite・\\LaTeX・命令形の書体を読み、任意引数付きは生ブロックに残す", () => {
+    expect(inlines("A\\footnote{Note} \\cite{knuth84, lamport} \\LaTeX{} x")).toMatchObject([
+      { type: "text", value: "A" },
+      { type: "footnote", children: [{ type: "text", value: "Note" }] },
+      { type: "cite", keys: ["knuth84", "lamport"] },
+      { type: "logo", name: "LaTeX" },
+      { type: "text", value: " x " },
+    ]);
+    expect(inlines("\\underline{a}\\textsc{b}")).toMatchObject([
+      { type: "styled", style: "underline" },
+      { type: "styled", style: "textsc" },
+    ]);
+    expect(types("\\footnote[3]{Note}")).toEqual(["rawInline"]);
+    expect(types("\\cite[p.~3]{knuth84}")).toEqual(["rawInline"]);
+  });
+});

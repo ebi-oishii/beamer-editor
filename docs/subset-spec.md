@@ -122,10 +122,20 @@ Markdown 風入力は `.slide.tex` の語彙ではない。入力補助が提供
 | 要素 | 構文 |
 |---|---|
 | 強調 | `\textbf{}`, `\emph{}`, `\textit{}`, `\texttt{}`, `\alert{}` |
-| 色 | `\textcolor{名前付き色}{…}`(定義済み色名のみ) |
+| 書体 | `\underline{}`, `\textsc{}`, `\textsf{}`, `\textrm{}`, `\textsl{}`, `\textup{}`, `\textmd{}`, `\textnormal{}` |
+| 書体の宣言 | `\bfseries`, `\mdseries`, `\itshape`, `\slshape`, `\upshape`, `\scshape`, `\ttfamily`, `\sffamily`, `\rmfamily`, `\normalfont` |
+| 文字サイズの宣言 | `\tiny`, `\scriptsize`, `\footnotesize`, `\small`, `\normalsize`, `\large`, `\Large`, `\LARGE`, `\huge`, `\Huge` |
+| 揃えの宣言 | `\centering`, `\raggedright`, `\raggedleft`(段落単位で効く) |
+| 色 | `\textcolor{名前付き色}{…}`, 宣言 `\color{名前付き色}`(定義済み色名のみ) |
+| グループ | `{…}` |
+| 空白 | `\hspace{長さ}`, `\vspace{長さ}`, `\hfill`, `\quad`, `\qquad`(長さは `pt` `bp` `mm` `cm` `in` `pc` `em` `ex` と `\textwidth` などの行幅の倍数) |
+| 脚注・参照 | `\footnote{}`, `\cite{}`(参考文献リストは扱わず、プレビューはキーを `[…]` で示す) |
+| ロゴ | `\LaTeX`, `\TeX` |
 | リンク | `\url{}`, `\href{}{}` |
 | 改行 | `\\` |
 | 特殊文字 | `\%`, `\&`, `\_`, `\#`, `\{`, `\}`, `~`, `---`, `--` |
+
+宣言は TeX と同じく、囲むグループ `{…}` か環境の終わりまで効く。段落の区切りをまたいで、同じ環境の後続の要素にも効く。
 
 ### 2.6 数式(KaTeX で描画)
 

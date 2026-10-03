@@ -1100,3 +1100,31 @@ describe("L022 / L023: テンプレート参照", () => {
     expect(sourceText(source, diagnostics[0])).toBe("\\usetheme{corporate}");
   });
 });
+
+describe("よく使う整形命令(#180)", () => {
+  it("本文でも decktext の中でも L001 にしない", () => {
+    const commands =
+      "\\centering \\small \\bfseries {\\color{red} A} \\underline{u} \\textsc{s} \\hspace{1em} A\\hfill B\\quad C \\footnote{n} \\cite{k} \\LaTeX";
+    const codes = lintSource(
+      deck(`\\begin{frame}[label=a]{T}
+${commands}
+\\begin{deckcanvas}
+\\begin{decktext}[x=0.100,y=0.200,w=0.500,size=normal]
+${commands}
+\\end{decktext}
+\\end{deckcanvas}
+\\end{frame}`),
+    ).map((diagnostic) => diagnostic.code);
+    expect(codes).not.toContain("L001");
+    expect(codes).not.toContain("L014");
+  });
+
+  it("未対応の命令はこれまでどおり L001 にする", () => {
+    const codes = lintSource(
+      deck(
+        "\\begin{frame}[label=a]{T}\nA \\textsuperscript{x} \\hspace{\\stretch{1}}\n\\end{frame}",
+      ),
+    ).map((diagnostic) => diagnostic.code);
+    expect(codes.filter((code) => code === "L001")).toHaveLength(2);
+  });
+});

@@ -15,6 +15,7 @@ import type {
   BlockNode,
   CanvasNode,
   DeckDocument,
+  DeclarationNode,
   FrameNode,
   InlineNode,
   LengthSpec,
@@ -25,6 +26,7 @@ import type {
   RawFrameNode,
   RawInlineNode,
   SourceSpan,
+  SpaceLength,
 } from "@beamer-editor/core";
 import {
   type DetachStatus,
@@ -296,6 +298,41 @@ function math(tex: string, displayMode: boolean): string {
   }
 }
 
+/** `\centering` などの揃えの宣言と、CSS の text-align の対応。 */
+const DECLARATION_ALIGN: Partial<Record<DeclarationNode["name"], "center" | "left" | "right">> = {
+  centering: "center",
+  raggedright: "left",
+  raggedleft: "right",
+};
+
+/** 11pt の文書クラスでの文字サイズ(pt)。テーマに無い大きさは LaTeX の標準値を使う。 */
+const EXTRA_SIZES_PT = { LARGE: 17.28, huge: 20.74, Huge: 24.88 } as const;
+
+const MAIN_FONT = `var(--deck-font-main, -apple-system, "Helvetica Neue", Arial, sans-serif)`;
+const MONO_FONT = `var(--deck-font-mono, "SF Mono", ui-monospace, Menlo, monospace)`;
+
+/** 書体の宣言と、同じ効果の CSS。`\textsf{}` などの命令形でも同じ表を使う。 */
+const FONT_CSS: Record<string, string> = {
+  bfseries: "font-weight:bold",
+  mdseries: "font-weight:normal",
+  itshape: "font-style:italic",
+  slshape: "font-style:oblique",
+  upshape: "font-style:normal",
+  scshape: "font-variant:small-caps",
+  ttfamily: `font-family:${MONO_FONT}`,
+  sffamily: `font-family:${MAIN_FONT}`,
+  rmfamily: "font-family:serif",
+  normalfont: `font-weight:normal;font-style:normal;font-variant:normal;font-family:${MAIN_FONT}`,
+};
+
+/** 段落をまたいで引き継ぐ宣言の効果。揃えは段落単位、それ以外は CSS で持つ。 */
+interface DeclarationState {
+  align: "center" | "left" | "right" | null;
+  css: string;
+}
+
+const isHfill = (node: InlineNode): boolean => node.type === "space" && node.kind === "hfill";
+
 class FrameRenderer {
   /** 現在の \pause 通過数。要素の data-min に反映する。 */
   private pauseCount = 0;
@@ -310,6 +347,10 @@ class FrameRenderer {
     footerHtml: null,
   };
   private canvasElements: RenderedCanvasElement[] = [];
+  /** 文書全体で通した脚注番号(LaTeX の footnote カウンタと同じく、フレームでは戻さない)。 */
+  private footnoteCount = 0;
+  /** 描画中フレームの脚注。スライドの下端にまとめて出す。 */
+  private footnotes: string[] = [];
   /** 描画中フレームの各フロー要素が「自由配置にする」候補になれるか(core と同じ判定)。 */
   private detachStatuses: Map<BlockNode, DetachStatus> = new Map();
 
@@ -388,50 +429,197 @@ class FrameRenderer {
     return attrs;
   }
 
+  /** 宣言の CSS。揃えは段落単位で扱うので、ここでは空を返す。 */
+  private declarationCss(node: DeclarationNode): string {
+    if (node.name === "color") return `color:${escapeHtml(NAMED_COLORS[node.color] ?? node.color)}`;
+    if (node.name in DECLARATION_ALIGN) return "";
+    if (node.name in FONT_CSS) return FONT_CSS[node.name] as string;
+    const size =
+      node.name === "normalsize"
+        ? this.theme.fontSizesPt.normal
+        : node.name in EXTRA_SIZES_PT
+          ? EXTRA_SIZES_PT[node.name as keyof typeof EXTRA_SIZES_PT]
+          : this.theme.fontSizesPt[node.name as keyof Theme["fontSizesPt"]];
+    return size === undefined ? "" : `font-size:${size}pt`;
+  }
+
+  /** TeX の長さを CSS の長さに。行幅基準の長さは、今いる場所の行幅(pt)に直す。 */
+  private spaceLengthCss(length: SpaceLength): string {
+    if (length.unit === "linewidth") {
+      const width = this.theme.metrics.bodyAreaPt.width * this.linewidthFactor;
+      return `${(length.value * width).toFixed(2)}pt`;
+    }
+    return `${length.value}${length.unit === "bp" ? "pt" : length.unit}`;
+  }
+
+  /**
+   * 行内要素の並び。宣言(`\small` など)はその後ろの残りを包み、`\hfill` は前後を
+   * 横並びの箱に分けて残りの幅を埋める。どちらも TeX と同じく、並びの終わりまで効く。
+   */
   renderInlines(nodes: InlineNode[]): string {
     let out = "";
-    for (const node of nodes) {
-      switch (node.type) {
-        case "text":
-          out += escapeHtml(node.value);
-          break;
-        case "styled": {
-          const inner = this.renderInlines(node.children);
-          if (node.style === "textbf") out += `<strong>${inner}</strong>`;
-          else if (node.style === "emph") out += `<em>${inner}</em>`;
-          else if (node.style === "textit") out += `<span class="it">${inner}</span>`;
-          else if (node.style === "texttt") out += `<code>${inner}</code>`;
-          else out += `<span class="alert">${inner}</span>`;
-          break;
-        }
-        case "colorText": {
-          const color = NAMED_COLORS[node.color] ?? node.color;
-          out += `<span style="color:${escapeHtml(color)}">${this.renderInlines(node.children)}</span>`;
-          break;
-        }
-        case "url":
-          out += `<a class="url" href="${escapeHtml(node.url)}">${escapeHtml(node.url)}</a>`;
-          break;
-        case "href":
-          out += `<a class="url" href="${escapeHtml(node.url)}">${this.renderInlines(node.children)}</a>`;
-          break;
-        case "lineBreak":
-          out += "<br>";
-          break;
-        case "inlineMath":
-          out += math(node.tex, false);
-          break;
-        case "rawInline":
-          out += `<span class="raw-inline" title="サブセット外(生ブロック)">${escapeHtml(node.tex)}</span>`;
-          break;
+    for (const [index, node] of nodes.entries()) {
+      if (node.type === "declaration") {
+        const css = this.declarationCss(node);
+        const rest = this.renderInlines(nodes.slice(index + 1));
+        return out + (css ? `<span style="${css}">${rest}</span>` : rest);
       }
+      if (isHfill(node)) {
+        const segments: InlineNode[][] = [[]];
+        for (const child of nodes.slice(index + 1)) {
+          if (isHfill(child)) segments.push([]);
+          else segments.at(-1)?.push(child);
+        }
+        const fill = '<span class="hfill" style="flex:1 1 auto"></span>';
+        const parts = [out, ...segments.map((segment) => this.renderInlines(segment))];
+        return `<span class="hfill-line" style="display:flex;align-items:baseline">${parts
+          .map((part) => `<span>${part}</span>`)
+          .join(fill)}</span>`;
+      }
+      out += this.renderInline(node);
     }
     return out;
   }
 
+  private renderInline(node: InlineNode): string {
+    switch (node.type) {
+      case "text":
+        return escapeHtml(node.value);
+      case "styled": {
+        const inner = this.renderInlines(node.children);
+        switch (node.style) {
+          case "textbf":
+            return `<strong>${inner}</strong>`;
+          case "emph":
+            return `<em>${inner}</em>`;
+          case "textit":
+            return `<span class="it">${inner}</span>`;
+          case "texttt":
+            return `<code>${inner}</code>`;
+          case "alert":
+            return `<span class="alert">${inner}</span>`;
+          case "underline":
+            return `<u>${inner}</u>`;
+          case "textsc":
+            return `<span style="${FONT_CSS.scshape}">${inner}</span>`;
+          case "textsf":
+            return `<span style="${FONT_CSS.sffamily}">${inner}</span>`;
+          case "textrm":
+            return `<span style="${FONT_CSS.rmfamily}">${inner}</span>`;
+          case "textsl":
+            return `<span style="${FONT_CSS.slshape}">${inner}</span>`;
+          case "textup":
+            return `<span style="${FONT_CSS.upshape}">${inner}</span>`;
+          case "textmd":
+            return `<span style="${FONT_CSS.mdseries}">${inner}</span>`;
+          case "textnormal":
+            return `<span style="${FONT_CSS.normalfont}">${inner}</span>`;
+        }
+        return inner;
+      }
+      case "colorText": {
+        const color = NAMED_COLORS[node.color] ?? node.color;
+        return `<span style="color:${escapeHtml(color)}">${this.renderInlines(node.children)}</span>`;
+      }
+      case "group":
+        return `<span>${this.renderInlines(node.children)}</span>`;
+      case "declaration":
+        return "";
+      case "space":
+        switch (node.kind) {
+          case "hspace":
+            return node.length
+              ? `<span class="hspace" style="display:inline-block;width:0;margin-left:${this.spaceLengthCss(node.length)}"></span>`
+              : "";
+          case "vspace":
+            return node.length
+              ? `<span class="vspace" style="display:block;height:0;margin-top:${this.spaceLengthCss(node.length)}"></span>`
+              : "";
+          case "quad":
+            return '<span class="quad" style="display:inline-block;width:1em"></span>';
+          case "qquad":
+            return '<span class="quad" style="display:inline-block;width:2em"></span>';
+          case "hfill":
+            return '<span class="hfill" style="display:inline-block;width:1em"></span>';
+        }
+        return "";
+      case "footnote": {
+        this.footnoteCount += 1;
+        const mark = this.footnoteCount;
+        this.footnotes.push(
+          `<div class="footnote"><sup>${mark}</sup> ${this.renderInlines(node.children)}</div>`,
+        );
+        return `<sup class="footnote-mark">${mark}</sup>`;
+      }
+      case "cite":
+        return `<span class="cite">[${node.keys.map(escapeHtml).join(", ")}]</span>`;
+      case "logo":
+        return math(`\\${node.name}`, false);
+      case "url":
+        return `<a class="url" href="${escapeHtml(node.url)}">${escapeHtml(node.url)}</a>`;
+      case "href":
+        return `<a class="url" href="${escapeHtml(node.url)}">${this.renderInlines(node.children)}</a>`;
+      case "lineBreak":
+        return "<br>";
+      case "inlineMath":
+        return math(node.tex, false);
+      case "rawInline":
+        return `<span class="raw-inline" title="サブセット外(生ブロック)">${escapeHtml(node.tex)}</span>`;
+    }
+  }
+
+  /** 段落の先頭の階層にある宣言。揃えは最後のものが段落全体に効き、それ以外は後続の要素へ引き継ぐ。 */
+  private paragraphDeclarations(nodes: InlineNode[]): DeclarationState {
+    let align: DeclarationState["align"] = null;
+    let css = "";
+    for (const node of nodes) {
+      if (node.type !== "declaration") continue;
+      align = DECLARATION_ALIGN[node.name] ?? align;
+      const style = this.declarationCss(node);
+      if (style) css += `${css ? ";" : ""}${style}`;
+    }
+    return { align, css };
+  }
+
+  private withState(html: string, state: DeclarationState): string {
+    if (!state.align && !state.css) return html;
+    const style = [state.align ? `text-align:${state.align}` : "", state.css]
+      .filter((part) => part !== "")
+      .join(";");
+    return `<div class="declared" style="${style}">${html}</div>`;
+  }
+
+  /**
+   * ブロックの並び。`\centering` や `\small` は TeX と同じく、同じ環境(グループ)の
+   * 後続の要素にも効くので、段落で見つけた宣言を次の要素へ引き継ぐ。キャンバスは
+   * 箱の中で揃えが戻る(minipage)ので引き継がない。
+   */
   renderBlocks(blocks: BlockNode[]): string {
     let out = "";
-    for (const block of blocks) out += this.renderBlock(block);
+    let state: DeclarationState = { align: null, css: "" };
+    for (const block of blocks) {
+      if (block.type === "paragraph") {
+        const own = this.paragraphDeclarations(block.children);
+        const align = own.align ?? state.align;
+        const after = {
+          align,
+          css: [state.css, own.css].filter((part) => part !== "").join(";"),
+        };
+        // 宣言だけの段落(`\centering` の行など)は描くものが無い。効果だけを引き継ぐ。
+        const onlyDeclarations = block.children.every(
+          (node) =>
+            node.type === "declaration" || (node.type === "text" && node.value.trim() === ""),
+        );
+        if (!onlyDeclarations)
+          out += this.withState(this.renderBlock(block), { align, css: state.css });
+        state = after;
+        continue;
+      }
+      out +=
+        block.type === "canvas"
+          ? this.renderBlock(block)
+          : this.withState(this.renderBlock(block), state);
+    }
     return out;
   }
 
@@ -727,17 +915,27 @@ class FrameRenderer {
     this.maxStep = 1;
     this.linewidthFactor = 1;
     this.canvasElements = [];
+    this.footnotes = [];
     this.detachStatuses = detachStatusesOf(frame);
-    const body = this.renderBlocks(frame.body);
     const title =
       frame.title && frame.title.length > 0
         ? `<div class="frametitle">${this.renderInlines(frame.title)}</div>`
         : "";
+    const body = this.renderBlocks(frame.body);
     return {
-      html: `<div class="slide${frame.options.plain ? " plain" : ""}">${this.renderDecorations(frameIndex, frameTotal)}${title}<div class="slide-body">${body}</div></div>`,
+      html: `<div class="slide${frame.options.plain ? " plain" : ""}">${this.renderDecorations(frameIndex, frameTotal)}${title}<div class="slide-body">${body}</div>${this.renderFootnotes()}</div>`,
       stepCount: this.maxStep,
       canvasElements: this.canvasElements,
     };
+  }
+
+  /** フレームの脚注を本文領域の下端にまとめる(beamer の既定と同じく tiny)。 */
+  private renderFootnotes(): string {
+    if (this.footnotes.length === 0) return "";
+    const { slideWidthPt, bodyAreaPt: body } = this.theme.metrics;
+    const left = (body.left / slideWidthPt) * 100;
+    const right = ((slideWidthPt - body.left - body.width) / slideWidthPt) * 100;
+    return `<div class="footnotes" style="position:absolute;left:${left.toFixed(3)}%;right:${right.toFixed(3)}%;bottom:2%;font-size:${this.theme.fontSizesPt.tiny}pt">${this.footnotes.join("")}</div>`;
   }
 
   renderRawFrame(frame: RawFrameNode, frameIndex: number, frameTotal: number): string {
@@ -760,6 +958,7 @@ function inlineToPlain(nodes: InlineNode[]): string {
       case "styled":
       case "colorText":
       case "href":
+      case "group":
         out += inlineToPlain(n.children);
         break;
       case "url":
@@ -772,7 +971,17 @@ function inlineToPlain(nodes: InlineNode[]): string {
         out += n.tex;
         break;
       case "lineBreak":
+      case "space":
         out += " ";
+        break;
+      case "cite":
+        out += `[${n.keys.join(", ")}]`;
+        break;
+      case "logo":
+        out += n.name;
+        break;
+      case "declaration":
+      case "footnote":
         break;
     }
   }

@@ -292,7 +292,7 @@ ${body}
     for (const body of [
       "\\myemph{text with \\begin{small}stuff\\end{small} inside}",
       "\\scalebox{0.8}{\\begin{tabular}{ll}a&b\\\\\\end{tabular}}",
-      "before \\textsc{Small} after",
+      "before \\textsuperscript{Small} after",
     ]) {
       const rendered = html(body);
       expect(rendered, body).toContain("raw-inline");
@@ -557,4 +557,90 @@ it("renders trailing comments in canvas align without swallowing the closing env
     ).frames[0]?.html ?? "";
   expect(html).toContain('class="katex"');
   expect(html).not.toContain("katex-error");
+});
+
+describe("renderDeck: よく使う整形命令(#180)", () => {
+  const deck = (...frames: string[]) =>
+    `\\documentclass{beamer}\n\\begin{document}\n${frames
+      .map((body, i) => `\\begin{frame}[label=f${i}]{T}\n${body}\n\\end{frame}`)
+      .join("\n")}\n\\end{document}\n`;
+  const frames = (...bodies: string[]) => renderDeck(parseDeck(deck(...bodies))).frames;
+  const html = (body: string) => frames(body)[0]?.html ?? "";
+
+  it("どの命令も生ブロックとして出さない", () => {
+    const out = html(
+      "\\centering \\small \\bfseries {\\color{red} A} \\underline{u} \\textsc{s} \\hspace{1em} A\\hfill B\\quad C\\footnote{n} \\cite{k} \\LaTeX \\vspace{2mm}",
+    );
+    expect(out).not.toContain("raw-inline");
+    expect(out).not.toContain("katex-error");
+  });
+
+  it("\\centering は decktext の箱の中を中央寄せにする", () => {
+    const out = html(`\\begin{deckcanvas}
+\\begin{decktext}[x=0.100,y=0.200,w=0.500,size=normal]
+\\centering
+Centered text
+\\end{decktext}
+\\end{deckcanvas}`);
+    expect(out).toMatch(/canvas-text[^>]*><div class="declared" style="text-align:center"><p>/);
+  });
+
+  it("宣言だけの段落は描かずに、後続の画像と段落へ揃えを引き継ぐ", () => {
+    const out = html("\\centering\n\\includegraphics[width=0.4\\textwidth]{a.png}\n\nNext");
+    expect(out).not.toContain("<p></p>");
+    expect(out).toMatch(/<div class="declared" style="text-align:center"><img /);
+    expect(out).toMatch(/<div class="declared" style="text-align:center"><p[^>]*>Next/);
+  });
+
+  it("文字サイズは同じ環境の後続の段落に引き継ぎ、段組みの別の段には持ち越さない", () => {
+    const out = html(`\\begin{columns}
+\\begin{column}{0.5\\textwidth}
+\\small
+First
+
+Second
+\\end{column}
+\\begin{column}{0.5\\textwidth}
+Other
+\\end{column}
+\\end{columns}`);
+    expect(out).toContain('<span style="font-size:10pt"> First</span>');
+    expect(out).toMatch(/<div class="declared" style="font-size:10pt"><p[^>]*>Second/);
+    expect(out).toMatch(/<div class="col"[^>]*><p[^>]*>Other/);
+  });
+
+  it("グループの中の宣言はグループの終わりまでで、波括弧は表示しない", () => {
+    const out = html("Before {\\color{red} A} after");
+    expect(out).toContain('Before <span><span style="color:#e74c3c"> A</span></span> after');
+    expect(out).not.toContain("{");
+  });
+
+  it("\\hfill は前後を横並びにして残りの幅を埋める", () => {
+    expect(html("Left \\hfill Right")).toContain(
+      '<span class="hfill-line" style="display:flex;align-items:baseline"><span>Left </span><span class="hfill" style="flex:1 1 auto"></span><span> Right </span></span>',
+    );
+  });
+
+  it("\\hspace / \\vspace の長さを CSS にし、行幅基準は今の行幅に直す", () => {
+    const out = html("A\\hspace{2em}B\\vspace{-3mm}C\\hspace{0.5\\textwidth}D");
+    expect(out).toContain("margin-left:2em");
+    expect(out).toContain("margin-top:-3mm");
+    expect(out).toContain(
+      `margin-left:${(0.5 * DEFAULT_THEME.metrics.bodyAreaPt.width).toFixed(2)}pt`,
+    );
+  });
+
+  it("脚注は本文の位置に番号を置き、スライドの下端にまとめ、番号はフレームをまたいで続く", () => {
+    const [first, second] = frames("A\\footnote{one} B\\footnote{two}", "C\\footnote{three}");
+    expect(first?.html).toContain('A<sup class="footnote-mark">1</sup>');
+    expect(first?.html).toContain('<div class="footnote"><sup>2</sup> two</div>');
+    expect(first?.html).toMatch(/<div class="footnotes" style="position:absolute;[^"]*bottom:2%/);
+    expect(second?.html).toContain('C<sup class="footnote-mark">3</sup>');
+  });
+
+  it("\\cite はキーを角括弧で、\\LaTeX はロゴで出す", () => {
+    const out = html("\\cite{knuth84, lamport} \\LaTeX{}");
+    expect(out).toContain('<span class="cite">[knuth84, lamport]</span>');
+    expect(out).toContain('class="katex"');
+  });
 });
