@@ -14,7 +14,11 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, relative, resolve } from "node:path";
-import { type CompileDeckFramesRequest, findDeckFrames } from "@beamer-editor/compiler";
+import {
+  type CompileDeckFramesRequest,
+  findDeckFrames,
+  type PdfExportProgress,
+} from "@beamer-editor/compiler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type CliDependencies,
@@ -1281,6 +1285,46 @@ describe("deck export", () => {
         }),
       ).toBe(0);
       expect(html).toHaveBeenLastCalledWith({ inputPath: "talk.slide.tex", overwrite: true });
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it("announces the first Tectonic package download once on stderr, except with --json", async () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const compiler = vi.fn(
+      async (request: { onProgress?: (progress: PdfExportProgress) => void }) => {
+        for (const [count, file] of ["latex.ltx", "beamer.cls", "pgf.sty"].entries())
+          request.onProgress?.({ kind: "download", file, count: count + 1 });
+        return {
+          format: "pdf" as const,
+          inputPath: "/tmp/talk.slide.tex",
+          outputPath: "/tmp/talk.pdf",
+          overwritten: false,
+          engineVersion: "0.17.0",
+        };
+      },
+    );
+    try {
+      expect(
+        await run(["export", "talk.slide.tex", "--format", "pdf"], { exportPdf: compiler }),
+      ).toBe(0);
+      expect(stderr.mock.calls).toEqual([
+        ["TeX パッケージを取得しています(初回のみ。数分かかることがあります)…\n"],
+      ]);
+      expect(stdout).toHaveBeenLastCalledWith("talk.slide.tex -> talk.pdf\n");
+      stderr.mockClear();
+      stdout.mockClear();
+      expect(
+        await run(["export", "talk.slide.tex", "--format", "pdf", "--json"], {
+          exportPdf: compiler,
+        }),
+      ).toBe(0);
+      expect(compiler.mock.calls.at(-1)?.[0].onProgress).toBeUndefined();
+      expect(stderr).not.toHaveBeenCalled();
+      expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({ format: "pdf" });
     } finally {
       stdout.mockRestore();
       stderr.mockRestore();

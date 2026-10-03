@@ -112,7 +112,7 @@
           "minimum": 5,
           "maximum": 1800,
           "scope": "resource",
-          "description": "Maximum time in seconds to wait for PDF compilation."
+          "description": "Maximum time in seconds to wait for PDF compilation. While Tectonic is downloading TeX packages (on first use), the timer restarts after each download, so the limit applies to the time since the last download."
         },
         "beamerEditor.preview.compileRawBlocks": {
           "type": "boolean",

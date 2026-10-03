@@ -62,9 +62,9 @@ managed な `.tex` エディターで、クリップボードの画像(PNG / JPE
 
 ## PDF 書き出し
 
-コマンドパレット、`.tex` エディター、または対応するプレビューのタイトルから **Beamer Editor: Export...** を実行すると、保存先を選んで PDF を書き出せます。コンパイルには [Tectonic](https://tectonic-typesetting.github.io/) を使います。Tectonic は拡張に同梱されているので(macOS arm64 / x86_64、Linux x64 / arm64、Windows x64)、別途インストールする必要はありません。初回のコンパイル時に TeX のパッケージを Tectonic が必要な分だけダウンロードします。対象外の環境や別の版を使いたいときは `beamerEditor.tectonicPath` で実行ファイルを指定してください(同梱の無い環境では PATH の `tectonic` を使います)。
+コマンドパレット、`.tex` エディター、または対応するプレビューのタイトルから **Beamer Editor: Export...** を実行すると、保存先を選んで PDF を書き出せます。コンパイルには [Tectonic](https://tectonic-typesetting.github.io/) を使います。Tectonic は拡張に同梱されているので(macOS arm64 / x86_64、Linux x64 / arm64、Windows x64)、別途インストールする必要はありません。初回のコンパイル時に TeX のパッケージを Tectonic が必要な分だけダウンロードします(数分かかることがあり、進み具合は書き出し中の通知に表示されます)。対象外の環境や別の版を使いたいときは `beamerEditor.tectonicPath` で実行ファイルを指定してください(同梱の無い環境では PATH の `tectonic` を使います)。
 
-編集中の内容は先に保存され、コンパイルは既定で300秒後に停止します（`beamerEditor.pdfExport.timeoutSeconds` で5〜1800秒に変更可）。失敗時は通知の「詳細を表示」からTectonicのエラーを確認できます。既存PDFはコンパイルが成功するまで置換されません。PDF は外部プログラムを起動するため、Restricted Modeでは形式選択後に実行を拒否します。
+編集中の内容は先に保存され、コンパイルは既定で300秒後に停止します（`beamerEditor.pdfExport.timeoutSeconds` で5〜1800秒に変更可。初回のパッケージ取得中は取得のたびに計測をやり直します）。失敗時は通知の「詳細を表示」からTectonicのエラーを確認できます。既存PDFはコンパイルが成功するまで置換されません。PDF は外部プログラムを起動するため、Restricted Modeでは形式選択後に実行を拒否します。
 
 Export の形式で **HTML（プレビュー相当）** を選ぶと、保存済みの内容から `index.html` を含むフォルダーを作成します。これは `file:` で直接開ける高速プレビューの固定スナップショットであり、正式な TeX 出力ではありません。PDF 画像と raw TeX はプレースホルダーのまま、外部 URL の画像は開いたブラウザーでネットワークを必要とします。HTML は外部プロセスを使わないため Restricted Mode でも利用できます。
 

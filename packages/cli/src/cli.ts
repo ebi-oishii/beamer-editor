@@ -30,6 +30,7 @@ import {
   exportPdf,
   frameSelectorFromAddress,
   type PdfExportErrorCode,
+  type PdfExportProgress,
   type PdfExportResult,
 } from "@beamer-editor/compiler";
 import {
@@ -687,6 +688,7 @@ export interface CliDependencies {
     outputPath?: string;
     overwrite?: boolean;
     tectonicPath?: string;
+    onProgress?: (progress: PdfExportProgress) => void;
   }) => Promise<PdfExportResult>;
   exportHtml?: (request: {
     inputPath: string;
@@ -936,11 +938,25 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
       } else process.stdout.write(`${input} -> ${result.indexPath}\n`);
       return EXIT_CODE.success;
     }
+    // A cold Tectonic cache downloads hundreds of files before compiling. Say
+    // so once, on stderr, so the wait is explained; --json keeps output machine-only.
+    let announcedDownload = false;
     const result = await (dependencies.exportPdf ?? exportPdf)({
       inputPath: input,
       ...(parsed.output === undefined ? {} : { outputPath: parsed.output }),
       ...(parsed.overwrite ? { overwrite: true } : {}),
       ...(parsed.tectonic === undefined ? {} : { tectonicPath: parsed.tectonic }),
+      ...(parsed.json
+        ? {}
+        : {
+            onProgress: () => {
+              if (announcedDownload) return;
+              announcedDownload = true;
+              process.stderr.write(
+                "TeX パッケージを取得しています(初回のみ。数分かかることがあります)…\n",
+              );
+            },
+          }),
     });
     if (parsed.json) {
       process.stdout.write(
