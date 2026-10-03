@@ -21,6 +21,7 @@ import type {
   DeckDocument,
   DeckElement,
   DeckStyle,
+  DeclarationNode,
   DimFactor,
   FrameNode,
   FrameOptions,
@@ -36,6 +37,7 @@ import type {
   RawBlockNode,
   RawFrameNode,
   SourceSpan,
+  SpaceLength,
   StyleColorRole,
   TableRow,
 } from "./ast.js";
@@ -59,7 +61,61 @@ const BLOCK_ENVS = new Set([
   "decktext",
 ]);
 
-const STYLE_COMMANDS = new Set(["textbf", "emph", "textit", "texttt", "alert"]);
+const STYLE_COMMANDS = new Set([
+  "textbf",
+  "emph",
+  "textit",
+  "texttt",
+  "alert",
+  "underline",
+  "textsc",
+  "textsf",
+  "textrm",
+  "textsl",
+  "textup",
+  "textmd",
+  "textnormal",
+]);
+
+/** 引数を取らない宣言(§2.5)。後に続く内容へ、囲むグループか環境の終わりまで効く。 */
+const DECLARATIONS = new Set([
+  "centering",
+  "raggedright",
+  "raggedleft",
+  "tiny",
+  "scriptsize",
+  "footnotesize",
+  "small",
+  "normalsize",
+  "large",
+  "Large",
+  "LARGE",
+  "huge",
+  "Huge",
+  "bfseries",
+  "mdseries",
+  "itshape",
+  "slshape",
+  "upshape",
+  "scshape",
+  "ttfamily",
+  "sffamily",
+  "rmfamily",
+  "normalfont",
+]);
+
+/** `\hspace` / `\vspace` の引数。プレビューで寸法にできる形だけを受け、それ以外は生ブロックに残す。 */
+function parseSpaceLength(text: string): SpaceLength | null {
+  const value = text.trim();
+  const absolute = /^([-+]?(?:\d+\.?\d*|\.\d+))\s*(pt|bp|mm|cm|in|pc|em|ex)$/.exec(value);
+  if (absolute) return { value: Number(absolute[1]), unit: absolute[2] as SpaceLength["unit"] };
+  const relative = /^([-+]?(?:\d+\.?\d*|\.\d+))?\s*\\(?:textwidth|linewidth|columnwidth)$/.exec(
+    value,
+  );
+  if (relative)
+    return { value: relative[1] === undefined ? 1 : Number(relative[1]), unit: "linewidth" };
+  return null;
+}
 
 const CANVAS_SIZES = new Set<CanvasFontSize>(CANVAS_FONT_SIZES);
 
@@ -374,6 +430,20 @@ class Parser {
         pos++;
         continue;
       }
+      if (ch === "{") {
+        // `{\small …}` のようなグループ。中の宣言はグループの終わりまで効く。
+        const close = readBalanced(this.src, pos);
+        if (close !== null && close < end) {
+          flush(pos);
+          out.push({
+            type: "group",
+            children: this.parseInlines(pos + 1, close),
+            span: span(pos, close + 1),
+          });
+          pos = close + 1;
+          continue;
+        }
+      }
       if (ch === "-") {
         if (this.src.startsWith("---", pos)) {
           pushText("—", pos);
@@ -496,6 +566,82 @@ class Parser {
           next: g2.next,
         };
       }
+    }
+    if (DECLARATIONS.has(name)) {
+      return {
+        node: {
+          type: "declaration",
+          name: name as Exclude<DeclarationNode["name"], "color">,
+          span: span(pos, argStart),
+        },
+        next: argStart,
+      };
+    }
+    if (name === "color" && this.src[argStart] !== "[") {
+      const g = group(argStart);
+      if (g) {
+        return {
+          node: {
+            type: "declaration",
+            name: "color",
+            color: this.src.slice(g.body[0], g.body[1]).trim(),
+            span: span(pos, g.next),
+          },
+          next: g.next,
+        };
+      }
+    }
+    if (name === "hspace" || name === "hspace*" || name === "vspace" || name === "vspace*") {
+      const g = group(argStart);
+      const length = g && parseSpaceLength(this.src.slice(g.body[0], g.body[1]));
+      if (g && length) {
+        return {
+          node: {
+            type: "space",
+            kind: name.startsWith("h") ? "hspace" : "vspace",
+            length,
+            span: span(pos, g.next),
+          },
+          next: g.next,
+        };
+      }
+    }
+    if (name === "hfill" || name === "quad" || name === "qquad") {
+      return {
+        node: { type: "space", kind: name, length: null, span: span(pos, argStart) },
+        next: argStart,
+      };
+    }
+    if (name === "footnote" && this.src[argStart] !== "[") {
+      const g = group(argStart);
+      if (g) {
+        return {
+          node: {
+            type: "footnote",
+            children: this.parseInlines(g.body[0], g.body[1]),
+            span: span(pos, g.next),
+          },
+          next: g.next,
+        };
+      }
+    }
+    if (name === "cite" && this.src[argStart] !== "[") {
+      const g = group(argStart);
+      if (g) {
+        const keys = this.src
+          .slice(g.body[0], g.body[1])
+          .split(",")
+          .map((key) => key.trim())
+          .filter((key) => key !== "");
+        if (keys.length > 0) {
+          return { node: { type: "cite", keys, span: span(pos, g.next) }, next: g.next };
+        }
+      }
+    }
+    if (name === "LaTeX" || name === "TeX") {
+      // `\LaTeX{}` の空グループは語の区切りなので一緒に読む。
+      const empty = this.src.startsWith("{}", argStart) ? argStart + 2 : argStart;
+      return { node: { type: "logo", name, span: span(pos, empty) }, next: empty };
     }
     if (name === "url") {
       const g = group(argStart);

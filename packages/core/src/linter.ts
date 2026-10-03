@@ -756,7 +756,11 @@ function hasLineBreak(nodes: InlineNode[]): boolean {
     if (node.type === "lineBreak" || (node.type === "text" && node.value.includes("\n")))
       return true;
     return (
-      (node.type === "styled" || node.type === "colorText" || node.type === "href") &&
+      (node.type === "styled" ||
+        node.type === "colorText" ||
+        node.type === "href" ||
+        node.type === "group" ||
+        node.type === "footnote") &&
       hasLineBreak(node.children)
     );
   });
