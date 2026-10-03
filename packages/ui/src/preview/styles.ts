@@ -54,6 +54,33 @@ export const PREVIEW_CSS = `
   outline-color: var(--vscode-focusBorder, #3344b3);
   background: var(--vscode-list-activeSelectionBackground, #e8eaf9);
 }
+.slide-card:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, #3344b3);
+  outline-offset: 2px;
+}
+.slide-order-menu {
+  position: fixed;
+  z-index: 3;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, #888));
+  border-radius: 3px;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background, #fff));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+}
+.slide-order-menu button {
+  display: block;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  color: var(--vscode-menu-foreground, inherit);
+  background: transparent;
+  text-align: left;
+}
+.slide-order-menu button:not(:disabled):hover,
+.slide-order-menu button:not(:disabled):focus {
+  background: var(--vscode-menu-selectionBackground, #ddeeff);
+}
 /* 外側は見た目の scaled size、内側(.slide-scale)は論理サイズのまま transform する。
    transform のはみ出しは外側で閉じ、影も外側に持たせる(#58 の移植)。 */
 .slide-layout {

@@ -53,6 +53,24 @@ export function slideOutlineEntries<Document extends SlideOutlineDocument>(
   });
 }
 
+const explicitFrameStartCache = new WeakMap<
+  SlideOutlineDocument,
+  { version: number; starts: ReadonlySet<number> }
+>();
+
+/**
+ * document に明示的に書かれた frame(マクロ展開の仮想 frame を除く)の開始位置。
+ * スライド一覧がどの文書を表示しているかに関係なく、その文書自身から求める。
+ * プレビューの描画ごとに frame 数だけ呼ばれるので、version ごとに 1 回だけ解析する。
+ */
+export function explicitFrameStarts(document: SlideOutlineDocument): ReadonlySet<number> {
+  const cached = explicitFrameStartCache.get(document);
+  if (cached?.version === document.version) return cached.starts;
+  const starts = new Set(slideOutlineEntries(document).map((entry) => entry.start));
+  explicitFrameStartCache.set(document, { version: document.version, starts });
+  return starts;
+}
+
 /** 現在の source document と一覧をまとめる小さな状態保持。 */
 export class SlideOutlineState<Document extends SlideOutlineDocument> {
   private document: Document | undefined;
