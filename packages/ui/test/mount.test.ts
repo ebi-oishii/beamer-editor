@@ -74,8 +74,12 @@ const DECK: RenderedDeck = {
 };
 
 /** deck を注入できるフェイク ShellHost。 */
-function fakeHost(): ShellHost & { push: (deck: RenderedDeck, version?: number) => void } {
-  let listener: ((deck: RenderedDeck, version: number) => void) | undefined;
+function fakeHost(): ShellHost & {
+  push: (deck: RenderedDeck, version?: number, editable?: number[]) => void;
+  reveal: (frameIndex: number, version: number) => void;
+} {
+  let listener: ((deck: RenderedDeck, version: number, editable?: number[]) => void) | undefined;
+  let revealListener: ((frameIndex: number, version: number) => void) | undefined;
   return {
     subscribe(l) {
       listener = l;
@@ -84,13 +88,106 @@ function fakeHost(): ShellHost & { push: (deck: RenderedDeck, version?: number) 
       };
     },
     jumpToSource() {},
+    onRevealFrame(listener) {
+      revealListener = listener;
+      return () => {
+        revealListener = undefined;
+      };
+    },
     notifyActiveFrame() {},
     moveCanvasElement() {},
-    push(deck, version = 1) {
-      listener?.(deck, version);
+    push(deck, version = 1, editable) {
+      listener?.(deck, version, editable);
+    },
+    reveal(frameIndex, version) {
+      revealListener?.(frameIndex, version);
     },
   };
 }
+
+it("slide order is available only through the caption context menu, not persistent controls or the stage", () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const editSlide = vi.fn();
+  const host = { ...fakeHost(), editSlide };
+  let unmount: () => void = () => {};
+  act(() => {
+    unmount = mountPreview(container, host);
+  });
+  act(() => host.push(DECK, 1, [0, 1]));
+  expect(container.querySelector(".slide-order-controls")).toBeNull();
+  const stage = container.querySelector<HTMLElement>(".slide-card-select");
+  const caption = container.querySelector<HTMLElement>(".slide-caption");
+  if (!stage || !caption) throw new Error("slide fixture missing");
+  const stageEvent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+  act(() => stage.dispatchEvent(stageEvent));
+  expect(stageEvent.defaultPrevented).toBe(false);
+  expect(container.querySelector(".slide-order-menu")).toBeNull();
+  act(() =>
+    caption.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 32, clientY: 32 }),
+    ),
+  );
+  const menu = container.querySelector<HTMLElement>(".slide-order-menu");
+  if (!menu) throw new Error("order menu missing");
+  const items = menu.querySelectorAll<HTMLButtonElement>("button");
+  expect(items).toHaveLength(2);
+  expect(items[0]?.disabled).toBe(true);
+  const savedRaf = globalThis.requestAnimationFrame;
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callback(0);
+    return 0;
+  });
+  try {
+    act(() => items[1]?.click());
+    expect(editSlide).toHaveBeenCalledExactlyOnceWith("moveDown", 0, 1);
+    // 移動操作直後には旧カードへ戻さず、更新済み deck の active frame を待つ。
+    expect(document.activeElement).not.toBe(stage);
+    act(() => host.push(DECK, 2, [0, 1]));
+    act(() => host.reveal(1, 2));
+    expect(document.activeElement).toBe(container.querySelectorAll(".slide-card")[1]);
+  } finally {
+    Object.defineProperty(globalThis, "requestAnimationFrame", {
+      configurable: true,
+      value: savedRaf,
+    });
+    act(() => unmount());
+  }
+});
+
+it("slide order menu opens by keyboard and ignores virtual frames", () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const host = { ...fakeHost(), editSlide: vi.fn() };
+  let unmount: () => void = () => {};
+  act(() => {
+    unmount = mountPreview(container, host);
+  });
+  try {
+    act(() => host.push(DECK, 1, [0]));
+    const card = container.querySelectorAll<HTMLElement>(".slide-card")[0];
+    const virtualCaption = container.querySelectorAll<HTMLElement>(".slide-caption")[1];
+    if (!card || !virtualCaption) throw new Error("slide fixture missing");
+    act(() =>
+      card.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true })),
+    );
+    const menu = container.querySelector<HTMLElement>(".slide-order-menu");
+    if (!menu) throw new Error("order menu missing");
+    expect(
+      [...menu.querySelectorAll<HTMLButtonElement>("button")].every((item) => item.disabled),
+    ).toBe(true);
+    act(() => document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+    expect(container.querySelector(".slide-order-menu")).toBeNull();
+    act(() =>
+      virtualCaption.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      ),
+    );
+    expect(container.querySelector(".slide-order-menu")).toBeNull();
+  } finally {
+    act(() => unmount());
+  }
+});
 
 const CANVAS_DECK: RenderedDeck = {
   title: "canvas",

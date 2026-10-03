@@ -951,6 +951,19 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           );
           return (await vscode.workspace.applyEdit(edit)) ? "applied" : "failed";
         },
+        editSlide: async (request) => {
+          const target = vscode.workspace.textDocuments.find(
+            (candidate) => candidate === request.document,
+          );
+          if (!target || target.version !== request.version) return { applied: false };
+          return slideEdits.executeAt(request.action, target, request.version, request.frameOffset);
+        },
+        // スライド一覧が別の文書を表示していても、プレビュー自身の文書で判定する。実行時の照合と
+        // 同じ判定(管理対象・閉じていない・書き込み可を含む)を使う。
+        isSlideEditable: (target, version, start) => {
+          const document = vscode.workspace.textDocuments.find((candidate) => candidate === target);
+          return document !== undefined && slideEdits.canMoveAt(document, version, start);
+        },
         // プレビューからの削除・コピー・貼り付け(#148)。対象は要求時の version の文書だけ。
         deleteCanvasElement: async (request) => {
           const target = liveDocument(request.document, request.version);
