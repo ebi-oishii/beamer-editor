@@ -454,6 +454,19 @@ export class PreviewController implements vscode.Disposable {
     return queued;
   }
 
+  /**
+   * 適用中、または文書への反映を待っている編集(キャンバス編集・スライド移動)があれば true。
+   * その間は古い描画の位置で次の編集を作らないよう、どの編集も受け付けない。
+   */
+  private editInFlight(): boolean {
+    return (
+      this.editApplyPending ||
+      this.editAwaitingVersion !== undefined ||
+      this.slideEditPending ||
+      this.pendingMovedSlide !== undefined
+    );
+  }
+
   private async handleCanvasStyle(
     move: {
       frameIndex: number;
@@ -461,13 +474,7 @@ export class PreviewController implements vscode.Disposable {
       version: number;
     } & ({ width: number } | { size: CanvasFontSize }),
   ): Promise<void> {
-    if (
-      this.editApplyPending ||
-      this.editAwaitingVersion !== undefined ||
-      this.slideEditPending ||
-      this.pendingMovedSlide
-    )
-      return;
+    if (this.editInFlight()) return;
     const latest = this.latest;
     const frame = latest?.deck.frames[move.frameIndex];
     const element = frame?.canvasElements?.find(
@@ -556,13 +563,7 @@ export class PreviewController implements vscode.Disposable {
     x: number;
     y: number;
   }): Promise<void> {
-    if (
-      this.editApplyPending ||
-      this.editAwaitingVersion !== undefined ||
-      this.slideEditPending ||
-      this.pendingMovedSlide
-    )
-      return;
+    if (this.editInFlight()) return;
     const latest = this.latest;
     const frame = latest?.deck.frames[move.frameIndex];
     const element = frame?.canvasElements?.find(
@@ -641,13 +642,7 @@ export class PreviewController implements vscode.Disposable {
     sourceSpan: { start: number; end: number };
     rect: { x: number; y: number; width: number };
   }): Promise<void> {
-    if (
-      this.editApplyPending ||
-      this.editAwaitingVersion !== undefined ||
-      this.slideEditPending ||
-      this.pendingMovedSlide
-    )
-      return;
+    if (this.editInFlight()) return;
     const latest = this.latest;
     if (
       !latest ||
@@ -706,13 +701,7 @@ export class PreviewController implements vscode.Disposable {
     frameIndex: number;
     version: number;
   }): Promise<void> {
-    if (
-      this.slideEditPending ||
-      this.editApplyPending ||
-      this.editAwaitingVersion !== undefined ||
-      this.pendingMovedSlide
-    )
-      return;
+    if (this.editInFlight()) return;
     const latest = this.latest;
     if (
       !latest ||
@@ -826,13 +815,7 @@ export class PreviewController implements vscode.Disposable {
     elementId: string;
     version: number;
   }): Promise<void> {
-    if (
-      this.editApplyPending ||
-      this.editAwaitingVersion !== undefined ||
-      this.slideEditPending ||
-      this.pendingMovedSlide
-    )
-      return;
+    if (this.editInFlight()) return;
     const element = this.currentCanvasElement(request);
     if (!element) {
       this.sendDeck();
@@ -888,7 +871,7 @@ export class PreviewController implements vscode.Disposable {
   }): Promise<void> {
     // 切り取りは削除まで一続きの操作。削除を受け付けられない状態でコピーだけ通すと、
     // 貼り付けが「移動」でなく「複製」になる。削除と同じガードで先に弾く。
-    if (request.cut && (this.editApplyPending || this.editAwaitingVersion !== undefined)) {
+    if (request.cut && this.editInFlight()) {
       this.onWarning("Canvas element was not cut. Try again.");
       this.sendDeck();
       return;
@@ -928,13 +911,7 @@ export class PreviewController implements vscode.Disposable {
 
   /** クリップボードのキャンバス要素を、表示中のフレームへ貼り付ける(Cmd+V。#148)。 */
   private async handlePaste(request: { frameIndex: number; version: number }): Promise<void> {
-    if (
-      this.editApplyPending ||
-      this.editAwaitingVersion !== undefined ||
-      this.slideEditPending ||
-      this.pendingMovedSlide
-    )
-      return;
+    if (this.editInFlight()) return;
     const latest = this.latest;
     if (
       !latest ||

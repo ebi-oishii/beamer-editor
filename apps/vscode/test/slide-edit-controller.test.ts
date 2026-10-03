@@ -135,6 +135,50 @@ it("does not apply a swap of identical frames, whose text and version would not 
   });
   expect(host.apply).not.toHaveBeenCalled();
 });
+it("does not offer or apply preview moves on documents that are not editable", async () => {
+  const deck = {
+    version: 1,
+    uri: { toString: () => "file:///deck.tex" },
+    getText: () =>
+      "\\begin{document}\n\\begin{frame}{A}a\\end{frame}\n\\begin{frame}{B}b\\end{frame}\n\\end{document}",
+  };
+  const host = {
+    isEditable: () => false,
+    apply: vi.fn(async () => true),
+    changed: vi.fn(),
+    warn: vi.fn(),
+  };
+  const controller = new SlideEditController(new SlideOutlineState<typeof deck>(), host);
+  const start = deck.getText().indexOf("\\begin{frame}{A}");
+  expect(controller.canMoveAt(deck, deck.version, start)).toBe(false);
+  expect((await controller.executeAt("moveDown", deck, deck.version, start)).applied).toBe(false);
+  expect(host.apply).not.toHaveBeenCalled();
+  host.isEditable = () => true;
+  expect(controller.canMoveAt(deck, deck.version, start)).toBe(true);
+  expect(controller.canMoveAt(deck, deck.version + 1, start)).toBe(false);
+});
+it("tells why a preview move was refused, as the Explorer does", async () => {
+  const deck = {
+    version: 1,
+    uri: { toString: () => "file:///deck.slide.tex" },
+    // B は書きかけで閉じていない。
+    getText: () =>
+      "\\begin{document}\n\\begin{frame}{A}a\\end{frame}\n\\begin{frame}{B}b\n\\end{document}",
+  };
+  const host = {
+    isEditable: () => true,
+    apply: vi.fn(async () => true),
+    changed: vi.fn(),
+    warn: vi.fn(),
+  };
+  const controller = new SlideEditController(new SlideOutlineState<typeof deck>(), host);
+  const start = deck.getText().indexOf("\\begin{frame}{A}");
+  expect(controller.canMoveAt(deck, deck.version, start)).toBe(true);
+  expect((await controller.executeAt("moveDown", deck, deck.version, start)).applied).toBe(false);
+  expect(host.warn).toHaveBeenCalledOnce();
+  expect(host.warn.mock.calls[0]?.[0]).toMatch(/閉じていない/);
+  expect(host.apply).not.toHaveBeenCalled();
+});
 it("palette commands pick a slide; palette insert inserts after the chosen slide", async () => {
   const { entry, state } = setup();
   const entries = state.getEntries();

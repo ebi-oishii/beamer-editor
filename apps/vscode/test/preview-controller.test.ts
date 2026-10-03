@@ -1428,6 +1428,35 @@ describe("PreviewController: canvas clipboard(#148)", () => {
     expect(onWarning).toHaveBeenCalledWith("Canvas element was not cut. Try again.");
   });
 
+  it("copyCanvasElement: スライド移動の反映を待っている間の cut も、コピーせず警告する", async () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const onWarning = vi.fn();
+    const copyCanvasElement = vi.fn(async () => true);
+    const deleteCanvasElement = vi.fn(async () => "applied" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      copyCanvasElement,
+      deleteCanvasElement,
+      // 移動は適用されたが、文書の変更はまだ届いていない(移動結果の描画待ち)。
+      editSlide: async () => ({ applied: true, newFrameStart: 0 }),
+      isSlideEditable: () => true,
+      onWarning,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    await controller.handleMessageForTest({
+      type: "editSlide",
+      action: "moveDown",
+      frameIndex: 0,
+      version: 7,
+    });
+    await controller.handleMessageForTest(request("copyCanvasElement", { cut: true }));
+    expect(copyCanvasElement).not.toHaveBeenCalled();
+    expect(deleteCanvasElement).not.toHaveBeenCalled();
+    expect(onWarning).toHaveBeenCalledWith("Canvas element was not cut. Try again.");
+  });
+
   it("copy / paste は非同期の失敗後も到着順に直列化する", async () => {
     const { panel } = makePanel();
     const { events } = makeEvents();

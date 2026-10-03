@@ -74,6 +74,19 @@ export class SlideEditController<Document extends SlideOutlineDocument> {
   }
 
   /**
+   * プレビューから移動できる frame か。編集可能な(管理対象・閉じていない・書き込み可の)文書で、
+   * 描画時の version のまま、start がその文書自身の明示 frame の開始位置であること。
+   * プレビューのメニューを出す判定と、実行時の照合の両方がこれを使う。
+   */
+  canMoveAt(document: Document, version: number, start: number): boolean {
+    return (
+      document.version === version &&
+      this.host.isEditable(document) &&
+      explicitFrameStarts(document).has(start)
+    );
+  }
+
+  /**
    * Webview からの操作用。描画時の version と source offset を、その document 自身の明示 frame
    * に照合してから既存の一回だけの WorkspaceEdit 経路へ流す。スライド一覧(Explorer)が別の文書を
    * 表示していても、プレビューの文書を動かせるようにする。
@@ -84,15 +97,15 @@ export class SlideEditController<Document extends SlideOutlineDocument> {
     version: number,
     start: number,
   ): Promise<{ applied: boolean; newFrameStart?: number }> {
-    if (
-      document.version !== version ||
-      !this.host.isEditable(document) ||
-      !explicitFrameStarts(document).has(start)
-    )
-      return { applied: false };
+    if (!this.canMoveAt(document, version, start)) return { applied: false };
     const source = document.getText();
     const result = editSlide(source, action, start);
-    if (!result.ok || result.edits.length === 0) return { applied: false };
+    if (!result.ok) {
+      // 閉じていない frame など、Explorer からの操作と同じ理由を出す。
+      this.host.warn(result.reason);
+      return { applied: false };
+    }
+    if (result.edits.length === 0) return { applied: false };
     let next = source;
     for (const edit of [...result.edits].sort((a, b) => b.span.start - a.span.start))
       next = next.slice(0, edit.span.start) + edit.text + next.slice(edit.span.end);

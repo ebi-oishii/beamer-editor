@@ -90,6 +90,55 @@ suite("#151: preview slide reorder", () => {
     await waitFor(() => document.getText() === source, "one undo restores the order");
   });
 
+  test("offers reordering only for managed decks", async () => {
+    const A = "\\begin{frame}[label=a]{A}\nA body\n\\end{frame}";
+    const B = "\\begin{frame}[label=b]{B}\nB body\n\\end{frame}";
+    const dir = await mkdtemp(path.join(tmpdir(), "beamer-151-"));
+    dirs.push(dir);
+    const extension = vscode.extensions.getExtension("ebi-oishii.beamer-editor");
+    assert.ok(extension);
+    const api = (await extension.activate()) as TestApi;
+    // 既定の managed glob は **/*.slide.tex。plain.tex は「Open Preview」でだけ開ける管理対象外の文書。
+    const editableIndexes = async (name: string, open: () => Thenable<unknown>) => {
+      const file = path.join(dir, name);
+      await writeFile(file, deck(A, B));
+      const document = await vscode.workspace.openTextDocument(file);
+      await vscode.window.showTextDocument(document);
+      await open();
+      await waitFor(
+        () => api._previewControllerForTest()?.latestOutcome?.version === document.version,
+        `${name} preview renders`,
+      );
+      const controller = api._previewControllerForTest();
+      assert.ok(controller);
+      // Webview へ送るメッセージを横取りして、描画時に渡す「移動できる frame」を読む。
+      const webview = (
+        controller as unknown as { panel: { webview: { postMessage(message: unknown): unknown } } }
+      ).panel.webview;
+      const sent: unknown[] = [];
+      const post = webview.postMessage.bind(webview);
+      webview.postMessage = (message: unknown) => {
+        sent.push(message);
+        return post(message);
+      };
+      controller.refresh();
+      const updated = sent.find(
+        (message): message is { type: string; editableFrameIndexes?: number[] } =>
+          (message as { type?: string }).type === "deckUpdated",
+      );
+      assert.ok(updated, `${name}: deckUpdated was posted`);
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+      return updated.editableFrameIndexes;
+    };
+    assert.deepEqual(await editableIndexes("deck.slide.tex", async () => undefined), [0, 1]);
+    assert.deepEqual(
+      await editableIndexes("plain.tex", () =>
+        vscode.commands.executeCommand("beamerEditor.openPreview"),
+      ),
+      [],
+    );
+  });
+
   test("a swap of identical slides does not block the next preview edit", async () => {
     const outline = "\\begin{frame}{Outline}\\tableofcontents\\end{frame}";
     const C = "\\begin{frame}[label=c]{C}\nC body\n\\end{frame}";
