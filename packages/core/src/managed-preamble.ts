@@ -63,7 +63,7 @@ export function locateManagedPreamble(
   if (endLine === null)
     return {
       problem: END_LINE.test(source.slice(contentStart))
-        ? "終了印が最初のユーザー領域(%% macros / %% style / %% preamble-extra)か \\begin{document} より後ろにあります"
+        ? "終了印が最初のユーザー領域の印(%% macros / %% style / %% preamble-extra の :begin。コメントの中のものも数えます)か \\begin{document} より後ろにあります"
         : END_LINE.test(source.slice(0, begin.index))
           ? "終了印が開始印より前にあります"
           : `終了印(「${MANAGED_PREAMBLE_END}」)がありません`,

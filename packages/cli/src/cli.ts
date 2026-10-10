@@ -29,6 +29,7 @@ import {
   type DeckFramesResult,
   exportPdf,
   frameSelectorFromAddress,
+  PdfExportError,
   type PdfExportErrorCode,
   type PdfExportResult,
 } from "@beamer-editor/compiler";
@@ -871,10 +872,10 @@ async function runSnapshot(
     writeError("E_IO", `出力先を作成できません: ${errorMessage(error)}`, parsed.json);
     return 3;
   }
+  const compiledSource = await readSourceBeforeCompile(input);
   // Only a successful mkdir makes this process the owner of `filesystemOutput`, and only an owner
   // may remove it on failure. Its parent is canonicalized above so a retargeted symlink cannot
   // redirect writes or cleanup after the reservation.
-  const compiledSource = await readSourceBeforeCompile(input);
   let reserved = false;
   let published = false;
   try {
@@ -907,11 +908,10 @@ async function runSnapshot(
         file: snapshotFileName(item.address.number, image.page),
       })),
     );
-    // コンパイル自体は成功しているので TeX の失敗(texFailed)ではなく、lint は添えない。
+    // コンパイル自体は成功しているので TeX の失敗ではない。texFailed を渡さない PdfExportError は
+    // texFailed が false になり、lint は添えない。
     if (!outputs.length)
-      throw Object.assign(new Error("snapshot 可能な PDF page がありません"), {
-        code: "E_COMPILE",
-      });
+      throw new PdfExportError("E_COMPILE", "snapshot 可能な PDF page がありません");
     // mkdir is atomic and never replaces an existing directory, so it doubles as the publication
     // reservation: a concurrent creator wins and we leave their entry untouched.
     try {
