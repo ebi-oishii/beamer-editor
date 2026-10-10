@@ -212,12 +212,8 @@ suite("Issue #181: deck 語彙の構文強調", () => {
       `\\begin / \\end: ${commands.map((token) => token.t).join(" | ")}`,
     );
     // option が閉じないまま続くと、次の frame の `label` が deck のキーとして読まれる。
-    const labelKey = scopesOf("label");
-    assert.ok(
-      labelKey.every((s) => !deck(s)),
-      `label: ${labelKey.join(" | ")}`,
-    );
-    // 組み込みの文法は `label=next` を 1 つのトークンにするので、部分一致で拾う。
+    // 組み込みの文法は `label=next` を 1 つのトークンにするので、部分一致で拾う。deck のキーとして
+    // 切り出されると、このトークンが無くなる。
     const label = tokens.filter((token) => token.c.includes("label=next"));
     assert.ok(
       label.length > 0 && label.every((token) => !deck(token.t)),
