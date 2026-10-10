@@ -694,6 +694,56 @@ describe("parseDeck: よく使う整形命令(#180)", () => {
     expect(nested).toMatchObject([{ type: "blockGroup", children: [{ type: "blockGroup" }] }]);
   });
 
+  it("グループの閉じは、コメント・\\verb・verbatim の本文の中の波括弧を数えない", () => {
+    // コメントの中の `}` / `{` は閉じにも開きにもならない。
+    expect(blocks("{\\small A % } {\nB}\nC")).toMatchObject([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "group",
+            children: [
+              { type: "declaration", name: "small" },
+              { type: "text", value: " A B" },
+            ],
+          },
+          { type: "text", value: " C " },
+        ],
+      },
+    ]);
+    expect(blocks("{\\small \\verb|}| A}\n\nB")).toMatchObject([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "group",
+            children: [
+              { type: "declaration" },
+              { type: "rawInline", tex: "\\verb|}|" },
+              { type: "text", value: " A" },
+            ],
+          },
+        ],
+      },
+      { type: "paragraph", children: [{ type: "text", value: "B " }] },
+    ]);
+    // verbatim は丸ごと 1 つの生ブロックのまま、グループはその後の `}` で閉じる。
+    expect(blocks("{\\small\n\\begin{verbatim}\n}\n\\end{verbatim}\n}\n\nAfter")).toMatchObject([
+      {
+        type: "blockGroup",
+        children: [
+          { type: "paragraph", children: [{ type: "declaration", name: "small" }] },
+          {
+            type: "rawBlock",
+            environment: "verbatim",
+            tex: "\\begin{verbatim}\n}\n\\end{verbatim}",
+          },
+        ],
+      },
+      { type: "paragraph", children: [{ type: "text", value: "After " }] },
+    ]);
+  });
+
   it("decktext の中のブロックのグループは中身を decktext の語彙で読む", () => {
     const [canvas] = blocks(
       "\\begin{deckcanvas}\n\\begin{decktext}[x=0.100,y=0.200,w=0.500,size=normal]\n{\\small A\n\n\\includegraphics{a.png}}\n\\end{decktext}\n\\end{deckcanvas}",

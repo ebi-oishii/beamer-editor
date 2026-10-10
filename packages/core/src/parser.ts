@@ -43,7 +43,7 @@ import type {
   StyleColorRole,
   TableRow,
 } from "./ast.js";
-import { documentTags, texTokens, VERBATIM_ENVS, verbArgumentEnd } from "./tex-scan.js";
+import { braceClose, documentTags, texTokens, VERBATIM_ENVS, verbArgumentEnd } from "./tex-scan.js";
 
 const BLOCK_ENVS = new Set([
   "itemize",
@@ -452,8 +452,8 @@ class Parser {
       }
       if (ch === "{") {
         // `{\small …}` のようなグループ。中の宣言はグループの終わりまで効く。
-        const close = readBalanced(this.src, pos);
-        if (close !== null && close < end) {
+        const close = braceClose(this.src, pos, end);
+        if (close !== null) {
           flush(pos);
           out.push({
             type: "group",
@@ -843,8 +843,8 @@ class Parser {
     pos: number,
     limit: number,
   ): BlockGroupNode | { type: "inline"; end: number } | null {
-    const close = readBalanced(this.src, pos);
-    if (close === null || close >= limit) return null;
+    const close = braceClose(this.src, pos, limit);
+    if (close === null) return null;
     const inline = { type: "inline" as const, end: close + 1 };
     // 中身をパースする前に、空行もブロック要素の始まりも無いものを安く除く。入れ子の `{` ごとに
     // 中身を読み直すと、深さに対して指数的に遅くなる。
