@@ -910,6 +910,18 @@ async function runSnapshot(
   }
 }
 
+/** 連続するフレーム番号をまとめる。ロゴや背景は全フレームに出るので、列挙すると長くなる。 */
+function frameRanges(frames: readonly number[]): string {
+  const ranges: string[] = [];
+  for (let i = 0; i < frames.length; ) {
+    let j = i;
+    while (j + 1 < frames.length && frames[j + 1] === (frames[j] as number) + 1) j++;
+    ranges.push(j > i ? `${frames[i]}-${frames[j]}` : `${frames[i]}`);
+    i = j + 1;
+  }
+  return ranges.join(", ");
+}
+
 function defaultPdfOutputForDisplay(input: string): string {
   if (input.endsWith(".slide.tex")) return `${input.slice(0, -".slide.tex".length)}.pdf`;
   const extension = extname(input);
@@ -929,12 +941,25 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
         ...(parsed.output === undefined ? {} : { outputPath: parsed.output }),
         ...(parsed.overwrite ? { overwrite: true } : {}),
       });
+      const placeholders = result.placeholders;
       if (parsed.json) {
         process.stdout.write(
-          `${JSON.stringify({ format: "html", input, output: result.outputPath, index: result.indexPath }, null, 2)}\n`,
+          `${JSON.stringify({ format: "html", input, output: result.outputPath, index: result.indexPath, placeholders }, null, 2)}\n`,
         );
-      } else process.stdout.write(`${input} -> ${result.indexPath}\n`);
-      return EXIT_CODE.success;
+      } else {
+        process.stdout.write(`${input} -> ${result.indexPath}\n`);
+        // 書き出しは成功するが図が欠けるので、気づけるよう stderr に残す。
+        if (placeholders.length > 0)
+          process.stderr.write(
+            `警告: 次の画像は HTML に出せず、プレースホルダーにしたか省きました(HTML が複製するのはデッキ配下の PNG / JPEG だけです)\n${placeholders
+              .map(
+                (p) =>
+                  `  frame ${frameRanges(p.frames)}: ${p.path || "(画像パス未指定)"}(${p.reason === "unsupported-format" ? "PNG / JPEG 以外の形式" : "見つからない"})\n`,
+              )
+              .join("")}`,
+          );
+      }
+      return placeholders.length > 0 ? EXIT_CODE.lintWarning : EXIT_CODE.success;
     }
     const result = await (dependencies.exportPdf ?? exportPdf)({
       inputPath: input,

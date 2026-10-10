@@ -47,7 +47,7 @@ pnpm --dir apps/vscode build  # VS Code 拡張のバンドル(開発は F5)
 
 ### HTML スナップショット
 
-`deck export talk.slide.tex --format html` は `talk-html/index.html` に、現在のプレビュー相当の静的な HTML を書き出します。`file:` で直接開けますが、正式な TeX 出力ではありません。PDF 画像と raw TeX はプレビューと同じプレースホルダーになり、外部 URL の画像は閲覧時にネットワークを必要とします。正式な組版には PDF 書き出しを使ってください。
+`deck export talk.slide.tex --format html` は `talk-html/index.html` に、現在のプレビュー相当の静的な HTML を書き出します。`file:` で直接開けますが、正式な TeX 出力ではありません。PDF 画像と raw TeX はプレビューと同じプレースホルダーになり、外部 URL の画像は閲覧時にネットワークを必要とします。複製するのはデッキ配下の PNG / JPEG だけで、それ以外の形式(PDF など)や見つからない画像をプレースホルダーにした場合(PDF の背景は描きません)は、該当する画像とフレーム番号を stderr に警告して終了コード 1 で終えます(`--json` では `placeholders` に列挙します)。正式な組版には PDF 書き出しを使ってください。
 
 ```bash
 pnpm --dir packages/cli deck export talk.slide.tex --format pdf
