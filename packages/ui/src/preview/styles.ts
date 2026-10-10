@@ -293,10 +293,10 @@ export const PREVIEW_CSS = `
   color: var(--deck-structure, #3333b3);
   font-weight: 600;
 }
-.slide .beamer-block.alert .block-title {
+.slide .beamer-block.alert > .block-title {
   color: var(--deck-alert, #c0392b);
 }
-.slide .beamer-block.example .block-title {
+.slide .beamer-block.example > .block-title {
   color: var(--deck-example, #1e8449);
 }
 .slide .beamer-block .block-body {
