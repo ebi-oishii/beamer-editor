@@ -257,9 +257,22 @@ function lineBreakEnd(src: string, pos: number, limit: number): number {
   return spacing ? i + spacing[0].length : i;
 }
 
-/** from 以降で最初の空行(段落の区切り)の手前の改行の位置。無ければ limit。CRLF も扱う。 */
-/** parseBlocks が段落を区切ってブロックとして読むコマンド(`\begin` の環境のほかに)。 */
-const BLOCK_COMMANDS = new Set(["[", "pause", "titlepage", "tableofcontents", "includegraphics"]);
+/**
+ * parseBlocks が段落を区切ってブロックとして読むコマンド(`\begin` の環境のほかに)。
+ * parseBlocks の分岐とグループの安い判定(blockStartIn)が同じこの一覧を見る。
+ */
+const BLOCK_COMMANDS = ["[", "pause", "titlepage", "tableofcontents", "includegraphics"] as const;
+type BlockCommand = (typeof BLOCK_COMMANDS)[number];
+
+function isBlockCommand(name: string): name is BlockCommand {
+  return (BLOCK_COMMANDS as readonly string[]).includes(name);
+}
+
+/** pos の `\` がブロックとして読むコマンドなら、その名前。 */
+function blockCommandAt(src: string, pos: number): BlockCommand | null {
+  const name = src[pos + 1] === "[" ? "[" : commandNameAt(src, pos);
+  return isBlockCommand(name) ? name : null;
+}
 
 /**
  * [from, to) にあるブロック要素の始まり(環境・`\[`・`\pause` など)。deckcanvas があれば
@@ -269,12 +282,13 @@ function blockStartIn(src: string, from: number, to: number): "canvas" | "block"
   let found: "block" | null = null;
   for (const token of texTokens(src, from, to)) {
     if (token.kind === "begin" && token.name === "deckcanvas") return "canvas";
-    if (token.kind === "command" ? BLOCK_COMMANDS.has(token.name) : token.kind !== "definition")
+    if (token.kind === "command" ? isBlockCommand(token.name) : token.kind !== "definition")
       found = "block";
   }
   return found;
 }
 
+/** from 以降で最初の空行(段落の区切り)の手前の改行の位置。無ければ limit。CRLF も扱う。 */
 function blankLineAt(src: string, from: number, limit: number): number {
   const match = /\r?\n[ \t]*\r?\n/.exec(src.slice(from, limit));
   return match ? from + match.index : limit;
@@ -781,52 +795,16 @@ class Parser {
         pos = lineBreakEnd(this.src, pos, end);
         continue;
       }
-      if (this.src.startsWith("\\[", pos)) {
+      const blockCommand = ch === "\\" ? blockCommandAt(this.src, pos) : null;
+      if (blockCommand) {
         flushPara(pos);
-        const close = this.displayMathClose(pos + 2, end);
-        if (close === null) {
-          // 閉じが見つからない `\[` は、その 2 文字だけを生ブロックにする。続きはこのループが
-          // 通常どおり読むので、後続のブロックを飲み込まない(#154)。
-          out.push(this.rawBlock(pos, pos + 2, null, "unknown-command"));
-          pos += 2;
-          continue;
-        }
-        out.push({
-          type: "displayMath",
-          kind: "bracket",
-          tex: this.src.slice(pos + 2, close).trim(),
-          span: span(pos, close + 2),
-        });
-        pos = close + 2;
+        const parsed = this.parseBlockCommand(blockCommand, pos, end);
+        out.push(parsed.node);
+        pos = parsed.next;
         continue;
       }
       if (ch === "\\") {
         const name = commandNameAt(this.src, pos);
-        if (name === "pause") {
-          flushPara(pos);
-          out.push({ type: "pause", span: span(pos, pos + 6) });
-          pos += 6;
-          continue;
-        }
-        if (name === "titlepage") {
-          flushPara(pos);
-          out.push({ type: "titlePage", span: span(pos, pos + 10) });
-          pos += 10;
-          continue;
-        }
-        if (name === "tableofcontents") {
-          flushPara(pos);
-          out.push({ type: "tableOfContents", span: span(pos, pos + 16) });
-          pos += 16;
-          continue;
-        }
-        if (name === "includegraphics") {
-          flushPara(pos);
-          const parsed = this.parseIncludeGraphics(pos, end);
-          out.push(parsed.node);
-          pos = parsed.next;
-          continue;
-        }
         // その他のコマンドはインラインとして段落に取り込む
         if (paraStart === -1) paraStart = pos;
         const step = this.parseInlineCommand(pos, name, end);
@@ -838,6 +816,41 @@ class Parser {
     }
     flushPara(end);
     return out;
+  }
+
+  /** ブロックとして読むコマンド(BLOCK_COMMANDS)を 1 つ読む。 */
+  private parseBlockCommand(
+    name: BlockCommand,
+    pos: number,
+    limit: number,
+  ): { node: BlockNode; next: number } {
+    switch (name) {
+      case "[": {
+        const close = this.displayMathClose(pos + 2, limit);
+        if (close === null) {
+          // 閉じが見つからない `\[` は、その 2 文字だけを生ブロックにする。続きは parseBlocks が
+          // 通常どおり読むので、後続のブロックを飲み込まない(#154)。
+          return { node: this.rawBlock(pos, pos + 2, null, "unknown-command"), next: pos + 2 };
+        }
+        return {
+          node: {
+            type: "displayMath",
+            kind: "bracket",
+            tex: this.src.slice(pos + 2, close).trim(),
+            span: span(pos, close + 2),
+          },
+          next: close + 2,
+        };
+      }
+      case "pause":
+        return { node: { type: "pause", span: span(pos, pos + 6) }, next: pos + 6 };
+      case "titlepage":
+        return { node: { type: "titlePage", span: span(pos, pos + 10) }, next: pos + 10 };
+      case "tableofcontents":
+        return { node: { type: "tableOfContents", span: span(pos, pos + 16) }, next: pos + 16 };
+      case "includegraphics":
+        return this.parseIncludeGraphics(pos, limit);
+    }
   }
 
   /**

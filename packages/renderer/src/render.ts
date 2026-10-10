@@ -889,7 +889,7 @@ class FrameRenderer {
             attrs,
           );
         } else {
-          html += `<img class="canvas-item"${attrs} src="${escapeHtml(item.path)}"${styleAttr(`${posStyle(item.position.x, item.position.y, item.position.width)}`)}>`;
+          html += `<img class="canvas-item"${attrs} src="${escapeHtml(item.path)}"${styleAttr(posStyle(item.position.x, item.position.y, item.position.width))}>`;
         }
       } else {
         html += placeholderHtml(
