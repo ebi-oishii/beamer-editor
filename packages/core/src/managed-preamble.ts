@@ -1,6 +1,7 @@
 import type { SourceSpan } from "./ast.js";
 import { MANAGED_PREAMBLE_RESOURCES } from "./generated-managed-preamble.js";
 import type { LintFix } from "./linter.js";
+import { documentTags } from "./tex-scan.js";
 
 /** `deck init` が書くツール管理プリアンブルの開始行。 */
 export const MANAGED_PREAMBLE_BEGIN =
@@ -21,23 +22,32 @@ export function managedPreambleBlock(): string {
 }
 
 // 開始行は文言を問わない(fixture は `% ---- ツール管理プリアンブル ----`)。
-const BEGIN_LINE = /^% ---- ツール管理プリアンブル[^\n]*$/m;
+const BEGIN_LINE = /^% ---- ツール管理プリアンブル[^\n]*$/gm;
 const END_LINE = /^% ---- ツール管理ここまで ----[ \t]*(?=\r?$)/m;
+const USER_REGION_BEGINS = ["%% macros:begin", "%% style:begin", "%% preamble-extra:begin"];
 
 /**
  * ソース上のツール管理プリアンブル(開始行の先頭から終了行の末尾まで。改行は含まない)。
- * 印が欠けている・順序が逆なら null。
+ * 終了印は、開始印より後ろで、最初のユーザー領域の印と `\begin{document}` より前だけで探す
+ * (終了印が消えたデッキで、後ろへ貼り付けた終了印の行まで差し替えてユーザー領域を消さない)。
+ * 印が欠けている・範囲内に終了印が無い・プリアンブルに開始印が 2 つ以上あるなら null。
  */
 export function managedPreambleSpan(source: string): SourceSpan | null {
-  const begin = BEGIN_LINE.exec(source);
-  if (begin === null) return null;
-  const rest = source.slice(begin.index + begin[0].length);
-  const end = END_LINE.exec(rest);
+  const documentBegin = documentTags(source).begin;
+  const preamble = documentBegin === -1 ? source : source.slice(0, documentBegin);
+  const begins = [...preamble.matchAll(BEGIN_LINE)];
+  const begin = begins[0];
+  if (begin === undefined || begins.length > 1) return null;
+  const contentStart = begin.index + begin[0].length;
+  const limit = Math.min(
+    preamble.length,
+    ...USER_REGION_BEGINS.map((marker) => preamble.indexOf(marker, contentStart)).filter(
+      (index) => index !== -1,
+    ),
+  );
+  const end = END_LINE.exec(source.slice(contentStart, limit));
   if (end === null) return null;
-  return {
-    start: begin.index,
-    end: begin.index + begin[0].length + end.index + end[0].length,
-  };
+  return { start: begin.index, end: contentStart + end.index + end[0].length };
 }
 
 /**

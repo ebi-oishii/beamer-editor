@@ -422,6 +422,17 @@ describe("--update-preamble", () => {
     await expect(updateManagedPreamble(directory)).rejects.toMatchObject({ code: "E_INPUT" });
   });
 
+  it("終了印が消え、後ろ(preamble-extra)に終了印の行があってもユーザー領域を書き換えない", async () => {
+    const deck = join(await temp(), "talk.slide.tex");
+    const source = (await outdatedDeck())
+      .replace(/^% ---- ツール管理ここまで ----\n/m, "")
+      .replace("%% preamble-extra:end", "% ---- ツール管理ここまで ----\n%% preamble-extra:end");
+    await writeFile(deck, source);
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(await run(["init", deck, "--update-preamble"])).toBe(3);
+    expect(await readFile(deck, "utf8")).toBe(source);
+  });
+
   it("引数の誤りは usage エラーにする", async () => {
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
     expect(await run(["init", "--update-preamble"])).toBe(3);

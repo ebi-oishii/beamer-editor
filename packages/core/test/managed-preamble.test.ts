@@ -157,6 +157,43 @@ describe("lintSource: L025(管理プリアンブルが使っているマクロ�
   });
 });
 
+describe("managedPreambleSpan: 終了印を探す範囲", () => {
+  const withoutEnd = oldManaged.replace(`\n${MANAGED_PREAMBLE_END}`, "");
+
+  it("終了印が消え、preamble-extra に終了印の行があるデッキは差し替えない(fix も出さない)", () => {
+    const source = initDeck(withoutEnd, BACKGROUNDS).replace(
+      "%% preamble-extra:begin\n",
+      `%% preamble-extra:begin\n${MANAGED_PREAMBLE_END}\n`,
+    );
+    expect(managedPreambleSpan(source)).toBeNull();
+    expect(managedPreambleUpdate(source)).toBeNull();
+    expect(l025(source).map((entry) => entry.fix)).toEqual([undefined, undefined]);
+  });
+
+  it("終了印が %% macros:begin より後ろにあるデッキは差し替えない", () => {
+    const source = initDeck(withoutEnd, BACKGROUNDS).replace(
+      "%% macros:end\n",
+      `%% macros:end\n${MANAGED_PREAMBLE_END}\n`,
+    );
+    expect(managedPreambleSpan(source)).toBeNull();
+  });
+
+  it("終了印が \\begin{document} より後ろにしか無いデッキは差し替えない", () => {
+    const source = initDeck(withoutEnd, BACKGROUNDS)
+      .replace(/%% (macros|style|preamble-extra):(begin|end)\n/g, "")
+      .replace("\\begin{document}\n", `\\begin{document}\n${MANAGED_PREAMBLE_END}\n`);
+    expect(managedPreambleSpan(source)).toBeNull();
+  });
+
+  it("プリアンブルに開始印が 2 つあるデッキは差し替えない", () => {
+    const source = initDeck(oldManaged, BACKGROUNDS).replace(
+      "%% preamble-extra:begin\n",
+      `%% preamble-extra:begin\n${MANAGED_PREAMBLE_BEGIN}\n`,
+    );
+    expect(managedPreambleSpan(source)).toBeNull();
+  });
+});
+
 describe("managedPreambleUpdate", () => {
   it("開始行の文言を問わず、終了行までを差し替える。印が欠ければ null", () => {
     const source = initDeck(
