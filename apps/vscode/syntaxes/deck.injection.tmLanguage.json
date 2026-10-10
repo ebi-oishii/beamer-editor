@@ -35,13 +35,16 @@
           "name": "punctuation.definition.optional-arguments.begin.deck"
         }
       },
-      "end": "\\]",
+      "end": "\\]|(?=[{}]|\\\\[A-Za-z@]|^\\s*$)",
       "endCaptures": {
         "0": {
           "name": "punctuation.definition.optional-arguments.end.deck"
         }
       },
       "patterns": [
+        {
+          "include": "text.tex#comment"
+        },
         {
           "include": "#option"
         }
@@ -74,13 +77,16 @@
           "name": "punctuation.definition.optional-arguments.begin.deck"
         }
       },
-      "end": "\\]",
+      "end": "\\]|(?=[{}]|\\\\[A-Za-z@]|^\\s*$)",
       "endCaptures": {
         "0": {
           "name": "punctuation.definition.optional-arguments.end.deck"
         }
       },
       "patterns": [
+        {
+          "include": "text.tex#comment"
+        },
         {
           "include": "#option"
         }
