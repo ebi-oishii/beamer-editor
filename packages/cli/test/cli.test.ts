@@ -1376,9 +1376,7 @@ describe("E_COMPILE に lint error を添える", () => {
       compileDeckFrames: async () => Promise.reject(compileError()),
     };
     try {
-      expect(await run(["check", source.path, "--json"], dependencies)).toBe(
-        EXIT_CODE.operationalFailure,
-      );
+      expect(await run(["check", source.path, "--json"], dependencies)).toBe(EXIT_CODE.lintError);
       const payload = JSON.parse(String(stderr.mock.calls[0]?.[0]));
       expect(payload.error).toMatchObject({
         code: "E_COMPILE",
@@ -1386,7 +1384,7 @@ describe("E_COMPILE に lint error を添える", () => {
         diagnostics: [{ code: "L025", severity: "error", location: { line: 4, column: 1 } }],
       });
       stderr.mockClear();
-      expect(await run(["check", source.path], dependencies)).toBe(EXIT_CODE.operationalFailure);
+      expect(await run(["check", source.path], dependencies)).toBe(EXIT_CODE.lintError);
       const text = stderr.mock.calls.map((call) => String(call[0])).join("");
       expect(text).toMatch(/^Undefined control sequence\n/);
       expect(text).toContain(`${source.path}:4:1: error L025: `);
@@ -1407,19 +1405,25 @@ describe("E_COMPILE に lint error を添える", () => {
     };
     const out = (file: string) => file.replace(/\.slide\.tex$/, "-snap");
     try {
-      await run(["snapshot", source.path, "-o", out(source.path), "--json"], dependencies);
+      expect(
+        await run(["snapshot", source.path, "-o", out(source.path), "--json"], dependencies),
+      ).toBe(EXIT_CODE.lintError);
       expect(JSON.parse(String(stderr.mock.calls[0]?.[0])).error).toMatchObject({
         code: "E_COMPILE",
         diagnostics: [{ code: "L025", location: { line: 4, column: 1 } }],
       });
       stderr.mockClear();
-      await run(["snapshot", source.path, "-o", out(source.path)], dependencies);
+      expect(await run(["snapshot", source.path, "-o", out(source.path)], dependencies)).toBe(
+        EXIT_CODE.lintError,
+      );
       expect(stderr.mock.calls.map((call) => String(call[0])).join("")).toContain(
         `${source.path}:4:1: error L025: `,
       );
       expect(existsSync(out(source.path))).toBe(false);
       stderr.mockClear();
-      await run(["snapshot", clean.path, "-o", out(clean.path), "--json"], dependencies);
+      expect(
+        await run(["snapshot", clean.path, "-o", out(clean.path), "--json"], dependencies),
+      ).toBe(EXIT_CODE.operationalFailure);
       expect(JSON.parse(String(stderr.mock.calls[0]?.[0]))).toEqual({
         error: { code: "E_COMPILE", message: "Undefined control sequence" },
       });
@@ -1436,7 +1440,7 @@ describe("E_COMPILE に lint error を添える", () => {
     const dependencies: CliDependencies = { exportPdf: async () => Promise.reject(compileError()) };
     try {
       expect(await run(["export", source.path, "--format", "pdf", "--json"], dependencies)).toBe(
-        EXIT_CODE.operationalFailure,
+        EXIT_CODE.lintError,
       );
       expect(
         JSON.parse(String(stderr.mock.calls[0]?.[0])).error.diagnostics.map(

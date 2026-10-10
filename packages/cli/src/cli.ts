@@ -13,7 +13,7 @@
  * | --- | --- |
  * | 0 | 成功または情報のみ |
  * | 1 | lint warning |
- * | 2 | lint error |
+ * | 2 | lint error(check / snapshot / export のコンパイル失敗 E_COMPILE に lint error が伴う場合を含む) |
  * | 3 | 操作失敗 (E_USAGE / E_IO / E_INTERNAL / 取得不能な font など) |
  */
 
@@ -260,16 +260,17 @@ function writeError(code: CliErrorCode, message: string, json: boolean): void {
 
 /**
  * E_COMPILE に、同じデッキの lint error を添えて出す。古い管理プリアンブル(L025)のように
- * lint が原因を先に検出できる失敗を、TeX のエラーだけで終わらせない。lint error が無ければ
- * 通常の E_COMPILE と同じ出力になる。
+ * lint が原因を先に検出できる失敗を、TeX のエラーだけで終わらせない。終了コードを返す。
+ * lint error があれば失敗の原因はデッキ側にあるかもしれないので 2(lint error)にし、
+ * エージェントが環境の失敗と取り違えないようにする。lint error が無ければ通常の E_COMPILE(3)。
  */
-function writeCompileError(
+function reportCompileError(
   message: string,
   json: boolean,
   file: string,
   source: string,
   diagnostics: readonly LintDiagnostic[],
-): void {
+): number {
   const errors = lintJson(
     file,
     source,
@@ -277,19 +278,20 @@ function writeCompileError(
   ).diagnostics;
   if (errors.length === 0) {
     writeError("E_COMPILE", message, json);
-    return;
+    return exitCodeForError("E_COMPILE");
   }
   if (json) {
     process.stderr.write(
       `${JSON.stringify({ error: { code: "E_COMPILE", message, diagnostics: errors } }, null, 2)}\n`,
     );
-    return;
+  } else {
+    process.stderr.write(`${message}\nlint のエラー(コンパイル失敗の原因かもしれません):\n`);
+    for (const entry of errors)
+      process.stderr.write(
+        `${file}:${entry.location.line}:${entry.location.column}: error ${entry.code}: ${entry.message}\n`,
+      );
   }
-  process.stderr.write(`${message}\nlint のエラー(コンパイル失敗の原因かもしれません):\n`);
-  for (const entry of errors)
-    process.stderr.write(
-      `${file}:${entry.location.line}:${entry.location.column}: error ${entry.code}: ${entry.message}\n`,
-    );
+  return EXIT_CODE.lintError;
 }
 
 /**
@@ -596,8 +598,8 @@ async function runCheck(parsed: ParsedCheckArgs, dependencies: CliDependencies):
         ? (possibleCode as CliErrorCode)
         : "E_INTERNAL";
     if (code === "E_COMPILE")
-      writeCompileError(errorMessage(error), parsed.json, input, source, lintDiagnostics);
-    else writeError(code, errorMessage(error), parsed.json);
+      return reportCompileError(errorMessage(error), parsed.json, input, source, lintDiagnostics);
+    writeError(code, errorMessage(error), parsed.json);
     return exitCodeForError(code);
   }
   const diagnostics = [
@@ -967,9 +969,15 @@ async function runSnapshot(
         ? (candidate as CliErrorCode)
         : "E_INTERNAL";
     const linted = code === "E_COMPILE" ? await lintAfterCompileFailure(input) : null;
-    if (linted === null) writeError(code, errorMessage(error), parsed.json);
-    else
-      writeCompileError(errorMessage(error), parsed.json, input, linted.source, linted.diagnostics);
+    if (linted !== null)
+      return reportCompileError(
+        errorMessage(error),
+        parsed.json,
+        input,
+        linted.source,
+        linted.diagnostics,
+      );
+    writeError(code, errorMessage(error), parsed.json);
     return exitCodeForError(code);
   }
 }
@@ -1038,9 +1046,15 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
         : "E_INTERNAL";
     // lint は失敗したときだけ走らせる(成功時の書き出しを遅くしない)。
     const linted = code === "E_COMPILE" ? await lintAfterCompileFailure(input) : null;
-    if (linted === null) writeError(code, errorMessage(error), parsed.json);
-    else
-      writeCompileError(errorMessage(error), parsed.json, input, linted.source, linted.diagnostics);
+    if (linted !== null)
+      return reportCompileError(
+        errorMessage(error),
+        parsed.json,
+        input,
+        linted.source,
+        linted.diagnostics,
+      );
+    writeError(code, errorMessage(error), parsed.json);
     return exitCodeForError(code);
   }
 }

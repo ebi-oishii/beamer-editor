@@ -22,6 +22,6 @@ CLI 0.0.1 の実装済みコマンド（実際のヘルプから生成）:
 
 CLI はまだ単独配布されていない。beamer-editor の checkout を用意し、`pnpm --dir /path/to/beamer-editor --filter @beamer-editor/cli deck <command> ...` を実行する。コマンドは `packages/cli` を作業ディレクトリにするため、生成プロジェクトのファイルと出力先は絶対パスで指定し、出力先を省略しない。
 
-終了コード: 0=成功・情報のみ、1=警告、2=lint error、3=操作失敗。JSONの成功結果はstdout、E_*エラーはstderr。
+終了コード: 0=成功・情報のみ、1=警告、2=lint error、3=操作失敗。check / snapshot / export のコンパイル失敗(E_COMPILE)に lint error が伴うときは 2 で、lint error を添える(--json では error.diagnostics)。環境の失敗とみなさず先に lint error を直す。JSONの成功結果はstdout、E_*エラーはstderr。
 
 上の一覧にないコマンドはこの版では未提供。検証できない場合は、利用可能なコマンドで代替した内容と未実施項目を報告する。
