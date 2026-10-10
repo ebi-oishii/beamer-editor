@@ -250,7 +250,7 @@ function cornerLogoWidthPct(width: LengthSpec | null, metrics: Theme["metrics"])
   }
 }
 
-/** フォント family の CSS スタック(main は和文ローカルフォントへフォールバック)。 */
+/** フォント family の CSS スタック(main は和文ローカルフォント、mono は Windows の Latin 等幅を挟んで総称へ落とす)。 */
 function fontStack(slot: "main" | "mono", family: string): string {
   const name = sanitizeFontFamily(family);
   // main は和文のローカルフォントへフォールバックしてからサンス総称へ落とす

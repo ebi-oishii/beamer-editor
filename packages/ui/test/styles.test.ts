@@ -150,6 +150,9 @@ describe("PREVIEW_CSS: キャンバス幾何の契約", () => {
   it("等幅スタックは総称 monospace の前に Windows の Latin 等幅を挟む", () => {
     const stacks = PREVIEW_CSS.match(/font-family:[^;]*monospace/g) ?? [];
     expect(stacks.length).toBeGreaterThan(0);
-    for (const stack of stacks) expect(stack).toMatch(/Consolas.*monospace$/);
+    for (const stack of stacks) {
+      expect(stack).toMatch(/(?:Consolas|"Cascadia Mono"), monospace$/);
+      expect(stack).not.toContain("Courier New");
+    }
   });
 });

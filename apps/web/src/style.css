@@ -81,7 +81,8 @@ main {
   border: 0;
   outline: none;
   padding: 10px;
-  font-family: "SF Mono", ui-monospace, Menlo, Consolas, "Cascadia Mono", "Courier New", monospace;
+  /* Consolas 以降の正本は packages/renderer/src/font-stack.ts の MONO_FONT_FALLBACK。 */
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, "Cascadia Mono", monospace;
   font-size: 12px;
   line-height: 1.5;
   white-space: pre;
