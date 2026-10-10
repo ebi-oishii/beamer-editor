@@ -114,6 +114,8 @@ Markdown 風入力は `.slide.tex` の語彙ではない。入力補助が提供
 | 画像 | `\includegraphics[width=0.8\textwidth]{path}` | オプションは `width` / `height` のみ、値は `\textwidth`・`\linewidth` の係数のみ。パスは相対パス。SVG は置けない(コンパイルエラーになる)ので PNG / PDF へ実際に変換したものを参照する |
 | 表 | `\begin{tabular}{lcr}` + `booktabs`(`\toprule` `\midrule` `\bottomrule`)+ `&` `\\` | 列指定は `l` `c` `r` と `|` なしの基本形のみ。`multicolumn` 等は生ブロックへ |
 
+HTML 書き出し(`deck export --format html`)が複製する画像はデッキ配下の PNG / JPEG だけである。それ以外(PDF など)は `\includegraphics` でも `deckimage`(§2.8)でもプレースホルダーになり、書き出しは警告なしで成功する。HTML でも図を出すには PNG へ変換したものを参照する(PDF 出力の画質が変わるため、AI が参照を書き換えるのはユーザーの同意がある場合だけ。[ai-protocol.md](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/ai-protocol.md) §5 の 11)。
+
 ### 2.5 インライン要素
 
 | 要素 | 構文 |
