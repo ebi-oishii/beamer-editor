@@ -1397,6 +1397,37 @@ describe("E_COMPILE に lint error を添える", () => {
     }
   });
 
+  it("deck snapshot も同じ(テキストと --json)。lint error が無ければ従来どおり", async () => {
+    const source = await fixture("talk.slide.tex", outdated);
+    await writeFile(source.path.replace("talk.slide.tex", "bg.png"), "");
+    const clean = await fixture("clean.slide.tex", deck("\\begin{frame}{A}\n\\end{frame}"));
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const dependencies: CliDependencies = {
+      compileDeckFrames: async () => Promise.reject(compileError()),
+    };
+    const out = (file: string) => file.replace(/\.slide\.tex$/, "-snap");
+    try {
+      await run(["snapshot", source.path, "-o", out(source.path), "--json"], dependencies);
+      expect(JSON.parse(String(stderr.mock.calls[0]?.[0])).error).toMatchObject({
+        code: "E_COMPILE",
+        diagnostics: [{ code: "L025", location: { line: 4, column: 1 } }],
+      });
+      stderr.mockClear();
+      await run(["snapshot", source.path, "-o", out(source.path)], dependencies);
+      expect(stderr.mock.calls.map((call) => String(call[0])).join("")).toContain(
+        `${source.path}:4:1: error L025: `,
+      );
+      expect(existsSync(out(source.path))).toBe(false);
+      stderr.mockClear();
+      await run(["snapshot", clean.path, "-o", out(clean.path), "--json"], dependencies);
+      expect(JSON.parse(String(stderr.mock.calls[0]?.[0]))).toEqual({
+        error: { code: "E_COMPILE", message: "Undefined control sequence" },
+      });
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
   it("deck export --format pdf も同じ。lint error が無ければ従来どおり", async () => {
     const source = await fixture("talk.slide.tex", outdated);
     await writeFile(source.path.replace("talk.slide.tex", "bg.png"), "");

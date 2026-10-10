@@ -966,7 +966,10 @@ async function runSnapshot(
       typeof candidate === "string" && Object.hasOwn(ERROR_EXIT_CODE, candidate)
         ? (candidate as CliErrorCode)
         : "E_INTERNAL";
-    writeError(code, errorMessage(error), parsed.json);
+    const linted = code === "E_COMPILE" ? await lintAfterCompileFailure(input) : null;
+    if (linted === null) writeError(code, errorMessage(error), parsed.json);
+    else
+      writeCompileError(errorMessage(error), parsed.json, input, linted.source, linted.diagnostics);
     return exitCodeForError(code);
   }
 }
