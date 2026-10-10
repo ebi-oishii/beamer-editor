@@ -529,7 +529,10 @@ ${managedPreambleBlock().replace(
         },
       }).export(document);
       expect(host.lintOptions).toHaveBeenCalledWith(document, outdated);
-      expect(String(vi.mocked(host.showError).mock.calls[0]?.[0])).toContain("先頭: L025: ");
+      const [message, ...actions] = vi.mocked(host.showError).mock.calls[0] ?? [];
+      expect(String(message)).toContain("先頭: L025: ");
+      // Problems パネルは今の本文の診断で通知と合わないので、「問題を表示」は出さない。
+      expect(actions).toEqual(["詳細を表示"]);
       expect(String(vi.mocked(host.showExportDetails).mock.calls[0]?.[0])).toContain(
         `\n${line}:1 L025 `,
       );

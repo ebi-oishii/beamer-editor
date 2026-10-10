@@ -158,12 +158,12 @@ function compileLintErrors(
   document: ExportDocument,
   compiled: string,
   options: (text: string) => LintOptions,
-): CompileLintError[] {
+): { errors: CompileLintError[]; unchanged: boolean } {
   try {
     // 位置は Problems パネルと同じ positionAt で出す。今の文書が変わっていれば、その位置は
     // コンパイルした本文とずれるので、取っておいた本文から数える。
     const unchanged = document.getText() === compiled;
-    return lintDocumentText(compiled, options(compiled))
+    const errors = lintDocumentText(compiled, options(compiled))
       .filter((diagnostic) => diagnostic.severity === "error")
       .map((diagnostic) => {
         const position = unchanged ? document.positionAt(diagnostic.span.start) : undefined;
@@ -173,8 +173,9 @@ function compileLintErrors(
             : { line: position.line + 1, column: position.character + 1 };
         return { line, column, code: diagnostic.code, message: diagnostic.message };
       });
+    return { errors, unchanged };
   } catch {
-    return [];
+    return { errors: [], unchanged: false };
   }
 }
 
@@ -321,11 +322,11 @@ export class ExportController {
       return;
     }
     if (error.code === "E_CANCELLED") return;
-    const lintErrors =
+    const { errors: lintErrors, unchanged } =
       // TeX が非 0 で終わったときだけ(起動の失敗・タイムアウトなどにデッキ側の原因は添えない)。
       error.texFailed && compiled !== undefined
         ? compileLintErrors(document, compiled, (text) => this.host.lintOptions(document, text))
-        : [];
+        : { errors: [], unchanged: false };
     const [first] = lintErrors;
     const message =
       first === undefined
@@ -335,7 +336,10 @@ export class ExportController {
       "詳細を表示",
       ...(error.code === "E_TECTONIC_NOT_FOUND" ? ["設定を開く"] : []),
       // 管理対象外の .tex は Problems パネルに診断が出ないので、通知と詳細に入れるだけにする。
-      ...(first === undefined || !this.host.showsProblems(document) ? [] : ["問題を表示"]),
+      // コンパイル中に文書が変わったときも出さない(Problems パネルは今の本文の診断で、通知と合わない)。
+      ...(first === undefined || !unchanged || !this.host.showsProblems(document)
+        ? []
+        : ["問題を表示"]),
     ];
     const action = await this.host.showError(message, ...actions);
     if (action === "詳細を表示") {
