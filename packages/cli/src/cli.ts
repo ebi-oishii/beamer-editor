@@ -13,7 +13,7 @@
  * | --- | --- |
  * | 0 | 成功または情報のみ |
  * | 1 | lint warning |
- * | 2 | lint error(check / snapshot / export のコンパイル失敗 E_COMPILE に lint error が伴う場合を含む) |
+ * | 2 | lint error(check / snapshot / export の TeX のコンパイルエラー E_COMPILE に lint error が伴う場合を含む) |
  * | 3 | 操作失敗 (E_USAGE / E_IO / E_INTERNAL / 取得不能な font など) |
  */
 
@@ -260,10 +260,20 @@ function writeError(code: CliErrorCode, message: string, json: boolean): void {
 }
 
 /**
- * E_COMPILE に、同じデッキの lint error を添えて出す。古い管理プリアンブル(L025)のように
- * lint が原因を先に検出できる失敗を、TeX のエラーだけで終わらせない。終了コードを返す。
- * lint error があれば失敗の原因はデッキ側にあるかもしれないので 2(lint error)にし、
- * エージェントが環境の失敗と取り違えないようにする。lint error が無ければ通常の E_COMPILE(3)。
+ * TeX が非 0 で終わった E_COMPILE か(compiler の PdfExportError.texFailed)。lint error を添えるのは
+ * この失敗だけで、起動の失敗・タイムアウト・log の欠落など環境やツール側の E_COMPILE には添えない。
+ */
+function isTexFailure(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && "texFailed" in error && error.texFailed === true
+  );
+}
+
+/**
+ * TeX のコンパイルエラー(isTexFailure)に、同じデッキの lint error を添えて出す。古い管理
+ * プリアンブル(L025)のように lint が原因を先に検出できる失敗を、TeX のエラーだけで終わらせない。
+ * 終了コードを返す。lint error があれば失敗の原因はデッキ側にあるかもしれないので 2(lint error)に
+ * し、エージェントが環境の失敗と取り違えないようにする。lint error が無ければ通常の E_COMPILE(3)。
  */
 function reportCompileError(
   message: string,
@@ -591,7 +601,7 @@ async function runCheck(parsed: ParsedCheckArgs, dependencies: CliDependencies):
       possibleCode !== undefined && possibleCode in ERROR_EXIT_CODE
         ? (possibleCode as CliErrorCode)
         : "E_INTERNAL";
-    if (code === "E_COMPILE")
+    if (code === "E_COMPILE" && isTexFailure(error))
       return reportCompileError(errorMessage(error), parsed.json, input, source, lintDiagnostics);
     writeError(code, errorMessage(error), parsed.json);
     return exitCodeForError(code);
@@ -828,17 +838,6 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-/**
- * snapshot が自分で投げる「選んだ frame に PDF page が無い」。コードは従来どおり E_COMPILE だが、
- * コンパイル自体は成功しているので、コンパイラの E_COMPILE と違って lint を添えない。
- */
-class NoSnapshotPageError extends Error {
-  readonly code = "E_COMPILE";
-  constructor() {
-    super("snapshot 可能な PDF page がありません");
-  }
-}
-
 async function runSnapshot(
   parsed: ParsedSnapshotArgs,
   dependencies: CliDependencies,
@@ -897,7 +896,11 @@ async function runSnapshot(
         file: snapshotFileName(item.address.number, image.page),
       })),
     );
-    if (!outputs.length) throw new NoSnapshotPageError();
+    // コンパイル自体は成功しているので TeX の失敗(texFailed)ではなく、lint は添えない。
+    if (!outputs.length)
+      throw Object.assign(new Error("snapshot 可能な PDF page がありません"), {
+        code: "E_COMPILE",
+      });
     // mkdir is atomic and never replaces an existing directory, so it doubles as the publication
     // reservation: a concurrent creator wins and we leave their entry untouched.
     try {
@@ -970,11 +973,8 @@ async function runSnapshot(
       typeof candidate === "string" && Object.hasOwn(ERROR_EXIT_CODE, candidate)
         ? (candidate as CliErrorCode)
         : "E_INTERNAL";
-    // 「ページが無い」はコンパイル自体は成功しているので lint を添えない(終了コード 3 のまま)。
     const linted =
-      code === "E_COMPILE" && !(error instanceof NoSnapshotPageError)
-        ? await lintAfterCompileFailure(input)
-        : null;
+      code === "E_COMPILE" && isTexFailure(error) ? await lintAfterCompileFailure(input) : null;
     if (linted !== null)
       return reportCompileError(
         errorMessage(error),
@@ -1051,7 +1051,8 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
         ? (possibleCode as CliErrorCode)
         : "E_INTERNAL";
     // lint は失敗したときだけ走らせる(成功時の書き出しを遅くしない)。
-    const linted = code === "E_COMPILE" ? await lintAfterCompileFailure(input) : null;
+    const linted =
+      code === "E_COMPILE" && isTexFailure(error) ? await lintAfterCompileFailure(input) : null;
     if (linted !== null)
       return reportCompileError(
         errorMessage(error),

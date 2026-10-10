@@ -159,7 +159,11 @@ describe("compileFragment", () => {
           : { exitCode: 1, stdout: "", stderr: "! Undefined control sequence.\nl.3 \\bad" },
     };
     await expect(compileFragment({ document: "\\bad" }, { runner: failing })).rejects.toMatchObject(
-      { code: "E_COMPILE", message: expect.stringContaining("Undefined control sequence") },
+      {
+        code: "E_COMPILE",
+        texFailed: true,
+        message: expect.stringContaining("Undefined control sequence"),
+      },
     );
   });
 

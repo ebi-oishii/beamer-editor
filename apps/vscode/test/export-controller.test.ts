@@ -463,7 +463,9 @@ ${managedPreambleBlock().replace(
 `;
     const failing = () => ({
       exportPdf: async () => {
-        throw new PdfExportError("E_COMPILE", "Undefined control sequence");
+        throw new PdfExportError("E_COMPILE", "Undefined control sequence", undefined, {
+          texFailed: true,
+        });
       },
     });
     const line = outdated.split("\n").findIndex((text) => text.startsWith("\\deckbackground")) + 1;
@@ -521,7 +523,9 @@ ${managedPreambleBlock().replace(
         exportPdf: async () => {
           // コンパイル中の未保存の編集: 先頭に 2 行足し、\deckbackground を消す。
           text = `% a\n% b\n${outdated.replace("\\deckbackground{assets/bg.png}\n", "")}`;
-          throw new PdfExportError("E_COMPILE", "Undefined control sequence");
+          throw new PdfExportError("E_COMPILE", "Undefined control sequence", undefined, {
+            texFailed: true,
+          });
         },
       }).export(document);
       expect(host.lintOptions).toHaveBeenCalledWith(document, outdated);
@@ -577,6 +581,26 @@ ${managedPreambleBlock().replace(
         "PDF の書き出し中に入出力エラーが発生しました。",
         "詳細を表示",
       );
+    });
+
+    it("TeX の失敗でない E_COMPILE(タイムアウト・起動失敗・log 欠落)では lint しない", async () => {
+      for (const message of [
+        "PDF のコンパイルが 300 秒でタイムアウトしました",
+        "Tectonic の実行に失敗しました: Error: spawn EACCES",
+        "Tectonic の最終 pass の log がありません",
+      ]) {
+        const host = createHost();
+        await new ExportController(host, {
+          exportPdf: async () => {
+            throw new PdfExportError("E_COMPILE", message);
+          },
+        }).export(createDocument({ getText: () => outdated }));
+        expect(host.lintOptions).not.toHaveBeenCalled();
+        expect(host.showError).toHaveBeenCalledWith(
+          "PDF のコンパイルに失敗しました。",
+          "詳細を表示",
+        );
+      }
     });
   });
 });

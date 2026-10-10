@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PdfExportError } from "@beamer-editor/compiler";
 import * as core from "@beamer-editor/core";
 import { afterEach, expect, it, vi } from "vitest";
 import { type CliDependencies, EXIT_CODE, run } from "../src/cli.ts";
@@ -37,7 +38,11 @@ it("E_COMPILE に添える lint が例外を投げても、元の E_COMPILE を�
   });
   const dependencies: CliDependencies = {
     exportPdf: async () =>
-      Promise.reject(Object.assign(new Error("Undefined control sequence"), { code: "E_COMPILE" })),
+      Promise.reject(
+        new PdfExportError("E_COMPILE", "Undefined control sequence", undefined, {
+          texFailed: true,
+        }),
+      ),
   };
   expect(await run(["export", deck, "--format", "pdf", "--json"], dependencies)).toBe(
     EXIT_CODE.operationalFailure,

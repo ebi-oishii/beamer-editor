@@ -14,7 +14,11 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, relative, resolve } from "node:path";
-import { type CompileDeckFramesRequest, findDeckFrames } from "@beamer-editor/compiler";
+import {
+  type CompileDeckFramesRequest,
+  findDeckFrames,
+  PdfExportError,
+} from "@beamer-editor/compiler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type CliDependencies,
@@ -1364,8 +1368,38 @@ describe("E_COMPILE に lint error を添える", () => {
 \\end{frame}
 \\end{document}
 `;
+  // TeX が非 0 で終わった E_COMPILE(compiler の PdfExportError.texFailed)。
   const compileError = () =>
-    Object.assign(new Error("Undefined control sequence"), { code: "E_COMPILE" });
+    new PdfExportError("E_COMPILE", "Undefined control sequence", undefined, { texFailed: true });
+
+  it("TeX の失敗でない E_COMPILE(タイムアウト・起動失敗・log 欠落)には lint を添えず、終了コード 3 のまま", async () => {
+    const source = await fixture("talk.slide.tex", outdated);
+    await writeFile(source.path.replace("talk.slide.tex", "bg.png"), "");
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const out = source.path.replace(/\.slide\.tex$/, "-snap");
+    try {
+      for (const message of [
+        "PDF のコンパイルが 300 秒でタイムアウトしました",
+        "Tectonic の実行に失敗しました: Error: spawn EACCES",
+        "Tectonic の最終 pass の log がありません",
+      ]) {
+        const reject = async () => Promise.reject(new PdfExportError("E_COMPILE", message));
+        for (const [argv, dependencies] of [
+          [["check", source.path, "--json"], { compileDeckFrames: reject }],
+          [["snapshot", source.path, "-o", out, "--json"], { compileDeckFrames: reject }],
+          [["export", source.path, "--format", "pdf", "--json"], { exportPdf: reject }],
+        ] as const) {
+          stderr.mockClear();
+          expect(await run([...argv], dependencies)).toBe(EXIT_CODE.operationalFailure);
+          expect(JSON.parse(String(stderr.mock.calls[0]?.[0]))).toEqual({
+            error: { code: "E_COMPILE", message },
+          });
+        }
+      }
+    } finally {
+      stderr.mockRestore();
+    }
+  });
 
   it("deck check: JSON は error.diagnostics に、テキストはメッセージの後に lint error を出す", async () => {
     const source = await fixture("talk.slide.tex", outdated);
