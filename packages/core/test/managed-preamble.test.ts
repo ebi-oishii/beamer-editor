@@ -10,6 +10,7 @@ import {
   managedPreambleBlock,
   managedPreambleSpan,
   managedPreambleUpdate,
+  parseDeck,
 } from "../src/index.js";
 
 const resource = (name: string) =>
@@ -216,7 +217,7 @@ describe("managedPreambleSpan: 終了印を探す範囲", () => {
     );
   });
 
-  it("ユーザー領域の印は行頭のものだけを数え、コメントの中の印では止まらない", () => {
+  it("ユーザー領域の印は parser と同じ規則で数え、コメントの中の印でも止まって書き換えない", () => {
     const source = initDeck(
       oldManaged.replace(
         `\n${MANAGED_PREAMBLE_END}`,
@@ -224,8 +225,11 @@ describe("managedPreambleSpan: 終了印を探す範囲", () => {
       ),
       BACKGROUNDS,
     );
-    const fix = managedPreambleUpdate(source);
-    expect(fix && apply(source, fix)).toBe(initDeck(managedPreambleBlock(), BACKGROUNDS));
+    // parser はこのコメントの位置から %% macros 領域を始める。管理プリアンブルの範囲もそこまでに限る。
+    expect(parseDeck(source).macros.span.start).toBe(
+      source.indexOf("% 利用者のマクロは") + "% 利用者のマクロは %% macros:begin の下へ\n".length,
+    );
+    expect(managedPreambleUpdate(source)).toBeNull();
   });
 
   it("parse 済みのプリアンブルの終わりを渡しても同じ結果になる", () => {
