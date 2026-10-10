@@ -2,10 +2,9 @@ import { lstat, mkdir, open, readdir, readFile, rename, rmdir, unlink } from "no
 import { dirname, join, resolve } from "node:path";
 import {
   CURRENT_DECK_SOURCE_VERSION,
-  MANAGED_PREAMBLE_BEGIN,
-  MANAGED_PREAMBLE_END,
+  locateManagedPreamble,
   managedPreambleBlock,
-  managedPreambleUpdate,
+  managedPreambleReplacement,
 } from "@beamer-editor/core";
 import { GENERATED_SKILL_FINGERPRINT } from "./generated-skill-fingerprint.ts";
 import {
@@ -216,12 +215,13 @@ export async function updateManagedPreamble(
       `デッキを読み込めません: ${target}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const fix = managedPreambleUpdate(source);
-  if (fix === null)
+  const located = locateManagedPreamble(source);
+  if ("problem" in located)
     throw new InitError(
       "E_INPUT",
-      `ツール管理プリアンブルの印(「${MANAGED_PREAMBLE_BEGIN}」から「${MANAGED_PREAMBLE_END}」まで)が見つからないため更新しません: ${target}`,
+      `ツール管理プリアンブルの範囲を特定できないため更新しません(${located.problem}): ${target}`,
     );
+  const fix = managedPreambleReplacement(source, located.span);
   const updated = source.slice(0, fix.span.start) + fix.replacement + source.slice(fix.span.end);
   if (updated === source) return { file: target, changed: false };
   // Stage and rename so an interrupted write never leaves a truncated deck.

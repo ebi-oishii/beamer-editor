@@ -11,7 +11,7 @@ import {
   type SourceSpan,
 } from "./ast.js";
 import type { FileExistsProbe, ImageFormat, ImageProbe } from "./image.js";
-import { managedPreambleUpdate } from "./managed-preamble.js";
+import { locateManagedPreamble, managedPreambleReplacement } from "./managed-preamble.js";
 import { parseDeck } from "./parser.js";
 import {
   blankComments,
@@ -1240,15 +1240,16 @@ function lintOutdatedManagedPreamble(source: string, doc: DeckDocument): LintDia
   const inputs = [...text.matchAll(/\\input\s*\{([^{}]*)\}/g)].map((match) =>
     (match[1] ?? "").trim().replace(/\.tex$/, ""),
   );
-  const fix = managedPreambleUpdate(source);
+  const located = locateManagedPreamble(source, preambleEnd);
+  const fix = "span" in located ? managedPreambleReplacement(source, located.span) : null;
   const diagnostics: LintDiagnostic[] = [];
   for (const { macro, uses } of pending) {
     if (defined.has(macro.name)) continue;
     if (inputs.some((path) => path === macro.resource || path.endsWith(`/${macro.resource}`)))
       continue;
     const message = `ツール管理プリアンブルが \\${macro.name} より古く、定義がありません。プレビューには出ますが PDF 書き出しは Undefined control sequence で止まります。${
-      fix === null
-        ? "ツール管理プリアンブルの印が見つからないため自動では直せません。deck init で作ったデッキの管理プリアンブルを写してください"
+      "problem" in located
+        ? `ツール管理プリアンブルの範囲を特定できないため自動では直せません(${located.problem})。印を直すか、deck init で作ったデッキの管理プリアンブルを写してください`
         : "deck init <file> --update-preamble で管理プリアンブルを最新に差し替えてください"
     }`;
     for (const span of uses)

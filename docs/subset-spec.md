@@ -62,7 +62,7 @@
 テーマ選択とパッケージはツール管理領域に入る。v1 のテーマは `default` の 1 種類から開始する(2 テーマ目は HTML/PDF の座標差を fixture で評価してから追加。`metropolis` は将来候補)。共通パッケージ(`graphicx`, `amsmath`, `amssymb`, `booktabs`, `hyperref` 等)と、キャンバス用の `deckcanvas` / `decktext` / `deckimage`(§2.8)の定義はツールが自動注入する。
 
 - ツール管理領域は `%% deck-source-version: 1` でソース形式の版を記録する。構文の版が上がるときは、フォーマッタが黙って破壊的変換せず、明示的な migration コマンドを通す(欠落・不一致は L017)。
-- 構文を変えずにツール管理プリアンブルへマクロを足したとき(`\deckbackground` など)は版を上げない。古いデッキでそのマクロを使うと L025 になり、`deck init <file> --update-preamble` が `% ---- ツール管理プリアンブル` 〜 `% ---- ツール管理ここまで ----` の間だけを `deck init` が書く現行の内容に差し替える(版の行・ユーザー領域・本文は変えない。印が無いデッキは書き換えずに失敗する)。
+- 構文を変えずにツール管理プリアンブルへマクロを足したとき(`\deckbackground` など)は版を上げない。古いデッキでそのマクロを使うと L025 になり、`deck init <file> --update-preamble` が `% ---- ツール管理プリアンブル` 〜 `% ---- ツール管理ここまで ----` の間だけを `deck init` が書く現行の内容に差し替える(版の行・ユーザー領域・本文は変えない。範囲を特定できない(印が無い・終了印が最初のユーザー領域か `\begin{document}` より後ろにある・開始印が複数ある)デッキは書き換えずに失敗し、L025 にも fix を付けない)。
 - スタイル(色・フォント・ロゴ・背景画像・フッター)は `%% style` 領域のスタイル語彙で指定する([theme-design.md](theme-design.md))。スタイルは本文の語彙を変えない提示層であり、v1 の語彙は幾何中立(本文領域・タイトル帯の寸法を変えない)。語彙外の様式は `%% preamble-extra` に生で書け、PDF には完全に効く(プレビューは近似のまま)。
 - 背景画像は `%% style` 領域の `\deckbackground{assets/bg.png}`(全スライド)と `\deckbackground[title]{assets/title-bg.png}`(表紙 = `\titlepage` のフレームだけ。全スライド用より優先)で指定する。画像は PNG / JPEG を使う(PDF の背景は PDF にだけ出てプレビューには出ない)。`\usebackgroundtemplate` / `\setbeamertemplate{background}` などをフレームの中・フレームの間・`%% preamble-extra` の外へ書かない(PDF には効くがプレビューには出ない。L024)
 - `deck` で始まるコマンド・環境名はツールの予約名前空間であり、`%% macros` 領域での再定義は不可(L016)。

@@ -4,6 +4,7 @@ import { MANAGED_PREAMBLE_RESOURCES } from "../src/generated-managed-preamble.js
 import {
   type LintFix,
   lintSource,
+  locateManagedPreamble,
   MANAGED_PREAMBLE_BEGIN,
   MANAGED_PREAMBLE_END,
   managedPreambleBlock,
@@ -191,6 +192,47 @@ describe("managedPreambleSpan: 終了印を探す範囲", () => {
       `%% preamble-extra:begin\n${MANAGED_PREAMBLE_BEGIN}\n`,
     );
     expect(managedPreambleSpan(source)).toBeNull();
+  });
+
+  it("特定できない理由を場合ごとに返し、L025 のメッセージにも入れる", () => {
+    const problem = (source: string) => {
+      const located = locateManagedPreamble(source);
+      return "problem" in located ? located.problem : null;
+    };
+    const noBegin = initDeck(oldManaged.replace(`${MANAGED_PREAMBLE_BEGIN}\n`, ""), BACKGROUNDS);
+    const noEnd = initDeck(withoutEnd, BACKGROUNDS);
+    const late = noEnd.replace("%% macros:end\n", `%% macros:end\n${MANAGED_PREAMBLE_END}\n`);
+    const twice = initDeck(oldManaged, BACKGROUNDS).replace(
+      "%% preamble-extra:begin\n",
+      `%% preamble-extra:begin\n${MANAGED_PREAMBLE_BEGIN}\n`,
+    );
+    expect(problem(noBegin)).toContain("開始印");
+    expect(problem(noEnd)).toBe(`終了印(「${MANAGED_PREAMBLE_END}」)がありません`);
+    expect(problem(late)).toContain("より後ろにあります");
+    expect(problem(twice)).toBe("開始印がプリアンブルに複数あります");
+    expect(problem(initDeck(oldManaged, BACKGROUNDS))).toBeNull();
+    expect(l025(late)[0]?.message).toContain(
+      `範囲を特定できないため自動では直せません(${problem(late)})`,
+    );
+  });
+
+  it("ユーザー領域の印は行頭のものだけを数え、コメントの中の印では止まらない", () => {
+    const source = initDeck(
+      oldManaged.replace(
+        `\n${MANAGED_PREAMBLE_END}`,
+        `\n% 利用者のマクロは %% macros:begin の下へ\n${MANAGED_PREAMBLE_END}`,
+      ),
+      BACKGROUNDS,
+    );
+    const fix = managedPreambleUpdate(source);
+    expect(fix && apply(source, fix)).toBe(initDeck(managedPreambleBlock(), BACKGROUNDS));
+  });
+
+  it("parse 済みのプリアンブルの終わりを渡しても同じ結果になる", () => {
+    const source = initDeck(oldManaged, BACKGROUNDS);
+    expect(managedPreambleSpan(source, source.indexOf("\\begin{document}"))).toEqual(
+      managedPreambleSpan(source),
+    );
   });
 });
 

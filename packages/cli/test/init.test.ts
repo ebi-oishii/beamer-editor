@@ -428,9 +428,13 @@ describe("--update-preamble", () => {
       .replace(/^% ---- ツール管理ここまで ----\n/m, "")
       .replace("%% preamble-extra:end", "% ---- ツール管理ここまで ----\n%% preamble-extra:end");
     await writeFile(deck, source);
-    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     expect(await run(["init", deck, "--update-preamble"])).toBe(3);
     expect(await readFile(deck, "utf8")).toBe(source);
+    // 理由を添える(印が無いのではなく、終了印が最初のユーザー領域より後ろにある)。
+    expect(stderr.mock.calls.map((c) => c[0]).join("")).toMatch(
+      /^ツール管理プリアンブルの範囲を特定できないため更新しません\(終了印が最初のユーザー領域.*より後ろにあります\): /,
+    );
   });
 
   it("引数の誤りは usage エラーにする", async () => {
