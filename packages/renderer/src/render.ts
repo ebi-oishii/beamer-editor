@@ -253,11 +253,13 @@ function cornerLogoWidthPct(width: LengthSpec | null, metrics: Theme["metrics"])
 function fontStack(slot: "main" | "mono", family: string): string {
   const name = sanitizeFontFamily(family);
   // main は和文のローカルフォントへフォールバックしてからサンス総称へ落とす
-  // (プレビューは近似でよい。theme-design.md §4)。mono は等幅のまま総称へ委ねる。
+  // (プレビューは近似でよい。theme-design.md §4)。mono は指定名の後に Windows の Latin 等幅
+  // (Consolas / Cascadia Mono / Courier New)を挟んでから総称へ落とす。総称 monospace だけだと
+  // 日本語 Windows では MS ゴシックになり、バックスラッシュ(U+005C)が ¥ に見える。
   // 和文フォールバックは Linux(Noto Sans CJK JP / Noto Sans JP)・macOS(Hiragino Sans)・
   // Windows(Yu Gothic)を順に並べる。先頭 family と重複しても害はない。
   return slot === "mono"
-    ? `"${name}", monospace`
+    ? `"${name}", Consolas, "Cascadia Mono", "Courier New", monospace`
     : `"${name}", "Noto Sans CJK JP", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif`;
 }
 

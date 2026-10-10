@@ -512,6 +512,21 @@ describe("renderDeck: styled.slide.tex(スタイル語彙)", () => {
     expect(deck2.css).not.toContain("--deck-font-mono");
   });
 
+  it("mono フォントは Windows の Latin 等幅を総称の前に挟む(日本語 Windows でバックスラッシュが ¥ に見えない)", () => {
+    const src = String.raw`\documentclass{beamer}
+%% style:begin
+\deckfont{mono}{JetBrains Mono}
+%% style:end
+\begin{document}
+\begin{frame}{A}x\end{frame}
+\end{document}
+`;
+    const css = renderDeck(parseDeck(src)).css;
+    expect(css).toContain(
+      '--deck-font-mono: "JetBrains Mono", Consolas, "Cascadia Mono", "Courier New", monospace;',
+    );
+  });
+
   it("ロゴとフッターが全フレームに入る(ページ番号付き)", () => {
     for (const frame of deck.frames) {
       expect(frame.html).toContain('class="deck-logo"');

@@ -99,4 +99,21 @@ describe("PREVIEW_CSS: キャンバス幾何の契約", () => {
       ).toBe(true);
     }
   });
+
+  it("インライン alert の色は alertblock の容器(本文)へ掛けない", () => {
+    const sheet = injectPreviewCss();
+    for (const rule of styleRules(sheet)) {
+      for (const part of rule.selectorText.split(",").map((p) => p.trim())) {
+        if (/\.alert(?![\w-])/.test(part) && !part.includes(".block-title")) {
+          expect(part, `${part} は .beamer-block を除外する`).toContain(":not(.beamer-block)");
+        }
+      }
+    }
+  });
+
+  it("等幅スタックは総称 monospace の前に Windows の Latin 等幅を挟む", () => {
+    const stacks = PREVIEW_CSS.match(/font-family:[^;]*monospace/g) ?? [];
+    expect(stacks.length).toBeGreaterThan(0);
+    for (const stack of stacks) expect(stack).toMatch(/Consolas.*monospace$/);
+  });
 });

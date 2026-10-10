@@ -81,7 +81,7 @@ main {
   border: 0;
   outline: none;
   padding: 10px;
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, "Cascadia Mono", "Courier New", monospace;
   font-size: 12px;
   line-height: 1.5;
   white-space: pre;

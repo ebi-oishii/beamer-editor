@@ -237,10 +237,10 @@ export const PREVIEW_CSS = `
   font-style: italic;
 }
 .slide code {
-  font-family: var(--deck-font-mono, "SF Mono", ui-monospace, Menlo, monospace);
+  font-family: var(--deck-font-mono, "SF Mono", ui-monospace, Menlo, Consolas, "Cascadia Mono", "Courier New", monospace);
   font-size: 0.92em;
 }
-.slide .alert {
+.slide .alert:not(.beamer-block) {
   color: var(--deck-alert, #c0392b);
 }
 .slide a.url {
@@ -413,7 +413,7 @@ export const PREVIEW_CSS = `
   padding: 3pt 5pt;
   font-size: 7pt;
   line-height: 1.35;
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, "Cascadia Mono", "Courier New", monospace;
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 130pt;
@@ -423,7 +423,7 @@ export const PREVIEW_CSS = `
   background: #fdf6e3;
   outline: 0.6pt dashed #b58900;
   border-radius: 2pt;
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, "Cascadia Mono", "Courier New", monospace;
   font-size: 0.85em;
   padding: 0 2pt;
 }
@@ -443,7 +443,7 @@ export const PREVIEW_CSS = `
   overflow: hidden;
 }
 .slide .placeholder-label {
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, "Cascadia Mono", "Courier New", monospace;
   font-size: 7.5pt;
   line-height: 1.3;
   text-align: center;
