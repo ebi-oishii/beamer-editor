@@ -146,6 +146,15 @@ export interface PreviewControllerOptions {
     placement: CanvasPlacement;
     document: PreviewDocument;
   }) => Promise<CanvasEditResult>;
+  /** プレビューのカードから順序を変える。既存の SlideEditController が一回の WorkspaceEdit を所有する。 */
+  editSlide?: (request: {
+    action: "moveUp" | "moveDown";
+    frameIndex: number;
+    version: number;
+    frameOffset: number;
+    document: PreviewDocument;
+  }) => Promise<{ applied: boolean; newFrameStart?: number }>;
+  isSlideEditable?: (document: PreviewDocument, version: number, sourceOffset: number) => boolean;
   /** 選択中のキャンバス要素を取り除く(Delete。#148)。sourceSpan は要素の options の範囲。 */
   deleteCanvasElement?: (request: {
     frameIndex: number;
@@ -273,6 +282,12 @@ export class PreviewController implements vscode.Disposable {
   private readonly onWebviewReady: () => void;
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
   private readonly detachToCanvas: PreviewControllerOptions["detachToCanvas"];
+  private readonly editSlide: PreviewControllerOptions["editSlide"];
+  private readonly isSlideEditable: PreviewControllerOptions["isSlideEditable"];
+  private slideEditPending = false;
+  private pendingMovedSlide:
+    | { document: PreviewDocument; uri: string; version: number; newFrameStart: number }
+    | undefined;
   private readonly deleteCanvasElement: PreviewControllerOptions["deleteCanvasElement"];
   private readonly copyCanvasElement: PreviewControllerOptions["copyCanvasElement"];
   private readonly pasteCanvasElements: PreviewControllerOptions["pasteCanvasElements"];
@@ -331,6 +346,8 @@ export class PreviewController implements vscode.Disposable {
     this.onWebviewReady = options.onWebviewReady ?? (() => {});
     this.moveCanvasElement = options.moveCanvasElement;
     this.detachToCanvas = options.detachToCanvas;
+    this.editSlide = options.editSlide;
+    this.isSlideEditable = options.isSlideEditable;
     this.deleteCanvasElement = options.deleteCanvasElement;
     this.copyCanvasElement = options.copyCanvasElement;
     this.pasteCanvasElements = options.pasteCanvasElements;
@@ -410,6 +427,8 @@ export class PreviewController implements vscode.Disposable {
       await this.handleMove(msg);
     } else if (msg.type === "detachToCanvas") {
       await this.handleDetach(msg);
+    } else if (msg.type === "editSlide") {
+      await this.handleSlideEdit(msg);
     } else if (msg.type === "deleteCanvasElement") {
       await this.handleDelete(msg);
     } else if (msg.type === "copyCanvasElement") {
@@ -435,6 +454,19 @@ export class PreviewController implements vscode.Disposable {
     return queued;
   }
 
+  /**
+   * 適用中、または文書への反映を待っている編集(キャンバス編集・スライド移動)があれば true。
+   * その間は古い描画の位置で次の編集を作らないよう、どの編集も受け付けない。
+   */
+  private editInFlight(): boolean {
+    return (
+      this.editApplyPending ||
+      this.editAwaitingVersion !== undefined ||
+      this.slideEditPending ||
+      this.pendingMovedSlide !== undefined
+    );
+  }
+
   private async handleCanvasStyle(
     move: {
       frameIndex: number;
@@ -442,7 +474,7 @@ export class PreviewController implements vscode.Disposable {
       version: number;
     } & ({ width: number } | { size: CanvasFontSize }),
   ): Promise<void> {
-    if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
+    if (this.editInFlight()) return;
     const latest = this.latest;
     const frame = latest?.deck.frames[move.frameIndex];
     const element = frame?.canvasElements?.find(
@@ -531,7 +563,7 @@ export class PreviewController implements vscode.Disposable {
     x: number;
     y: number;
   }): Promise<void> {
-    if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
+    if (this.editInFlight()) return;
     const latest = this.latest;
     const frame = latest?.deck.frames[move.frameIndex];
     const element = frame?.canvasElements?.find(
@@ -610,7 +642,7 @@ export class PreviewController implements vscode.Disposable {
     sourceSpan: { start: number; end: number };
     rect: { x: number; y: number; width: number };
   }): Promise<void> {
-    if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
+    if (this.editInFlight()) return;
     const latest = this.latest;
     if (
       !latest ||
@@ -664,6 +696,93 @@ export class PreviewController implements vscode.Disposable {
     }
   }
 
+  private async handleSlideEdit(request: {
+    action: "moveUp" | "moveDown";
+    frameIndex: number;
+    version: number;
+  }): Promise<void> {
+    if (this.editInFlight()) return;
+    const latest = this.latest;
+    if (
+      !latest ||
+      this.latestDocument !== this.document ||
+      request.version !== this.document.version ||
+      latest.version !== this.document.version
+    ) {
+      this.onWarning(
+        "プレビューが古いためスライドを移動できませんでした。更新して選び直してください。",
+      );
+      this.sendDeck();
+      return;
+    }
+    const frameOffset = resolveJumpOffset(latest, request.frameIndex);
+    if (frameOffset === null) return;
+    const document = this.document;
+    this.slideEditPending = true;
+    try {
+      const result = await this.editSlide?.({ ...request, frameOffset, document });
+      this.slideEditPending = false;
+      if (this.disposed) {
+        this.pendingMovedSlide = undefined;
+        return;
+      }
+      if (result?.applied && result.newFrameStart !== undefined) {
+        this.pendingMovedSlide = {
+          document,
+          uri: document.uri.toString(),
+          version: request.version,
+          newFrameStart: result.newFrameStart,
+        };
+        this.revealMovedSlide();
+        if (
+          !this.disposed &&
+          this.pendingMovedSlide &&
+          (!this.latest ||
+            this.latestDocument !== document ||
+            this.latest.version !== document.version)
+        ) {
+          this.sendDeck();
+        }
+      } else {
+        this.pendingMovedSlide = undefined;
+        this.sendDeck();
+      }
+    } catch {
+      this.pendingMovedSlide = undefined;
+      if (!this.disposed) {
+        this.onError("failed to move the slide.");
+        this.sendDeck();
+      }
+    } finally {
+      this.slideEditPending = false;
+    }
+  }
+
+  private revealMovedSlide(): void {
+    const pending = this.pendingMovedSlide;
+    const latest = this.latest;
+    if (!pending || !latest || latest.version <= pending.version) return;
+    if (
+      pending.document !== this.document ||
+      pending.uri !== this.document.uri.toString() ||
+      this.latestDocument !== this.document ||
+      latest.version !== this.document.version
+    ) {
+      this.pendingMovedSlide = undefined;
+      return;
+    }
+    const frameIndex = latest.deck.frames.findIndex(
+      (_, index) => resolveJumpOffset(latest, index) === pending.newFrameStart,
+    );
+    this.pendingMovedSlide = undefined;
+    if (frameIndex < 0) return;
+    void this.panel.webview.postMessage({
+      type: "activeFrameChanged",
+      frameIndex,
+      version: latest.version,
+    });
+  }
+
   /**
    * 要求が指す editable なキャンバス要素の最新 descriptor。プレビューが古い版を見ていれば undefined
    * (move と同じ条件)。
@@ -696,7 +815,7 @@ export class PreviewController implements vscode.Disposable {
     elementId: string;
     version: number;
   }): Promise<void> {
-    if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
+    if (this.editInFlight()) return;
     const element = this.currentCanvasElement(request);
     if (!element) {
       this.sendDeck();
@@ -752,7 +871,7 @@ export class PreviewController implements vscode.Disposable {
   }): Promise<void> {
     // 切り取りは削除まで一続きの操作。削除を受け付けられない状態でコピーだけ通すと、
     // 貼り付けが「移動」でなく「複製」になる。削除と同じガードで先に弾く。
-    if (request.cut && (this.editApplyPending || this.editAwaitingVersion !== undefined)) {
+    if (request.cut && this.editInFlight()) {
       this.onWarning("Canvas element was not cut. Try again.");
       this.sendDeck();
       return;
@@ -792,7 +911,7 @@ export class PreviewController implements vscode.Disposable {
 
   /** クリップボードのキャンバス要素を、表示中のフレームへ貼り付ける(Cmd+V。#148)。 */
   private async handlePaste(request: { frameIndex: number; version: number }): Promise<void> {
-    if (this.editApplyPending || this.editAwaitingVersion !== undefined) return;
+    if (this.editInFlight()) return;
     const latest = this.latest;
     if (
       !latest ||
@@ -870,6 +989,7 @@ export class PreviewController implements vscode.Disposable {
   private handleDocumentChange(event: PreviewDocumentChangeEvent): void {
     if (this.disposed) return;
     if (event.document.uri.toString() !== this.document.uri.toString()) return;
+    if (event.document !== this.document) this.pendingMovedSlide = undefined;
     // close → 再オープンで新しい TextDocument になっても追従できるよう差し替える。
     this.document = event.document;
     if (event.contentChanges.length === 0) return;
@@ -913,8 +1033,16 @@ export class PreviewController implements vscode.Disposable {
         deck,
         version: outcome.version,
         activeFrame: 0,
+        editableFrameIndexes: outcome.deck.frames.flatMap((_, index) => {
+          const offset = resolveJumpOffset(outcome, index);
+          return offset !== null &&
+            this.isSlideEditable?.(renderedDocument, outcome.version, offset)
+            ? [index]
+            : [];
+        }),
       };
     } catch (err) {
+      this.pendingMovedSlide = undefined;
       const text = String(err);
       this.onError(text);
       message = { type: "error", message: text };
@@ -923,6 +1051,7 @@ export class PreviewController implements vscode.Disposable {
     if (message.type === "deckUpdated") {
       // フレーム番号は描画ごとに変わり得るので、追従の既読は描画単位でリセットする。
       this.lastRevealedFrame = undefined;
+      this.revealMovedSlide();
       if (this.pendingReveal !== undefined) {
         const { offset, onlyIfChanged } = this.pendingReveal;
         this.pendingReveal = undefined;
@@ -974,6 +1103,7 @@ export class PreviewController implements vscode.Disposable {
     }
 
     this.disposed = true;
+    this.pendingMovedSlide = undefined;
     clearTimeout(this.debounceTimer);
     this.debounceTimer = undefined;
     for (const disposable of this.disposables.splice(0)) {

@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { editSlide } from "@beamer-editor/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  explicitFrameStarts,
   hasSlideOutlineContentChanges,
   managedOutlineDocument,
   SlideOutlineRefreshScheduler,
@@ -206,5 +207,42 @@ describe("managedOutlineDocument", () => {
   it("clears the outlined preview source when it is no longer managed", () => {
     const previewSource = document("\\begin{frame}{cleared}\\end{frame}");
     expect(managedOutlineDocument(undefined, previewSource, () => false)).toBeUndefined();
+  });
+});
+
+describe("explicitFrameStarts", () => {
+  it("returns the explicit frame starts of the document itself, without macro-generated frames", () => {
+    const source = String.raw`\documentclass{beamer}
+%% macros:begin
+\newcommand{\virtual}{\begin{frame}{Second}\end{frame}}
+%% macros:end
+\begin{document}
+\begin{frame}{First}\end{frame}
+\virtual
+\begin{frame}{Third}\end{frame}
+\end{document}`;
+    const deck = document(source);
+    expect([...explicitFrameStarts(deck)]).toEqual([
+      source.indexOf("\\begin{frame}{First}"),
+      source.indexOf("\\begin{frame}{Third}"),
+    ]);
+    // スライド一覧の状態(別の文書を表示中)には依存しない。
+    const state = new SlideOutlineState<ReturnType<typeof document>>();
+    state.setDocument(document("\\begin{document}\\end{document}"));
+    expect(explicitFrameStarts(deck).size).toBe(2);
+  });
+
+  it("re-reads the document after its version changes", () => {
+    let source = "\\begin{document}\n\\begin{frame}{A}\\end{frame}\n\\end{document}";
+    const deck = {
+      uri: { toString: () => "file:///deck.slide.tex" },
+      version: 1,
+      getText: () => source,
+    };
+    expect(explicitFrameStarts(deck).size).toBe(1);
+    source =
+      "\\begin{document}\n\\begin{frame}{A}\\end{frame}\n\\begin{frame}{B}\\end{frame}\n\\end{document}";
+    deck.version = 2;
+    expect(explicitFrameStarts(deck).size).toBe(2);
   });
 });

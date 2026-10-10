@@ -62,6 +62,19 @@ describe("parseExtensionToWebview: rawBlock*", () => {
 });
 
 describe("parseWebviewToExtension", () => {
+  it("accepts only bounded slide reorder messages", () => {
+    expect(
+      parseWebviewToExtension({ type: "editSlide", action: "moveUp", frameIndex: 1, version: 2 }),
+    ).toEqual({
+      type: "editSlide",
+      action: "moveUp",
+      frameIndex: 1,
+      version: 2,
+    });
+    expect(
+      parseWebviewToExtension({ type: "editSlide", action: "moveLeft", frameIndex: 1, version: 2 }),
+    ).toBeNull();
+  });
   it("undoRedo は kind が undo / redo のときだけ受ける", () => {
     expect(parseWebviewToExtension({ type: "undoRedo", kind: "undo" })).toEqual({
       type: "undoRedo",
