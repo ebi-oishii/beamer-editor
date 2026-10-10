@@ -306,14 +306,24 @@ function reportCompileError(
 }
 
 /**
- * コンパイルに失敗したデッキを deck check と同じオプションで lint する(E_COMPILE に添える用)。
- * 読めない・lint が例外を投げるときは null(元の E_COMPILE だけを出す)。
+ * コンパイルの前に読んだ本文(コンパイル中にファイルが編集されても、失敗の報告ではこれを lint する)。
+ * 読めなければ null(読めない入力はコンパイラが E_INPUT にする)。
  */
-async function lintAfterCompileFailure(
+async function readSourceBeforeCompile(input: string): Promise<string | null> {
+  return readFile(resolve(input), "utf8").catch(() => null);
+}
+
+/**
+ * コンパイルに失敗したデッキの、コンパイル前に読んだ本文を deck check と同じオプションで lint する
+ * (TeX のコンパイルエラーに添える用)。本文が無い・lint が例外を投げるときは null(元の E_COMPILE
+ * だけを出す)。
+ */
+async function lintCompiledSource(
   input: string,
+  source: string | null,
 ): Promise<{ source: string; diagnostics: LintDiagnostic[] } | null> {
+  if (source === null) return null;
   try {
-    const source = await readFile(resolve(input), "utf8");
     const diagnostics = lintSource(source, {
       ...createNodeFileProbes(dirname(resolve(input))),
       ...(await skillLintOptions(input)),
@@ -864,6 +874,7 @@ async function runSnapshot(
   // Only a successful mkdir makes this process the owner of `filesystemOutput`, and only an owner
   // may remove it on failure. Its parent is canonicalized above so a retargeted symlink cannot
   // redirect writes or cleanup after the reservation.
+  const compiledSource = await readSourceBeforeCompile(input);
   let reserved = false;
   let published = false;
   try {
@@ -974,7 +985,9 @@ async function runSnapshot(
         ? (candidate as CliErrorCode)
         : "E_INTERNAL";
     const linted =
-      code === "E_COMPILE" && isTexFailure(error) ? await lintAfterCompileFailure(input) : null;
+      code === "E_COMPILE" && isTexFailure(error)
+        ? await lintCompiledSource(input, compiledSource)
+        : null;
     if (linted !== null)
       return reportCompileError(
         errorMessage(error),
@@ -998,6 +1011,8 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
   if (parsed.error) return usageError(parsed.error, parsed.json);
   // parseExportArgs has validated these conditions above.
   const input = parsed.input as string;
+  // 失敗の報告で lint する、コンパイル前の本文(PDF のときだけ読む)。
+  let compiledSource: string | null = null;
   try {
     if (parsed.format === "html") {
       if (parsed.tectonic !== undefined)
@@ -1014,6 +1029,7 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
       } else process.stdout.write(`${input} -> ${result.indexPath}\n`);
       return EXIT_CODE.success;
     }
+    compiledSource = await readSourceBeforeCompile(input);
     const result = await (dependencies.exportPdf ?? exportPdf)({
       inputPath: input,
       ...(parsed.output === undefined ? {} : { outputPath: parsed.output }),
@@ -1052,7 +1068,9 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
         : "E_INTERNAL";
     // lint は失敗したときだけ走らせる(成功時の書き出しを遅くしない)。
     const linted =
-      code === "E_COMPILE" && isTexFailure(error) ? await lintAfterCompileFailure(input) : null;
+      code === "E_COMPILE" && isTexFailure(error)
+        ? await lintCompiledSource(input, compiledSource)
+        : null;
     if (linted !== null)
       return reportCompileError(
         errorMessage(error),

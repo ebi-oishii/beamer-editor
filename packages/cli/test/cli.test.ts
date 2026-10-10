@@ -1372,6 +1372,38 @@ describe("E_COMPILE に lint error を添える", () => {
   const compileError = () =>
     new PdfExportError("E_COMPILE", "Undefined control sequence", undefined, { texFailed: true });
 
+  it("コンパイルの間にファイルが変わっても、snapshot / export はコンパイル前の本文を lint する", async () => {
+    const source = await fixture("talk.slide.tex", outdated);
+    await writeFile(source.path.replace("talk.slide.tex", "bg.png"), "");
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    // コンパイル中の編集: 先頭に 2 行足し、\deckbackground を消す(今のファイルには L025 が無い)。
+    const editThenFail = async () => {
+      await writeFile(
+        source.path,
+        `% a\n% b\n${outdated.replace("\\deckbackground{bg.png}\n", "")}`,
+      );
+      throw compileError();
+    };
+    try {
+      for (const [argv, dependencies] of [
+        [
+          ["snapshot", source.path, "-o", source.path.replace(/\.slide\.tex$/, "-snap"), "--json"],
+          { compileDeckFrames: editThenFail },
+        ],
+        [["export", source.path, "--format", "pdf", "--json"], { exportPdf: editThenFail }],
+      ] as const) {
+        await writeFile(source.path, outdated);
+        stderr.mockClear();
+        expect(await run([...argv], dependencies)).toBe(EXIT_CODE.lintError);
+        expect(JSON.parse(String(stderr.mock.calls[0]?.[0])).error.diagnostics).toMatchObject([
+          { code: "L025", location: { line: 4, column: 1 } },
+        ]);
+      }
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
   it("TeX の失敗でない E_COMPILE(タイムアウト・起動失敗・log 欠落)には lint を添えず、終了コード 3 のまま", async () => {
     const source = await fixture("talk.slide.tex", outdated);
     await writeFile(source.path.replace("talk.slide.tex", "bg.png"), "");
