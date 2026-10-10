@@ -189,6 +189,7 @@ describe("parseArgs(純関数)", () => {
       json: false,
       write: false,
       updateSkill: false,
+      updatePreamble: false,
       unknownOptions: [],
     });
   });
@@ -218,6 +219,7 @@ describe("parseArgs(純関数)", () => {
       json: false,
       write: false,
       updateSkill: false,
+      updatePreamble: false,
       unknownOptions: [],
     });
   });

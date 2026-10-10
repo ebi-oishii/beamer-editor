@@ -7,6 +7,7 @@ export * from "./formatter.js";
 export * from "./fragment.js";
 export * from "./image.js";
 export * from "./linter.js";
+export * from "./managed-preamble.js";
 export * from "./parser.js";
 export * from "./slide-edit.js";
 export * from "./template.js";

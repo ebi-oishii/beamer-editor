@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { PdfExportError } from "@beamer-editor/compiler";
+import { managedPreambleBlock } from "@beamer-editor/core";
 import { HtmlExportError } from "@beamer-editor/html-export";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -48,6 +50,9 @@ function createHost(overrides: Partial<ExportHost> = {}): ExportHost {
     revealInFileManager: vi.fn(async () => undefined),
     openTectonicSettings: vi.fn(async () => undefined),
     showExportDetails: vi.fn(),
+    showProblems: vi.fn(async () => undefined),
+    showsProblems: vi.fn(() => true),
+    lintOptions: vi.fn(() => ({})),
     uriForFile: vi.fn(() => output),
     tectonicPath: vi.fn(() => "/custom/tectonic"),
     timeoutMs: vi.fn(() => 300_000),
@@ -55,8 +60,31 @@ function createHost(overrides: Partial<ExportHost> = {}): ExportHost {
   };
 }
 
-function createDocument(overrides: Partial<{ isDirty: boolean; save(): Promise<boolean> }> = {}) {
-  return { uri: input, isDirty: false, save: vi.fn(async () => true), ...overrides };
+/** lint の error が無い文書。 */
+const CLEAN_SOURCE = `%% deck-source-version: 1
+\\documentclass[aspectratio=169]{beamer}
+\\begin{document}
+\\begin{frame}{A}
+\\end{frame}
+\\end{document}
+`;
+
+function createDocument(
+  overrides: Partial<{ isDirty: boolean; save(): Promise<boolean>; getText(): string }> = {},
+) {
+  const document = {
+    uri: input,
+    isDirty: false,
+    save: vi.fn(async () => true),
+    getText: () => CLEAN_SOURCE,
+    // vscode.TextDocument.positionAt と同じく、呼んだ時点の本文で数える。
+    positionAt: vi.fn((offset: number) => {
+      const lines = document.getText().slice(0, offset).split("\n");
+      return { line: lines.length - 1, character: (lines.at(-1) ?? "").length };
+    }),
+    ...overrides,
+  };
+  return document;
 }
 
 describe("ExportController", () => {
@@ -413,5 +441,169 @@ describe("ExportController", () => {
     expect(host.showWarning).toHaveBeenCalledWith(
       "書き出しは完了しましたが、表示操作に失敗しました。",
     );
+  });
+
+  describe("E_COMPILE に lint の error を添える", () => {
+    const read = (path: string) =>
+      readFileSync(new URL(`../../../packages/core/${path}`, import.meta.url), "utf8").trimEnd();
+    // \deckbackground を足す前の管理プリアンブル + \deckbackground(L025)。
+    const outdated = `\\documentclass[aspectratio=169]{beamer}
+%% deck-source-version: 1
+${managedPreambleBlock().replace(
+  read("resources/deck-style-preamble.tex"),
+  read("test/resources/deck-style-preamble.before-background.tex"),
+)}
+
+%% style:begin
+\\deckbackground{assets/bg.png}
+%% style:end
+
+\\begin{document}
+\\end{document}
+`;
+    const failing = () => ({
+      exportPdf: async () => {
+        throw new PdfExportError("E_COMPILE", "Undefined control sequence", undefined, {
+          texFailed: true,
+        });
+      },
+    });
+    const line = outdated.split("\n").findIndex((text) => text.startsWith("\\deckbackground")) + 1;
+
+    it("メッセージに件数と先頭の L025 を入れ、「問題を表示」と詳細の全件を出す", async () => {
+      const host = createHost({
+        showError: vi.fn(async () => "詳細を表示"),
+        lintOptions: vi.fn(() => ({ fileExists: () => true })),
+      });
+      await new ExportController(host, failing()).export(
+        createDocument({ getText: () => outdated }),
+      );
+      const [message, ...actions] = vi.mocked(host.showError).mock.calls[0] ?? [];
+      expect(message).toMatch(
+        /^PDF のコンパイルに失敗しました。 lint のエラーが 1 件あります\(先頭: L025: ツール管理プリアンブルが/,
+      );
+      expect(actions).toEqual(["詳細を表示", "問題を表示"]);
+      expect(host.lintOptions).toHaveBeenCalledOnce();
+      const detail = String(vi.mocked(host.showExportDetails).mock.calls[0]?.[0]);
+      expect(detail).toMatch(
+        new RegExp(`^lint のエラー\\(コンパイル失敗の原因かもしれません\\):\\n${line}:1 L025 `),
+      );
+      expect(detail.endsWith("\n\n[E_COMPILE] Undefined control sequence")).toBe(true);
+
+      const problems = createHost({ showError: vi.fn(async () => "問題を表示") });
+      const document = createDocument({ getText: () => outdated });
+      await new ExportController(problems, failing()).export(document);
+      expect(problems.showProblems).toHaveBeenCalledOnce();
+      expect(problems.showExportDetails).not.toHaveBeenCalled();
+      // 文書が変わっていなければ、位置は Problems パネルと同じ positionAt で出す。
+      expect(document.positionAt).toHaveBeenCalled();
+    });
+
+    it("管理対象外の .tex では「問題を表示」を出さず、通知と詳細に lint の error を入れるだけにする", async () => {
+      const host = createHost({
+        showError: vi.fn(async () => "詳細を表示"),
+        showsProblems: vi.fn(() => false),
+      });
+      await new ExportController(host, failing()).export(
+        createDocument({ getText: () => outdated }),
+      );
+      const [message, ...actions] = vi.mocked(host.showError).mock.calls[0] ?? [];
+      expect(message).toContain("先頭: L025: ");
+      expect(actions).toEqual(["詳細を表示"]);
+      expect(String(vi.mocked(host.showExportDetails).mock.calls[0]?.[0])).toContain(
+        `\n${line}:1 L025 `,
+      );
+    });
+
+    it("コンパイル中に編集されても、コンパイルした本文を lint し、その行・列を出す", async () => {
+      let text = outdated;
+      const document = createDocument({ getText: () => text });
+      const host = createHost({ showError: vi.fn(async () => "詳細を表示") });
+      await new ExportController(host, {
+        exportPdf: async () => {
+          // コンパイル中の未保存の編集: 先頭に 2 行足し、\deckbackground を消す。
+          text = `% a\n% b\n${outdated.replace("\\deckbackground{assets/bg.png}\n", "")}`;
+          throw new PdfExportError("E_COMPILE", "Undefined control sequence", undefined, {
+            texFailed: true,
+          });
+        },
+      }).export(document);
+      expect(host.lintOptions).toHaveBeenCalledWith(document, outdated);
+      const [message, ...actions] = vi.mocked(host.showError).mock.calls[0] ?? [];
+      expect(String(message)).toContain("先頭: L025: ");
+      // Problems パネルは今の本文の診断で通知と合わないので、「問題を表示」は出さない。
+      expect(actions).toEqual(["詳細を表示"]);
+      expect(String(vi.mocked(host.showExportDetails).mock.calls[0]?.[0])).toContain(
+        `\n${line}:1 L025 `,
+      );
+      expect(document.positionAt).not.toHaveBeenCalled();
+    });
+
+    it("lint の error が無い・lint が例外を投げるときは今まで通り", async () => {
+      for (const document of [
+        createDocument(),
+        createDocument({
+          getText: () => {
+            throw new Error("closed");
+          },
+        }),
+      ]) {
+        const host = createHost({ showError: vi.fn(async () => "詳細を表示") });
+        await new ExportController(host, failing()).export(document);
+        expect(host.showError).toHaveBeenCalledWith(
+          "PDF のコンパイルに失敗しました。",
+          "詳細を表示",
+        );
+        expect(host.showExportDetails).toHaveBeenCalledWith(
+          "[E_COMPILE] Undefined control sequence",
+        );
+      }
+      const throwing = createHost({
+        lintOptions: vi.fn(() => {
+          throw new Error("fs");
+        }),
+      });
+      await new ExportController(throwing, failing()).export(
+        createDocument({ getText: () => outdated }),
+      );
+      expect(throwing.showError).toHaveBeenCalledWith(
+        "PDF のコンパイルに失敗しました。",
+        "詳細を表示",
+      );
+    });
+
+    it("E_COMPILE 以外では lint しない", async () => {
+      const host = createHost();
+      await new ExportController(host, {
+        exportPdf: async () => {
+          throw new PdfExportError("E_IO", "io");
+        },
+      }).export(createDocument({ getText: () => outdated }));
+      expect(host.lintOptions).not.toHaveBeenCalled();
+      expect(host.showError).toHaveBeenCalledWith(
+        "PDF の書き出し中に入出力エラーが発生しました。",
+        "詳細を表示",
+      );
+    });
+
+    it("TeX の失敗でない E_COMPILE(タイムアウト・起動失敗・log 欠落)では lint しない", async () => {
+      for (const message of [
+        "PDF のコンパイルが 300 秒でタイムアウトしました",
+        "Tectonic の実行に失敗しました: Error: spawn EACCES",
+        "Tectonic の最終 pass の log がありません",
+      ]) {
+        const host = createHost();
+        await new ExportController(host, {
+          exportPdf: async () => {
+            throw new PdfExportError("E_COMPILE", message);
+          },
+        }).export(createDocument({ getText: () => outdated }));
+        expect(host.lintOptions).not.toHaveBeenCalled();
+        expect(host.showError).toHaveBeenCalledWith(
+          "PDF のコンパイルに失敗しました。",
+          "詳細を表示",
+        );
+      }
+    });
   });
 });

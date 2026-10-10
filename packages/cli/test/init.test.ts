@@ -2,10 +2,17 @@ import * as fs from "node:fs/promises";
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatDeck, framesOf, lintSource, parseDeck } from "@beamer-editor/core";
-import { afterEach, expect, it, vi } from "vitest";
+import {
+  formatDeck,
+  framesOf,
+  lintSource,
+  locateManagedPreamble,
+  managedPreambleBlock,
+  parseDeck,
+} from "@beamer-editor/core";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { run } from "../src/cli.ts";
-import { initDeck, initialDeckSource } from "../src/init.ts";
+import { initDeck, initialDeckSource, updateManagedPreamble } from "../src/init.ts";
 import { skillLintOptions } from "../src/skill.ts";
 import { SKILL_FILE_PATHS } from "../src/skill-generator.ts";
 
@@ -91,7 +98,7 @@ it("L010 reports a stale Codex skill even when the Claude Code copy is current",
 });
 
 it("inlines the canonical non-fixture managed preamble", async () => {
-  const source = await initialDeckSource();
+  const source = initialDeckSource();
   for (const name of [
     "deck-managed-header.tex",
     "deck-canvas-preamble.tex",
@@ -336,4 +343,130 @@ it("updates a repository-like layout (skill at the Git root, no main.slide.tex) 
       ),
     );
   }
+});
+
+it("deck init が出力するデッキは、ツール自身の背景テンプレートを含んでも L024 にならない", () => {
+  const source = initialDeckSource();
+  expect(source).toContain("\\setbeamertemplate{background}");
+  expect(lintSource(source).filter((entry) => entry.code === "L024")).toEqual([]);
+});
+
+describe("--update-preamble", () => {
+  const resource = (path: string) => readFile(new URL(path, import.meta.url), "utf8");
+  /** `\deckbackground` より前の `deck init` が書いたデッキ。ユーザー領域と本文に手を入れてある。 */
+  async function outdatedDeck(): Promise<string> {
+    const current = (await resource("../../core/resources/deck-style-preamble.tex")).trimEnd();
+    const before = (
+      await resource("../../core/test/resources/deck-style-preamble.before-background.tex")
+    ).trimEnd();
+    return initialDeckSource()
+      .replace(current, before)
+      .replace("%% macros:end", "\\newcommand{\\R}{\\mathbb{R}}\n%% macros:end")
+      .replace("%% style:end", "\\deckbackground{assets/bg.png}\n%% style:end")
+      .replace("%% preamble-extra:end", "\\usepackage{tikz}\n%% preamble-extra:end")
+      .replace("Your first point.", "変更した本文。");
+  }
+  const managedSpan = (source: string) => {
+    const located = locateManagedPreamble(source);
+    if (!("span" in located)) throw new Error("managed preamble expected");
+    return located.span;
+  };
+
+  it("管理領域だけを現行に差し替え、2 回目は変えない。L025 の fix と同じ結果になる", async () => {
+    const deck = join(await temp(), "talk.slide.tex");
+    const before = await outdatedDeck();
+    await writeFile(deck, before);
+    const l025 = lintSource(before).filter((entry) => entry.code === "L025");
+    expect(l025).toHaveLength(1);
+    const fix = l025[0]?.fix;
+    if (fix === undefined) throw new Error("fix expected");
+
+    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    expect(await run(["init", deck, "--update-preamble", "--json"])).toBe(0);
+    expect(JSON.parse(stdout.mock.calls.map((c) => c[0]).join(""))).toEqual({
+      file: deck,
+      changed: true,
+    });
+    const after = await readFile(deck, "utf8");
+    const old = managedSpan(before);
+    const updated = managedSpan(after);
+    expect(after.slice(updated.start, updated.end)).toBe(managedPreambleBlock());
+    expect(after.slice(0, updated.start)).toBe(before.slice(0, old.start));
+    expect(after.slice(updated.end)).toBe(before.slice(old.end));
+    expect(after).toBe(
+      before.slice(0, fix.span.start) + fix.replacement + before.slice(fix.span.end),
+    );
+    expect(lintSource(after)).toEqual([]);
+
+    stdout.mockClear();
+    expect(await run(["init", deck, "--update-preamble"])).toBe(0);
+    expect(stdout.mock.calls.map((c) => c[0]).join("")).toContain("最新です");
+    expect(await readFile(deck, "utf8")).toBe(after);
+  });
+
+  it("印が無いデッキ・存在しないファイルは書き換えずに失敗する", async () => {
+    const directory = await temp();
+    const deck = join(directory, "talk.slide.tex");
+    const source = (await outdatedDeck()).replace(/^% ---- ツール管理ここまで ----\n/m, "");
+    await writeFile(deck, source);
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(await run(["init", deck, "--update-preamble", "--json"])).toBe(3);
+    expect(JSON.parse(stderr.mock.calls.map((c) => c[0]).join(""))).toMatchObject({
+      error: { code: "E_INPUT" },
+    });
+    expect(await readFile(deck, "utf8")).toBe(source);
+    expect(await readdir(directory)).toEqual(["talk.slide.tex"]);
+    await expect(updateManagedPreamble(join(directory, "missing.tex"))).rejects.toMatchObject({
+      code: "E_INPUT",
+    });
+    await expect(updateManagedPreamble(directory)).rejects.toMatchObject({ code: "E_INPUT" });
+  });
+
+  it("終了印が消え、後ろ(preamble-extra)に終了印の行があってもユーザー領域を書き換えない", async () => {
+    const deck = join(await temp(), "talk.slide.tex");
+    const source = (await outdatedDeck())
+      .replace(/^% ---- ツール管理ここまで ----\n/m, "")
+      .replace("%% preamble-extra:end", "% ---- ツール管理ここまで ----\n%% preamble-extra:end");
+    await writeFile(deck, source);
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(await run(["init", deck, "--update-preamble"])).toBe(3);
+    expect(await readFile(deck, "utf8")).toBe(source);
+    // 理由を添える(印が無いのではなく、終了印が最初のユーザー領域より後ろにある)。
+    expect(stderr.mock.calls.map((c) => c[0]).join("")).toMatch(
+      /^ツール管理プリアンブルの範囲を特定できないため更新しません\(終了印が最初のユーザー領域.*より後ろにあります\): /,
+    );
+  });
+
+  it("%% macros:end の綴り違いや、手前のコメントの %% macros:begin があってもマクロ領域を書き換えない", async () => {
+    const withoutEnd = (await outdatedDeck()).replace(/^% ---- ツール管理ここまで ----\n/m, "");
+    for (const source of [
+      // (a) %% macros:end の綴りが違い、マクロの後ろに終了印を貼り付けた
+      withoutEnd.replace("%% macros:end", "%% macro:end\n% ---- ツール管理ここまで ----"),
+      // (b) 管理プリアンブルより前のコメントに %% macros:begin があり、本物のマクロ領域の後ろに終了印がある
+      withoutEnd
+        .replace(
+          "%% deck-source-version: 1\n",
+          "%% deck-source-version: 1\n% メモ: %% macros:begin の下に書く\n",
+        )
+        .replace("%% macros:end", "%% macros:end\n% ---- ツール管理ここまで ----"),
+    ]) {
+      const deck = join(await temp(), "talk.slide.tex");
+      await writeFile(deck, source);
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      expect(await run(["init", deck, "--update-preamble", "--json"])).toBe(3);
+      expect(JSON.parse(stderr.mock.calls.map((c) => c[0]).join(""))).toMatchObject({
+        error: { code: "E_INPUT" },
+      });
+      expect(await readFile(deck, "utf8")).toBe(source);
+      expect(lintSource(source).filter((entry) => entry.fix !== undefined)).toEqual([]);
+      stderr.mockRestore();
+    }
+  });
+
+  it("引数の誤りは usage エラーにする", async () => {
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    expect(await run(["init", "--update-preamble"])).toBe(3);
+    expect(await run(["init", "a.tex", "--update-preamble", "--update-skill"])).toBe(3);
+    expect(await run(["lint", "a.tex", "--update-preamble"])).toBe(3);
+  });
 });

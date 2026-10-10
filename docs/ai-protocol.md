@@ -58,9 +58,11 @@
 
 `deck check` はキャンバスフレーム([subset-spec.md](subset-spec.md) §2.8)について、savepos 実測による本文領域外へのはみ出し・オブジェクト重なりの検出も報告する(絶対配置は Overfull 警告が出ないため)。
 
+`deck check`・`deck snapshot`・`deck export --format pdf` は、TeX のコンパイルエラー(Tectonic が非 0 で終わった `E_COMPILE`)のときにデッキの lint エラーも添え(テキストではメッセージの後、`--json` では `error.diagnostics`)、そのときの終了コードは 3(操作失敗)ではなく 2(lint error)になる。環境の失敗とみなさず、TeX のエラーより先にそちらを直す(例: L025 は `deck init <file> --update-preamble`)。Tectonic の起動の失敗・タイムアウト・log の欠落など、TeX のエラーでない `E_COMPILE` には lint エラーを添えず、終了コードは 3 のまま。
+
 `snapshot` の出力先は新規ディレクトリのみを受け付ける。既存のパス(ディレクトリ・通常ファイル・壊れたシンボリックリンクを含む)は `E_OUTPUT_EXISTS` で拒否し、その中身には一切触れない。全 PNG の書き込み後に空の `.deck-snapshot-complete` を作成して公開する。このマーカーがないディレクトリは書き込み中・クラッシュ・失敗後の残留として未完成扱いにし、消費者はマーカーの存在を確認してから JSON または `*.png` だけを読む。失敗した場合は自分が作成した出力ディレクトリだけを削除するので、既存のディレクトリが消えることはない。
 
-`check` と `snapshot` は tectonic を使うため数秒かかるが、エージェントの検証は対話的操作ではないので許容する(人間のプレビューは常に即時の HTML 側)。`check` は診断なし（または情報のみ）を 0、警告を 1、lint エラーを 2、Tectonic・入出力・使用法などの操作失敗を 3 で終了する。`--json` の操作失敗は stderr に出る。
+`check` と `snapshot` は tectonic を使うため数秒かかるが、エージェントの検証は対話的操作ではないので許容する(人間のプレビューは常に即時の HTML 側)。`check` は診断なし（または情報のみ）を 0、警告を 1、lint エラーを 2、Tectonic・入出力・使用法などの操作失敗を 3 で終了する。`--json` の操作失敗は stderr に出る。終了コード 2 では通常 stdout に結果(診断の一覧)が出るが、TeX のコンパイルエラーに lint エラーが伴う場合(上記)だけは、stdout が空で、エラーは stderr に出る(`--json` のときは `error.code` が `E_COMPILE`、lint エラーが `error.diagnostics` の JSON)。`--json` では、どちらの場合かを stdout が空で stderr の JSON に `error` があるかで見分ける。
 
 ## 5. 行動規約(ガードレール)
 
@@ -217,7 +219,7 @@ description: >
 ## 規約
 - ツール管理プリアンブルは編集禁止。マクロ定義は %% macros 領域のみ
 - 指示されていない変更(順序・枚数・既存文言)をしない
-- 画像は assets/ に置く。新規デッキはまずアウトラインを提案して合意を取る
+- 画像は assets/ に置き、パスはデッキのディレクトリ基準で拡張子まで書く(`assets/fig.png`。拡張子の省略や \graphicspath はプレビュー・HTML 書き出し・lint が解決しない)。新規デッキはまずアウトラインを提案して合意を取る
 - git 管理下では 1 指示 = 1 コミット
 
 ## フレームの参照

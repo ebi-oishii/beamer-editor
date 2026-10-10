@@ -4,11 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  buildFragmentDocument,
-  fragmentDependencies,
-  fragmentGraphicsPaths,
-} from "../src/fragment.js";
+import { buildFragmentDocument, fragmentDependencies } from "../src/fragment.js";
 import { compileFragment, type ProcessRunner } from "../src/index.js";
 
 describe("buildFragmentDocument", () => {
@@ -115,17 +111,6 @@ describe("fragmentDependencies", () => {
   });
 });
 
-describe("fragmentGraphicsPaths", () => {
-  it("\\graphicspath の探索ディレクトリを出現順に拾い、コメントの中は見ない", () => {
-    expect(
-      fragmentGraphicsPaths(
-        "% \\graphicspath{{old/}}\n\\graphicspath{ {images/} {figs/} }\n\\graphicspath{{images/}{../shared/}}",
-      ),
-    ).toEqual(["images/", "figs/", "../shared/"]);
-    expect(fragmentGraphicsPaths("\\includegraphics{a.png}")).toEqual([]);
-  });
-});
-
 describe("compileFragment", () => {
   const FAKE_PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37]); // %PDF-1.7
 
@@ -174,7 +159,11 @@ describe("compileFragment", () => {
           : { exitCode: 1, stdout: "", stderr: "! Undefined control sequence.\nl.3 \\bad" },
     };
     await expect(compileFragment({ document: "\\bad" }, { runner: failing })).rejects.toMatchObject(
-      { code: "E_COMPILE", message: expect.stringContaining("Undefined control sequence") },
+      {
+        code: "E_COMPILE",
+        texFailed: true,
+        message: expect.stringContaining("Undefined control sequence"),
+      },
     );
   });
 

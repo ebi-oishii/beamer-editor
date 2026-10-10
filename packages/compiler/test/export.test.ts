@@ -191,7 +191,12 @@ describe("exportPdf", () => {
       temps.push(value);
       return value;
     };
-    for (const compile of [result({ exitCode: 1, stderr: "bad tex" }), result({ stdout: "" })]) {
+    // TeX が非 0 で終わったときだけ texFailed(終了 0 で PDF が無い・シグナルで止まったは立てない)。
+    for (const [compile, texFailed] of [
+      [result({ exitCode: 1, stderr: "bad tex" }), true],
+      [result({ stdout: "" }), false],
+      [result({ exitCode: null, stderr: "killed" }), false],
+    ] as const) {
       let call = 0;
       const runner: ProcessRunner = { run: async () => (call++ === 0 ? result() : compile) };
       await expect(
@@ -199,7 +204,7 @@ describe("exportPdf", () => {
           { inputPath: input.path, overwrite: true },
           { runner, temporaryDirectory: makeTemp },
         ),
-      ).rejects.toMatchObject({ code: "E_COMPILE" });
+      ).rejects.toMatchObject({ code: "E_COMPILE", texFailed });
       expect(await readFile(output, "utf8")).toBe("old PDF");
     }
     await expect(Promise.all(temps.map((path) => access(path)))).rejects.toBeDefined();
@@ -411,6 +416,24 @@ describe("exportPdf", () => {
     }
   }, 10_000);
 
+  it("Tectonic の起動に失敗した E_COMPILE は TeX の失敗として扱わない", async () => {
+    const input = await source();
+    let call = 0;
+    const runner: ProcessRunner = {
+      run: async () => {
+        if (call++ === 0) return result();
+        throw new Error("spawn EACCES");
+      },
+    };
+    await expect(
+      exportPdf({ inputPath: input.path, overwrite: true }, { runner }),
+    ).rejects.toMatchObject({
+      code: "E_COMPILE",
+      texFailed: false,
+      message: expect.stringContaining("Tectonic の実行に失敗しました"),
+    });
+  });
+
   it("uses separate version and compile timeouts and maps compile timeout without replacing output", async () => {
     const input = await source();
     const output = join(input.dir, "talk.pdf");
@@ -430,6 +453,7 @@ describe("exportPdf", () => {
       ),
     ).rejects.toMatchObject({
       code: "E_COMPILE",
+      texFailed: false,
       message: expect.stringContaining("12.345 秒でタイムアウト"),
     });
     expect(timeoutValues).toEqual([10_000, 12_345]);
@@ -466,5 +490,7 @@ describe("exportPdf", () => {
 describe("PdfExportError", () => {
   it("exposes a stable machine-readable code", () => {
     expect(new PdfExportError("E_COMPILE", "failed").code).toBe("E_COMPILE");
+    expect(new PdfExportError("E_COMPILE", "failed").texFailed).toBe(false);
+    expect(new PdfExportError("E_IO", "io", undefined, { texFailed: true }).texFailed).toBe(false);
   });
 });
