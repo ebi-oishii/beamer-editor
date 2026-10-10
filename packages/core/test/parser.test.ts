@@ -675,6 +675,25 @@ describe("parseDeck: よく使う整形命令(#180)", () => {
     ]);
   });
 
+  it("入れ子の深い波括弧も、深さに対して指数的にならずに読む", () => {
+    const depth = 200;
+    const cases = [
+      `${"{".repeat(depth)}a${"}".repeat(depth)}`,
+      `${"{\\small a ".repeat(depth)}${"}".repeat(depth)}`,
+      // いちばん内側にだけ空行があり、どの深さのグループもブロックのグループになる。
+      `${"{".repeat(depth)}a\n\nb${"}".repeat(depth)}`,
+    ];
+    const [inline, declared, nested] = cases.map((body) => {
+      const started = performance.now();
+      const result = blocks(body);
+      expect(performance.now() - started).toBeLessThan(200);
+      return result;
+    });
+    expect(inline).toMatchObject([{ type: "paragraph", children: [{ type: "group" }] }]);
+    expect(declared).toMatchObject([{ type: "paragraph", children: [{ type: "group" }] }]);
+    expect(nested).toMatchObject([{ type: "blockGroup", children: [{ type: "blockGroup" }] }]);
+  });
+
   it("decktext の中のブロックのグループは中身を decktext の語彙で読む", () => {
     const [canvas] = blocks(
       "\\begin{deckcanvas}\n\\begin{decktext}[x=0.100,y=0.200,w=0.500,size=normal]\n{\\small A\n\n\\includegraphics{a.png}}\n\\end{decktext}\n\\end{deckcanvas}",

@@ -258,6 +258,18 @@ function lineBreakEnd(src: string, pos: number, limit: number): number {
 }
 
 /** from 以降で最初の空行(段落の区切り)の手前の改行の位置。無ければ limit。CRLF も扱う。 */
+/** parseBlocks が段落を区切ってブロックとして読むコマンド(`\begin` の環境のほかに)。 */
+const BLOCK_COMMANDS = new Set(["[", "pause", "titlepage", "tableofcontents", "includegraphics"]);
+
+/** [from, to) にブロック要素の始まり(環境・`\[`・`\pause` など)があるか。 */
+function hasBlockStart(src: string, from: number, to: number): boolean {
+  for (const token of texTokens(src, from, to)) {
+    if (token.kind === "command" ? BLOCK_COMMANDS.has(token.name) : token.kind !== "definition")
+      return true;
+  }
+  return false;
+}
+
 function blankLineAt(src: string, from: number, limit: number): number {
   const match = /\r?\n[ \t]*\r?\n/.exec(src.slice(from, limit));
   return match ? from + match.index : limit;
@@ -736,12 +748,18 @@ class Parser {
       }
       if (ch === "{") {
         // 空行やブロック要素をまたぐグループは段落を区切ってブロックのグループにする。
-        // 段落の中で閉じるグループはここでは読まず、parseInlines がインラインの group にする。
-        const group = this.blockGroupAt(pos, end);
-        if (group) {
+        // 段落の中で閉じるグループは段落の一部として閉じの次まで進め、あとで parseInlines が
+        // インラインの group にする(中の `{` をここで読み直さない)。
+        const group = this.braceGroupAt(pos, end);
+        if (group?.type === "blockGroup") {
           flushPara(pos);
           out.push(group);
           pos = group.span.end;
+          continue;
+        }
+        if (group) {
+          if (paraStart === -1) paraStart = pos;
+          pos = group.end;
           continue;
         }
       }
@@ -817,15 +835,25 @@ class Parser {
     return out;
   }
 
-  /** pos の `{` が空行かブロック要素をまたいで閉じるなら、そのグループ。段落の中で閉じるなら null。 */
-  private blockGroupAt(pos: number, limit: number): BlockGroupNode | null {
+  /**
+   * pos の `{` のグループ。空行かブロック要素をまたいで閉じるならブロックのグループ、段落の中で
+   * 閉じるなら `inline`(閉じの次の位置)、閉じなければ null。
+   */
+  private braceGroupAt(
+    pos: number,
+    limit: number,
+  ): BlockGroupNode | { type: "inline"; end: number } | null {
     const close = readBalanced(this.src, pos);
     if (close === null || close >= limit) return null;
+    const inline = { type: "inline" as const, end: close + 1 };
+    // 中身をパースする前に、空行もブロック要素の始まりも無いものを安く除く。入れ子の `{` ごとに
+    // 中身を読み直すと、深さに対して指数的に遅くなる。
+    const blankLine = blankLineAt(this.src, pos + 1, close) < close;
+    if (!blankLine && !hasBlockStart(this.src, pos + 1, close)) return inline;
     const children = this.parseBlocks(pos + 1, close);
-    const crossesBlock =
-      blankLineAt(this.src, pos + 1, close) < close ||
-      children.some((block) => block.type !== "paragraph");
-    return crossesBlock ? { type: "blockGroup", children, span: span(pos, close + 1) } : null;
+    return blankLine || children.some((block) => block.type !== "paragraph")
+      ? { type: "blockGroup", children, span: span(pos, close + 1) }
+      : inline;
   }
 
   /**
