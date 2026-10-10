@@ -261,13 +261,18 @@ function lineBreakEnd(src: string, pos: number, limit: number): number {
 /** parseBlocks が段落を区切ってブロックとして読むコマンド(`\begin` の環境のほかに)。 */
 const BLOCK_COMMANDS = new Set(["[", "pause", "titlepage", "tableofcontents", "includegraphics"]);
 
-/** [from, to) にブロック要素の始まり(環境・`\[`・`\pause` など)があるか。 */
-function hasBlockStart(src: string, from: number, to: number): boolean {
+/**
+ * [from, to) にあるブロック要素の始まり(環境・`\[`・`\pause` など)。deckcanvas があれば
+ * `canvas`、ほかのブロック要素だけなら `block`、無ければ null。
+ */
+function blockStartIn(src: string, from: number, to: number): "canvas" | "block" | null {
+  let found: "block" | null = null;
   for (const token of texTokens(src, from, to)) {
+    if (token.kind === "begin" && token.name === "deckcanvas") return "canvas";
     if (token.kind === "command" ? BLOCK_COMMANDS.has(token.name) : token.kind !== "definition")
-      return true;
+      found = "block";
   }
-  return false;
+  return found;
 }
 
 function blankLineAt(src: string, from: number, limit: number): number {
@@ -837,7 +842,9 @@ class Parser {
 
   /**
    * pos の `{` のグループ。空行かブロック要素をまたいで閉じるならブロックのグループ、段落の中で
-   * 閉じるなら `inline`(閉じの次の位置)、閉じなければ null。
+   * 閉じるなら `inline`(閉じの次の位置)。閉じない、または deckcanvas を含むなら null で、
+   * `{` は本文の文字として読む。deckcanvas はフレーム直下でしか canvas として扱われない
+   * (isCanvasFrame・canvas の lint・自由配置)ので、グループの子にしない。
    */
   private braceGroupAt(
     pos: number,
@@ -846,10 +853,12 @@ class Parser {
     const close = braceClose(this.src, pos, limit);
     if (close === null) return null;
     const inline = { type: "inline" as const, end: close + 1 };
+    const blockStart = blockStartIn(this.src, pos + 1, close);
+    if (blockStart === "canvas") return null;
     // 中身をパースする前に、空行もブロック要素の始まりも無いものを安く除く。入れ子の `{` ごとに
     // 中身を読み直すと、深さに対して指数的に遅くなる。
     const blankLine = blankLineAt(this.src, pos + 1, close) < close;
-    if (!blankLine && !hasBlockStart(this.src, pos + 1, close)) return inline;
+    if (!blankLine && blockStart === null) return inline;
     const children = this.parseBlocks(pos + 1, close);
     return blankLine || children.some((block) => block.type !== "paragraph")
       ? { type: "blockGroup", children, span: span(pos, close + 1) }
