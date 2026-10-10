@@ -17,21 +17,21 @@
   ],
   "repository": {
     "environment-with-options": {
-      "begin": "(\\\\begin)(\\{)(deck[A-Za-z]*)(\\})\\s*(\\[)",
+      "begin": "(\\s*)(\\\\begin)(\\{)(deck[A-Za-z]*)(\\})\\s*(\\[)",
       "beginCaptures": {
-        "1": {
+        "2": {
           "name": "support.function.be.latex"
         },
-        "2": {
+        "3": {
           "name": "punctuation.definition.arguments.begin.latex"
         },
-        "3": {
+        "4": {
           "name": "entity.name.type.deck"
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.arguments.end.latex"
         },
-        "5": {
+        "6": {
           "name": "punctuation.definition.optional-arguments.begin.deck"
         }
       },
@@ -51,18 +51,18 @@
       ]
     },
     "environment": {
-      "match": "(\\\\(?:begin|end))(\\{)(deck[A-Za-z]*)(\\})",
+      "match": "(\\s*)(\\\\(?:begin|end))(\\{)(deck[A-Za-z]*)(\\})",
       "captures": {
-        "1": {
+        "2": {
           "name": "support.function.be.latex"
         },
-        "2": {
+        "3": {
           "name": "punctuation.definition.arguments.begin.latex"
         },
-        "3": {
+        "4": {
           "name": "entity.name.type.deck"
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.arguments.end.latex"
         }
       }

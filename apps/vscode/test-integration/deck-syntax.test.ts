@@ -176,4 +176,61 @@ suite("Issue #181: deck 語彙の構文強調", () => {
       `label=next: ${label.map((token) => token.t).join(" | ")}`,
     );
   });
+
+  test("字下げしたキャンバスでも色分けし、後ろのフレームの組み込みの色分けを壊さない", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "beamer-deck-syntax-"));
+    tempDirs.push(directory);
+    const file = path.join(directory, "deck.slide.tex");
+    // 「自由配置にする」が書き出すキャンバスと同じく、環境とコマンドを字下げする。
+    await writeFile(
+      file,
+      [
+        "\\documentclass{beamer}",
+        "\\begin{document}",
+        "\\begin{frame}[label=c]{C}",
+        "  \\begin{deckcanvas}",
+        "    \\begin{decktext}[x=0.123,y=0.234,w=0.345,size=small]",
+        "      text",
+        "    \\end{decktext}",
+        "    \\deckimage[x=0.456,y=0.567,w=0.678]{a.png}",
+        "  \\end{deckcanvas}",
+        "\\end{frame}",
+        "\\begin{frame}[label=d]{D}",
+        "\\begin{itemize}",
+        "\\item point",
+        "\\end{itemize}",
+        "\\end{frame}",
+        "\\end{document}",
+        "",
+      ].join("\n"),
+    );
+
+    const tokens = await vscode.commands.executeCommand<CapturedToken[]>(
+      "_workbench.captureSyntaxTokens",
+      vscode.Uri.file(file),
+    );
+    const scopesOf = (text: string): string[] =>
+      tokens.filter((token) => token.c.trim() === text).map((token) => token.t);
+
+    for (const name of ["deckcanvas", "decktext", "\\deckimage"]) {
+      const scopes = scopesOf(name);
+      assert.ok(
+        scopes.length > 0 && scopes.every((s) => s.includes("entity.name.type.deck")),
+        `${name}: ${scopes.join(" | ")}`,
+      );
+    }
+    for (const value of ["0.123", "0.234", "0.345", "0.456", "0.567", "0.678"]) {
+      const scopes = scopesOf(value);
+      assert.ok(
+        scopes.length > 0 && scopes.every((s) => s.includes("constant.numeric.deck")),
+        `option の ${value}: ${scopes.join(" | ")}`,
+      );
+    }
+    // deck の環境の範囲が閉じ損なうと、後ろの \\end{frame} が組み込みの色分けを失う。
+    const ends = tokens.filter((token) => token.c.trim() === "end" || token.c.trim() === "\\end");
+    assert.ok(
+      ends.length > 0 && ends.every((token) => token.t.includes("support.function.be.latex")),
+      `\\end: ${ends.map((token) => token.t).join(" | ")}`,
+    );
+  });
 });
