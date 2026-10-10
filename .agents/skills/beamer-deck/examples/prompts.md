@@ -9,7 +9,7 @@
 | 局所修正 | 「frame 7 の箇条書きを 3 点に圧縮して」 | 対象フレームのみ編集 → format → lint → 必要なら check → 結果を報告で完了。HTML・PDF は書き出さない |
 | 横断修正 | 「全フレームのタイトルを体言止めに統一」 | outline で全体把握 → 一括編集 → 報告は変更一覧 |
 | 検証駆動 | 「溢れてるフレームがないか確認して、あれば直して」 | `deck check` → Overfull のフレームを修正 → 再 check |
-| 素材の取り込み | 「この図を『手法』のフレームに入れて」 | 内容と依頼に応じて通常フローの `\includegraphics` か canvas の `\deckimage` を選ぶ → snapshot で目視確認。SVG を canvas に置くには、利用可能な手段で PDF または PNG へ実際に変換してから置く |
+| 素材の取り込み | 「この図を『手法』のフレームに入れて」 | 内容と依頼に応じて通常フローの `\includegraphics` か canvas の `\deckimage` を選ぶ → snapshot で目視確認。SVG はどちらにも直接置けないので、利用可能な手段で PNG か PDF へ実際に変換し、変換後のファイルを参照する(変換手段がなければ未対応として報告) |
 | プレビューで動かす | 「2 枚目のテキストをプレビューで動かせるように」「GUI で操作できるように」 | 依頼で指定された対象要素のうち移せるものだけを `deckcanvas` の `decktext` / `deckimage` へ移す(label が無ければ付ける)。移せない指定対象要素と、同じフレームを含む対象外の全要素はそのまま残す → format → lint → check → 報告。pptx は作らない |
 | PDF 出力 | 「PDF にして」「PDF で書き出して」 | `deck export <file> --format pdf -o <pdf>`(どちらも絶対パス。指定がなければ入力の隣の `<name>.pdf`)→ 出力した PDF のパスを報告 |
 | HTML 出力 | 「HTML で書き出して」 | `deck export <file> --format html -o <directory>`(どちらも絶対パス。指定がなければ入力の隣の `<name>-html`)→ 出力先を報告 |
