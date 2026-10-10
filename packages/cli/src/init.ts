@@ -128,7 +128,7 @@ export async function initDeck(
   const target = resolve(directory);
   if (options.updateSkill) return updateSkill(target);
   const files: Record<string, string> = {
-    "main.slide.tex": await initialDeckSource(),
+    "main.slide.tex": initialDeckSource(),
     ...(await projectInstructionFiles()),
     ...projectSkillFiles(await generatedSkillFiles()),
   };

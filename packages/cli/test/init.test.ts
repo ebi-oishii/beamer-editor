@@ -98,7 +98,7 @@ it("L010 reports a stale Codex skill even when the Claude Code copy is current",
 });
 
 it("inlines the canonical non-fixture managed preamble", async () => {
-  const source = await initialDeckSource();
+  const source = initialDeckSource();
   for (const name of [
     "deck-managed-header.tex",
     "deck-canvas-preamble.tex",
@@ -345,8 +345,8 @@ it("updates a repository-like layout (skill at the Git root, no main.slide.tex) 
   }
 });
 
-it("deck init が出力するデッキは、ツール自身の背景テンプレートを含んでも L024 にならない", async () => {
-  const source = await initialDeckSource();
+it("deck init が出力するデッキは、ツール自身の背景テンプレートを含んでも L024 にならない", () => {
+  const source = initialDeckSource();
   expect(source).toContain("\\setbeamertemplate{background}");
   expect(lintSource(source).filter((entry) => entry.code === "L024")).toEqual([]);
 });
