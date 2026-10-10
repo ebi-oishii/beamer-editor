@@ -984,6 +984,13 @@ class Parser {
       }
       i++;
     }
+    // 最初の \item より前は宣言だけを拾う(宣言は環境の終わりまで全項目に効く)。
+    const declarations = this.parseBlocks(bodyStart, itemPositions[0] ?? bodyEnd).flatMap(
+      (block) =>
+        block.type === "paragraph"
+          ? block.children.filter((node): node is DeclarationNode => node.type === "declaration")
+          : [],
+    );
     for (let k = 0; k < itemPositions.length; k++) {
       const itemPos = itemPositions[k] as number;
       const contentEnd = k + 1 < itemPositions.length ? (itemPositions[k + 1] as number) : bodyEnd;
@@ -997,7 +1004,7 @@ class Parser {
         span: span(itemPos, contentEnd),
       });
     }
-    return { type: "list", kind, items, span: span(pos, next) };
+    return { type: "list", kind, declarations, items, span: span(pos, next) };
   }
 
   private parseColumns(pos: number, bodyStart: number, bodyEnd: number, next: number): BlockNode {

@@ -689,7 +689,11 @@ class FrameRenderer {
               `<li${this.overlayAttrs(item.overlay)}>${this.renderListItemChildren(item.children)}</li>`,
           )
           .join("");
-        return `<${tag}${flow}>${items}</${tag}>`;
+        // 最初の \item より前の宣言は、環境の中の全項目に効く(外の宣言はこの外側で掛かる)。
+        return this.withState(
+          `<${tag}${flow}>${items}</${tag}>`,
+          this.paragraphDeclarations(block.declarations),
+        );
       }
       case "columns": {
         const cols = block.columns

@@ -644,6 +644,23 @@ Other
     expect(Object.keys(NAMED_COLORS).sort()).toEqual([...XCOLOR_BASE_NAMES].sort());
   });
 
+  it("箇条書きの最初の \\item より前の宣言は全項目に効き、環境の外へ漏れない", () => {
+    for (const [kind, tag] of [
+      ["itemize", "ul"],
+      ["enumerate", "ol"],
+    ]) {
+      const out = html(
+        `\\begin{${kind}}\n\\small \\color{red} \\bfseries\n\\item First\n\\item Second\n\\end{${kind}}\nAfter`,
+      );
+      expect(out).toMatch(
+        new RegExp(
+          `<div class="declared" style="font-size:10pt;color:#e74c3c;font-weight:bold"><${tag}[^>]*><li><span>First </span></li><li><span>Second </span></li></${tag}></div>`,
+        ),
+      );
+      expect(out).toMatch(/<\/div><p[^>]*>After/);
+    }
+  });
+
   it("\\hfill は前後を横並びにして残りの幅を埋める", () => {
     expect(html("Left \\hfill Right")).toContain(
       '<span class="hfill-line" style="display:flex;align-items:baseline"><span>Left </span><span class="hfill" style="flex:1 1 auto"></span><span> Right </span></span>',

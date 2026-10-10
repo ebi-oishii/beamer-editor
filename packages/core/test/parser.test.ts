@@ -544,13 +544,16 @@ describe("parseDeck: TeX と同じ境界規則(tex-scan)", () => {
 });
 
 describe("parseDeck: よく使う整形命令(#180)", () => {
-  const inlines = (body: string) => {
+  const blocks = (body: string) => {
     const doc = parseDeck(
       `\\documentclass{beamer}\n\\begin{document}\n\\begin{frame}[label=a]{T}\n${body}\n\\end{frame}\n\\end{document}\n`,
     );
     const frame = framesOf(doc)[0];
     if (frame?.type !== "frame") throw new Error("frame missing");
-    const paragraph = frame.body[0];
+    return frame.body;
+  };
+  const inlines = (body: string) => {
+    const paragraph = blocks(body)[0];
     if (paragraph?.type !== "paragraph") throw new Error("paragraph missing");
     return paragraph.children;
   };
@@ -628,5 +631,26 @@ describe("parseDeck: よく使う整形命令(#180)", () => {
     ]);
     expect(types("\\footnote[3]{Note}")).toEqual(["rawInline"]);
     expect(types("\\cite[p.~3]{knuth84}")).toEqual(["rawInline"]);
+  });
+
+  it("箇条書きの最初の \\item より前の宣言を list に残す", () => {
+    for (const kind of ["itemize", "enumerate"]) {
+      const [list] = blocks(
+        `\\begin{${kind}}\n\\small \\color{red}\n\\bfseries\n\\item A\n\\item B\n\\end{${kind}}`,
+      );
+      expect(list).toMatchObject({
+        type: "list",
+        declarations: [
+          { type: "declaration", name: "small" },
+          { type: "declaration", name: "color", color: "red" },
+          { type: "declaration", name: "bfseries" },
+        ],
+        items: [{ type: "listItem" }, { type: "listItem" }],
+      });
+    }
+    expect(blocks("\\begin{itemize}\n\\item A\n\\end{itemize}")[0]).toMatchObject({
+      type: "list",
+      declarations: [],
+    });
   });
 });

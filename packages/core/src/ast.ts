@@ -255,6 +255,11 @@ export interface ParagraphNode extends BaseNode {
 export interface ListNode extends BaseNode {
   type: "list";
   kind: "itemize" | "enumerate";
+  /**
+   * 最初の `\item` より前に書いた宣言(`\small` など)。環境の終わりまで全項目に効く。
+   * 宣言以外の前置きは読まない。
+   */
+  declarations: DeclarationNode[];
   items: ListItemNode[];
 }
 
