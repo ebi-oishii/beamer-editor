@@ -292,6 +292,25 @@ function writeCompileError(
     );
 }
 
+/**
+ * コンパイルに失敗したデッキを deck check と同じオプションで lint する(E_COMPILE に添える用)。
+ * 読めない・lint が例外を投げるときは null(元の E_COMPILE だけを出す)。
+ */
+async function lintAfterCompileFailure(
+  input: string,
+): Promise<{ source: string; diagnostics: LintDiagnostic[] } | null> {
+  try {
+    const source = await readFile(resolve(input), "utf8");
+    const diagnostics = lintSource(source, {
+      ...createNodeFileProbes(dirname(resolve(input))),
+      ...(await skillLintOptions(input)),
+    });
+    return { source, diagnostics };
+  } catch {
+    return null;
+  }
+}
+
 function location(source: string, offset: number) {
   const before = source.slice(0, offset);
   const line = before.split("\n").length;
@@ -1015,17 +1034,10 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
         ? (possibleCode as CliErrorCode)
         : "E_INTERNAL";
     // lint は失敗したときだけ走らせる(成功時の書き出しを遅くしない)。
-    const source =
-      code === "E_COMPILE" ? await readFile(resolve(input), "utf8").catch(() => null) : null;
-    if (source === null) writeError(code, errorMessage(error), parsed.json);
+    const linted = code === "E_COMPILE" ? await lintAfterCompileFailure(input) : null;
+    if (linted === null) writeError(code, errorMessage(error), parsed.json);
     else
-      writeCompileError(
-        errorMessage(error),
-        parsed.json,
-        input,
-        source,
-        lintSource(source, createNodeFileProbes(dirname(resolve(input)))),
-      );
+      writeCompileError(errorMessage(error), parsed.json, input, linted.source, linted.diagnostics);
     return exitCodeForError(code);
   }
 }
