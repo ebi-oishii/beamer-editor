@@ -129,10 +129,22 @@ describe("fragmentGraphicsPaths", () => {
 describe("compileFragment", () => {
   const FAKE_PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37]); // %PDF-1.7
 
-  function runner(calls: { command: string; args: string[]; cwd: string }[]): ProcessRunner {
+  function runner(
+    calls: {
+      command: string;
+      args: string[];
+      cwd: string;
+      restartTimeoutOn?: (line: string) => boolean;
+    }[],
+  ): ProcessRunner {
     return {
       async run(command, args, options) {
-        calls.push({ command, args, cwd: options.cwd });
+        calls.push({
+          command,
+          args,
+          cwd: options.cwd,
+          ...(options.restartTimeoutOn ? { restartTimeoutOn: options.restartTimeoutOn } : {}),
+        });
         if (args[0] === "--version")
           return { exitCode: 0, stdout: "tectonic 0.16.9\n", stderr: "" };
         const outdir = args[args.indexOf("--outdir") + 1] as string;
@@ -143,7 +155,7 @@ describe("compileFragment", () => {
   }
 
   it("一時ディレクトリに fragment.tex を書いてコンパイルし、PDF のバイト列を返して片づける", async () => {
-    const calls: { command: string; args: string[]; cwd: string }[] = [];
+    const calls: Parameters<typeof runner>[0] = [];
     const temps: string[] = [];
     const makeTemp = async (prefix: string) => {
       const dir = await mkdtemp(join(tmpdir(), prefix));
@@ -159,6 +171,8 @@ describe("compileFragment", () => {
     expect(calls.map((call) => call.args[0])).toEqual(["--version", "-X"]);
     const compile = calls[1];
     expect(compile?.cwd).toBe("/deck");
+    expect(compile?.restartTimeoutOn?.("note: downloading standalone.cls")).toBe(true);
+    expect(calls[0]?.restartTimeoutOn).toBeUndefined();
     expect(compile?.args.slice(1, 4)).toEqual(["compile", "--outdir", temps[0]]);
     expect(compile?.args[4]).toBe(join(temps[0] as string, "fragment.tex"));
     await expect(readFile(join(temps[0] as string, "fragment.tex"))).rejects.toMatchObject({

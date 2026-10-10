@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 const MAX_PROCESS_OUTPUT = 1024 * 1024;
 const DEFAULT_COMPILE_TIMEOUT_MS = 300_000;
@@ -33,8 +34,20 @@ export interface PdfExportRequest {
   overwrite?: boolean;
   tectonicPath?: string;
   signal?: AbortSignal;
-  /** Tectonic compile timeout. Defaults to 5 minutes. */
+  /**
+   * Tectonic compile timeout. Defaults to 5 minutes. Each TeX package download
+   * restarts it, so a slow first run is measured from its latest download.
+   */
   timeoutMs?: number;
+  /** Tectonic の進捗(初回の TeX パッケージ取得)を受け取る。例外は書き出しに影響しない。 */
+  onProgress?: (progress: PdfExportProgress) => void;
+}
+
+/** `count` は 1 始まりの累計ダウンロード数。 */
+export interface PdfExportProgress {
+  kind: "download";
+  file: string;
+  count: number;
 }
 
 export interface PdfExportResult {
@@ -75,12 +88,21 @@ export interface ProcessResult {
   timedOut?: boolean;
 }
 
+export interface ProcessRunOptions {
+  cwd: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  /**
+   * stdout / stderr を 1 行ずつ(改行を除いて)受け取る。最後の改行なし行は終了時に渡す。
+   * Tectonic は note(取得中のファイル名など)を stdout、warning / error を stderr に出す。
+   */
+  onOutputLine?: (line: string, stream: "stdout" | "stderr") => void;
+  /** true を返した出力行(stdout / stderr とも)でタイムアウトを最初から計り直す。 */
+  restartTimeoutOn?: (line: string) => boolean;
+}
+
 export interface ProcessRunner {
-  run(
-    command: string,
-    args: readonly string[],
-    options: { cwd: string; signal?: AbortSignal; timeoutMs?: number },
-  ): Promise<ProcessResult>;
+  run(command: string, args: readonly string[], options: ProcessRunOptions): Promise<ProcessResult>;
 }
 
 export interface PdfExportDependencies {
@@ -109,6 +131,46 @@ function boundedCollector(limit: number) {
     },
     value: () => value,
   };
+}
+
+/**
+ * Split a byte stream into lines across chunk boundaries. A line longer than
+ * the output limit is cut there, so one unterminated line cannot grow without
+ * bound.
+ */
+function lineSplitter(onLine: (line: string) => void) {
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  const emit = (line: string) => onLine(line.endsWith("\r") ? line.slice(0, -1) : line);
+  return {
+    append(chunk: Buffer | string) {
+      const lines = (pending + (typeof chunk === "string" ? chunk : decoder.write(chunk))).split(
+        "\n",
+      );
+      pending = (lines.pop() as string).slice(0, MAX_PROCESS_OUTPUT);
+      for (const line of lines) emit(line);
+    },
+    end() {
+      const rest = pending + decoder.end();
+      pending = "";
+      if (rest.length > 0) emit(rest);
+    },
+  };
+}
+
+const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*[A-Za-z]`, "g");
+const TECTONIC_DOWNLOAD_LINE = /^note: downloading (.+)$/;
+
+/**
+ * Tectonic が TeX パッケージ・フォントを初回取得するときの出力行(`note: downloading <file>`)
+ * から、取得中のファイル名を返す。端末向けに色が付いていても判定できるよう ANSI を除く。
+ */
+function tectonicDownloadFile(line: string): string | undefined {
+  return TECTONIC_DOWNLOAD_LINE.exec(line.replace(ANSI_ESCAPE, "").trim())?.[1]?.trim();
+}
+
+function isTectonicDownloadLine(line: string): boolean {
+  return tectonicDownloadFile(line) !== undefined;
 }
 
 /** Node の spawn を shell なし・argv のままで呼ぶ標準ランナー。 */
@@ -158,8 +220,35 @@ export const nodeProcessRunner: ProcessRunner = {
         if (hardSettle) clearTimeout(hardSettle);
         options.signal?.removeEventListener("abort", onAbort);
       };
+      const armTimeout = () => {
+        if (options.timeoutMs === undefined || options.timeoutMs <= 0) return;
+        if (timeout) clearTimeout(timeout);
+        timeout = setTimeout(() => {
+          if (settled) return;
+          timedOut = true;
+          terminate();
+        }, options.timeoutMs);
+      };
+      const { onOutputLine, restartTimeoutOn } = options;
+      const outputLines = (stream: "stdout" | "stderr") =>
+        lineSplitter((line) => {
+          // A listener runs inside a stream event; its failure must not
+          // become an uncaught exception or stop the remaining output.
+          try {
+            if (!settled && !terminating && restartTimeoutOn?.(line)) armTimeout();
+            onOutputLine?.(line, stream);
+          } catch {
+            // Ignored deliberately; the collected output is unaffected.
+          }
+        });
+      const lines =
+        onOutputLine === undefined && restartTimeoutOn === undefined
+          ? undefined
+          : { stdout: outputLines("stdout"), stderr: outputLines("stderr") };
       const finish = (exitCode: number | null) => {
         if (settled) return;
+        lines?.stdout.end();
+        lines?.stderr.end();
         settled = true;
         cleanup();
         resolveResult({
@@ -193,6 +282,10 @@ export const nodeProcessRunner: ProcessRunner = {
       if (options.signal?.aborted) onAbort();
       child.stdout?.on("data", stdout.append);
       child.stderr?.on("data", stderr.append);
+      if (lines) {
+        child.stdout?.on("data", lines.stdout.append);
+        child.stderr?.on("data", lines.stderr.append);
+      }
       child.on("error", (error: NodeJS.ErrnoException) => {
         if (settled) return;
         settled = true;
@@ -201,13 +294,7 @@ export const nodeProcessRunner: ProcessRunner = {
         else reject(error);
       });
       child.on("close", finish);
-      if (options.timeoutMs !== undefined && options.timeoutMs > 0) {
-        timeout = setTimeout(() => {
-          if (settled) return;
-          timedOut = true;
-          terminate();
-        }, options.timeoutMs);
-      }
+      armTimeout();
     });
   },
 };
@@ -279,6 +366,24 @@ function runnerOptions(
   timeoutMs: number,
 ): { cwd: string; signal?: AbortSignal; timeoutMs: number } {
   return signal === undefined ? { cwd, timeoutMs } : { cwd, signal, timeoutMs };
+}
+
+/**
+ * Options for a Tectonic compile. A cold cache can make Tectonic fetch hundreds
+ * of files one by one, so the timeout counts from the latest download rather
+ * than from the start; a compile that stops making progress still times out.
+ */
+function compileRunnerOptions(
+  cwd: string,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  onOutputLine?: (line: string) => void,
+): ProcessRunOptions {
+  return {
+    ...runnerOptions(cwd, signal, timeoutMs),
+    restartTimeoutOn: isTectonicDownloadLine,
+    ...(onOutputLine === undefined ? {} : { onOutputLine }),
+  };
 }
 
 function throwIfCancelled(signal: AbortSignal | undefined): void {
@@ -398,17 +503,30 @@ export async function exportPdf(
   try {
     tempDirectory = await makeTemp("beamer-editor-pdf-");
     throwIfCancelled(signal);
+    const onProgress = request.onProgress;
+    let downloads = 0;
     let compileResult: ProcessResult;
     try {
       compileResult = await runner.run(
         tectonic,
         ["-X", "compile", "--outdir", tempDirectory, inputPath],
-        runnerOptions(
+        compileRunnerOptions(
           dirname(inputPath),
           signal,
           request.timeoutMs && request.timeoutMs > 0
             ? request.timeoutMs
             : DEFAULT_COMPILE_TIMEOUT_MS,
+          onProgress &&
+            ((line) => {
+              const file = tectonicDownloadFile(line);
+              if (file === undefined) return;
+              downloads += 1;
+              try {
+                onProgress({ kind: "download", file, count: downloads });
+              } catch {
+                // Progress is advisory; a failing listener must not fail the export.
+              }
+            }),
         ),
       );
     } catch (error) {
@@ -429,7 +547,7 @@ export async function exportPdf(
         request.timeoutMs && request.timeoutMs > 0 ? request.timeoutMs : DEFAULT_COMPILE_TIMEOUT_MS;
       throw new PdfExportError(
         "E_COMPILE",
-        `PDF のコンパイルが ${timeoutMs / 1000} 秒でタイムアウトしました${processDetail(compileResult)}`,
+        `PDF のコンパイルが ${timeoutMs / 1000} 秒でタイムアウトしました(TeX パッケージの取得中は最後の取得から計測)${processDetail(compileResult)}`,
       );
     }
     const compiledPdf = join(tempDirectory, compiledPdfName(inputPath));
@@ -1169,7 +1287,7 @@ export async function compileDeckFrames(
           temporaryDirectory,
           measuredInput,
         ],
-        runnerOptions(
+        compileRunnerOptions(
           dirname(inputPath),
           signal,
           request.timeoutMs && request.timeoutMs > 0
@@ -1389,7 +1507,7 @@ export async function compileFragment(
       compileResult = await runner.run(
         tectonic,
         ["-X", "compile", "--outdir", tempDirectory, inputPath],
-        runnerOptions(request.cwd ?? tempDirectory, signal, timeoutMs),
+        compileRunnerOptions(request.cwd ?? tempDirectory, signal, timeoutMs),
       );
     } catch (error) {
       if (isAbort(error, signal))
@@ -1407,7 +1525,7 @@ export async function compileFragment(
     if (compileResult.timedOut)
       throw new PdfExportError(
         "E_COMPILE",
-        `部分コンパイルが ${timeoutMs / 1000} 秒でタイムアウトしました${processDetail(compileResult)}`,
+        `部分コンパイルが ${timeoutMs / 1000} 秒でタイムアウトしました(TeX パッケージの取得中は最後の取得から計測)${processDetail(compileResult)}`,
       );
     const compiledPdf = join(tempDirectory, "fragment.pdf");
     if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(compiledPdf)))

@@ -1,4 +1,4 @@
-import { PdfExportError } from "@beamer-editor/compiler";
+import { PdfExportError, type PdfExportProgress } from "@beamer-editor/compiler";
 import { HtmlExportError } from "@beamer-editor/html-export";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -38,7 +38,10 @@ function createHost(overrides: Partial<ExportHost> = {}): ExportHost {
     chooseOutput: vi.fn(async () => output),
     outputExists: vi.fn(async () => false),
     withProgress: vi.fn(async (task) =>
-      task({ isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) }),
+      task(
+        { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) },
+        () => {},
+      ),
     ),
     showInformation: vi.fn(async () => undefined),
     showError: vi.fn(async () => undefined),
@@ -112,6 +115,53 @@ describe("ExportController", () => {
       }),
     );
     expect(host.openPdf).toHaveBeenCalledWith(output);
+  });
+
+  it("reports Tectonic package downloads in the progress notification, throttled", async () => {
+    vi.useFakeTimers();
+    try {
+      const report = vi.fn<(message: string) => void>();
+      const host = createHost({
+        withProgress: async (task) =>
+          task(
+            { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) },
+            report,
+          ),
+      });
+      let finishCompile: (() => void) | undefined;
+      const compile = vi.fn(
+        async (request: { onProgress?: (progress: PdfExportProgress) => void }) => {
+          request.onProgress?.({ kind: "download", file: "latex.ltx", count: 1 });
+          request.onProgress?.({ kind: "download", file: "beamer.cls", count: 2 });
+          request.onProgress?.({ kind: "download", file: "pgf.sty", count: 3 });
+          await new Promise<void>((resolve) => {
+            finishCompile = resolve;
+          });
+          return {
+            format: "pdf" as const,
+            inputPath: input.fsPath,
+            outputPath: output.fsPath,
+            overwritten: false,
+            engineVersion: "0.17.0",
+          };
+        },
+      );
+      const exporting = new ExportController(host, { exportPdf: compile }).export(createDocument());
+      await vi.waitFor(() => expect(finishCompile).toBeDefined());
+      // The first update is immediate; later ones within 250 ms collapse into the latest.
+      expect(report.mock.calls).toEqual([["TeX パッケージを取得中（初回のみ）: 1 件 — latex.ltx"]]);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(report.mock.calls).toEqual([
+        ["TeX パッケージを取得中（初回のみ）: 1 件 — latex.ltx"],
+        ["TeX パッケージを取得中（初回のみ）: 3 件 — pgf.sty"],
+      ]);
+      finishCompile?.();
+      await exporting;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(report).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("exports HTML in an untrusted workspace and opens the generated index", async () => {
@@ -238,13 +288,16 @@ describe("ExportController", () => {
     let cancel: (() => void) | undefined;
     const host = createHost({
       withProgress: async (task) =>
-        task({
-          isCancellationRequested: false,
-          onCancellationRequested: (listener) => {
-            cancel = listener;
-            return { dispose() {} };
+        task(
+          {
+            isCancellationRequested: false,
+            onCancellationRequested: (listener) => {
+              cancel = listener;
+              return { dispose() {} };
+            },
           },
-        }),
+          () => {},
+        ),
     });
     const compile = vi.fn(async (_request) => {
       cancel?.();
@@ -259,10 +312,13 @@ describe("ExportController", () => {
     const subscription = { dispose: vi.fn() };
     const host = createHost({
       withProgress: async (task) =>
-        task({
-          isCancellationRequested: true,
-          onCancellationRequested: () => subscription,
-        }),
+        task(
+          {
+            isCancellationRequested: true,
+            onCancellationRequested: () => subscription,
+          },
+          () => {},
+        ),
     });
     const compile = vi.fn();
     await new ExportController(host, { exportPdf: compile }).export(createDocument());
@@ -274,7 +330,10 @@ describe("ExportController", () => {
     const subscription = { dispose: vi.fn() };
     const host = createHost({
       withProgress: async (task) =>
-        task({ isCancellationRequested: false, onCancellationRequested: () => subscription }),
+        task(
+          { isCancellationRequested: false, onCancellationRequested: () => subscription },
+          () => {},
+        ),
       tectonicPath: () => {
         throw new Error("invalid configuration");
       },
