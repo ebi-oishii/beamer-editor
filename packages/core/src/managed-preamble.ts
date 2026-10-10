@@ -67,27 +67,14 @@ export function locateManagedPreamble(
   return { span: { start: begin.index, end: contentStart + endLine.index + endLine[0].length } };
 }
 
-/** 範囲を特定できたときのツール管理プリアンブルの位置。できなければ null(理由は locateManagedPreamble)。 */
-export function managedPreambleSpan(source: string, preambleEnd?: number): SourceSpan | null {
-  const located = locateManagedPreamble(source, preambleEnd);
-  return "span" in located ? located.span : null;
-}
-
-/** `span` のツール管理プリアンブルを `deck init` が書く現行の内容へ差し替える修正。 */
+/**
+ * `span`(locateManagedPreamble の結果)のツール管理プリアンブルを、`deck init` が書く現行の内容へ
+ * 差し替える修正(`--update-preamble` と L025 の fix)。`%% deck-source-version` 行とユーザー領域
+ * (印の外)には触らない。すでに現行と一致していれば、置換しても変わらない修正を返す。
+ */
 export function managedPreambleReplacement(source: string, span: SourceSpan): LintFix {
   const block = managedPreambleBlock();
   // CRLF のファイルは改行コードを揃える(管理領域だけ LF になるのを避ける)。
   const crlf = source.slice(span.start, span.end).includes("\r\n");
   return { span, replacement: crlf ? block.replaceAll("\n", "\r\n") : block };
-}
-
-/**
- * ツール管理プリアンブルを `deck init` が書く現行の内容へ差し替える修正。
- * `%% deck-source-version` 行とユーザー領域(印の外)には触らない。範囲を特定できない
- * (開始印・終了印が無い、終了印が最初のユーザー領域より後ろにある、開始印が複数ある)なら null。
- * すでに現行と一致していれば、置換しても変わらない修正を返す。
- */
-export function managedPreambleUpdate(source: string, preambleEnd?: number): LintFix | null {
-  const span = managedPreambleSpan(source, preambleEnd);
-  return span === null ? null : managedPreambleReplacement(source, span);
 }

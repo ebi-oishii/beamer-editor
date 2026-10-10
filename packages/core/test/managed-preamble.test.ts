@@ -8,8 +8,7 @@ import {
   MANAGED_PREAMBLE_BEGIN,
   MANAGED_PREAMBLE_END,
   managedPreambleBlock,
-  managedPreambleSpan,
-  managedPreambleUpdate,
+  managedPreambleReplacement,
   parseDeck,
 } from "../src/index.js";
 
@@ -59,6 +58,16 @@ const oldManaged = [
 ].join("\n");
 const BACKGROUNDS = "\\deckbackground{assets/bg.png}\n\\deckbackground[title]{assets/title.png}";
 
+/** 範囲を特定できたときの位置(できなければ null)。 */
+const spanOf = (source: string, preambleEnd?: number) => {
+  const located = locateManagedPreamble(source, preambleEnd);
+  return "span" in located ? located.span : null;
+};
+/** --update-preamble / L025 の fix と同じ差し替え(範囲を特定できなければ null)。 */
+const updateOf = (source: string) => {
+  const span = spanOf(source);
+  return span === null ? null : managedPreambleReplacement(source, span);
+};
 const apply = (source: string, fix: LintFix) =>
   source.slice(0, fix.span.start) + fix.replacement + source.slice(fix.span.end);
 const l025 = (source: string) => lintSource(source).filter((entry) => entry.code === "L025");
@@ -91,7 +100,7 @@ describe("lintSource: L025(管理プリアンブルが使っているマクロ�
     for (const entry of found) {
       expect(entry.severity).toBe("error");
       expect(entry.message).toContain("deck init <file> --update-preamble");
-      expect(entry.fix).toEqual(managedPreambleUpdate(source));
+      expect(entry.fix).toEqual(updateOf(source));
     }
   });
 
@@ -101,14 +110,14 @@ describe("lintSource: L025(管理プリアンブルが使っているマクロ�
     if (fix === undefined) throw new Error("fix expected");
     const fixed = apply(source, fix);
     expect(fixed).toBe(initDeck(managedPreambleBlock(), BACKGROUNDS));
-    const span = managedPreambleSpan(source);
+    const span = spanOf(source);
     expect(fixed.slice(0, span?.start)).toBe(source.slice(0, span?.start));
     expect(fixed.slice(fixed.length - (source.length - (span?.end ?? 0)))).toBe(
       source.slice(span?.end),
     );
     expect(lintSource(fixed)).toEqual([]);
     // 2 回目は変化しない。
-    const again = managedPreambleUpdate(fixed);
+    const again = updateOf(fixed);
     expect(again && apply(fixed, again)).toBe(fixed);
   });
 
@@ -159,7 +168,7 @@ describe("lintSource: L025(管理プリアンブルが使っているマクロ�
   });
 });
 
-describe("managedPreambleSpan: 終了印を探す範囲", () => {
+describe("locateManagedPreamble: 終了印を探す範囲", () => {
   const withoutEnd = oldManaged.replace(`\n${MANAGED_PREAMBLE_END}`, "");
 
   it("終了印が消え、preamble-extra に終了印の行があるデッキは差し替えない(fix も出さない)", () => {
@@ -167,8 +176,8 @@ describe("managedPreambleSpan: 終了印を探す範囲", () => {
       "%% preamble-extra:begin\n",
       `%% preamble-extra:begin\n${MANAGED_PREAMBLE_END}\n`,
     );
-    expect(managedPreambleSpan(source)).toBeNull();
-    expect(managedPreambleUpdate(source)).toBeNull();
+    expect(spanOf(source)).toBeNull();
+    expect(updateOf(source)).toBeNull();
     expect(l025(source).map((entry) => entry.fix)).toEqual([undefined, undefined]);
   });
 
@@ -177,14 +186,14 @@ describe("managedPreambleSpan: 終了印を探す範囲", () => {
       "%% macros:end\n",
       `%% macros:end\n${MANAGED_PREAMBLE_END}\n`,
     );
-    expect(managedPreambleSpan(source)).toBeNull();
+    expect(spanOf(source)).toBeNull();
   });
 
   it("終了印が \\begin{document} より後ろにしか無いデッキは差し替えない", () => {
     const source = initDeck(withoutEnd, BACKGROUNDS)
       .replace(/%% (macros|style|preamble-extra):(begin|end)\n/g, "")
       .replace("\\begin{document}\n", `\\begin{document}\n${MANAGED_PREAMBLE_END}\n`);
-    expect(managedPreambleSpan(source)).toBeNull();
+    expect(spanOf(source)).toBeNull();
   });
 
   it("プリアンブルに開始印が 2 つあるデッキは差し替えない", () => {
@@ -192,7 +201,7 @@ describe("managedPreambleSpan: 終了印を探す範囲", () => {
       "%% preamble-extra:begin\n",
       `%% preamble-extra:begin\n${MANAGED_PREAMBLE_BEGIN}\n`,
     );
-    expect(managedPreambleSpan(source)).toBeNull();
+    expect(spanOf(source)).toBeNull();
   });
 
   it("特定できない理由を場合ごとに返し、L025 のメッセージにも入れる", () => {
@@ -232,34 +241,30 @@ describe("managedPreambleSpan: 終了印を探す範囲", () => {
     expect(parseDeck(source).macros.span.start).toBe(
       source.indexOf("% 利用者のマクロは") + "% 利用者のマクロは %% macros:begin の下へ\n".length,
     );
-    expect(managedPreambleUpdate(source)).toBeNull();
+    expect(updateOf(source)).toBeNull();
   });
 
   it("parse 済みのプリアンブルの終わりを渡しても同じ結果になる", () => {
     const source = initDeck(oldManaged, BACKGROUNDS);
-    expect(managedPreambleSpan(source, source.indexOf("\\begin{document}"))).toEqual(
-      managedPreambleSpan(source),
-    );
+    expect(spanOf(source, source.indexOf("\\begin{document}"))).toEqual(spanOf(source));
   });
 });
 
-describe("managedPreambleUpdate", () => {
+describe("managedPreambleReplacement", () => {
   it("開始行の文言を問わず、終了行までを差し替える。印が欠ければ null", () => {
     const source = initDeck(
       oldManaged.replace(MANAGED_PREAMBLE_BEGIN, "% ---- ツール管理プリアンブル ----"),
       "",
     );
-    const fix = managedPreambleUpdate(source);
+    const fix = updateOf(source);
     expect(fix && apply(source, fix)).toBe(initDeck(managedPreambleBlock(), ""));
-    expect(managedPreambleUpdate(source.replace(MANAGED_PREAMBLE_END, "% end"))).toBeNull();
-    expect(
-      managedPreambleUpdate(source.replace("% ---- ツール管理プリアンブル ----", "% begin")),
-    ).toBeNull();
+    expect(updateOf(source.replace(MANAGED_PREAMBLE_END, "% end"))).toBeNull();
+    expect(updateOf(source.replace("% ---- ツール管理プリアンブル ----", "% begin"))).toBeNull();
   });
 
   it("CRLF のデッキは差し替え後も CRLF にそろえる", () => {
     const source = initDeck(oldManaged, BACKGROUNDS).replaceAll("\n", "\r\n");
-    const fix = managedPreambleUpdate(source);
+    const fix = updateOf(source);
     if (fix === null) throw new Error("fix expected");
     const fixed = apply(source, fix);
     expect(fixed).toBe(initDeck(managedPreambleBlock(), BACKGROUNDS).replaceAll("\n", "\r\n"));

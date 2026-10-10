@@ -6,8 +6,8 @@ import {
   formatDeck,
   framesOf,
   lintSource,
+  locateManagedPreamble,
   managedPreambleBlock,
-  managedPreambleSpan,
   parseDeck,
 } from "@beamer-editor/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -367,9 +367,9 @@ describe("--update-preamble", () => {
       .replace("Your first point.", "変更した本文。");
   }
   const managedSpan = (source: string) => {
-    const span = managedPreambleSpan(source);
-    if (span === null) throw new Error("managed preamble expected");
-    return span;
+    const located = locateManagedPreamble(source);
+    if (!("span" in located)) throw new Error("managed preamble expected");
+    return located.span;
   };
 
   it("管理領域だけを現行に差し替え、2 回目は変えない。L025 の fix と同じ結果になる", async () => {

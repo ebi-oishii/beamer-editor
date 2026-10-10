@@ -1,5 +1,10 @@
 import { readFileSync } from "node:fs";
-import { lintSource, managedPreambleBlock, managedPreambleUpdate } from "@beamer-editor/core";
+import {
+  lintSource,
+  locateManagedPreamble,
+  managedPreambleBlock,
+  managedPreambleReplacement,
+} from "@beamer-editor/core";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("vscode", () => {
@@ -170,8 +175,9 @@ ${outdated}
       source.slice(0, document.offsetAt(edit.range.start)) +
       edit.text +
       source.slice(document.offsetAt(edit.range.end));
-    const update = managedPreambleUpdate(source);
-    if (!update) throw new Error("update expected");
+    const located = locateManagedPreamble(source);
+    if (!("span" in located)) throw new Error("managed preamble expected");
+    const update = managedPreambleReplacement(source, located.span);
     expect(fixed).toBe(
       source.slice(0, update.span.start) + update.replacement + source.slice(update.span.end),
     );
