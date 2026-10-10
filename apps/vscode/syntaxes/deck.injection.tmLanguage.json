@@ -90,6 +90,15 @@
       },
       "patterns": [
         {
+          "match": "(\\\\)[^A-Za-z@]",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.keyword.tex"
+            }
+          },
+          "name": "constant.character.escape.tex"
+        },
+        {
           "include": "text.tex#comment"
         },
         {

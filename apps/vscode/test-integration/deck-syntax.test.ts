@@ -355,6 +355,74 @@ suite("Issue #181: deck 語彙の構文強調", () => {
     assert.ok(leaked.length === 0, `option の中に紛れたトークン: ${show(leaked)}`);
   });
 
+  test("option の中の \\% と \\] は TeX と同じくエスケープとして読み、コメントや終わりにしない", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "beamer-deck-syntax-"));
+    tempDirs.push(directory);
+    const file = path.join(directory, "deck.slide.tex");
+    await writeFile(
+      file,
+      [
+        "\\documentclass{beamer}",
+        "\\begin{document}",
+        "\\begin{frame}[label=e]{E}",
+        "\\begin{deckcanvas}",
+        "\\deckimage[x=0.1,y=50\\%]{a.png}",
+        "next $m$ line",
+        "\\deckimage[x=0.3\\],w=0.4]{b.png}",
+        "\\end{deckcanvas}",
+        "\\end{frame}",
+        "\\end{document}",
+        "",
+      ].join("\n"),
+    );
+
+    const tokens = await vscode.commands.executeCommand<CapturedToken[]>(
+      "_workbench.captureSyntaxTokens",
+      vscode.Uri.file(file),
+    );
+    const option = "meta.optional-arguments.deck";
+    const containing = (text: string) => tokens.filter((token) => token.c.includes(text));
+    const show = (list: CapturedToken[]) =>
+      list.map((token) => `${JSON.stringify(token.c)} ${token.t}`).join(" | ");
+
+    // \% はコメントの始まりではない。このファイルにコメントは無い。
+    const comment = tokens.filter((token) => token.t.includes("comment"));
+    assert.ok(comment.length === 0, `コメント: ${show(comment)}`);
+    const escapes = tokens.filter((token) => token.t.includes("constant.character.escape.tex"));
+    assert.ok(
+      escapes.length === 4 && escapes.every((token) => token.t.includes(option)),
+      `エスケープ: ${show(escapes)}`,
+    );
+
+    // \% の後の ] で閉じるので、{a.png} と次の行は組み込みの文法のまま。
+    for (const text of ["{a.png}", "next", "line"]) {
+      const outside = containing(text);
+      assert.ok(
+        outside.length > 0 && outside.every((token) => !deck(token.t) && !token.t.includes(option)),
+        `${text}: ${show(outside)}`,
+      );
+    }
+    const math = tokens.filter((token) => token.c.trim() === "m");
+    assert.ok(
+      math.length > 0 && math.every((token) => token.t.includes("meta.math")),
+      `$m$: ${show(math)}`,
+    );
+
+    // \] では閉じず、その後の w=0.4 まで option が続く。
+    const width = tokens.filter((token) => token.c.trim() === "0.4");
+    assert.ok(
+      width.length > 0 &&
+        width.every(
+          (token) => token.t.includes("constant.numeric.deck") && token.t.includes(option),
+        ),
+      `0.4: ${show(width)}`,
+    );
+    const closes = tokens.filter((token) =>
+      token.t.includes("punctuation.definition.optional-arguments.end.deck"),
+    );
+    assert.ok(closes.length === 2, `option の ] : ${show(closes)}`);
+  });
+
   test("字下げしたキャンバスでも色分けし、後ろのフレームの組み込みの色分けを壊さない", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "beamer-deck-syntax-"));
     tempDirs.push(directory);
