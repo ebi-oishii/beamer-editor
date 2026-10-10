@@ -5,6 +5,7 @@ import {
   type PdfExportErrorCode,
   type PdfExportResult,
 } from "@beamer-editor/compiler";
+import type { LintOptions } from "@beamer-editor/core";
 import {
   defaultHtmlOutputPath,
   exportHtml,
@@ -12,6 +13,7 @@ import {
   type HtmlExportRequest,
   type HtmlExportResult,
 } from "@beamer-editor/html-export";
+import { lintDocumentText } from "./diagnostics";
 
 export interface ExportUri {
   readonly scheme: string;
@@ -23,6 +25,7 @@ export interface ExportDocument {
   readonly uri: ExportUri;
   readonly isDirty: boolean;
   save(): Thenable<boolean>;
+  getText(): string;
 }
 
 export interface ExportCancellationToken {
@@ -44,6 +47,10 @@ export interface ExportHost {
   revealInFileManager(uri: ExportUri): Thenable<unknown>;
   openTectonicSettings(): Thenable<unknown>;
   showExportDetails(detail: string): void;
+  /** Problems パネルを開く(コンパイル失敗に lint の error が伴うときの操作)。 */
+  showProblems(): Thenable<unknown>;
+  /** Problems パネルと同じ lint オプション(画像の存在・テンプレート参照の解決結果)。 */
+  lintOptions(document: ExportDocument): LintOptions;
   uriForFile(path: string): ExportUri;
   tectonicPath(document: ExportDocument): string | undefined;
   timeoutMs(document: ExportDocument): number;
@@ -128,6 +135,41 @@ export function exportErrorDetail(error: PdfExportError): string {
   );
   if (detail.length <= DETAIL_LIMIT) return detail;
   return `${detail.slice(0, DETAIL_LIMIT)}\n…（詳細を切り詰めました）`;
+}
+
+interface CompileLintError {
+  line: number;
+  column: number;
+  code: string;
+  message: string;
+}
+
+/**
+ * コンパイルに失敗した文書の lint error。古い管理プリアンブル(L025)のように lint が原因を
+ * 先に検出できる失敗を、TeX の出力だけで終わらせないために添える。lint が例外を投げたら
+ * 何も添えない(元の失敗の報告を妨げない)。
+ */
+function compileLintErrors(
+  document: ExportDocument,
+  options: () => LintOptions,
+): CompileLintError[] {
+  try {
+    const text = document.getText();
+    return lintDocumentText(text, options())
+      .filter((diagnostic) => diagnostic.severity === "error")
+      .map((diagnostic) => {
+        const before = text.slice(0, diagnostic.span.start);
+        const lineStart = before.lastIndexOf("\n") + 1;
+        return {
+          line: before.split("\n").length,
+          column: diagnostic.span.start - lineStart + 1,
+          code: diagnostic.code,
+          message: diagnostic.message,
+        };
+      });
+  } catch {
+    return [];
+  }
 }
 
 /** Extension Host のみで PDF export の UI と compiler 呼び出しを調停する。 */
@@ -247,11 +289,11 @@ export class ExportController {
         await this.host.showWarning("書き出しは完了しましたが、表示操作に失敗しました。");
       }
     } catch (error) {
-      await this.reportError(error);
+      await this.reportError(error, document);
     }
   }
 
-  private async reportError(error: unknown): Promise<void> {
+  private async reportError(error: unknown, document: ExportDocument): Promise<void> {
     if (error instanceof HtmlExportError) {
       if (error.code !== "E_CANCELLED")
         await this.host.showError(`HTML の書き出しに失敗しました: ${error.message}`);
@@ -262,13 +304,37 @@ export class ExportController {
       return;
     }
     if (error.code === "E_CANCELLED") return;
-    const message = ERROR_MESSAGES[error.code];
-    const actions =
-      error.code === "E_TECTONIC_NOT_FOUND"
-        ? (["詳細を表示", "設定を開く"] as const)
-        : (["詳細を表示"] as const);
+    const lintErrors =
+      error.code === "E_COMPILE"
+        ? compileLintErrors(document, () => this.host.lintOptions(document))
+        : [];
+    const [first] = lintErrors;
+    const message =
+      first === undefined
+        ? ERROR_MESSAGES[error.code]
+        : `${ERROR_MESSAGES[error.code]} lint のエラーが ${lintErrors.length} 件あります(先頭: ${first.code}: ${first.message})`;
+    const actions = [
+      "詳細を表示",
+      ...(error.code === "E_TECTONIC_NOT_FOUND" ? ["設定を開く"] : []),
+      ...(first === undefined ? [] : ["問題を表示"]),
+    ];
     const action = await this.host.showError(message, ...actions);
-    if (action === "詳細を表示") this.host.showExportDetails(exportErrorDetail(error));
+    if (action === "詳細を表示") {
+      const detail = exportErrorDetail(error);
+      this.host.showExportDetails(
+        first === undefined
+          ? detail
+          : [
+              "lint のエラー(コンパイル失敗の原因かもしれません):",
+              ...lintErrors.map(
+                (entry) => `${entry.line}:${entry.column} ${entry.code} ${entry.message}`,
+              ),
+              "",
+              detail,
+            ].join("\n"),
+      );
+    }
+    if (action === "問題を表示") await this.host.showProblems();
     if (error.code === "E_TECTONIC_NOT_FOUND") {
       if (action === "設定を開く") await this.host.openTectonicSettings();
     }

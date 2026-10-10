@@ -15,6 +15,7 @@ import {
   fragmentHash,
   graphicsPathsOf,
   type LintDiagnostic,
+  type LintOptions,
   type LintSeverity,
   parseDeck,
   pasteCanvasObjects,
@@ -89,6 +90,20 @@ function toVscodeDiagnostic(
   diagnostic.code = lint.code;
   diagnostic.source = "beamer-editor";
   return diagnostic;
+}
+
+/**
+ * Problems パネルと PDF 書き出しの失敗報告で共有する lint オプション。
+ * テンプレート(.sty)参照の解決結果を L022 / L023 へ渡す(#70)。
+ */
+function deckLintOptions(document: vscode.TextDocument): LintOptions {
+  if (document.uri.scheme !== "file") return {};
+  const files = nodeTemplateFileSystem(path.dirname(document.uri.fsPath));
+  return {
+    // 画像の存在(L004)。デッキのディレクトリ配下だけを見る(`..` や絶対パスは無いものとして扱う)。
+    fileExists: files.isFile,
+    templates: templateStatuses(parseDeck(document.getText()), files),
+  };
 }
 
 /**
@@ -298,6 +313,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         exportOutput.appendLine(detail);
         exportOutput.show(true);
       },
+      showProblems: () => vscode.commands.executeCommand("workbench.actions.view.problems"),
+      lintOptions: (document) => deckLintOptions(document as vscode.TextDocument),
       uriForFile: (path) => vscode.Uri.file(path) as ExportUri,
       tectonicPath: (document) => tectonicPathFor(document.uri as vscode.Uri),
       timeoutMs: (document) => {
@@ -346,18 +363,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     },
     vscode.workspace.textDocuments,
     (document) => isManaged(document),
-    // テンプレート(.sty)参照の解決結果を L022 / L023 へ渡す(#70)。
-    (document) =>
-      document.uri.scheme === "file"
-        ? {
-            // 画像の存在(L004)。デッキのディレクトリ配下だけを見る(`..` や絶対パスは無いものとして扱う)。
-            fileExists: nodeTemplateFileSystem(path.dirname(document.uri.fsPath)).isFile,
-            templates: templateStatuses(
-              parseDeck(document.getText()),
-              nodeTemplateFileSystem(path.dirname(document.uri.fsPath)),
-            ),
-          }
-        : {},
+    deckLintOptions,
   );
   context.subscriptions.push(diagnosticCollection, lintController);
 
