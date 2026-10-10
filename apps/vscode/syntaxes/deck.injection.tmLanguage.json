@@ -17,84 +17,84 @@
   ],
   "repository": {
     "environment-with-options": {
-      "begin": "(\\s*)(\\\\begin)(\\{)(deck[A-Za-z]*)(\\})\\s*(\\[)",
+      "begin": "\\s*(\\\\begin)(\\{)(deck[A-Za-z]*)(\\})\\s*(?=\\[)",
       "beginCaptures": {
-        "2": {
+        "1": {
           "name": "support.function.be.latex"
         },
-        "3": {
+        "2": {
           "name": "punctuation.definition.arguments.begin.latex"
         },
-        "4": {
+        "3": {
           "name": "entity.name.type.deck"
         },
-        "5": {
+        "4": {
           "name": "punctuation.definition.arguments.end.latex"
-        },
-        "6": {
-          "name": "punctuation.definition.optional-arguments.begin.deck"
         }
       },
-      "end": "\\]|(?=[{}]|\\\\[A-Za-z@]|^\\s*$)",
-      "endCaptures": {
-        "0": {
-          "name": "punctuation.definition.optional-arguments.end.deck"
-        }
-      },
+      "end": "(?!\\G)",
       "patterns": [
         {
-          "include": "text.tex#comment"
-        },
-        {
-          "include": "#option"
+          "include": "#option-list"
         }
       ]
     },
     "environment": {
-      "match": "(\\s*)(\\\\(?:begin|end))(\\{)(deck[A-Za-z]*)(\\})",
+      "match": "\\s*(\\\\(?:begin|end))(\\{)(deck[A-Za-z]*)(\\})",
       "captures": {
-        "2": {
+        "1": {
           "name": "support.function.be.latex"
         },
-        "3": {
+        "2": {
           "name": "punctuation.definition.arguments.begin.latex"
         },
-        "4": {
+        "3": {
           "name": "entity.name.type.deck"
         },
-        "5": {
+        "4": {
           "name": "punctuation.definition.arguments.end.latex"
         }
       }
     },
     "command-with-options": {
-      "begin": "(\\\\deck[A-Za-z]+)\\s*(\\[)",
+      "begin": "(\\\\deck[A-Za-z]+)\\s*(?=\\[)",
       "beginCaptures": {
         "1": {
           "name": "entity.name.type.deck"
-        },
-        "2": {
-          "name": "punctuation.definition.optional-arguments.begin.deck"
         }
       },
-      "end": "\\]|(?=[{}]|\\\\[A-Za-z@]|^\\s*$)",
-      "endCaptures": {
-        "0": {
-          "name": "punctuation.definition.optional-arguments.end.deck"
-        }
-      },
+      "end": "(?!\\G)",
       "patterns": [
         {
-          "include": "text.tex#comment"
-        },
-        {
-          "include": "#option"
+          "include": "#option-list"
         }
       ]
     },
     "command": {
       "match": "\\\\deck[A-Za-z]+",
       "name": "entity.name.type.deck"
+    },
+    "option-list": {
+      "begin": "\\[",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.optional-arguments.begin.deck"
+        }
+      },
+      "end": "\\]|(?=[{}]|\\\\[A-Za-z@]|^\\s*$)",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.optional-arguments.end.deck"
+        }
+      },
+      "patterns": [
+        {
+          "include": "text.tex#comment"
+        },
+        {
+          "include": "#option"
+        }
+      ]
     },
     "option": {
       "match": "([A-Za-z]+)\\s*(=)\\s*(?:([-+]?(?:\\d+\\.?\\d*|\\.\\d+))|([A-Za-z]+))?",
