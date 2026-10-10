@@ -94,7 +94,7 @@ export function Stage({
   version: number;
   onSetCanvasFontSize?: ((elementId: string, size: CanvasFontSize) => void) | undefined;
   onResizeCanvasElement?: ((elementId: string, width: number) => void) | undefined;
-  onMoveCanvasElement: (elementId: string, x: number, y: number) => void;
+  onMoveCanvasElement?: ((elementId: string, x: number, y: number) => void) | undefined;
   /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
   onDetachToCanvas?: ((request: DetachRequest) => void) | undefined;
   /** このフレームで選択中のキャンバス要素。選択の持ち主は親で、Stage はこの値から枠を描く。 */
@@ -442,7 +442,7 @@ export function Stage({
         drag.element.style.left = `${drag.x * 100}%`;
         drag.element.style.top = `${drag.y * 100}%`;
       } else {
-        onMoveCanvasElement(drag.id, raw.x, raw.y);
+        onMoveCanvasElement?.(drag.id, raw.x, raw.y);
       }
     }
     dragRef.current = undefined;

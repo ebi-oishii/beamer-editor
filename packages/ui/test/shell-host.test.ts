@@ -5,19 +5,25 @@ import { createMessageShellHost, type MessageTransport } from "../src/shell-host
 
 function makeTransport() {
   const posted: unknown[] = [];
-  let cb: ((msg: ExtensionToWebview) => void) | undefined;
+  const callbacks = new Set<(msg: ExtensionToWebview) => void>();
   const transport: MessageTransport = {
     post(msg) {
       posted.push(msg);
     },
     subscribe(c) {
-      cb = c;
+      callbacks.add(c);
       return () => {
-        cb = undefined;
+        callbacks.delete(c);
       };
     },
   };
-  return { transport, posted, receive: (msg: ExtensionToWebview) => cb?.(msg) };
+  return {
+    transport,
+    posted,
+    receive: (msg: ExtensionToWebview) => {
+      for (const cb of callbacks) cb(msg);
+    },
+  };
 }
 
 function deck(title: string): RenderedDeck {
@@ -62,6 +68,40 @@ describe("createMessageShellHost", () => {
       "v2b",
       "v3",
     ]);
+  });
+
+  it("接続世代が進むと version をリセットし、旧世代の deck/raw/frame を捨て、操作へ世代を付ける", () => {
+    const { transport, posted, receive } = makeTransport();
+    const host = createMessageShellHost(transport);
+    const decks: string[] = [];
+    const raws: string[] = [];
+    const frames: number[] = [];
+    host.subscribe((next) => decks.push(next.title));
+    host.onRawBlockImage?.((key) => raws.push(key));
+    host.onRevealFrame?.((index) => frames.push(index));
+    receive({ type: "deckUpdated", deck: deck("old"), version: 7, activeFrame: 0, generation: 1 });
+    receive({ type: "deckUpdated", deck: deck("new"), version: 1, activeFrame: 0, generation: 2 });
+    receive({
+      type: "deckUpdated",
+      deck: deck("stale"),
+      version: 8,
+      activeFrame: 0,
+      generation: 1,
+    });
+    receive({ type: "rawBlockReady", key: "old", pdfBase64: "x", generation: 1 });
+    receive({ type: "rawBlockReady", key: "new", pdfBase64: "x", generation: 2 });
+    receive({ type: "activeFrameChanged", frameIndex: 1, version: 1, generation: 1 });
+    receive({ type: "activeFrameChanged", frameIndex: 2, version: 1, generation: 2 });
+    host.jumpToSource(0, 1);
+    expect(decks).toEqual(["old", "new"]);
+    expect(raws).toEqual(["new"]);
+    expect(frames).toEqual([2]);
+    expect(posted).toContainEqual({
+      type: "jumpToSource",
+      frameIndex: 0,
+      version: 1,
+      generation: 2,
+    });
   });
 
   it("ナビ状態を WebviewStateStore へ保存・復元し、旧 state と不正 zoom を fit として扱う", () => {

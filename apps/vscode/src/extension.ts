@@ -47,6 +47,7 @@ import {
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
 import { executeHistoryCommand, PreviewHistory } from "./preview-history";
+import { planPreviewLayoutRestore, type SourceSide, sourceSideOfPreview } from "./preview-layout";
 import {
   affectsRawBlockCompile,
   dependencyFingerprint,
@@ -61,7 +62,7 @@ import {
   SlideOutlineRefreshScheduler,
   SlideOutlineState,
 } from "./slide-outline";
-import { resolveSourceViewColumn } from "./source-navigation";
+import { resolveJumpOffset, resolveSourceViewColumn } from "./source-navigation";
 import { detectBundledTectonic, resolveTectonicPath } from "./tectonic";
 import { baseStyleOf, nodeTemplateFileSystem, templateStatuses } from "./templates";
 import { YenBackslashCodeActionProvider } from "./yen-code-actions";
@@ -177,6 +178,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   const latexWorkshopSessionPrompted = new Set<string>();
   const lineFlash = createLineFlash();
   const previewSources = new Map<vscode.WebviewPanel, vscode.TextDocument>();
+  // #155: 配置復元で controller からパネルを引き、移した先のグループで #94 のロックを掛け直させる。
+  const previewHosts = new Map<
+    PreviewController,
+    { panel: vscode.WebviewPanel; resetGroupLock: () => void }
+  >();
   // Webview からの undo / redo(#103)。対象のソースへフォーカスを移してコマンドを実行し、終わったら
   // Webview へ戻す。要求は拡張全体で直列にし、押下時点の panel と文書に対して実行する。
   /** プレビューからの undo / redo を試す回数と、効かなかったときの待ち(ms)。 */
@@ -186,6 +192,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     panel: vscode.WebviewPanel;
     uri: vscode.Uri;
     viewColumn: vscode.ViewColumn | undefined;
+    isCurrent?: () => boolean;
   }>({
     apply: async (kind, target) => {
       const document =
@@ -649,6 +656,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   ): void {
     const prepared = previewLifecycle.prepareOpen(document.uri, automatic);
     if (prepared.kind === "existing") {
+      // 同じ URI を開き直すと TextDocument object/version は新しくなる。panel は作り直さない。
+      // ownership と previewSources の文書は onAttached が差し替える。
+      prepared.controller.attachDocument(document);
       if (!automatic) {
         // 同じグループの別タブの後ろに隠れていても表示する。preserveFocus ならフォーカスはソースに残す。
         prepared.controller.reveal(preserveFocus);
@@ -697,7 +707,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     };
     const viewStateSubscription = panel.onDidChangeViewState(() => {
       lockGroupIfActive();
-      if (panel.active) updateSlideOutline(isManaged(document) ? document : undefined);
+      // panel.viewColumn は tab の変化と別に届く。列が変わったら source の側を取り直す(#155)。
+      schedulePreviewTabReconciliation();
+      // 開き直した source は別の TextDocument になるので、作成時の document ではなく現在の接続先を見る。
+      const source = previewSources.get(panel);
+      if (panel.active) updateSlideOutline(source && isManaged(source) ? source : undefined);
     });
     lockGroupIfActive();
 
@@ -793,7 +807,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       vscode.workspace
         .getConfiguration("beamerEditor", document.uri)
         .get<boolean>("preview.compileRawBlocks", true);
-    const controller = new PreviewController(
+    let controller: PreviewController;
+    controller = new PreviewController(
       panel,
       {
         scriptUri: mediaUri("webview.js"),
@@ -806,11 +821,14 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       },
       () => {
         previewSources.delete(panel);
+        previewHosts.delete(controller);
         rawBlockCompiler.dispose();
         rawBlockSettings.dispose();
         templateWatcher.dispose();
         viewStateSubscription.dispose();
-        if (!previewLifecycle.panelDisposed(document.uri, controller)) return;
+        // TextDocument は tab を閉じても cache に残る。source tab の有無で「開いている」を判定する。
+        const sourceIsOpen = sourceTabUris().has(document.uri.toString());
+        if (!previewLifecycle.panelDisposed(document.uri, controller, sourceIsOpen)) return;
         if (previewController === controller) previewController = undefined;
       },
       {
@@ -824,6 +842,15 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           );
         },
         onWebviewReady: () => rawBlockCompiler.forgetDelivered(),
+        onDetached: () => rawBlockCompiler.reset(),
+        onAttached: (attached) => {
+          // controller には extension.ts が TextDocument だけを渡す。開き直した文書へスライド一覧・
+          // export・ownership の参照を差し替え、閉じる前の凍結した文書を見ないようにする。
+          const reopened = attached as vscode.TextDocument;
+          previewSources.set(panel, reopened);
+          previewLifecycle.sourceOpened(document.uri, reopened);
+          if (panel.active) updateSlideOutline(isManaged(reopened) ? reopened : undefined);
+        },
         onError: (message) => {
           void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
         },
@@ -837,9 +864,23 @@ export function activate(context: vscode.ExtensionContext): TestApi {
             ) ?? document;
           void jumpToOffset(target, offset, lineFlash, sourceViewColumn);
         },
+        navigateDetached: async (frameIndex) => {
+          // 凍結した TextDocument の offset は使わない。最新の文書を開き、再描画済みの
+          // ExpansionMap から frame を引き直してから移動する。
+          const target = await vscode.workspace.openTextDocument(document.uri);
+          controller.attachDocument(target);
+          const outcome = controller.latestOutcome;
+          const offset = outcome ? resolveJumpOffset(outcome, frameIndex) : null;
+          if (offset !== null) await jumpToOffset(target, offset, lineFlash, sourceViewColumn);
+        },
         // Webview からの Cmd/Ctrl+Z(#103)。押下時点の panel と文書を固定して列に入れる。
-        undoRedo: (kind) =>
-          previewHistory.request(kind, { panel, uri: document.uri, viewColumn: sourceViewColumn }),
+        undoRedo: (kind, generation, targetDocument): Promise<void> =>
+          previewHistory.request(kind, {
+            panel,
+            uri: document.uri,
+            viewColumn: sourceViewColumn,
+            isCurrent: (): boolean => controller.isCurrentConnection(generation, targetDocument),
+          }),
         resolveResource: (path) => {
           const uri = path.startsWith("/")
             ? vscode.Uri.file(path)
@@ -1020,6 +1061,13 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       controller.refresh();
     });
     context.subscriptions.push(templateWatcher, rawBlockSettings);
+    // 移した先のグループは未ロック。次にパネルがアクティブになったときに掛け直す(フォーカスは奪わない)。
+    previewHosts.set(controller, {
+      panel,
+      resetGroupLock: () => {
+        groupLocked = false;
+      },
+    });
     previewLifecycle.register(document.uri, controller, document, automatic);
     previewController = controller;
   }
@@ -1034,11 +1082,143 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     });
   }
 
+  /** テキストの tab がある URI ごとに、その tab を持つグループの列を集める。 */
+  function sourceTabColumns(): Map<string, number[]> {
+    const columns = new Map<string, number[]>();
+    for (const group of vscode.window.tabGroups?.all ?? []) {
+      for (const tab of group.tabs) {
+        if (!(tab.input instanceof vscode.TabInputText)) continue;
+        const uri = tab.input.uri.toString();
+        const list = columns.get(uri) ?? [];
+        if (!list.includes(group.viewColumn)) list.push(group.viewColumn);
+        columns.set(uri, list);
+      }
+    }
+    return columns;
+  }
+  /** source tab が開いている URI。TextDocument は tab を閉じても cache に残るので tab で判定する。 */
+  function sourceTabUris(): Set<string> {
+    return new Set(sourceTabColumns().keys());
+  }
+
+  function isPreviewTab(tab: vscode.Tab, panel: vscode.WebviewPanel): boolean {
+    return tab.input instanceof vscode.TabInputWebview && tab.label === panel.title;
+  }
+  /**
+   * パネルの tab があるグループ。panel.viewColumn は tab の変化より遅れて更新されうるので tab で引く。
+   * 同じ title のプレビューが複数あれば panel.viewColumn の列を優先する。
+   */
+  function previewTabGroup(panel: vscode.WebviewPanel): vscode.TabGroup | undefined {
+    const groups = vscode.window.tabGroups.all.filter((group) =>
+      group.tabs.some((tab) => isPreviewTab(tab, panel)),
+    );
+    return (
+      groups.find((group) => group.viewColumn === panel.viewColumn) ??
+      (groups.length === 1 ? groups[0] : undefined)
+    );
+  }
+
+  // #155: source tab を閉じて開き直したときのプレビューの配置復元。接続中に見た source の側を
+  // URI ごとに覚え(既定は ViewColumn.Beside で開いたときの左)、閉じた URI を復元待ちにする。
+  const sourceSides = new Map<string, SourceSide>();
+  const layoutRestorePending = new Set<string>();
+
+  /**
+   * 開き直した source が同じグループか右側に開いたら、プレビューを source の右へ移す。
+   * ロック済みのグループは空になっても自動では閉じないので、移した後に空いた元のグループを片付ける。
+   */
+  async function restorePreviewLayout(
+    controller: PreviewController,
+    sourceColumns: readonly number[],
+    sourceSide: SourceSide,
+  ): Promise<void> {
+    const host = previewHosts.get(controller);
+    if (!host) return;
+    const previousGroup = previewTabGroup(host.panel);
+    const target = planPreviewLayoutRestore({
+      previewColumn: previousGroup?.viewColumn ?? controller.viewColumn,
+      sourceColumns,
+      sourceSide,
+    });
+    if (target === undefined) return;
+    controller.moveTo(target);
+    host.resetGroupLock();
+    if (!previousGroup) return;
+    // reveal による移動は workbench 側で非同期に反映される。反映を短く待ってから元のグループを見る
+    // (列番号はずれうるので、移動前に取った group object で照合する)。
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (!vscode.window.tabGroups.all.includes(previousGroup)) return;
+      if (previousGroup.tabs.length === 0) {
+        await vscode.window.tabGroups.close(previousGroup, true);
+        return;
+      }
+      // source と同じグループから移した場合は、元のグループに source が残る。
+      if (!previousGroup.tabs.some((tab) => isPreviewTab(tab, host.panel))) return;
+    }
+  }
+
+  /** tabGroups の最終状態を基準に source 接続を保つ。TextDocument は tab を閉じても cache に残る。 */
+  let tabReconcileTimer: ReturnType<typeof setTimeout> | undefined;
+  const reconcilePreviewTabs = (): void => {
+    const columnsByUri = sourceTabColumns();
+    // 最後の source tab を閉じた文書は「閉じた」扱い。次に開いたら自動プレビューを再び開く。
+    previewLifecycle.sourceTabsChanged(new Set(columnsByUri.keys()));
+    for (const [uri, owner] of previewLifecycle.registry.entries()) {
+      const columns = columnsByUri.get(uri);
+      if (!columns) {
+        owner.controller.detachDocument();
+        layoutRestorePending.add(uri);
+        continue;
+      }
+      const current = vscode.workspace.textDocuments.find(
+        (document) => document.uri.toString() === uri,
+      );
+      if (current) owner.controller.attachDocument(current);
+      // 切断中のジャンプ(navigateDetached)は tab より先に接続するので、接続の遷移ではなく
+      // 「source tab が無かった URI に tab が戻った」ことを復元の契機にする。
+      if (layoutRestorePending.delete(uri)) {
+        void restorePreviewLayout(owner.controller, columns, sourceSides.get(uri) ?? "left").catch(
+          () => {},
+        );
+        continue;
+      }
+      const host = previewHosts.get(owner.controller);
+      const previewColumn =
+        (host && previewTabGroup(host.panel)?.viewColumn) ?? owner.controller.viewColumn;
+      const side = sourceSideOfPreview(previewColumn, columns);
+      if (side) sourceSides.set(uri, side);
+    }
+    // panel を閉じた URI の配置情報は持ち越さない。
+    for (const uri of [...layoutRestorePending]) {
+      if (!previewLifecycle.registry.get(uri)) layoutRestorePending.delete(uri);
+    }
+    for (const uri of [...sourceSides.keys()]) {
+      if (!previewLifecycle.registry.get(uri)) sourceSides.delete(uri);
+    }
+  };
+  const schedulePreviewTabReconciliation = (): void => {
+    clearTimeout(tabReconcileTimer);
+    tabReconcileTimer = setTimeout(() => {
+      tabReconcileTimer = undefined;
+      reconcilePreviewTabs();
+    }, 0);
+  };
+
   context.subscriptions.push(
     vscode.workspace.onDidCloseTextDocument((document) => {
-      previewLifecycle.sourceClosed(document.uri)?.close();
+      // tab の最終集合で切断する。TextDocument close は複数 tab / cache と一致しない。
+      schedulePreviewTabReconciliation();
       if (slideOutlineState.hasDocument(document)) updateSlideOutline(undefined);
     }),
+    vscode.workspace.onDidOpenTextDocument((document) => {
+      if (!isManaged(document)) return;
+      // openTextDocument だけでは source tab を開いたことにならない。tabGroups の最終状態で接続する。
+      schedulePreviewTabReconciliation();
+    }),
+    ...(vscode.window.tabGroups?.onDidChangeTabs
+      ? [vscode.window.tabGroups.onDidChangeTabs(() => schedulePreviewTabReconciliation())]
+      : []),
     vscode.workspace.onDidChangeTextDocument((event) => {
       if (
         hasSlideOutlineContentChanges(event.contentChanges) &&

@@ -8,7 +8,7 @@ import {
 } from "../src/preview-history";
 
 type Panel = { id: string };
-type Target = { panel: Panel; uri: string };
+type Target = { panel: Panel; uri: string; isCurrent?: () => boolean };
 
 function deferred(): { promise: Promise<void>; resolve: () => void; reject: (e: unknown) => void } {
   let resolve!: () => void;
@@ -78,6 +78,22 @@ describe("PreviewHistory", () => {
     pending[0]?.resolve();
     await operation;
     expect(host.reveal).not.toHaveBeenCalled();
+  });
+
+  it("待機列にある古い接続世代の要求は apply も reveal もしない", async () => {
+    const open = new Set([a.panel, b.panel]);
+    const { host, applied, pending } = makeHost(open);
+    const history = new PreviewHistory(host);
+    let current = true;
+    const first = history.request("undo", a);
+    const stale = history.request("redo", { ...b, isCurrent: () => current });
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    current = false;
+    pending[0]?.resolve();
+    await first;
+    await stale;
+    expect(applied).toEqual([["undo", a]]);
+    expect(host.reveal).toHaveBeenCalledTimes(1);
   });
 
   it("失敗した要求は onError へ回し、フォーカスは戻し、後続の要求は止めない", async () => {

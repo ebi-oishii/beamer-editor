@@ -16,18 +16,22 @@ export type ExtensionToWebview =
       deck: RenderedDeck;
       version: number;
       activeFrame: number;
+      /** 接続し直した同一 URI の古い更新を捨てるための接続世代。 */
+      generation?: number;
+      /** false の間は最後に描画した deck を閲覧専用で表示する。 */
+      sourceConnected?: boolean;
       /** 元ソースに明示された frame の index。マクロ展開だけの仮想 frame は含めない。 */
       editableFrameIndexes?: number[];
     }
-  | { type: "activeFrameChanged"; frameIndex: number; version: number }
+  | { type: "activeFrameChanged"; frameIndex: number; version: number; generation?: number }
   /** 生ブロックの部分コンパイル結果(#81)。key はプレースホルダの data-raw-key。pdfBase64 は standalone の PDF。 */
-  | { type: "rawBlockReady"; key: string; pdfBase64: string }
-  | { type: "rawBlockFailed"; key: string; message: string }
+  | { type: "rawBlockReady"; key: string; pdfBase64: string; generation?: number }
+  | { type: "rawBlockFailed"; key: string; message: string; generation?: number }
   /** 部分コンパイルを切ったとき、差し込み済みの画像を捨ててプレースホルダへ戻す。 */
-  | { type: "rawImagesCleared" }
-  | { type: "error"; message: string };
+  | { type: "rawImagesCleared"; generation?: number }
+  | { type: "error"; message: string; generation?: number };
 
-export type WebviewToExtension =
+export type WebviewToExtension = (
   | { type: "editSlide"; action: "moveUp" | "moveDown"; frameIndex: number; version: number }
   | {
       type: "setCanvasFontSize";
@@ -79,7 +83,8 @@ export type WebviewToExtension =
       sourceSpan: { start: number; end: number };
       /** スライド全体を 1 とした左上座標と幅。ホストが本文領域座標へ変換する。 */
       rect: { x: number; y: number; width: number };
-    };
+    }
+) & { generation?: number };
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
@@ -96,6 +101,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Extension → Webview を検証する。不正なら null。 */
 export function parseExtensionToWebview(raw: unknown): ExtensionToWebview | null {
   if (!isRecord(raw)) return null;
+  if ("generation" in raw && !isNonNegativeInteger(raw.generation)) return null;
   switch (raw.type) {
     case "deckUpdated":
       if (
@@ -112,29 +118,55 @@ export function parseExtensionToWebview(raw: unknown): ExtensionToWebview | null
           version: raw.version,
           activeFrame: raw.activeFrame,
           ...(editableFrameIndexes ? { editableFrameIndexes } : {}),
+          ...(isNonNegativeInteger(raw.generation) ? { generation: raw.generation } : {}),
+          ...(typeof raw.sourceConnected === "boolean"
+            ? { sourceConnected: raw.sourceConnected }
+            : {}),
         };
       }
       return null;
     case "activeFrameChanged":
       if (typeof raw.frameIndex === "number" && typeof raw.version === "number") {
-        return { type: "activeFrameChanged", frameIndex: raw.frameIndex, version: raw.version };
+        return {
+          type: "activeFrameChanged",
+          frameIndex: raw.frameIndex,
+          version: raw.version,
+          ...(isNonNegativeInteger(raw.generation) ? { generation: raw.generation } : {}),
+        };
       }
       return null;
     case "rawBlockReady":
       if (typeof raw.key === "string" && typeof raw.pdfBase64 === "string") {
-        return { type: "rawBlockReady", key: raw.key, pdfBase64: raw.pdfBase64 };
+        return {
+          type: "rawBlockReady",
+          key: raw.key,
+          pdfBase64: raw.pdfBase64,
+          ...(isNonNegativeInteger(raw.generation) ? { generation: raw.generation } : {}),
+        };
       }
       return null;
     case "rawBlockFailed":
       if (typeof raw.key === "string" && typeof raw.message === "string") {
-        return { type: "rawBlockFailed", key: raw.key, message: raw.message };
+        return {
+          type: "rawBlockFailed",
+          key: raw.key,
+          message: raw.message,
+          ...(isNonNegativeInteger(raw.generation) ? { generation: raw.generation } : {}),
+        };
       }
       return null;
     case "rawImagesCleared":
-      return { type: "rawImagesCleared" };
+      return {
+        type: "rawImagesCleared",
+        ...(isNonNegativeInteger(raw.generation) ? { generation: raw.generation } : {}),
+      };
     case "error":
       if (typeof raw.message === "string") {
-        return { type: "error", message: raw.message };
+        return {
+          type: "error",
+          message: raw.message,
+          ...(isNonNegativeInteger(raw.generation) ? { generation: raw.generation } : {}),
+        };
       }
       return null;
     default:
@@ -145,6 +177,7 @@ export function parseExtensionToWebview(raw: unknown): ExtensionToWebview | null
 /** Webview → Extension を検証する。不正なら null。 */
 export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null {
   if (!isRecord(raw)) return null;
+  if ("generation" in raw && !isNonNegativeInteger(raw.generation)) return null;
   switch (raw.type) {
     case "editSlide":
       return (raw.action === "moveUp" || raw.action === "moveDown") &&

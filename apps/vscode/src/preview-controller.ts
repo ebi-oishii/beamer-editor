@@ -22,6 +22,8 @@ export interface PreviewPanel {
     postMessage(msg: unknown): Thenable<boolean>;
     onDidReceiveMessage(listener: (msg: unknown) => void): vscode.Disposable;
   };
+  /** パネルのあるエディタグループの列(#155 の配置復元)。 */
+  readonly viewColumn?: vscode.ViewColumn | undefined;
   onDidDispose(listener: () => void): vscode.Disposable;
   reveal(viewColumn?: vscode.ViewColumn, preserveFocus?: boolean): void;
   dispose(): void;
@@ -93,17 +95,27 @@ export interface PreviewControllerOptions {
    * エディタ操作は vscode API が要るため extension.ts が注入する。既定は何もしない。
    */
   navigate?: (offset: number) => void;
+  /** 切断中のジャンプは、最新の source を開いて再描画してから host が解決する。 */
+  navigateDetached?: (frameIndex: number) => void | Promise<void>;
   /** 描画が成功するたびに呼ぶ(生ブロックの部分コンパイルの起点。#81)。 */
   onRendered?: (outcome: RenderOutcome) => void;
   /**
    * Webview が (再)生成されて ready を送ったとき。差し込み済み画像の再送のために done を捨てる。
    */
   onWebviewReady?: () => void;
+  /** source を切り離すときに、その接続に属する非同期 work を取り消す。 */
+  onDetached?: () => void;
+  /** 開き直した source を (再) 接続したとき。host 側が保持する文書参照を差し替える。 */
+  onAttached?: (document: PreviewDocument) => void;
   /**
    * Webview からの取り消し / やり直し要求(Cmd/Ctrl+Z。#103)。エディタ操作は vscode API が要るため
    * extension.ts が注入する。既定は何もしない。
    */
-  undoRedo?: (kind: "undo" | "redo") => void | Promise<void>;
+  undoRedo?: (
+    kind: "undo" | "redo",
+    generation: number,
+    document: PreviewDocument,
+  ) => void | Promise<void>;
   /**
    * 画像などローカルリソースのパスを Webview で読める URI へ変換する
    * (asWebviewUri。extension.ts が注入)。未指定なら書き換えない。
@@ -274,12 +286,19 @@ export class PreviewController implements vscode.Disposable {
   private readonly onError: (message: string) => void;
   private readonly onWarning: (message: string) => void;
   private readonly navigate: (offset: number) => void;
-  private readonly undoRedo: (kind: "undo" | "redo") => void | Promise<void>;
+  private readonly navigateDetached: ((frameIndex: number) => void | Promise<void>) | undefined;
+  private readonly undoRedo: (
+    kind: "undo" | "redo",
+    generation: number,
+    document: PreviewDocument,
+  ) => void | Promise<void>;
   private readonly resolveResource: ((path: string) => string) | undefined;
   private readonly setCanvasFontSize: PreviewControllerOptions["setCanvasFontSize"];
   private readonly resizeCanvasElement: PreviewControllerOptions["resizeCanvasElement"];
   private readonly onRendered: (outcome: RenderOutcome) => void;
   private readonly onWebviewReady: () => void;
+  private readonly onDetached: () => void;
+  private readonly onAttached: (document: PreviewDocument) => void;
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
   private readonly detachToCanvas: PreviewControllerOptions["detachToCanvas"];
   private readonly editSlide: PreviewControllerOptions["editSlide"];
@@ -317,6 +336,9 @@ export class PreviewController implements vscode.Disposable {
   private pendingReveal: { offset: number; onlyIfChanged: boolean } | undefined;
   /** 直近にソース側から表示させたフレーム。カーソル追従で同じフレーム内の移動を無視する。 */
   private lastRevealedFrame: number | undefined;
+  /** close → reopen の間に完了する非同期操作を隔離する接続世代。 */
+  private connectionGeneration = 0;
+  private attached = true;
 
   /**
    * プレビュー対象の文書。エディタタブを閉じると TextDocument は close され
@@ -338,12 +360,15 @@ export class PreviewController implements vscode.Disposable {
     this.onError = options.onError ?? (() => {});
     this.onWarning = options.onWarning ?? (() => {});
     this.navigate = options.navigate ?? (() => {});
+    this.navigateDetached = options.navigateDetached;
     this.undoRedo = options.undoRedo ?? (() => {});
     this.resolveResource = options.resolveResource;
     this.setCanvasFontSize = options.setCanvasFontSize;
     this.resizeCanvasElement = options.resizeCanvasElement;
     this.onRendered = options.onRendered ?? (() => {});
     this.onWebviewReady = options.onWebviewReady ?? (() => {});
+    this.onDetached = options.onDetached ?? (() => {});
+    this.onAttached = options.onAttached ?? (() => {});
     this.moveCanvasElement = options.moveCanvasElement;
     this.detachToCanvas = options.detachToCanvas;
     this.editSlide = options.editSlide;
@@ -362,6 +387,54 @@ export class PreviewController implements vscode.Disposable {
   /** 最後に成功したレンダリング結果(未成功なら undefined)。 */
   get latestOutcome(): RenderOutcome | undefined {
     return this.latest;
+  }
+
+  /** 統合テスト用: source と接続中か。 */
+  get isAttached(): boolean {
+    return this.attached;
+  }
+
+  /** 統合テストと host 操作の世代照合用。 */
+  get generation(): number {
+    return this.connectionGeneration;
+  }
+
+  /** 非同期 host 操作が開始時の source 接続へまだ属するかを確認する。 */
+  isCurrentConnection(generation: number, document: PreviewDocument): boolean {
+    return (
+      !this.disposed &&
+      this.attached &&
+      this.connectionGeneration === generation &&
+      this.document === document
+    );
+  }
+
+  /** source tab を閉じても panel は残し、最後の描画を閲覧専用にする。 */
+  detachDocument(): void {
+    if (this.disposed || !this.attached) return;
+    this.attached = false;
+    this.connectionGeneration += 1;
+    clearTimeout(this.debounceTimer);
+    this.debounceTimer = undefined;
+    this.pendingMovedSlide = undefined;
+    this.editApplyPending = false;
+    this.editAwaitingVersion = undefined;
+    this.onDetached();
+    if (this.latest) this.sendDeck(true);
+  }
+
+  /** 同じ URI を開き直したら、既存 panel に新しい TextDocument を接続して即時再描画する。 */
+  attachDocument(document: PreviewDocument): void {
+    if (this.disposed) return;
+    if (this.attached && this.document === document) return;
+    this.document = document;
+    this.attached = true;
+    this.connectionGeneration += 1;
+    this.pendingMovedSlide = undefined;
+    this.editApplyPending = false;
+    this.editAwaitingVersion = undefined;
+    this.onAttached(document);
+    this.sendDeck();
   }
 
   /**
@@ -414,8 +487,21 @@ export class PreviewController implements vscode.Disposable {
   }
 
   private async dispatchMessage(raw: unknown): Promise<void> {
+    // shell host は現在の接続世代を全 UI 操作へ透過的に付ける。parser の公開契約を
+    // 互換のため広げず、ここで raw の世代だけを照合する。
+    const generation =
+      typeof raw === "object" &&
+      raw !== null &&
+      typeof (raw as { generation?: unknown }).generation === "number"
+        ? (raw as { generation: number }).generation
+        : undefined;
+    if (generation !== undefined && generation !== this.connectionGeneration) return;
     const msg = parseWebviewToExtension(raw);
     if (!msg) return;
+    // 再接続後は旧 Webview から世代なしで届く操作を legacy として受け入れない。
+    if (this.connectionGeneration > 0 && generation === undefined && msg.type !== "ready") return;
+    // 閉じた source の古い UI 操作は、ジャンプ以外すべて無効にする。
+    if (!this.attached && msg.type !== "jumpToSource" && msg.type !== "ready") return;
     if (msg.type === "ready") {
       this.onWebviewReady();
       this.sendDeck();
@@ -432,14 +518,18 @@ export class PreviewController implements vscode.Disposable {
     } else if (msg.type === "deleteCanvasElement") {
       await this.handleDelete(msg);
     } else if (msg.type === "copyCanvasElement") {
-      await this.enqueueClipboard(() => this.handleCopy(msg));
+      const operationGeneration = this.connectionGeneration;
+      await this.enqueueClipboard(() => this.handleCopy(msg, operationGeneration));
     } else if (msg.type === "pasteCanvasElements") {
-      await this.enqueueClipboard(() => this.handlePaste(msg));
+      const operationGeneration = this.connectionGeneration;
+      await this.enqueueClipboard(() => this.handlePaste(msg, operationGeneration));
     } else if (msg.type === "undoRedo") {
       // 注入された処理は同期で呼び出し、同期の例外も非同期の rejection も onError へ回す。
       const report = () => this.onError(`failed to ${msg.kind} the source document.`);
       try {
-        await this.undoRedo(msg.kind);
+        const document = this.document;
+        const operationGeneration = this.connectionGeneration;
+        await this.undoRedo(msg.kind, operationGeneration, document);
       } catch {
         report();
       }
@@ -863,12 +953,16 @@ export class PreviewController implements vscode.Disposable {
   }
 
   /** 選択中のキャンバス要素のソースをクリップボードへ写す(Cmd+C)。cut(Cmd+X)なら続けて取り除く。 */
-  private async handleCopy(request: {
-    frameIndex: number;
-    elementId: string;
-    version: number;
-    cut: boolean;
-  }): Promise<void> {
+  private async handleCopy(
+    request: {
+      frameIndex: number;
+      elementId: string;
+      version: number;
+      cut: boolean;
+    },
+    generation: number,
+  ): Promise<void> {
+    if (!this.isCurrentConnection(generation, this.document)) return;
     // 切り取りは削除まで一続きの操作。削除を受け付けられない状態でコピーだけ通すと、
     // 貼り付けが「移動」でなく「複製」になる。削除と同じガードで先に弾く。
     if (request.cut && this.editInFlight()) {
@@ -900,7 +994,7 @@ export class PreviewController implements vscode.Disposable {
     } catch {
       copied = false;
     }
-    if (this.disposed) return;
+    if (!this.isCurrentConnection(generation, document)) return;
     if (!copied) {
       this.onWarning("Canvas element was not copied. Try selecting it again.");
       this.sendDeck();
@@ -910,7 +1004,11 @@ export class PreviewController implements vscode.Disposable {
   }
 
   /** クリップボードのキャンバス要素を、表示中のフレームへ貼り付ける(Cmd+V。#148)。 */
-  private async handlePaste(request: { frameIndex: number; version: number }): Promise<void> {
+  private async handlePaste(
+    request: { frameIndex: number; version: number },
+    generation: number,
+  ): Promise<void> {
+    if (!this.isCurrentConnection(generation, this.document)) return;
     if (this.editInFlight()) return;
     const latest = this.latest;
     if (
@@ -935,7 +1033,7 @@ export class PreviewController implements vscode.Disposable {
         document,
       });
       this.editApplyPending = false;
-      if (this.disposed) return;
+      if (!this.isCurrentConnection(generation, document)) return;
       if (result === "applied") {
         this.editAwaitingVersion = version;
         if (this.document.version !== version) this.sendDeck();
@@ -972,6 +1070,10 @@ export class PreviewController implements vscode.Disposable {
    * いた場合(未 debounce の編集が保留中の場合を含む)は移動せず、再描画だけを送る。
    */
   private handleJump(frameIndex: number, version: number): void {
+    if (!this.attached) {
+      void this.navigateDetached?.(frameIndex);
+      return;
+    }
     const latest = this.latest;
     if (!latest || version !== this.document.version || latest.version !== this.document.version) {
       this.sendDeck();
@@ -988,10 +1090,8 @@ export class PreviewController implements vscode.Disposable {
    */
   private handleDocumentChange(event: PreviewDocumentChangeEvent): void {
     if (this.disposed) return;
-    if (event.document.uri.toString() !== this.document.uri.toString()) return;
-    if (event.document !== this.document) this.pendingMovedSlide = undefined;
-    // close → 再オープンで新しい TextDocument になっても追従できるよう差し替える。
-    this.document = event.document;
+    if (!this.attached) return;
+    if (event.document !== this.document) return;
     if (event.contentChanges.length === 0) return;
     clearTimeout(this.debounceTimer);
     this.debounceTimer = setTimeout(() => this.sendDeck(), RENDER_DEBOUNCE_MS);
@@ -1003,15 +1103,20 @@ export class PreviewController implements vscode.Disposable {
    * 予期しない例外時は deckUpdated を送らず最後に成功したプレビューを残し、
    * error メッセージと onError で通知だけする(VS-3 のエラー方針)。
    */
-  private sendDeck(): void {
+  private sendDeck(snapshotOnly = false): void {
     if (this.disposed) return;
     let message: ExtensionToWebview;
     try {
       const renderedDocument = this.document;
-      const outcome = this.render(renderedDocument.getText(), renderedDocument.version);
-      this.latest = outcome;
-      this.latestDocument = renderedDocument;
-      this.onRendered(outcome);
+      const outcome = snapshotOnly
+        ? this.latest
+        : this.render(renderedDocument.getText(), renderedDocument.version);
+      if (!outcome) return;
+      if (!snapshotOnly) {
+        this.latest = outcome;
+        this.latestDocument = renderedDocument;
+        this.onRendered(outcome);
+      }
       if (this.editAwaitingVersion !== undefined && outcome.version !== this.editAwaitingVersion) {
         this.editAwaitingVersion = undefined;
       }
@@ -1033,6 +1138,8 @@ export class PreviewController implements vscode.Disposable {
         deck,
         version: outcome.version,
         activeFrame: 0,
+        generation: this.connectionGeneration,
+        sourceConnected: this.attached,
         editableFrameIndexes: outcome.deck.frames.flatMap((_, index) => {
           const offset = resolveJumpOffset(outcome, index);
           return offset !== null &&
@@ -1066,26 +1173,35 @@ export class PreviewController implements vscode.Disposable {
   }
 
   /** 生ブロックの部分コンパイル結果を Webview へ送る(#81)。 */
-  postRawBlockReady(key: string, pdf: Uint8Array): void {
+  postRawBlockReady(key: string, pdf: Uint8Array, generation = this.connectionGeneration): void {
     if (this.disposed) return;
     const message: ExtensionToWebview = {
       type: "rawBlockReady",
       key,
       pdfBase64: Buffer.from(pdf).toString("base64"),
+      generation,
     };
     void this.panel.webview.postMessage(message);
   }
 
-  postRawBlockFailed(key: string, message: string): void {
+  postRawBlockFailed(key: string, message: string, generation = this.connectionGeneration): void {
     if (this.disposed) return;
-    const msg: ExtensionToWebview = { type: "rawBlockFailed", key, message };
+    const msg: ExtensionToWebview = {
+      type: "rawBlockFailed",
+      key,
+      message,
+      generation,
+    };
     void this.panel.webview.postMessage(msg);
   }
 
   /** 部分コンパイルを切ったとき、Webview 側の差し込み済み画像を捨てる。 */
   postRawImagesCleared(): void {
     if (this.disposed) return;
-    const message: ExtensionToWebview = { type: "rawImagesCleared" };
+    const message: ExtensionToWebview = {
+      type: "rawImagesCleared",
+      generation: this.connectionGeneration,
+    };
     void this.panel.webview.postMessage(message);
   }
 
@@ -1095,6 +1211,17 @@ export class PreviewController implements vscode.Disposable {
    */
   reveal(preserveFocus = false): void {
     this.panel.reveal(undefined, preserveFocus);
+  }
+
+  /** パネルのある列。破棄後や列が決まっていないときは undefined。 */
+  get viewColumn(): vscode.ViewColumn | undefined {
+    return this.disposed ? undefined : this.panel.viewColumn;
+  }
+
+  /** パネルを別の列へ移す(#155 の配置復元)。既定ではフォーカスを動かさない。 */
+  moveTo(viewColumn: vscode.ViewColumn, preserveFocus = true): void {
+    if (this.disposed) return;
+    this.panel.reveal(viewColumn, preserveFocus);
   }
 
   dispose(): void {
