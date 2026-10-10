@@ -69,6 +69,9 @@ pnpm --dir packages/cli deck check talk.slide.tex --tectonic /path/to/tectonic -
 
 診断なし（または情報のみ）は終了コード 0、警告は 1、lint エラーは 2、Tectonic・入出力・
 使用法などの操作失敗は 3 で終了する。`--json` の操作失敗は stderr に出力される。
+コンパイルが失敗した(`E_COMPILE`)デッキに lint エラーがあれば、原因の手がかりとして
+それも添える(テキストではメッセージの後、`--json` では `error.diagnostics`)。
+`deck export --format pdf` も同じ。
 
 ### デッキ編集スキルの生成
 

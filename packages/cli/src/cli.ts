@@ -258,6 +258,40 @@ function writeError(code: CliErrorCode, message: string, json: boolean): void {
   }
 }
 
+/**
+ * E_COMPILE に、同じデッキの lint error を添えて出す。古い管理プリアンブル(L025)のように
+ * lint が原因を先に検出できる失敗を、TeX のエラーだけで終わらせない。lint error が無ければ
+ * 通常の E_COMPILE と同じ出力になる。
+ */
+function writeCompileError(
+  message: string,
+  json: boolean,
+  file: string,
+  source: string,
+  diagnostics: readonly LintDiagnostic[],
+): void {
+  const errors = lintJson(
+    file,
+    source,
+    diagnostics.filter((diagnostic) => diagnostic.severity === "error"),
+  ).diagnostics;
+  if (errors.length === 0) {
+    writeError("E_COMPILE", message, json);
+    return;
+  }
+  if (json) {
+    process.stderr.write(
+      `${JSON.stringify({ error: { code: "E_COMPILE", message, diagnostics: errors } }, null, 2)}\n`,
+    );
+    return;
+  }
+  process.stderr.write(`${message}\nlint のエラー(コンパイル失敗の原因かもしれません):\n`);
+  for (const entry of errors)
+    process.stderr.write(
+      `${file}:${entry.location.line}:${entry.location.column}: error ${entry.code}: ${entry.message}\n`,
+    );
+}
+
 function location(source: string, offset: number) {
   const before = source.slice(0, offset);
   const line = before.split("\n").length;
@@ -542,7 +576,9 @@ async function runCheck(parsed: ParsedCheckArgs, dependencies: CliDependencies):
       possibleCode !== undefined && possibleCode in ERROR_EXIT_CODE
         ? (possibleCode as CliErrorCode)
         : "E_INTERNAL";
-    writeError(code, errorMessage(error), parsed.json);
+    if (code === "E_COMPILE")
+      writeCompileError(errorMessage(error), parsed.json, input, source, lintDiagnostics);
+    else writeError(code, errorMessage(error), parsed.json);
     return exitCodeForError(code);
   }
   const diagnostics = [
@@ -978,7 +1014,18 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
       possibleCode !== undefined && possibleCode in ERROR_EXIT_CODE
         ? (possibleCode as CliErrorCode)
         : "E_INTERNAL";
-    writeError(code, errorMessage(error), parsed.json);
+    // lint は失敗したときだけ走らせる(成功時の書き出しを遅くしない)。
+    const source =
+      code === "E_COMPILE" ? await readFile(resolve(input), "utf8").catch(() => null) : null;
+    if (source === null) writeError(code, errorMessage(error), parsed.json);
+    else
+      writeCompileError(
+        errorMessage(error),
+        parsed.json,
+        input,
+        source,
+        lintSource(source, createNodeFileProbes(dirname(resolve(input)))),
+      );
     return exitCodeForError(code);
   }
 }
