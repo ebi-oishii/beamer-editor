@@ -236,6 +236,7 @@ export type BlockNode =
   | ColumnsNode
   | BlockEnvNode
   | CenterNode
+  | BlockGroupNode
   | TableNode
   | ImageNode
   | DisplayMathNode
@@ -300,6 +301,15 @@ export interface BlockEnvNode extends BaseNode {
 
 export interface CenterNode extends BaseNode {
   type: "center";
+  children: BlockNode[];
+}
+
+/**
+ * 空行やブロック要素をまたぐ波括弧のグループ `{…}`。中の宣言は `}` で終わり、括弧は表示しない。
+ * 段落の中で閉じるグループはインラインの `group`。
+ */
+export interface BlockGroupNode extends BaseNode {
+  type: "blockGroup";
   children: BlockNode[];
 }
 
@@ -395,10 +405,10 @@ export interface CanvasTextNode extends BaseNode {
   invalidSize: InvalidCanvasFontSize | null;
   /**
    * decktext 内の許容語彙(§2.8): paragraph(インライン要素・数式・改行)、
-   * displayMath と 3 段までのリスト。深さ・内容の逸脱は L014 が検査する
-   * (パーサは BlockNode として読めるものは読む)。
+   * displayMath と 3 段までのリスト。それらを包む波括弧のグループ(中身も同じ語彙)。
+   * 深さ・内容の逸脱は L014 が検査する(パーサは BlockNode として読めるものは読む)。
    */
-  children: Array<ParagraphNode | DisplayMathNode | ListNode | RawBlockNode>;
+  children: Array<ParagraphNode | DisplayMathNode | ListNode | BlockGroupNode | RawBlockNode>;
 }
 
 export interface CanvasImageNode extends BaseNode {

@@ -543,6 +543,27 @@ ordinary text
     expect(raw).toEqual(["\\color{red;position:fixed}", "\\textcolor{red;inset:0}{B}"]);
   });
 
+  it("ブロックのグループの中も、本文と decktext の検査の対象にする", () => {
+    const source = deck(`
+\\begin{frame}[label=g]{Group}
+{\\small A \\unknowncommand
+
+B}
+\\begin{deckcanvas}
+\\begin{decktext}[x=0.100,y=0.200,w=0.500,size=normal]
+{\\small C
+
+D}
+\\end{decktext}
+\\end{deckcanvas}
+\\end{frame}`);
+
+    const codes = lintDeck(parseDeck(source)).map((entry) => entry.code);
+
+    expect(codes).toContain("L001");
+    expect(codes).not.toContain("L014");
+  });
+
   it("到達しないオーバーレイのステップを L005 で報告し、連続範囲は許可する", () => {
     const source = deck(`
 \\begin{frame}{Overlay}

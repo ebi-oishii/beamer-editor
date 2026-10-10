@@ -13,10 +13,12 @@ import { CANVAS_FONT_SIZES } from "./ast.js";
 
 import type {
   AspectRatio,
+  BlockGroupNode,
   BlockNode,
   CanvasFontSize,
   CanvasItemNode,
   CanvasNode,
+  CanvasTextNode,
   ColumnNode,
   DeckDocument,
   DeckElement,
@@ -732,6 +734,17 @@ class Parser {
         pos++;
         continue;
       }
+      if (ch === "{") {
+        // 空行やブロック要素をまたぐグループは段落を区切ってブロックのグループにする。
+        // 段落の中で閉じるグループはここでは読まず、parseInlines がインラインの group にする。
+        const group = this.blockGroupAt(pos, end);
+        if (group) {
+          flushPara(pos);
+          out.push(group);
+          pos = group.span.end;
+          continue;
+        }
+      }
       if (this.src.startsWith("\\begin{", pos)) {
         flushPara(pos);
         const parsed = this.parseEnvironment(pos, end);
@@ -802,6 +815,17 @@ class Parser {
     }
     flushPara(end);
     return out;
+  }
+
+  /** pos の `{` が空行かブロック要素をまたいで閉じるなら、そのグループ。段落の中で閉じるなら null。 */
+  private blockGroupAt(pos: number, limit: number): BlockGroupNode | null {
+    const close = readBalanced(this.src, pos);
+    if (close === null || close >= limit) return null;
+    const children = this.parseBlocks(pos + 1, close);
+    const crossesBlock =
+      blankLineAt(this.src, pos + 1, close) < close ||
+      children.some((block) => block.type !== "paragraph");
+    return crossesBlock ? { type: "blockGroup", children, span: span(pos, close + 1) } : null;
   }
 
   /**
@@ -1247,14 +1271,16 @@ class Parser {
           continue;
         }
         const contentStart = optClose === null ? optOpen : optClose + 1;
-        const children = this.parseBlocks(contentStart, envEnd).map((b) =>
-          b.type === "paragraph" ||
-          b.type === "displayMath" ||
-          b.type === "list" ||
-          b.type === "rawBlock"
-            ? b
-            : this.rawBlock(b.span.start, b.span.end, null, "canvas-unsupported-content"),
-        );
+        const decktextBlock = (b: BlockNode): CanvasTextNode["children"][number] =>
+          b.type === "blockGroup"
+            ? { ...b, children: b.children.map(decktextBlock) }
+            : b.type === "paragraph" ||
+                b.type === "displayMath" ||
+                b.type === "list" ||
+                b.type === "rawBlock"
+              ? b
+              : this.rawBlock(b.span.start, b.span.end, null, "canvas-unsupported-content");
+        const children = this.parseBlocks(contentStart, envEnd).map(decktextBlock);
         items.push({
           type: "canvasText",
           position: {

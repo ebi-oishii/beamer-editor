@@ -35,6 +35,8 @@ function kindLabel(element: HTMLElement, kind: string): string {
       return "ブロック";
     case "center":
       return "中央寄せ";
+    case "blockGroup":
+      return "グループ";
     case "table":
       return "表";
     case "displayMath":

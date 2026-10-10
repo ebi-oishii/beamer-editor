@@ -61,6 +61,7 @@ function collectBlockReplacements(block: BlockNode, replacements: Replacement[])
       break;
     case "blockEnv":
     case "center":
+    case "blockGroup":
       for (const child of block.children) collectBlockReplacements(child, replacements);
       break;
     default:

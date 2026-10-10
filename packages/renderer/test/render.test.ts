@@ -644,6 +644,25 @@ Other
     expect(Object.keys(NAMED_COLORS).sort()).toEqual([...XCOLOR_BASE_NAMES].sort());
   });
 
+  it("空行をまたぐグループの宣言はグループの中だけに効き、波括弧は表示しない", () => {
+    const out = html("{\\small First\n\nSecond\n}\n\nNormal");
+    expect(out).toContain('<span style="font-size:10pt"> First</span>');
+    expect(out).toMatch(
+      /<div class="declared" style="font-size:10pt"><p[^>]*>Second <\/p><\/div><\/div><p[^>]*>Normal /,
+    );
+    expect(out).not.toContain("{");
+    expect(out).not.toContain("}");
+  });
+
+  it("外側の宣言はグループの中にも効き、中の宣言はグループの中のブロック環境にも効く", () => {
+    const out = html(
+      "\\bfseries\n{\\color{red}\nIntro\n\\begin{itemize}\n\\item A\n\\end{itemize}\n}\nC",
+    );
+    expect(out).toMatch(/<div class="declared" style="font-weight:bold"><div class="block-group"/);
+    expect(out).toMatch(/<div class="declared" style="color:#e74c3c"><ul/);
+    expect(out).toMatch(/<div class="declared" style="font-weight:bold"><p[^>]*>C /);
+  });
+
   it("箇条書きの最初の \\item より前の宣言は全項目に効き、環境の外へ漏れない", () => {
     for (const [kind, tag] of [
       ["itemize", "ul"],

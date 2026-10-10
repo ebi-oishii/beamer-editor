@@ -633,6 +633,71 @@ describe("parseDeck: よく使う整形命令(#180)", () => {
     expect(types("\\cite[p.~3]{knuth84}")).toEqual(["rawInline"]);
   });
 
+  it("空行やブロック要素をまたぐ波括弧はブロックのグループにする", () => {
+    expect(blocks("{\\small First\n\nSecond\n}\n\nNormal")).toMatchObject([
+      {
+        type: "blockGroup",
+        children: [
+          {
+            type: "paragraph",
+            children: [
+              { type: "declaration", name: "small" },
+              { type: "text", value: " First" },
+            ],
+          },
+          { type: "paragraph", children: [{ type: "text", value: "Second " }] },
+        ],
+      },
+      { type: "paragraph", children: [{ type: "text", value: "Normal " }] },
+    ]);
+    // 段落の途中で始まるグループは、そこまでの段落を確定してからグループにする。
+    const [lead, group, after] = blocks(
+      "Lead {\\color{red}\nIntro\n\\begin{itemize}\n\\item A\n\\end{itemize}\n} after",
+    );
+    expect(lead).toMatchObject({ type: "paragraph", children: [{ type: "text", value: "Lead " }] });
+    expect(group?.type === "blockGroup" && group.children.map((block) => block.type)).toEqual([
+      "paragraph",
+      "list",
+    ]);
+    expect(after).toMatchObject({
+      type: "paragraph",
+      children: [{ type: "text", value: "after " }],
+    });
+  });
+
+  it("段落の中で閉じるグループはインラインのまま、閉じないグループはこれまでどおり本文に残す", () => {
+    expect(blocks("A {\\small B} C")).toMatchObject([
+      { type: "paragraph", children: [{ type: "text" }, { type: "group" }, { type: "text" }] },
+    ]);
+    expect(blocks("{\\small First\n\nSecond")).toMatchObject([
+      { type: "paragraph", children: [{ type: "text", value: "{" }, { type: "declaration" }, {}] },
+      { type: "paragraph", children: [{ type: "text", value: "Second " }] },
+    ]);
+  });
+
+  it("decktext の中のブロックのグループは中身を decktext の語彙で読む", () => {
+    const [canvas] = blocks(
+      "\\begin{deckcanvas}\n\\begin{decktext}[x=0.100,y=0.200,w=0.500,size=normal]\n{\\small A\n\n\\includegraphics{a.png}}\n\\end{decktext}\n\\end{deckcanvas}",
+    );
+    expect(canvas).toMatchObject({
+      type: "canvas",
+      items: [
+        {
+          type: "canvasText",
+          children: [
+            {
+              type: "blockGroup",
+              children: [
+                { type: "paragraph" },
+                { type: "rawBlock", reason: "canvas-unsupported-content" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("箇条書きの最初の \\item より前の宣言を list に残す", () => {
     for (const kind of ["itemize", "enumerate"]) {
       const [list] = blocks(

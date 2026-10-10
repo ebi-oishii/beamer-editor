@@ -723,6 +723,9 @@ class FrameRenderer {
       }
       case "center":
         return `<div class="center"${this.flowBlockAttrs(block)}>${this.renderBlocks(block.children)}</div>`;
+      case "blockGroup":
+        // 中の宣言は `}` で終わる(新しい状態で描く)。外側の宣言は包む要素から CSS で引き継ぐ。
+        return `<div class="block-group"${this.flowBlockAttrs(block)}>${this.renderBlocks(block.children)}</div>`;
       case "table": {
         const rules = block.rows.filter((r) => r.type === "tableRule").length;
         let html = `<table class="tabular${rules > 0 ? " booktabs" : ""}"${this.flowBlockAttrs(block)}>`;

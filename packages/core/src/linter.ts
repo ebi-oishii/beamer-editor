@@ -419,6 +419,7 @@ function visitBlocks(blocks: BlockNode[], visitor: (block: BlockNode) => void): 
         break;
       case "blockEnv":
       case "center":
+      case "blockGroup":
         visitBlocks(block.children, visitor);
         break;
       case "canvas":
@@ -663,6 +664,10 @@ function lintCanvas(canvas: CanvasNode): LintDiagnostic[] {
     const visitTextBlocks = (blocks: BlockNode[], listDepth: number): void => {
       for (const block of blocks) {
         if (block.type === "paragraph" || block.type === "displayMath") {
+          continue;
+        }
+        if (block.type === "blockGroup") {
+          visitTextBlocks(block.children, listDepth);
           continue;
         }
         if (block.type === "rawBlock") {
