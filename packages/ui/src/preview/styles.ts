@@ -290,17 +290,77 @@ export const PREVIEW_CSS = `
   margin-bottom: 7pt;
 }
 .slide .beamer-block .block-title {
-  color: var(--deck-structure, #3333b3);
+  color: var(--deck-block-title-fg, var(--deck-structure, #3333b3));
   font-weight: 600;
 }
 .slide .beamer-block.alert .block-title {
-  color: var(--deck-alert, #c0392b);
+  color: var(--deck-block-alerted-title-fg, var(--deck-alert, #c0392b));
 }
 .slide .beamer-block.example .block-title {
-  color: var(--deck-example, #1e8449);
+  color: var(--deck-block-example-title-fg, var(--deck-example, #1e8449));
 }
 .slide .beamer-block .block-body {
   margin-top: 1pt;
+}
+
+/* ---- ブロックの配色と形(preamble-extra の \\setbeamercolor{block title} 等と
+   \\setbeamertemplate{blocks}[rounded] の近似。core の PreviewBlockStyle) ----
+   --deck-block-* は書かれた色だけ deck.css に出る。種類ごとの変数を --block-* へ写し、
+   alerted / example は block title / block body を継がない(Beamer 既定の色テーマどおり)。
+   title の fg が無ければ上の規則どおり種類の文字色、body の fg が無ければ未定義の var() で
+   unset になり周りの文字色を継ぐ。帯・箱・角丸・影のクラスは renderer が指定のあるときだけ付ける。
+   寸法は Beamer の beamerboxesrounded(左右 4bp 張り出し・角 4bp・右下の影)に合わせる。 */
+.slide .beamer-block {
+  --block-title-bg: var(--deck-block-title-bg);
+  --block-body-fg: var(--deck-block-body-fg);
+  --block-body-bg: var(--deck-block-body-bg);
+}
+.slide .beamer-block.alert {
+  --block-title-bg: var(--deck-block-alerted-title-bg);
+  --block-body-fg: var(--deck-block-alerted-body-fg);
+  --block-body-bg: var(--deck-block-alerted-body-bg);
+}
+.slide .beamer-block.example {
+  --block-title-bg: var(--deck-block-example-title-bg);
+  --block-body-fg: var(--deck-block-example-body-fg);
+  --block-body-bg: var(--deck-block-example-body-bg);
+}
+.slide .beamer-block > .block-body {
+  color: var(--block-body-fg);
+}
+.slide .beamer-block.block-title-filled > .block-title {
+  background: var(--block-title-bg);
+  margin: 0 -4pt;
+  padding: 2pt 4pt 1.5pt;
+}
+.slide .beamer-block.block-title-filled > .block-title:empty {
+  display: none;
+}
+.slide .beamer-block.block-title-filled > .block-body {
+  margin-top: 0;
+  padding-top: 2pt;
+}
+.slide .beamer-block.block-body-filled > .block-body {
+  background: var(--block-body-bg);
+  margin: 0 -4pt;
+  padding: 2pt 4pt 3pt;
+}
+.slide .beamer-block.block-rounded > .block-title {
+  border-radius: 4pt 4pt 0 0;
+}
+.slide .beamer-block.block-rounded > .block-body {
+  border-radius: 0 0 4pt 4pt;
+}
+.slide .beamer-block.block-rounded:not(.block-title-filled) > .block-body,
+.slide .beamer-block.block-rounded > .block-title:empty + .block-body {
+  border-radius: 4pt;
+}
+.slide .beamer-block.block-shadow.block-title-filled > .block-title,
+.slide .beamer-block.block-shadow.block-body-filled > .block-body {
+  box-shadow: 2pt 2pt 3pt rgba(0, 0, 0, 0.35);
+}
+.slide .beamer-block.block-shadow {
+  margin-bottom: 9pt;
 }
 
 .slide .center {

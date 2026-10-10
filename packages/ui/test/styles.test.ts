@@ -100,3 +100,53 @@ describe("PREVIEW_CSS: キャンバス幾何の契約", () => {
     }
   });
 });
+
+describe("PREVIEW_CSS: ブロックの配色と形", () => {
+  const GATES = ["block-title-filled", "block-body-filled", "block-rounded", "block-shadow"];
+
+  it("帯・箱・角丸・影の宣言は renderer が付けるクラスの下にだけある(指定が無ければ見た目は従来どおり)", () => {
+    const sheet = injectPreviewCss();
+    const shaping = ["background", "padding", "border-radius", "box-shadow", "display"];
+    const blockRules = styleRules(sheet).filter((rule) =>
+      rule.selectorText.includes("beamer-block"),
+    );
+    for (const rule of blockRules) {
+      for (const selector of rule.selectorText.split(",")) {
+        const gated = GATES.some((gate) => selector.includes(gate));
+        for (const property of shaping) {
+          if (gated) continue;
+          expect(rule.style.getPropertyValue(property), `${selector} { ${property} }`).toBe("");
+        }
+      }
+    }
+    for (const gate of GATES) {
+      expect(
+        blockRules.some((rule) => rule.selectorText.includes(gate)),
+        gate,
+      ).toBe(true);
+    }
+    // 上の検査が空振りしないよう、ゲート下の宣言が CSSOM に読めていることも確かめる。
+    const band = blockRules.find(
+      (rule) => rule.selectorText === ".slide .beamer-block.block-title-filled > .block-title",
+    );
+    expect(band?.style.getPropertyValue("background")).toBe("var(--block-title-bg)");
+    expect(band?.style.getPropertyValue("padding")).toBe("2pt 4pt 1.5pt");
+  });
+
+  it("title の文字色は deck.css の変数が無ければ種類の文字色へ戻る", () => {
+    const sheet = injectPreviewCss();
+    const color = (selector: string) =>
+      styleRules(sheet)
+        .find((rule) => rule.selectorText === selector)
+        ?.style.getPropertyValue("color");
+    expect(color(".slide .beamer-block .block-title")).toBe(
+      "var(--deck-block-title-fg, var(--deck-structure, #3333b3))",
+    );
+    expect(color(".slide .beamer-block.alert .block-title")).toBe(
+      "var(--deck-block-alerted-title-fg, var(--deck-alert, #c0392b))",
+    );
+    expect(color(".slide .beamer-block.example .block-title")).toBe(
+      "var(--deck-block-example-title-fg, var(--deck-example, #1e8449))",
+    );
+  });
+});

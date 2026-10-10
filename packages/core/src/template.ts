@@ -180,6 +180,45 @@ export interface PreviewStyle {
   /** 全スライドの背景画像(`\usebackgroundtemplate` / `background canvas`)。 */
   background?: { path: string };
   footer?: string;
+  /** ブロック(block / alertblock / exampleblock)の配色と形。指定があるときだけ持つ。 */
+  blocks?: PreviewBlockStyle;
+}
+
+/**
+ * ブロックの種類。Beamer の色名 `block title` / `block title alerted` / `block title example`
+ * (body も同様)の接尾辞に対応する。
+ */
+export type PreviewBlockKind = "normal" | "alerted" | "example";
+
+/** ブロック 1 種類ぶんの配色(RRGGBB)。書かれていないものは持たない。 */
+export interface PreviewBlockColors {
+  titleFg?: string;
+  titleBg?: string;
+  bodyFg?: string;
+  bodyBg?: string;
+}
+
+/**
+ * preamble-extra / テンプレートの `\setbeamercolor{block title}` 等と
+ * `\setbeamertemplate{blocks}[rounded]` から読んだブロックの見た目(近似)。
+ *
+ * 色は種類ごとに「書かれたものだけ」を持ち、継承は Beamer 既定
+ * (beamercolorthemedefault.sty)に合わせてプレビューの CSS が解く:
+ * - `block title` は `parent=structure`、`block title alerted` は `parent=alerted text`、
+ *   `block title example` は `parent=example text`。よって title の fg が無ければ
+ *   その種類の文字色(structure / alert / example)になり、bg が無ければ帯は無い。
+ *   alerted / example の title は `block title` の bg を**継がない**
+ * - `block body` / `block body alerted` / `block body example` は親を持たない。
+ *   bg が無ければ箱は無く、fg が無ければ周りの文字色のまま。alerted / example の body は
+ *   `block body` を**継がない**
+ */
+export interface PreviewBlockStyle {
+  colors: Partial<Record<PreviewBlockKind, PreviewBlockColors>>;
+  /**
+   * `\setbeamertemplate{blocks}[rounded][shadow=true]` / `[default]`、
+   * `\useinnertheme[shadow]{rounded}`。書かれていなければ持たない(既定の角形)。
+   */
+  shape?: { rounded: boolean; shadow: boolean };
 }
 
 const XCOLOR_BASE: Record<string, string> = {
@@ -212,6 +251,16 @@ const BEAMER_COLOR_ROLES: Record<string, { fg?: StyleColorRole; bg?: StyleColorR
   "background canvas": { bg: "background" },
 };
 
+/** `\setbeamercolor` のブロック用の色名 → 種類と部位。 */
+const BEAMER_BLOCK_COLORS: Record<string, { kind: PreviewBlockKind; part: "title" | "body" }> = {
+  "block title": { kind: "normal", part: "title" },
+  "block body": { kind: "normal", part: "body" },
+  "block title alerted": { kind: "alerted", part: "title" },
+  "block body alerted": { kind: "alerted", part: "body" },
+  "block title example": { kind: "example", part: "title" },
+  "block body example": { kind: "example", part: "body" },
+};
+
 function hex2(value: number): string {
   return Math.max(0, Math.min(255, Math.round(value)))
     .toString(16)
@@ -242,6 +291,39 @@ function colorFromModel(model: string, spec: string): string | null {
     default:
       return null;
   }
+}
+
+/**
+ * xcolor の色式を RRGGBB にする。色名・6 桁の 16 進に加え、混色 `a!p!b`(p% の a と残りの b)・
+ * `a!p`(残りは white)・連鎖 `a!p1!b!p2!c`(左から順に、途中の結果を次の a として混ぜる)を読む。
+ * p は 0〜100 に丸める。補色 `-red`・`rgb:...`・`structure.fg` のような参照など、それ以外は null。
+ * 混色は RGB の線形補間(xcolor は色のモデルで混ぜるが、gray の基本色も RGB で混ぜて同じ値になる)。
+ */
+function resolveColorExpression(
+  expression: string,
+  lookup: (name: string) => string | undefined,
+): string | null {
+  const channels = (name: string): number[] | null => {
+    const hex = /^[0-9A-Fa-f]{6}$/.test(name) ? name.toUpperCase() : lookup(name);
+    return hex ? [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)) : null;
+  };
+  const parts = expression.split("!").map((part) => part.trim());
+  let current = channels(parts[0] as string);
+  for (let i = 1; current && i < parts.length; i += 2) {
+    const percent = parts[i] as string;
+    if (!/^\d*\.?\d+$/.test(percent)) return null;
+    const ratio = Math.min(100, Number(percent)) / 100;
+    const other = channels(parts[i + 1] ?? "white");
+    if (!other) return null;
+    current = current.map((value, c) => value * ratio + (other[c] as number) * (1 - ratio));
+  }
+  return current ? current.map((value) => hex2(value)).join("") : null;
+}
+
+/** `\setbeamertemplate{blocks}[rounded][...]` / `\useinnertheme[...]{rounded}` の shadow(既定 false)。 */
+function shadowOption(options: string | undefined): boolean {
+  const match = /(?:^|,)\s*shadow\s*(?:=\s*(\w+)\s*)?(?:,|$)/.exec(options ?? "");
+  return match !== null && match[1] !== "false";
 }
 
 /** `1.2cm` / `0.1\paperwidth` / `2em`(非対応)などの長さを解釈する。 */
@@ -322,8 +404,10 @@ function* commandGroups(
 
 /**
  * 標準の Beamer / xcolor / fontspec 記法からプレビュー用スタイルを抽出する(近似)。
- * 解釈するもの: \definecolor(HTML/RGB/rgb/gray)・\colorlet、\setbeamercolor の
- * structure / alerted text / example text / normal text / background canvas、
+ * 解釈するもの: \definecolor(HTML/RGB/rgb/gray)・\colorlet、xcolor の混色式(`blue!75!black` 等)、
+ * \setbeamercolor の structure / alerted text / example text / normal text / background canvas と
+ * block title / block body(alerted / example 含む)、\setbeamertemplate{blocks}[rounded] と
+ * \useinnertheme{rounded}、
  * \setsansfont / \setmainfont / \setmonofont、\logo{\includegraphics...} と
  * \pgfdeclareimage + \pgfuseimage、\usebackgroundtemplate / \setbeamertemplate{background canvas}。
  * ツールの語彙(\deckcolor 等)が書かれていればそれも読む。それ以外は PDF 専用。
@@ -339,16 +423,13 @@ export function extractPreviewStyle(source: string): PreviewStyle {
     const hex = colorFromModel(model, spec);
     if (hex) palette.set(name.trim(), hex);
   }
+  const resolveColor = (expression: string): string | null =>
+    resolveColorExpression(expression, (name) => palette.get(name));
   for (const { groups } of commandGroups(text, "colorlet", 2)) {
     const [name, other] = groups as [string, string];
-    const hex = palette.get(other.trim());
+    const hex = resolveColor(other);
     if (hex) palette.set(name.trim(), hex);
   }
-  const resolveColor = (expression: string): string | null => {
-    const name = expression.trim();
-    if (/^[0-9A-Fa-f]{6}$/.test(name)) return name.toUpperCase();
-    return palette.get(name) ?? null;
-  };
 
   for (const { groups } of commandGroups(text, "setbeamercolor", 2)) {
     const [key, spec] = groups as [string, string];
@@ -362,6 +443,37 @@ export function extractPreviewStyle(source: string): PreviewStyle {
       if (role && hex) style.colors[role] = hex;
     }
   }
+
+  // ブロックの配色(継承は PreviewBlockStyle の説明どおりプレビュー側で解く)
+  const blocks: PreviewBlockStyle = { colors: {} };
+  for (const { groups } of commandGroups(text, "setbeamercolor", 2)) {
+    const [key, spec] = groups as [string, string];
+    const target = BEAMER_BLOCK_COLORS[key.trim().replace(/\s+/g, " ")];
+    if (!target) continue;
+    for (const part of spec.split(",")) {
+      const [k, v] = part.split("=").map((s) => s.trim());
+      if ((k !== "fg" && k !== "bg") || v === undefined) continue;
+      const hex = resolveColor(v);
+      if (!hex) continue;
+      const slot = `${target.part}${k === "fg" ? "Fg" : "Bg"}` as const;
+      blocks.colors[target.kind] = { ...blocks.colors[target.kind], [slot]: hex };
+    }
+  }
+  // ブロックの形(\setbeamertemplate{blocks}[...] と \useinnertheme{rounded} を記述順に。後が勝つ)
+  const shapePattern =
+    /\\(?:setbeamertemplate\*?\s*\{\s*blocks\s*\}((?:\s*\[[^\]]*\])+)|useinnertheme\s*(?:\[([^\]]*)\])?\s*\{\s*rounded\s*\})/g;
+  for (const match of text.matchAll(shapePattern)) {
+    if (match[1] === undefined) {
+      blocks.shape = { rounded: true, shadow: shadowOption(match[2]) };
+      continue;
+    }
+    const [template, options] = [...match[1].matchAll(/\[([^\]]*)\]/g)].map((m) =>
+      (m[1] as string).trim(),
+    );
+    if (template === "rounded") blocks.shape = { rounded: true, shadow: shadowOption(options) };
+    else if (template === "default") blocks.shape = { rounded: false, shadow: false };
+  }
+  if (Object.keys(blocks.colors).length > 0 || blocks.shape) style.blocks = blocks;
 
   // フォント(名前参照)
   for (const command of ["setsansfont", "setmainfont"]) {
@@ -456,6 +568,15 @@ export function mergePreviewStyles(...styles: PreviewStyle[]): PreviewStyle {
     if (style.logo) merged.logo = style.logo;
     if (style.background) merged.background = style.background;
     if (style.footer !== undefined) merged.footer = style.footer;
+    if (style.blocks) {
+      const blocks: PreviewBlockStyle = merged.blocks ?? { colors: {} };
+      merged.blocks = blocks;
+      for (const [kind, colors] of Object.entries(style.blocks.colors)) {
+        const key = kind as PreviewBlockKind;
+        blocks.colors[key] = { ...blocks.colors[key], ...colors };
+      }
+      if (style.blocks.shape) blocks.shape = style.blocks.shape;
+    }
   }
   return merged;
 }
