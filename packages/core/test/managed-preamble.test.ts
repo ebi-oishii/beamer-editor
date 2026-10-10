@@ -211,6 +211,9 @@ describe("managedPreambleSpan: 終了印を探す範囲", () => {
     expect(problem(noEnd)).toBe(`終了印(「${MANAGED_PREAMBLE_END}」)がありません`);
     expect(problem(late)).toContain("より後ろにあります");
     expect(problem(twice)).toBe("開始印がプリアンブルに複数あります");
+    // 印の順序が逆(終了印が開始印より前)。
+    const reversed = initDeck(`${MANAGED_PREAMBLE_END}\n${withoutEnd}`, BACKGROUNDS);
+    expect(problem(reversed)).toBe("終了印が開始印より前にあります");
     expect(problem(initDeck(oldManaged, BACKGROUNDS))).toBeNull();
     expect(l025(late)[0]?.message).toContain(
       `範囲を特定できないため自動では直せません(${problem(late)})`,

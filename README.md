@@ -74,8 +74,8 @@ TeX のコンパイルエラー(Tectonic が非 0 で終わった `E_COMPILE`)�
 デッキ側にあるかもしれないので終了コードを 3 ではなく 2 にする。`deck snapshot` と
 `deck export --format pdf` も同じ。Tectonic の起動の失敗・タイムアウトなど TeX のエラーでない
 `E_COMPILE` には添えず、3 のまま。終了コード 2 では通常 stdout に結果が出るが、この場合だけは
-stdout が空で、stderr にエラーの JSON(`error.code` が `E_COMPILE`、`error.diagnostics`)が出る。
-stdout が空で stderr の JSON に `error` があるかで見分ける。
+stdout が空で、エラーは stderr に出る(`--json` のときは `error.code` が `E_COMPILE`、lint エラーが
+`error.diagnostics` の JSON)。`--json` では、stdout が空で stderr の JSON に `error` があるかで見分ける。
 
 ### デッキ編集スキルの生成
 
@@ -83,4 +83,4 @@ stdout が空で stderr の JSON に `error` があるかで見分ける。
 
 ### 新規デッキ
 
-`pnpm --dir /path/to/beamer-editor --filter @beamer-editor/cli deck init /path/to/my-talk` で `main.slide.tex`、空の `assets/`、`.claude/skills/beamer-deck/`、`.agents/skills/beamer-deck/`、常に読まれるエージェント向け指示 `AGENTS.md` と、それを import する `CLAUDE.md` を生成します。CLI はまだ単独配布されていません。この起動方法では `packages/cli` が作業ディレクトリになるため、生成プロジェクトの入力・出力先は絶対パスで指定し、出力先を省略しないでください。新規生成は新規または空のディレクトリだけを受け付け、既存データは上書きしません。`deck init /absolute/path/to/project --update-skill` は既存ディレクトリの `.claude/skills/beamer-deck/` と `.agents/skills/beamer-deck/` を作成・更新し、L010 の fingerprint ずれを解消します。`AGENTS.md` / `CLAUDE.md` は存在しないときだけ作成し、既存のものは上書きしません。デッキのファイル名や位置は問わず(`main.slide.tex` は不要)、デッキやassetsには触れません。存在しないパスやディレクトリ以外は `E_OUTPUT_EXISTS` で拒否します。`--json` で生成ファイル一覧を取得できます。`deck init /absolute/path/to/main.slide.tex --update-preamble` は、デッキの `% ---- ツール管理プリアンブル` 〜 `% ---- ツール管理ここまで ----` の間だけを新規生成と同じ現行の内容に差し替え、版の行・ユーザー領域・本文には触れません。古いデッキで後から足したマクロ(`\deckbackground`)を使うと出る L025 を解消します。管理プリアンブルの範囲を特定できない(印が無い・終了印が最初のユーザー領域より後ろにある・開始印が複数ある)デッキは、書き換えずに理由を添えて `E_INPUT` で失敗します。プリアンブルはデッキへ埋め込むためリポジトリのfixtureに依存せず、PDF出力にはTectonicが必要です。初期本文は英語です。日本語を使う場合は `deck fonts fetch` でフォントを用意し、style領域へ `\deckfont{main}{Noto Sans CJK JP}` を指定します。
+`pnpm --dir /path/to/beamer-editor --filter @beamer-editor/cli deck init /path/to/my-talk` で `main.slide.tex`、空の `assets/`、`.claude/skills/beamer-deck/`、`.agents/skills/beamer-deck/`、常に読まれるエージェント向け指示 `AGENTS.md` と、それを import する `CLAUDE.md` を生成します。CLI はまだ単独配布されていません。この起動方法では `packages/cli` が作業ディレクトリになるため、生成プロジェクトの入力・出力先は絶対パスで指定し、出力先を省略しないでください。新規生成は新規または空のディレクトリだけを受け付け、既存データは上書きしません。`deck init /absolute/path/to/project --update-skill` は既存ディレクトリの `.claude/skills/beamer-deck/` と `.agents/skills/beamer-deck/` を作成・更新し、L010 の fingerprint ずれを解消します。`AGENTS.md` / `CLAUDE.md` は存在しないときだけ作成し、既存のものは上書きしません。デッキのファイル名や位置は問わず(`main.slide.tex` は不要)、デッキやassetsには触れません。存在しないパスやディレクトリ以外は `E_OUTPUT_EXISTS` で拒否します。`--json` で生成ファイル一覧を取得できます。`deck init /absolute/path/to/main.slide.tex --update-preamble` は、デッキの `% ---- ツール管理プリアンブル` 〜 `% ---- ツール管理ここまで ----` の間だけを新規生成と同じ現行の内容に差し替え、版の行・ユーザー領域・本文には触れません。古いデッキで後から足したマクロ(`\deckbackground`)を使うと出る L025 を解消します。管理プリアンブルの範囲を特定できない(印が無い・終了印が最初のユーザー領域か `\begin{document}` より後ろにある・終了印が開始印より前にある・開始印が複数ある)デッキは、書き換えずに理由を添えて `E_INPUT` で失敗します。プリアンブルはデッキへ埋め込むためリポジトリのfixtureに依存せず、PDF出力にはTectonicが必要です。初期本文は英語です。日本語を使う場合は `deck fonts fetch` でフォントを用意し、style領域へ `\deckfont{main}{Noto Sans CJK JP}` を指定します。
