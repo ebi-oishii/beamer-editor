@@ -62,6 +62,7 @@
 テーマ選択とパッケージはツール管理領域に入る。v1 のテーマは `default` の 1 種類から開始する(2 テーマ目は HTML/PDF の座標差を fixture で評価してから追加。`metropolis` は将来候補)。共通パッケージ(`graphicx`, `amsmath`, `amssymb`, `booktabs`, `hyperref` 等)と、キャンバス用の `deckcanvas` / `decktext` / `deckimage`(§2.8)の定義はツールが自動注入する。
 
 - ツール管理領域は `%% deck-source-version: 1` でソース形式の版を記録する。構文の版が上がるときは、フォーマッタが黙って破壊的変換せず、明示的な migration コマンドを通す(欠落・不一致は L017)。
+- 構文を変えずにツール管理プリアンブルへマクロを足したとき(`\deckbackground` など)は版を上げない。古いデッキでそのマクロを使うと L025 になり、`deck init <file> --update-preamble` が `% ---- ツール管理プリアンブル` 〜 `% ---- ツール管理ここまで ----` の間だけを `deck init` が書く現行の内容に差し替える(版の行・ユーザー領域・本文は変えない。印が無いデッキは書き換えずに失敗する)。
 - スタイル(色・フォント・ロゴ・背景画像・フッター)は `%% style` 領域のスタイル語彙で指定する([theme-design.md](theme-design.md))。スタイルは本文の語彙を変えない提示層であり、v1 の語彙は幾何中立(本文領域・タイトル帯の寸法を変えない)。語彙外の様式は `%% preamble-extra` に生で書け、PDF には完全に効く(プレビューは近似のまま)。
 - 背景画像は `%% style` 領域の `\deckbackground{assets/bg.png}`(全スライド)と `\deckbackground[title]{assets/title-bg.png}`(表紙 = `\titlepage` のフレームだけ。全スライド用より優先)で指定する。画像は PNG / JPEG を使う(PDF の背景は PDF にだけ出てプレビューには出ない)。`\usebackgroundtemplate` / `\setbeamertemplate{background}` などをフレームの中・フレームの間・`%% preamble-extra` の外へ書かない(PDF には効くがプレビューには出ない。L024)
 - `deck` で始まるコマンド・環境名はツールの予約名前空間であり、`%% macros` 領域での再定義は不可(L016)。
@@ -305,6 +306,7 @@ pass では推測値を出力しないため、最終 pass で有効なレコー
 | L022 | preamble-extra が参照するテンプレート `.sty` がデッキのディレクトリ配下に無い | `\usetheme` は info(TeX 配布のテーマなら通る)、パス指定の `\usepackage` は warning |
 | L023 | テンプレート `.sty` が参照する画像が無い(デッキのディレクトリ基準) | warning |
 | L024 | 背景の指定(`\usebackgroundtemplate` / `\setbeamertemplate{background}` / `\addtobeamertemplate{background}` ほか)が `%% preamble-extra` と `%% style` のどちらの中にもない(PDF には効くがプレビューには出ない。ツール管理プリアンブルの中も対象で、`deck*` マクロ定義の本文だけは除く) | warning |
+| L025 | `%% style` の `\deckbackground` を使っているのに、ツール管理プリアンブルがそれより古く定義が無い(この機能の追加前に `deck init` したデッキ。プレビューには出るが PDF 書き出しは Undefined control sequence で止まる)。ユーザー領域の外に定義も `\input{…deck-style-preamble}` も無いものを報告する。`deck init <file> --update-preamble` で直る | error。VS Code では管理プリアンブルを差し替える Quick Fix を提供 |
 
 オブジェクト同士の重なりは意図的な場合があるため lint 対象にしない(`deck check` の実測レポートで info 表示のみ。§2.8)。
 

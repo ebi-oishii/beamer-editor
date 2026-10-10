@@ -8,6 +8,7 @@ CLI 0.0.1 の実装済みコマンド（実際のヘルプから生成）:
 
   deck init [directory] [--json]      新規または空のディレクトリへ新規デッキを生成
   deck init <directory> --update-skill [--json]  既存ディレクトリの .claude と .agents 配下の skills/beamer-deck/ を更新
+  deck init <file> --update-preamble [--json]  デッキのツール管理プリアンブルを現行の内容に差し替える
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示

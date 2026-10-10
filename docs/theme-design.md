@@ -57,6 +57,7 @@
 - ロゴ・背景画像の存在は L004、`deck*` の再定義禁止は L016 をそのまま適用
 - **画像パス**: `\decklogo` / `\deckbackground` のパスは本文の `\includegraphics` や `deckimage` と同じく、画像パスはデッキのディレクトリ基準で、拡張子まで書く(`\graphicspath` や拡張子の省略は TeX では通るが、プレビュー・HTML 書き出し・lint が解決しないので使わない)。書いたパスに無く TeX なら拾うファイルがある場合、L004 が正しいパスを示す(VS Code では Quick Fix)
 - **L024**(warning): 背景の指定(`\usebackgroundtemplate` / `\setbeamertemplate{background}` / `{background canvas}` / `\addtobeamertemplate{...}` の同名)が `%% preamble-extra` と `%% style` のどちらの中にもない(ツール管理プリアンブルの中、プリアンブルの管理領域の外・フレームの間・フレームの中)。ただしツール自身の背景テンプレートを持つ `deck*` マクロ定義(`\newcommand\deckX{...}` / `\def` / `\@namedef{deckX}` など)の本文は見ない。PDF には効くがプレビューは読まないので気づけるよう警告する。全スライド共通の背景は preamble-extra へ、表紙と本文で分けるなら `%% style` の `\deckbackground` を使う。`%% style` の中は L020 が報告するので L024 は重ねない
+- **L025**(error): `\deckbackground` は deck-source-version を上げずにツール管理プリアンブルへ足したので、それより前に `deck init` したデッキには定義が無く、lint もプレビューも通るのに PDF だけが Undefined control sequence で止まる(定義だけ補っても古い `\deck@refresh@background` は背景を描かない)。`%% style` に `\deckbackground` があり、ユーザー領域の外に定義も `\input{…deck-style-preamble}` も無ければ報告し、`deck init <file> --update-preamble` と同じ管理プリアンブルの差し替えを fix(VS Code の Quick Fix)として付ける。版を上げると全デッキに L017 が出るため、後から足すマクロは linter.ts の対応表(マクロ → 定義するリソース)へ足す
 
 ### 2.1 テンプレート(`.sty` + 画像)の読み込み
 

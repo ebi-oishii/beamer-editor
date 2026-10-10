@@ -11,6 +11,7 @@ import {
   type SourceSpan,
 } from "./ast.js";
 import type { FileExistsProbe, ImageFormat, ImageProbe } from "./image.js";
+import { managedPreambleUpdate } from "./managed-preamble.js";
 import { parseDeck } from "./parser.js";
 import {
   blankComments,
@@ -41,7 +42,8 @@ export type LintCode =
   | "L021"
   | "L022"
   | "L023"
-  | "L024";
+  | "L024"
+  | "L025";
 
 export type LintSeverity = "info" | "warning" | "error";
 
@@ -1183,6 +1185,71 @@ function lintHiddenBackgrounds(source: string, doc: DeckDocument): LintDiagnosti
   return diagnostics;
 }
 
+/**
+ * deck-source-version を上げずにツール管理プリアンブルへ後から足したマクロと、それを定義する
+ * リソース(`deck init` が展開する。fixture のように `\input` で読むデッキは常に最新)。
+ * 足す前に `deck init` したデッキには定義が無く、lint もプレビューも通るのに PDF だけが
+ * Undefined control sequence で止まる。
+ */
+const LATER_MANAGED_MACROS: ReadonlyArray<{
+  name: string;
+  resource: string;
+  uses: (doc: DeckDocument) => SourceSpan[];
+}> = [
+  {
+    name: "deckbackground",
+    resource: "deck-style-preamble",
+    uses: (doc) =>
+      doc.style.entries
+        .filter((entry) => entry.type === "styleBackground")
+        .map((entry) => entry.span),
+  },
+];
+
+/**
+ * L025: ツール管理プリアンブルが、使っているマクロより古い。ユーザー領域(macros / style /
+ * preamble-extra)の外に定義も該当リソースの `\input` も無いものを報告し、管理プリアンブルを
+ * 現行へ差し替える修正(`deck init --update-preamble` と同じ)を付ける。
+ */
+function lintOutdatedManagedPreamble(source: string, doc: DeckDocument): LintDiagnostic[] {
+  const pending = LATER_MANAGED_MACROS.map((macro) => ({ macro, uses: macro.uses(doc) })).filter(
+    (entry) => entry.uses.length > 0,
+  );
+  if (pending.length === 0) return [];
+  // プリアンブル(\begin{document} が無ければ全体)から、コメントとユーザー領域を空白にする。
+  const preambleEnd = doc.managedPreamble.span.end || source.length;
+  let text = blankComments(source).slice(0, preambleEnd);
+  for (const region of [doc.macros.span, doc.style.span, doc.preambleExtra.span]) {
+    if (region.end <= region.start || region.start >= text.length) continue;
+    const end = Math.min(region.end, text.length);
+    text = text.slice(0, region.start) + " ".repeat(end - region.start) + text.slice(end);
+  }
+  const defined = new Set(
+    [...text.matchAll(DECK_MACRO_DEFINITION)].map((match) => /deck[A-Za-z@]*/.exec(match[0])?.[0]),
+  );
+  const inputs = [...text.matchAll(/\\input\s*\{([^{}]*)\}/g)].map((match) =>
+    (match[1] ?? "").trim().replace(/\.tex$/, ""),
+  );
+  const fix = managedPreambleUpdate(source);
+  const diagnostics: LintDiagnostic[] = [];
+  for (const { macro, uses } of pending) {
+    if (defined.has(macro.name)) continue;
+    if (inputs.some((path) => path === macro.resource || path.endsWith(`/${macro.resource}`)))
+      continue;
+    const message = `ツール管理プリアンブルが \\${macro.name} より古く、定義がありません。プレビューには出ますが PDF 書き出しは Undefined control sequence で止まります。${
+      fix === null
+        ? "ツール管理プリアンブルの印が見つからないため自動では直せません。deck init で作ったデッキの管理プリアンブルを写してください"
+        : "deck init <file> --update-preamble で管理プリアンブルを最新に差し替えてください"
+    }`;
+    for (const span of uses)
+      diagnostics.push({
+        ...diagnostic("L025", "error", message, span),
+        ...(fix === null ? {} : { fix }),
+      });
+  }
+  return diagnostics;
+}
+
 /** 元ソースを必要とする規則を含めて lint する公開 API。 */
 export function lintSource(source: string, options: LintOptions = {}): LintDiagnostic[] {
   const doc = parseDeck(source);
@@ -1190,5 +1257,6 @@ export function lintSource(source: string, options: LintOptions = {}): LintDiagn
     ...lintDeckAt(doc, options, source),
     ...lintYenBackslashes(source),
     ...lintHiddenBackgrounds(source, doc),
+    ...lintOutdatedManagedPreamble(source, doc),
   ].sort((a, b) => a.span.start - b.span.start || a.code.localeCompare(b.code));
 }

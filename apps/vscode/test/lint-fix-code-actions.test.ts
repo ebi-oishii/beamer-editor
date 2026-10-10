@@ -1,4 +1,5 @@
-import { lintSource } from "@beamer-editor/core";
+import { readFileSync } from "node:fs";
+import { lintSource, managedPreambleBlock, managedPreambleUpdate } from "@beamer-editor/core";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("vscode", () => {
@@ -37,7 +38,7 @@ vi.mock("vscode", () => {
 });
 
 import * as vscode from "vscode";
-import { ImagePathCodeActionProvider } from "../src/image-path-code-actions";
+import { LintFixCodeActionProvider } from "../src/lint-fix-code-actions";
 
 function fakeDocument(text: string, scheme = "file") {
   const lineStarts = [0];
@@ -79,14 +80,14 @@ function setup(source = SOURCE, scheme = "file") {
       document.positionAt(l004.span.end),
     ),
   } as unknown as vscode.Diagnostic;
-  const provider = new ImagePathCodeActionProvider();
+  const provider = new LintFixCodeActionProvider();
   provider.record(document, lint);
   const actions = (range = diagnostic.range, diagnostics = [diagnostic]) =>
     provider.provideCodeActions(document, range, { diagnostics } as never, {} as never);
   return { document, diagnostic, provider, actions };
 }
 
-describe("ImagePathCodeActionProvider", () => {
+describe("LintFixCodeActionProvider", () => {
   it("L004 の提案を、波括弧の中のパスだけを置換する Quick Fix にする", () => {
     const { actions, document } = setup();
     const [action] = actions();
@@ -118,5 +119,63 @@ describe("ImagePathCodeActionProvider", () => {
     const { actions, document } = setup();
     (document as unknown as { version: number }).version = 2;
     expect(actions()).toEqual([]);
+  });
+
+  it("L025 は管理プリアンブルを差し替える Quick Fix にし、結果は --update-preamble と同じ", () => {
+    const read = (path: string) =>
+      readFileSync(new URL(`../../../packages/core/${path}`, import.meta.url), "utf8").trimEnd();
+    const outdated = managedPreambleBlock().replace(
+      read("resources/deck-style-preamble.tex"),
+      read("test/resources/deck-style-preamble.before-background.tex"),
+    );
+    const source = `\\documentclass[aspectratio=169]{beamer}
+%% deck-source-version: 1
+${outdated}
+
+%% style:begin
+\\deckbackground{assets/bg.png}
+%% style:end
+
+\\begin{document}
+\\end{document}
+`;
+    const document = fakeDocument(source);
+    const lint = lintSource(source);
+    const l025 = lint.find((entry) => entry.code === "L025");
+    if (!l025) throw new Error("L025 expected");
+    const diagnostic = {
+      source: "beamer-editor",
+      code: "L025",
+      range: new vscode.Range(
+        document.positionAt(l025.span.start),
+        document.positionAt(l025.span.end),
+      ),
+    } as unknown as vscode.Diagnostic;
+    const provider = new LintFixCodeActionProvider();
+    provider.record(document, lint);
+    const [action] = provider.provideCodeActions(
+      document,
+      diagnostic.range,
+      { diagnostics: [diagnostic] } as never,
+      {} as never,
+    );
+    expect(action?.title).toBe("ツール管理プリアンブルを最新に差し替える");
+    const [edit] = (
+      (action as vscode.CodeAction).edit as unknown as {
+        edits: { range: vscode.Range; text: string }[];
+      }
+    ).edits;
+    if (!edit) throw new Error("edit expected");
+    const fixed =
+      source.slice(0, document.offsetAt(edit.range.start)) +
+      edit.text +
+      source.slice(document.offsetAt(edit.range.end));
+    const update = managedPreambleUpdate(source);
+    if (!update) throw new Error("update expected");
+    expect(fixed).toBe(
+      source.slice(0, update.span.start) + update.replacement + source.slice(update.span.end),
+    );
+    expect(fixed).toContain(managedPreambleBlock());
+    expect(lintSource(fixed).filter((entry) => entry.code === "L025")).toEqual([]);
   });
 });

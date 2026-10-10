@@ -34,7 +34,7 @@ import {
 } from "./export-controller";
 import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
 import { ImagePasteEditProvider } from "./image-paste-provider";
-import { ImagePathCodeActionProvider } from "./image-path-code-actions";
+import { LintFixCodeActionProvider } from "./lint-fix-code-actions";
 import {
   appendUniqueIgnorePatterns,
   chooseLatexWorkshopTarget,
@@ -323,8 +323,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
   // lint → Problems パネル・波線(VS-5)。開いている .tex 文書ごとに独立管理する。
   const diagnosticCollection = vscode.languages.createDiagnosticCollection("beamer-editor");
-  // L004(画像パス)の Quick Fix は最新の lint 結果の fix を引く。
-  const imagePathActions = new ImagePathCodeActionProvider();
+  // L004(画像パス)・L025(管理プリアンブル)の Quick Fix は最新の lint 結果の fix を引く。
+  const lintFixActions = new LintFixCodeActionProvider();
   const lintController = new LintController<vscode.TextDocument>(
     {
       onDidOpenTextDocument: (listener) => vscode.workspace.onDidOpenTextDocument(listener),
@@ -333,14 +333,14 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     },
     {
       set: (document, diagnostics) => {
-        imagePathActions.record(document, diagnostics);
+        lintFixActions.record(document, diagnostics);
         diagnosticCollection.set(
           document.uri,
           diagnostics.map((lint) => toVscodeDiagnostic(document, lint)),
         );
       },
       delete: (document) => {
-        imagePathActions.forget(document);
+        lintFixActions.forget(document);
         diagnosticCollection.delete(document.uri);
       },
     },
@@ -490,7 +490,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           return isManaged(document)
             ? [
                 ...yenCodeActions.provideCodeActions(document, range, context, token),
-                ...imagePathActions.provideCodeActions(document, range, context, token),
+                ...lintFixActions.provideCodeActions(document, range, context, token),
               ]
             : [];
         },
