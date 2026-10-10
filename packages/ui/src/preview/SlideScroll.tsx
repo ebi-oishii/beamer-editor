@@ -94,7 +94,9 @@ function SlideCard({
   onResizeCanvasElement?:
     | ((frameIndex: number, elementId: string, width: number) => void)
     | undefined;
-  onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
+  onMoveCanvasElement?:
+    | ((frameIndex: number, elementId: string, x: number, y: number) => void)
+    | undefined;
   onDetachToCanvas: ((frameIndex: number, request: DetachRequest) => void) | undefined;
   selectedElementId: string | null;
   onSelectionChange: (frameIndex: number, elementId: string | null) => void;
@@ -147,7 +149,11 @@ function SlideCard({
               ? (elementId, width) => onResizeCanvasElement(index, elementId, width)
               : undefined
           }
-          onMoveCanvasElement={(elementId, x, y) => onMoveCanvasElement(index, elementId, x, y)}
+          onMoveCanvasElement={
+            onMoveCanvasElement
+              ? (elementId, x, y) => onMoveCanvasElement(index, elementId, x, y)
+              : undefined
+          }
           onDetachToCanvas={
             onDetachToCanvas ? (request) => onDetachToCanvas(index, request) : undefined
           }
@@ -215,7 +221,9 @@ export function SlideScroll({
   onResizeCanvasElement?:
     | ((frameIndex: number, elementId: string, width: number) => void)
     | undefined;
-  onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
+  onMoveCanvasElement?:
+    | ((frameIndex: number, elementId: string, x: number, y: number) => void)
+    | undefined;
   /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
   onDetachToCanvas?: ((frameIndex: number, request: DetachRequest) => void) | undefined;
   /** 選択中のキャンバス要素(#148)。持ち主は呼び出し側で、各フレームはこの値から枠を描く。 */

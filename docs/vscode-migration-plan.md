@@ -202,6 +202,7 @@ apps/
 - 開発時に使う pnpm はルート `package.json` の `packageManager` で固定する。
 - 対象はデスクトップ版 VS Code の Node Extension Host。
 - managed 文書はアクティブ時に URI ごとの自動プレビューを開き、通常のローカル `.tex` はコマンドによる手動プレビューだけを開く。複数 URI の panel は同時に存在できる（#45）。
+- source tab を閉じても URI ownership と WebviewPanel は残す。最後の deck は閲覧専用で表示し、同じ URI を再度開いたら新しい `TextDocument` を既存 panel へ接続して即時再描画する（#155）。接続世代を message に付け、閉じる前の非同期 UI 操作が再接続後の文書を変更しないようにする。source tab の有無は `tabGroups` で判定し(TextDocument は tab を閉じても cache に残る)、最後の tab を閉じたら自動プレビューの dismissal も解く。開き直した source がプレビューと同じグループか右側に開いた場合は、閉じる前の「source が左」の配置へプレビューを移して戻し、空いたロック済みグループを閉じる。
 - VS Code 組み込み LaTeX grammar を基本とし、LaTeX Workshop は任意の編集支援として扱う（#52）。
 - Workspace Trust は実装済みで、Restricted Mode では parse / render / lint を利用できる。外部プロセスを使う Phase 6 の機能は無効化する。
 

@@ -30,6 +30,15 @@ export const PREVIEW_CSS = `
 .beamer-preview * {
   box-sizing: border-box;
 }
+/* ソースを閉じて閲覧専用になったことを、スクロール領域の上に 1 行で知らせる(#155)。 */
+.source-closed-banner {
+  margin: 0;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border, #ddd);
+  background: var(--vscode-editorWidget-background, #fafafa);
+  color: var(--vscode-descriptionForeground, #444);
+  font-size: 12px;
+}
 
 /* 全フレームを縦一列に並べるスクロール領域(Marp のプレビューと同じ読み方)。
    padding は SlideScroll.tsx の SCROLL_PADDING と揃える。下端の余白は末尾フレームも

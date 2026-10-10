@@ -256,14 +256,23 @@ describe("managed file helpers", () => {
     expect(lifecycle.panelDisposed(documentUri, 1)).toBe(true);
     expect(lifecycle.prepareOpen(documentUri, true)).toEqual({ kind: "dismissed" });
 
-    // Closing the source removes ownership and dismissal, then a new active session can create once.
-    lifecycle.sourceClosed(documentUri);
+    // An open source tab keeps the dismissal; closing its last tab clears it so a new session can create once.
+    lifecycle.sourceTabsChanged(new Set([documentUri.toString()]));
+    expect(lifecycle.prepareOpen(documentUri, true)).toEqual({ kind: "dismissed" });
+    lifecycle.sourceTabsChanged(new Set());
     expect(lifecycle.prepareOpen(documentUri, true)).toEqual({ kind: "create" });
     lifecycle.register(documentUri, 2, document, true);
+    // Source close retains the panel ownership; reopening the URI reconnects it instead of making a panel.
+    lifecycle.sourceTabsChanged(new Set());
+    expect(lifecycle.registry.get(documentUri)?.controller).toBe(2);
+    expect(lifecycle.prepareOpen(documentUri, true)).toEqual({ kind: "existing", controller: 2 });
+    const reopened = { uri: documentUri, managed: true };
+    expect(lifecycle.sourceOpened(documentUri, reopened)).toBe(2);
+    expect(lifecycle.registry.get(documentUri)?.document).toBe(reopened);
 
     const manualUri = uri("file:///work/manual.slide.tex");
     lifecycle.register(manualUri, 3, { uri: manualUri, managed: false }, false);
-    document.managed = false;
+    reopened.managed = false;
     expect(lifecycle.managedFilesChanged((candidate) => candidate.managed)).toEqual([2]);
     expect(lifecycle.registry.get(documentUri)).toBeUndefined();
     expect(lifecycle.registry.get(manualUri)?.controller).toBe(3);
@@ -280,7 +289,20 @@ describe("managed file helpers", () => {
     expect(lifecycle.managedFilesChanged(() => true)).toEqual([]);
     expect(lifecycle.prepareOpen(dismissedUri, true)).toEqual({ kind: "dismissed" });
 
-    lifecycle.sourceClosed(dismissedUri);
+    lifecycle.sourceTabsChanged(new Set());
     expect(lifecycle.prepareOpen(dismissedUri, true)).toEqual({ kind: "create" });
+  });
+
+  it("clears dismissals only for URIs whose source tabs are all closed", () => {
+    const dismissals = new AutoPreviewDismissals();
+    const open = uri("file:///work/open.slide.tex");
+    const closed = uri("file:///work/closed.slide.tex");
+    dismissals.dismiss(open, true);
+    dismissals.dismiss(closed, true);
+
+    dismissals.retainOnly(new Set([open.toString()]));
+
+    expect(dismissals.has(open)).toBe(true);
+    expect(dismissals.has(closed)).toBe(false);
   });
 });

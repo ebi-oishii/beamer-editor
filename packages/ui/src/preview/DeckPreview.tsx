@@ -21,6 +21,8 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   // 表示中 deck の document version。jumpToSource に添えて古い版からのジャンプを検出させる。
   const [version, setVersion] = useState(Number.NEGATIVE_INFINITY);
   const [editableFrameIndexes, setEditableFrameIndexes] = useState<number[]>([]);
+  const [sourceConnected, setSourceConnected] = useState(true);
+  const sourceConnectedRef = useRef(true);
   const [restoredNav] = useState(() => host.loadNavState?.());
   // 生ブロックの部分コンパイル画像(#81)。ホストから届いた PDF を画像にして箱にはめ込む。
   const [rawImages] = useState(() => new RawImageStore(host.rasterizePdf?.bind(host)));
@@ -97,7 +99,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const versionRef = useRef(Number.NEGATIVE_INFINITY);
   useEffect(
     () =>
-      host.subscribe((next, nextVersion, editable) => {
+      host.subscribe((next, nextVersion, editable, connected = true) => {
         select(null);
         versionRef.current = nextVersion;
         const requestedVersion = reorderFocusRequestVersion.current;
@@ -107,7 +109,9 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         }
         setDeck(next);
         setVersion(nextVersion);
-        setEditableFrameIndexes(editable ?? []);
+        sourceConnectedRef.current = connected;
+        setSourceConnected(connected);
+        setEditableFrameIndexes(connected ? (editable ?? []) : []);
       }),
     [host, select],
   );
@@ -257,7 +261,11 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         // Cmd/Ctrl+Z はソース文書の取り消し(Shift 付き、または Ctrl+Y はやり直し)。#103
         // ドラッグや自由配置の編集はソースへの WorkspaceEdit なので、プレビューにいるまま戻せる。
         const key = event.key.toLowerCase();
-        if ((key === "z" || key === "y") && hostRef.current.undoRedo) {
+        if (
+          sourceConnectedRef.current &&
+          (key === "z" || key === "y") &&
+          hostRef.current.undoRedo
+        ) {
           event.preventDefault();
           hostRef.current.undoRedo(key === "y" || event.shiftKey ? "redo" : "undo");
           return;
@@ -272,6 +280,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
             (key === "c" || key === "x") &&
             selection &&
             !copyingText &&
+            sourceConnectedRef.current &&
             hostRef.current.copyCanvasElement
           ) {
             event.preventDefault();
@@ -283,7 +292,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
             );
             return;
           }
-          if (key === "v" && hostRef.current.pasteCanvasElements) {
+          if (sourceConnectedRef.current && key === "v" && hostRef.current.pasteCanvasElements) {
             event.preventDefault();
             hostRef.current.pasteCanvasElements(currentRef.current, versionRef.current);
             return;
@@ -306,6 +315,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         const selection = selectionRef.current;
         if (
           selection &&
+          sourceConnectedRef.current &&
           hostRef.current.deleteCanvasElement &&
           !(
             target instanceof HTMLInputElement ||
@@ -344,6 +354,11 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
 
   return (
     <section className="beamer-preview" ref={previewRef} aria-label="Beamer スライドプレビュー">
+      {!sourceConnected && (
+        <p className="source-closed-banner" role="status">
+          ソースファイルが閉じられているため閲覧専用です。ソースを開き直すか、スライドをダブルクリックすると編集を再開できます。
+        </p>
+      )}
       <SlideScroll
         frames={deck.frames}
         current={state.current}
@@ -358,7 +373,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         }}
         onJump={(i) => host.jumpToSource(i, version)}
         onEditSlide={
-          host.editSlide
+          sourceConnected && host.editSlide
             ? (action, i) => {
                 reorderFocusRequestVersion.current = version;
                 host.editSlide?.(action, i, version);
@@ -370,22 +385,25 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         onFocusFrameHandled={() => setReorderFocusFrame(undefined)}
         onScrollActive={(i) => dispatch({ type: "goto", index: i })}
         onSetCanvasFontSize={
-          host.setCanvasFontSize
+          sourceConnected && host.setCanvasFontSize
             ? (frameIndex, elementId, size) =>
                 host.setCanvasFontSize?.(frameIndex, elementId, version, size)
             : undefined
         }
         onResizeCanvasElement={
-          host.resizeCanvasElement
+          sourceConnected && host.resizeCanvasElement
             ? (frameIndex, elementId, width) =>
                 host.resizeCanvasElement?.(frameIndex, elementId, version, width)
             : undefined
         }
-        onMoveCanvasElement={(frameIndex, elementId, x, y) =>
-          host.moveCanvasElement?.(frameIndex, elementId, version, x, y)
+        onMoveCanvasElement={
+          sourceConnected && host.moveCanvasElement
+            ? (frameIndex, elementId, x, y) =>
+                host.moveCanvasElement?.(frameIndex, elementId, version, x, y)
+            : undefined
         }
         onDetachToCanvas={
-          host.detachToCanvas
+          sourceConnected && host.detachToCanvas
             ? (frameIndex, request) => {
                 host.detachToCanvas?.(frameIndex, version, request.sourceSpan, request.rect);
               }
