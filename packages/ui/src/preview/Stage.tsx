@@ -270,8 +270,9 @@ export function Stage({
     };
   }, [menu, closeMenu]);
 
-  // 本文のはみ出しを測る(#193)。html / step の差し替え直後に描画前に測り、その後は本文と
+  // 本文のはみ出しを測る(#193)。html の差し替え直後に描画前に測り、その後は本文と
   // その直下の要素の寸法変化(画像の読み込み等)とフォントの読み込み完了で測り直す。
+  // step は依存に入れない。step が変えるのは .covered(visibility: hidden)だけで寸法は変わらない。
   // biome-ignore lint/correctness/useExhaustiveDependencies: frame の html 差し替えで DOM が作り直されるので frame を依存に含める
   useLayoutEffect(() => {
     const report = (next: SlideOverflow | null) => {
@@ -307,7 +308,7 @@ export function Stage({
       disposed = true;
       observer?.disconnect();
     };
-  }, [frame, step, measureOverflow]);
+  }, [frame, measureOverflow]);
 
   // frame（html）または step が変わるたびに covered を再適用する。
   // biome-ignore lint/correctness/useExhaustiveDependencies: frame の html 差し替え時に再適用したい

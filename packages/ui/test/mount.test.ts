@@ -1152,6 +1152,48 @@ describe("mountPreview", () => {
     }
   });
 
+  it("step を進めてもはみ出しの計測をやり直さない(寸法を変えないため)(#193)", () => {
+    const bodyObservers: Element[] = [];
+    class ResizeObserverMock {
+      observe(target: Element) {
+        if (target.classList.contains("slide-body")) bodyObservers.push(target);
+      }
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+    let unmount: () => void = () => {};
+    act(() => {
+      unmount = mountPreview(container, host);
+    });
+    act(() => host.push(DECK));
+    try {
+      const first = container.querySelector<HTMLElement>('.slide-card[data-index="0"]');
+      const covered = first?.querySelector<HTMLElement>('[data-min="2"]');
+      const stepRange = container.querySelector<HTMLInputElement>(
+        'input[aria-label="オーバーレイ step（2 段階）"]',
+      );
+      if (!covered || !stepRange) throw new Error("step fixture missing");
+      expect(covered.classList.contains("covered")).toBe(true);
+      const before = bodyObservers.length;
+      expect(before).toBeGreaterThan(0);
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+          stepRange,
+          "2",
+        );
+        stepRange.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(covered.classList.contains("covered")).toBe(false);
+      expect(bodyObservers).toHaveLength(before);
+    } finally {
+      act(() => unmount());
+    }
+  });
+
   it("外側の .slide-layout が transform のはみ出しを閉じ、影を持つ", () => {
     const container = document.createElement("div");
     document.body.append(container);
