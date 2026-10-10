@@ -111,7 +111,7 @@ Markdown 風入力は `.slide.tex` の語彙ではない。入力補助が提供
 
 | 要素 | Beamer 構文 | 備考 |
 |---|---|---|
-| 画像 | `\includegraphics[width=0.8\textwidth]{path}` | オプションは `width` / `height` のみ、値は `\textwidth`・`\linewidth` の係数のみ。パスは相対パス |
+| 画像 | `\includegraphics[width=0.8\textwidth]{path}` | オプションは `width` / `height` のみ、値は `\textwidth`・`\linewidth` の係数のみ。パスは相対パス。SVG は置けない(コンパイルエラーになる)ので PNG / PDF へ実際に変換したものを参照する |
 | 表 | `\begin{tabular}{lcr}` + `booktabs`(`\toprule` `\midrule` `\bottomrule`)+ `&` `\\` | 列指定は `l` `c` `r` と `|` なしの基本形のみ。`multicolumn` 等は生ブロックへ |
 
 ### 2.5 インライン要素
@@ -172,7 +172,7 @@ GUI で扱う自由配置は `deckcanvas` の層に集める。フレーム本�
 | `decktext` | テキスト・インライン要素・単純な箇条書き | 移動、幅変更、文字サイズ変更、削除、コピー・貼り付け |
 | `deckimage` | PNG / JPEG / PDF 画像 | 移動、縦横比を保った拡大縮小、削除、コピー・貼り付け |
 
-TikZ・複雑な表・生 LaTeX ブロック・動画・SVG はキャンバス GUI の対象外。必要な場合は生ブロック、または実際に PDF / PNG へ変換した画像として扱う。SVG を canvas に置くには、利用可能な変換手段で PDF または PNG へ実際に変換してから `deckimage` として扱う。通常フローの `\includegraphics` についても SVG のコンパイルを保証しない。
+TikZ・複雑な表・生 LaTeX ブロック・動画・SVG はキャンバス GUI の対象外。必要な場合は生ブロック、または実際に PDF / PNG へ変換した画像として扱う。SVG はキャンバスに限らずデッキのどこにも直接置けない(通常フローの `\includegraphics{fig.svg}` も BoundingBox を決められずコンパイルエラーになる)。置く前に、利用可能な変換手段で PNG または PDF へ実際に変換し、変換後のファイルを参照する。変換手段がなければ未対応として報告し、拡張子だけを変えない。
 
 #### `decktext` 内部の許容語彙
 
@@ -226,7 +226,7 @@ v1 ではキャンバスオブジェクトへのオーバーレイ指定(`\pause
 
 #### 画像
 
-- `deckimage` の v1 対象は PNG / JPEG / PDF。SVG は GUI へ直接入れず、利用可能な変換手段で PDF または PNG へ実際に変換する(L015)。変換手段がなければ canvas には置けない
+- `deckimage` の v1 対象は PNG / JPEG / PDF。SVG は GUI へ直接入れず、利用可能な変換手段で PDF または PNG へ実際に変換する(L015)。変換手段がなければ canvas にも通常フローにも置けない
 - 参照は相対パス。将来 GUI から追加する場合は `assets/` へコピーし、ファイル名衝突を解決する
 - 高さ自動算出・縦横比保持・L015 の検査に必要な画像寸法(PNG/JPEG ヘッダ、PDF の MediaBox)は、L004 と同じ注入パターンで core へ渡す「寸法プローブ」が取得する(core 自体はファイルシステムに依存しない)
 
