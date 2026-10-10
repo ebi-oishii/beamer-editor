@@ -61,7 +61,7 @@
 - ツール管理領域は `%% deck-source-version: 1` でソース形式の版を記録する。構文の版が上がるときは、フォーマッタが黙って破壊的変換せず、明示的な migration コマンドを通す(欠落・不一致は L017)。
 - スタイル(色・フォント・ロゴ・フッター)は `%% style` 領域のスタイル語彙で指定する([theme-design.md](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/theme-design.md))。スタイルは本文の語彙を変えない提示層であり、v1 の語彙は幾何中立(本文領域・タイトル帯の寸法を変えない)。語彙外の様式は `%% preamble-extra` に生で書け、PDF には完全に効く(プレビューは近似のまま)。
 - `deck` で始まるコマンド・環境名はツールの予約名前空間であり、`%% macros` 領域での再定義は不可(L016)。
-- GUI キャンバスの正式サポートは 16:9(`aspectratio=169`)のみ。4:3 デッキでの `deckcanvas` 使用は警告する(L018)。
+- GUI キャンバスの正式サポートは 16:9(`aspectratio=169`)のみ。4:3 デッキでの `deckcanvas` 使用は警告する(L018)。4:3 デッキでは自由配置を求められても `deckcanvas` を使わず通常フローで書き、16:9 に変えれば使えることを伝える。
 
 メタデータ: `\title{}` `\author{}` `\date{}` `\institute{}` `\subtitle{}` を解釈する。
 
@@ -111,8 +111,10 @@ Markdown 風入力は `.slide.tex` の語彙ではない。入力補助が提供
 
 | 要素 | Beamer 構文 | 備考 |
 |---|---|---|
-| 画像 | `\includegraphics[width=0.8\textwidth]{path}` | オプションは `width` / `height` のみ、値は `\textwidth`・`\linewidth` の係数のみ。パスは相対パス |
+| 画像 | `\includegraphics[width=0.8\textwidth]{path}` | オプションは `width` / `height` のみ、値は `\textwidth`・`\linewidth` の係数のみ。パスは相対パス。SVG は置けない(コンパイルエラーになる)ので PNG / PDF へ実際に変換したものを参照する |
 | 表 | `\begin{tabular}{lcr}` + `booktabs`(`\toprule` `\midrule` `\bottomrule`)+ `&` `\\` | 列指定は `l` `c` `r` と `|` なしの基本形のみ。`multicolumn` 等は生ブロックへ |
+
+HTML 書き出し(`deck export --format html`)が複製する画像はデッキ配下の PNG / JPEG だけである。それ以外(PDF など)は `\includegraphics` でも `deckimage`(§2.8)でもプレースホルダーになり、書き出しは警告なしで成功する。HTML でも図を出すには PNG へ変換したものを参照する(PDF 出力の画質が変わるため、AI が参照を書き換えるのはユーザーの同意がある場合だけ。[ai-protocol.md](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/ai-protocol.md) §5 の 11)。
 
 ### 2.5 インライン要素
 
@@ -146,7 +148,7 @@ Markdown 風入力は `.slide.tex` の語彙ではない。入力補助が提供
 
 GUI で扱う自由配置は `deckcanvas` の層に集める。フレーム本文に `deckcanvas` がある場合、そのフレームはキャンバスフレームである。通常フロー要素と `deckcanvas` は同じフレームに共存できる(フロー配置の上に重なる層)。`deckcanvas` はフレームに 1 つまで(2 つ以上は L014)。
 
-- 通常フレーム: 既存の `columns`、`itemize`、`block` などで構成する
+- 通常フレーム: 既存の `columns`、`itemize`、`block`、`\includegraphics` などで構成する
 - キャンバスフレーム: `deckcanvas` の直下に位置指定オブジェクトだけを並べる(許容外の要素は L014)。フロー要素はそのまま残せる
 - 通常フレームの段落・箸条書き・画像は、GUI の「自由配置にする」で `deckcanvas` の `decktext` / `deckimage` へ移せる(位置は移動時の表示位置から取り、残ったフロー要素は詰まる)。表示条件が変わるもの(overlay 付きの block / `\item` の中、`\pause` との前後関係が移動先と異なるもの、`\pause` を含むリスト)は対象にしない。項目の唯一の内容を移すときは空になる `\item`(項目が 1 つならリスト)も取り除く(その範囲にあったコメントは同じ位置に残す)。`center` の中の要素は箱の中で `\centering` を保つ。フレームに `label` が無ければ、文書内で未使用の `canvas-N` を自動で付ける(L011)。候補にできない要素を右クリックしたときは理由を表示する
 - フレームタイトルは固定領域であり、GUI で移動しない
@@ -172,14 +174,14 @@ GUI で扱う自由配置は `deckcanvas` の層に集める。フレーム本�
 | `decktext` | テキスト・インライン要素・単純な箇条書き | 移動、幅変更、文字サイズ変更、削除、コピー・貼り付け |
 | `deckimage` | PNG / JPEG / PDF 画像 | 移動、縦横比を保った拡大縮小、削除、コピー・貼り付け |
 
-TikZ・複雑な表・生 LaTeX ブロック・動画・SVG はキャンバス GUI の対象外。必要な場合は生ブロック、または事前に PDF / PNG へ変換した画像として扱う。
+TikZ・複雑な表・生 LaTeX ブロック・動画・SVG はキャンバス GUI の対象外。必要な場合は生ブロック、または実際に PDF / PNG へ変換した画像として扱う。SVG はキャンバスに限らずデッキのどこにも直接置けない(通常フローの `\includegraphics{fig.svg}` も BoundingBox を決められずコンパイルエラーになる)。置く前に、利用可能な変換手段で PNG または PDF へ実際に変換し、変換後のファイルを参照する。変換手段がなければ未対応として報告し、拡張子だけを変えない。
 
 #### `decktext` 内部の許容語彙
 
 - `decktext` は現行の語彙を維持する。可: インライン要素(§2.5)、数式(§2.6)、改行 `\\`、`\centering`、`itemize` / `enumerate`(本文と同じくネスト 3 段まで)。`center` 環境は許容外で L014 の対象だが、整列コマンド `\centering` は許容する
-- block 系環境、`columns`、基本 `tabular` は通常フローで扱う。`\includegraphics` は `deckimage` を使う
+- block 系環境、`columns`、基本 `tabular` は通常フローで扱う。画像は通常フローでは `\includegraphics`、canvas では `deckimage` を使う
 - ディスプレイ数式は §2.6 の語彙として受理する。#97 はその構造化と、通常フローから自由配置へ変換する実装を追跡する。キャンバスオブジェクトへのオーバーレイは #98 で扱う
-- TikZ と生 LaTeX は通常フローで扱う。生ブロックのプレビューはキャッシュ付き standalone 部分コンパイル画像を用い、まだコンパイルされていない場合はプレースホルダを表示する。キャンバスへ置く必要があれば PDF / PNG に事前変換して `deckimage` を使う。表の GUI 編集は #12 で扱う
+- TikZ と生 LaTeX は通常フローで扱う。生ブロックのプレビューはキャッシュ付き standalone 部分コンパイル画像を用い、まだコンパイルされていない場合はプレースホルダを表示する。キャンバスへ置く必要があれば、利用可能な手段で PDF / PNG に実際に変換してから `deckimage` を使う。表の GUI 編集は #12 で扱う
 - 上記の許容外要素、またはネスト 4 段以上のリストは L014
 
 #### 座標系と正規形
@@ -226,7 +228,7 @@ v1 ではキャンバスオブジェクトへのオーバーレイ指定(`\pause
 
 #### 画像
 
-- v1 対象は PNG / JPEG / PDF。SVG は GUI へ直接入れず、PDF または PNG へ変換する(L015)
+- `deckimage` の v1 対象は PNG / JPEG / PDF。SVG は GUI へ直接入れず、利用可能な変換手段で PDF または PNG へ実際に変換する(L015)。変換手段がなければ canvas にも通常フローにも置けない
 - 参照は相対パス。将来 GUI から追加する場合は `assets/` へコピーし、ファイル名衝突を解決する
 - 高さ自動算出・縦横比保持・L015 の検査に必要な画像寸法(PNG/JPEG ヘッダ、PDF の MediaBox)は、L004 と同じ注入パターンで core へ渡す「寸法プローブ」が取得する(core 自体はファイルシステムに依存しない)
 
