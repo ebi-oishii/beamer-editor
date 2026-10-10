@@ -72,7 +72,9 @@ pnpm --dir packages/cli deck check talk.slide.tex --tectonic /path/to/tectonic -
 コンパイルが失敗した(`E_COMPILE`)デッキに lint エラーがあれば、原因の手がかりとして
 それも添え(テキストではメッセージの後、`--json` では `error.diagnostics`)、失敗の原因は
 デッキ側にあるかもしれないので終了コードを 3 ではなく 2 にする。`deck snapshot` と
-`deck export --format pdf` も同じ。
+`deck export --format pdf` も同じ。終了コード 2 では通常 stdout に結果が出るが、この場合だけは
+stdout が空で、stderr にエラーの JSON(`error.code` が `E_COMPILE`、`error.diagnostics`)が出る。
+stdout が空で stderr の JSON に `error` があるかで見分ける。
 
 ### デッキ編集スキルの生成
 
