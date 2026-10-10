@@ -92,6 +92,9 @@ const escapeHtml = (s: string) =>
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 
+/** style 属性。フォント名の引用符などで属性が切れないよう、値は必ずエスケープする。 */
+const styleAttr = (css: string) => ` style="${escapeHtml(css)}"`;
+
 /**
  * コンパイルしないと描けないもの(生ブロック・PDF 画像)の代わりに置く箱(#93)。Overleaf のドラフトモードと
  * 同じく中身は描かず、ラベル(環境名・ファイル名)だけを中央に出して場所を確保する。原文は title(ホバー)に残す。
@@ -104,7 +107,7 @@ function placeholderHtml(
   attrs: string,
 ): string {
   const tip = title.length > 400 ? `${title.slice(0, 400)}…` : title;
-  return `<div class="${classes} placeholder"${attrs} style="${style}" title="${escapeHtml(tip)}"><span class="placeholder-label">${escapeHtml(label)}</span></div>`;
+  return `<div class="${classes} placeholder"${attrs}${styleAttr(style)} title="${escapeHtml(tip)}"><span class="placeholder-label">${escapeHtml(label)}</span></div>`;
 }
 
 /** 大きさの指定が無いときの箱: 本文幅の 6 割、4:3。 */
@@ -321,7 +324,7 @@ const MAIN_FONT = `var(--deck-font-main, -apple-system, "Helvetica Neue", Arial,
 const MONO_FONT = `var(--deck-font-mono, "SF Mono", ui-monospace, Menlo, monospace)`;
 
 /** 書体の宣言と、同じ効果の CSS。`\textsf{}` などの命令形でも同じ表を使う。 */
-const FONT_CSS: Record<string, string> = {
+const FONT_CSS = {
   bfseries: "font-weight:bold",
   mdseries: "font-weight:normal",
   itshape: "font-style:italic",
@@ -332,7 +335,7 @@ const FONT_CSS: Record<string, string> = {
   sffamily: `font-family:${MAIN_FONT}`,
   rmfamily: "font-family:serif",
   normalfont: `font-weight:normal;font-style:normal;font-variant:normal;font-family:${MAIN_FONT}`,
-};
+} satisfies Record<string, string>;
 
 /** 段落をまたいで引き継ぐ宣言の効果。揃えは段落単位、それ以外は CSS で持つ。 */
 interface DeclarationState {
@@ -415,8 +418,8 @@ class FrameRenderer {
         pos = `right:2%;bottom:3%;width:${widthPct}%`;
       }
       out += logo.path.toLowerCase().endsWith(".pdf")
-        ? `<div class="deck-logo image-placeholder" style="${pos}">PDF ロゴ: ${escapeHtml(logo.path)}</div>`
-        : `<img class="deck-logo" src="${escapeHtml(logo.path)}" style="${pos}">`;
+        ? `<div class="deck-logo image-placeholder"${styleAttr(pos)}>PDF ロゴ: ${escapeHtml(logo.path)}</div>`
+        : `<img class="deck-logo" src="${escapeHtml(logo.path)}"${styleAttr(pos)}>`;
     }
     const footerHtml = this.decorations.footerHtml;
     if (footerHtml !== null) {
@@ -445,7 +448,7 @@ class FrameRenderer {
       return color ? `color:${color}` : "";
     }
     if (node.name in DECLARATION_ALIGN) return "";
-    if (node.name in FONT_CSS) return FONT_CSS[node.name] as string;
+    if (node.name in FONT_CSS) return FONT_CSS[node.name as keyof typeof FONT_CSS];
     const size =
       node.name === "normalsize"
         ? this.theme.fontSizesPt.normal
@@ -474,7 +477,7 @@ class FrameRenderer {
       if (node.type === "declaration") {
         const css = this.declarationCss(node);
         const rest = this.renderInlines(nodes.slice(index + 1));
-        return out + (css ? `<span style="${css}">${rest}</span>` : rest);
+        return out + (css ? `<span${styleAttr(css)}>${rest}</span>` : rest);
       }
       if (isHfill(node)) {
         const segments: InlineNode[][] = [[]];
@@ -513,25 +516,25 @@ class FrameRenderer {
           case "underline":
             return `<u>${inner}</u>`;
           case "textsc":
-            return `<span style="${FONT_CSS.scshape}">${inner}</span>`;
+            return `<span${styleAttr(FONT_CSS.scshape)}>${inner}</span>`;
           case "textsf":
-            return `<span style="${FONT_CSS.sffamily}">${inner}</span>`;
+            return `<span${styleAttr(FONT_CSS.sffamily)}>${inner}</span>`;
           case "textrm":
-            return `<span style="${FONT_CSS.rmfamily}">${inner}</span>`;
+            return `<span${styleAttr(FONT_CSS.rmfamily)}>${inner}</span>`;
           case "textsl":
-            return `<span style="${FONT_CSS.slshape}">${inner}</span>`;
+            return `<span${styleAttr(FONT_CSS.slshape)}>${inner}</span>`;
           case "textup":
-            return `<span style="${FONT_CSS.upshape}">${inner}</span>`;
+            return `<span${styleAttr(FONT_CSS.upshape)}>${inner}</span>`;
           case "textmd":
-            return `<span style="${FONT_CSS.mdseries}">${inner}</span>`;
+            return `<span${styleAttr(FONT_CSS.mdseries)}>${inner}</span>`;
           case "textnormal":
-            return `<span style="${FONT_CSS.normalfont}">${inner}</span>`;
+            return `<span${styleAttr(FONT_CSS.normalfont)}>${inner}</span>`;
         }
         return inner;
       }
       case "colorText": {
         const color = namedColor(node.color);
-        const style = color ? ` style="color:${color}"` : "";
+        const style = color ? styleAttr(`color:${color}`) : "";
         return `<span${style}>${this.renderInlines(node.children)}</span>`;
       }
       case "group":
@@ -542,11 +545,11 @@ class FrameRenderer {
         switch (node.kind) {
           case "hspace":
             return node.length
-              ? `<span class="hspace" style="display:inline-block;width:0;margin-left:${this.spaceLengthCss(node.length)}"></span>`
+              ? `<span class="hspace"${styleAttr(`display:inline-block;width:0;margin-left:${this.spaceLengthCss(node.length)}`)}></span>`
               : "";
           case "vspace":
             return node.length
-              ? `<span class="vspace" style="display:block;height:0;margin-top:${this.spaceLengthCss(node.length)}"></span>`
+              ? `<span class="vspace"${styleAttr(`display:block;height:0;margin-top:${this.spaceLengthCss(node.length)}`)}></span>`
               : "";
           case "quad":
             return '<span class="quad" style="display:inline-block;width:1em"></span>';
@@ -599,7 +602,7 @@ class FrameRenderer {
     const style = [state.align ? `text-align:${state.align}` : "", state.css]
       .filter((part) => part !== "")
       .join(";");
-    return `<div class="declared" style="${style}">${html}</div>`;
+    return `<div class="declared"${styleAttr(style)}>${html}</div>`;
   }
 
   /**
@@ -703,7 +706,7 @@ class FrameRenderer {
             this.linewidthFactor = outer * (c.width.factor > 0 ? c.width.factor : 1);
             const inner = this.renderBlocks(c.children);
             this.linewidthFactor = outer;
-            return `<div class="col" style="width:${(c.width.factor * 100).toFixed(1)}%">${inner}</div>`;
+            return `<div class="col"${styleAttr(`width:${(c.width.factor * 100).toFixed(1)}%`)}>${inner}</div>`;
           })
           .join("");
         return `<div class="columns${block.topAligned ? " top" : ""}"${this.flowBlockAttrs(block)}>${cols}</div>`;
@@ -737,7 +740,7 @@ class FrameRenderer {
             row.cells.forEach((cell, i) => {
               const align =
                 block.columns[i] === "r" ? "right" : block.columns[i] === "c" ? "center" : "left";
-              html += `<td style="text-align:${align}">${this.renderInlines(cell)}</td>`;
+              html += `<td${styleAttr(`text-align:${align}`)}>${this.renderInlines(cell)}</td>`;
             });
             html += "</tr>";
           }
@@ -761,7 +764,7 @@ class FrameRenderer {
             `${flow}${this.overlayAttrs(null)}`,
           );
         }
-        return `<img${flow} src="${escapeHtml(block.path)}" style="${width}"${this.overlayAttrs(null)}>`;
+        return `<img${flow} src="${escapeHtml(block.path)}"${styleAttr(width)}${this.overlayAttrs(null)}>`;
       }
       case "displayMath": {
         // align 系は KaTeX では aligned 環境として描画する(& と \\ を解釈させる)
@@ -849,7 +852,7 @@ class FrameRenderer {
     const top = (body.top / slideHeightPt) * 100;
     const width = (body.width / slideWidthPt) * 100;
     const height = (body.height / slideHeightPt) * 100;
-    let html = `<div class="canvas" style="left:${left.toFixed(3)}%;top:${top.toFixed(3)}%;width:${width.toFixed(3)}%;height:${height.toFixed(3)}%">`;
+    let html = `<div class="canvas"${styleAttr(`left:${left.toFixed(3)}%;top:${top.toFixed(3)}%;width:${width.toFixed(3)}%;height:${height.toFixed(3)}%`)}>`;
     // ドラッグ対象の descriptor。ID は種類ごとの連番で、frame 内で一意になる。
     const describe = (
       kind: RenderedCanvasElement["kind"],
@@ -874,7 +877,7 @@ class FrameRenderer {
         `left:${(x * 100).toFixed(2)}%;top:${(y * 100).toFixed(2)}%;width:${(w * 100).toFixed(2)}%`;
       if (item.type === "canvasText") {
         const attrs = describe("text", item.position, item.size, item.invalidSize?.value);
-        html += `<div class="canvas-item canvas-text"${attrs} style="${posStyle(item.position.x, item.position.y, item.position.width)};font-size:${this.theme.fontSizesPt[item.size]}pt">${this.renderBlocks(item.children)}</div>`;
+        html += `<div class="canvas-item canvas-text"${attrs}${styleAttr(`${posStyle(item.position.x, item.position.y, item.position.width)};font-size:${this.theme.fontSizesPt[item.size]}pt`)}>${this.renderBlocks(item.children)}</div>`;
       } else if (item.type === "canvasImage") {
         const attrs = describe("image", item.position);
         if (item.path.toLowerCase().endsWith(".pdf")) {
@@ -886,7 +889,7 @@ class FrameRenderer {
             attrs,
           );
         } else {
-          html += `<img class="canvas-item"${attrs} src="${escapeHtml(item.path)}" style="${posStyle(item.position.x, item.position.y, item.position.width)}">`;
+          html += `<img class="canvas-item"${attrs} src="${escapeHtml(item.path)}"${styleAttr(`${posStyle(item.position.x, item.position.y, item.position.width)}`)}>`;
         }
       } else {
         html += placeholderHtml(
@@ -955,7 +958,7 @@ class FrameRenderer {
     const { slideWidthPt, bodyAreaPt: body } = this.theme.metrics;
     const left = (body.left / slideWidthPt) * 100;
     const right = ((slideWidthPt - body.left - body.width) / slideWidthPt) * 100;
-    return `<div class="footnotes" style="position:absolute;left:${left.toFixed(3)}%;right:${right.toFixed(3)}%;bottom:2%;font-size:${this.theme.fontSizesPt.tiny}pt">${this.footnotes.join("")}</div>`;
+    return `<div class="footnotes"${styleAttr(`position:absolute;left:${left.toFixed(3)}%;right:${right.toFixed(3)}%;bottom:2%;font-size:${this.theme.fontSizesPt.tiny}pt`)}>${this.footnotes.join("")}</div>`;
   }
 
   renderRawFrame(frame: RawFrameNode, frameIndex: number, frameTotal: number): string {
