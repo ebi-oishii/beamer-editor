@@ -1,4 +1,8 @@
-import { PdfExportError, type PdfExportProgress } from "@beamer-editor/compiler";
+import {
+  PdfExportError,
+  type PdfExportProgress,
+  type PdfExportResult,
+} from "@beamer-editor/compiler";
 import { HtmlExportError } from "@beamer-editor/html-export";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -162,6 +166,122 @@ describe("ExportController", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("pending throttled progress at the end of a PDF export", () => {
+    const downloading = (count: number, file: string) =>
+      `TeX パッケージを取得中（初回のみ）: ${count} 件 — ${file}`;
+
+    /** Starts an export whose compile reports `files` back to back and then waits. */
+    function startDownloads(files: readonly string[]) {
+      const report = vi.fn<(message: string) => void>();
+      let cancel: (() => void) | undefined;
+      const host = createHost({
+        withProgress: async (task) =>
+          task(
+            {
+              isCancellationRequested: false,
+              onCancellationRequested: (listener) => {
+                cancel = listener;
+                return { dispose() {} };
+              },
+            },
+            report,
+          ),
+      });
+      let finish: (() => void) | undefined;
+      const compile = vi.fn(
+        async (request: {
+          signal: AbortSignal;
+          onProgress?: (progress: PdfExportProgress) => void;
+        }) => {
+          for (const [index, file] of files.entries())
+            request.onProgress?.({ kind: "download", file, count: index + 1 });
+          return new Promise<PdfExportResult>((resolve, reject) => {
+            finish = () =>
+              resolve({
+                format: "pdf",
+                inputPath: input.fsPath,
+                outputPath: output.fsPath,
+                overwritten: false,
+                engineVersion: "0.17.0",
+              });
+            // Like Tectonic, the process takes a while to stop after an abort.
+            request.signal.addEventListener("abort", () =>
+              setTimeout(() => reject(new PdfExportError("E_CANCELLED", "cancelled")), 1_000),
+            );
+          });
+        },
+      );
+      const controller = new ExportController(host, { exportPdf: compile });
+      const exporting = controller.export(createDocument());
+      return {
+        host,
+        report,
+        controller,
+        exporting,
+        started: () => vi.waitFor(() => expect(finish).toBeDefined()),
+        finish: () => finish?.(),
+        cancel: () => cancel?.(),
+      };
+    }
+
+    it("reports the last update once when the export succeeds right after it", async () => {
+      vi.useFakeTimers();
+      try {
+        const run = startDownloads(["latex.ltx", "beamer.cls", "pgf.sty"]);
+        await run.started();
+        expect(run.report.mock.calls).toEqual([[downloading(1, "latex.ltx")]]);
+        run.finish();
+        await run.exporting;
+        expect(run.report.mock.calls).toEqual([
+          [downloading(1, "latex.ltx")],
+          [downloading(3, "pgf.sty")],
+        ]);
+        // Flushed before the task returns, so before the success message.
+        expect(run.report.mock.invocationCallOrder[1]).toBeLessThan(
+          vi.mocked(run.host.showInformation).mock.invocationCallOrder[0] as number,
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(run.report).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not report again on success when nothing is pending", async () => {
+      vi.useFakeTimers();
+      try {
+        const run = startDownloads(["latex.ltx"]);
+        await run.started();
+        run.finish();
+        await run.exporting;
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(run.report.mock.calls).toEqual([[downloading(1, "latex.ltx")]]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each([
+      ["cancelled", (run: ReturnType<typeof startDownloads>) => run.cancel()],
+      ["disposed", (run: ReturnType<typeof startDownloads>) => run.controller.dispose()],
+    ])("drops the pending update when the export is %s", async (_name, stop) => {
+      vi.useFakeTimers();
+      try {
+        const run = startDownloads(["latex.ltx", "beamer.cls", "pgf.sty"]);
+        await run.started();
+        stop(run);
+        // Past both the throttle interval and the compile settling.
+        await vi.advanceTimersByTimeAsync(2_000);
+        await run.exporting;
+        expect(run.report.mock.calls).toEqual([[downloading(1, "latex.ltx")]]);
+        expect(run.host.showError).not.toHaveBeenCalled();
+        expect(run.host.showInformation).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("exports HTML in an untrusted workspace and opens the generated index", async () => {

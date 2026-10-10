@@ -97,17 +97,25 @@ const ERROR_MESSAGES: Record<Exclude<PdfExportErrorCode, "E_CANCELLED">, string>
 const DETAIL_LIMIT = 64 * 1024;
 const PROGRESS_INTERVAL_MS = 250;
 
-/** 初回の TeX パッケージ取得は数百件続くため、通知の更新を間引いて最後の値だけは必ず出す。 */
+/**
+ * 初回の TeX パッケージ取得は数百件続くため、通知の更新を間引く。間引いて保留中の最後の値は、
+ * 成功時に `flush()` で同期的に出し、キャンセル・破棄時は `dispose()` で捨てる。
+ */
 function throttledReporter(report: (message: string) => void) {
   let lastReported = Number.NEGATIVE_INFINITY;
   let latest: string | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const flush = () => {
+  const dispose = () => {
+    if (timer) clearTimeout(timer);
     timer = undefined;
-    if (latest === undefined) return;
-    lastReported = Date.now();
-    report(latest);
     latest = undefined;
+  };
+  const flush = () => {
+    const message = latest;
+    dispose();
+    if (message === undefined) return;
+    lastReported = Date.now();
+    report(message);
   };
   return {
     report(message: string) {
@@ -117,11 +125,10 @@ function throttledReporter(report: (message: string) => void) {
       if (wait <= 0) flush();
       else timer = setTimeout(flush, wait);
     },
-    dispose() {
-      if (timer) clearTimeout(timer);
-      timer = undefined;
-      latest = undefined;
-    },
+    /** 保留中の値があれば今すぐ出す。 */
+    flush,
+    /** 保留中の値を出さずに捨てる。以降のタイマー通知も出ない。 */
+    dispose,
   };
 }
 
@@ -268,7 +275,12 @@ export class ExportController {
             },
             ...(tectonicPath === undefined ? {} : { tectonicPath }),
           };
-          return await this.compile(request);
+          // Cancel and controller dispose both abort; the compile may take a
+          // while to settle after that, so drop the pending update right away.
+          abort.signal.addEventListener("abort", () => progress.dispose(), { once: true });
+          const compiled = await this.compile(request);
+          if (!this.disposed && !abort.signal.aborted) progress.flush();
+          return compiled;
         } finally {
           progress.dispose();
           subscription.dispose();
