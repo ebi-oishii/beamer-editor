@@ -299,6 +299,9 @@ describe("exportHtml", () => {
     expect(viewer).toContain("transform='scale('");
     expect(viewer).not.toContain("[data-min],[data-overlay]");
     expect(viewer.indexOf("[data-min]")).toBeLessThan(viewer.indexOf("[data-overlay]"));
+    // 本文のはみ出し表示(#193)は編集用プレビューの警告で、閲覧用の書き出しには出さない。
+    expect(viewer).not.toContain("slide-overflow");
+    expect(html).not.toContain("slide-overflow");
   });
 
   it("maps prevalidation filesystem failures into the public error taxonomy", async () => {

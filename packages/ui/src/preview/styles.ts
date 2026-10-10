@@ -84,6 +84,7 @@ export const PREVIEW_CSS = `
 /* 外側は見た目の scaled size、内側(.slide-scale)は論理サイズのまま transform する。
    transform のはみ出しは外側で閉じ、影も外側に持たせる(#58 の移植)。 */
 .slide-layout {
+  position: relative;
   overflow: hidden;
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25);
 }
@@ -93,17 +94,49 @@ export const PREVIEW_CSS = `
 .slide-layout .slide {
   box-shadow: none;
 }
-/* キャプションはスライド幅に収めて省略する(幅 0 + min-width でカード幅を広げない)。 */
+/* 本文がはみ出した辺の印(#193)。スライドの外側の box に重ねるだけで、本文の配置は変えない。
+   操作は下のスライドへ通す。 */
+.slide-overflow-edge {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.slide-overflow-edge.bottom {
+  border-bottom: 2px dashed var(--vscode-editorWarning-foreground, #bf8803);
+}
+.slide-overflow-edge.right {
+  border-right: 2px dashed var(--vscode-editorWarning-foreground, #bf8803);
+}
+/* キャプションはスライド幅に収めて省略する(幅 0 + min-width でカード幅を広げない)。
+   はみ出しのバッジは省略せず残し、題名の側を縮める。 */
 .slide-caption {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
   width: 0;
   min-width: 100%;
   font-size: 11px;
   color: var(--vscode-descriptionForeground, #444);
   padding: 4px 2px 0;
-  text-align: center;
   white-space: nowrap;
+}
+.slide-caption-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.slide-overflow-badge {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border: 1px solid var(--vscode-inputValidation-warningBorder, #bf8803);
+  border-radius: 3px;
+  color: var(--vscode-inputValidation-warningForeground, var(--vscode-foreground, #333));
+  background: var(--vscode-inputValidation-warningBackground, #fff4ce);
+  font-size: 10px;
+  line-height: 14px;
+  cursor: help;
 }
 /* 現在フレームの step 操作はスクロール領域へ重ね、表示領域の高さを変えない。 */
 .step-control {

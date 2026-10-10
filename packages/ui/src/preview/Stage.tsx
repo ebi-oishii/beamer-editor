@@ -16,6 +16,7 @@ import {
   type DetachCandidate,
   slideRelativeRect,
 } from "./detach.js";
+import { detectOverflow, measureFlowExtent, type SlideOverflow, sameOverflow } from "./overflow.js";
 import { applyOverlay } from "./overlay.js";
 
 /** 「自由配置にする」の要求。sourceSpan は展開後ソース、rect はスライド全体を 1 とした値。 */
@@ -86,6 +87,8 @@ export function Stage({
   onDetachToCanvas,
   selectedElementId,
   onSelectionChange,
+  overflow = null,
+  onOverflowChange,
 }: {
   frame: RenderedFrame;
   step: number;
@@ -101,8 +104,17 @@ export function Stage({
   selectedElementId: string | null;
   /** 選択の要求(null は選択解除)。押された要素か、要素の無い所を押したことを親へ伝える。 */
   onSelectionChange: (elementId: string | null) => void;
+  /** 本文のはみ出し(#193)。持ち主は親で、Stage はこの値からはみ出した辺の印を描く。 */
+  overflow?: SlideOverflow | null | undefined;
+  /** 実測したはみ出しが変わったときの通知。未指定なら測らない。 */
+  onOverflowChange?: ((overflow: SlideOverflow | null) => void) | undefined;
 }): JSX.Element {
   const scaleRef = useRef<HTMLDivElement>(null);
+  const onOverflowChangeRef = useRef(onOverflowChange);
+  onOverflowChangeRef.current = onOverflowChange;
+  const lastOverflowRef = useRef<SlideOverflow | null>(null);
+  // 生フレームは中身を描いていないので測らない。
+  const measureOverflow = !frame.isRaw && onOverflowChange !== undefined;
   const dragRef = useRef<DragState>();
   const selected = selectedElementId;
   const onSelectionChangeRef = useRef(onSelectionChange);
@@ -257,6 +269,45 @@ export function Stage({
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [menu, closeMenu]);
+
+  // 本文のはみ出しを測る(#193)。html / step の差し替え直後に描画前に測り、その後は本文と
+  // その直下の要素の寸法変化(画像の読み込み等)とフォントの読み込み完了で測り直す。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: frame の html 差し替えで DOM が作り直されるので frame を依存に含める
+  useLayoutEffect(() => {
+    const report = (next: SlideOverflow | null) => {
+      if (sameOverflow(lastOverflowRef.current, next)) return;
+      lastOverflowRef.current = next;
+      onOverflowChangeRef.current?.(next);
+    };
+    const slide = measureOverflow
+      ? scaleRef.current?.querySelector<HTMLElement>(".slide")
+      : undefined;
+    if (!slide) {
+      report(null);
+      return;
+    }
+    let disposed = false;
+    const measure = () => {
+      if (disposed) return;
+      const measurement = measureFlowExtent(slide);
+      // レイアウトが無い(非表示の Webview など)ときは直前の判定を保つ。
+      if (measurement) report(detectOverflow(measurement));
+    };
+    measure();
+    slide.ownerDocument.fonts?.ready.then(measure, () => {});
+    let observer: ResizeObserver | undefined;
+    const body = slide.querySelector<HTMLElement>(":scope > .slide-body");
+    if (body && typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(measure);
+      observer.observe(body);
+      // 横に広い表や段組は .slide-body の寸法を変えないので、直下の要素も見る。
+      for (const child of body.children) observer.observe(child);
+    }
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+    };
+  }, [frame, step, measureOverflow]);
 
   // frame（html）または step が変わるたびに covered を再適用する。
   // biome-ignore lint/correctness/useExhaustiveDependencies: frame の html 差し替え時に再適用したい
@@ -503,6 +554,19 @@ export function Stage({
         // biome-ignore lint/security/noDangerouslySetInnerHtml: renderer が escape 済みの信頼 HTML
         dangerouslySetInnerHTML={{ __html: frame.html }}
       />
+      {overflow ? (
+        // はみ出した辺の印。説明はカード(キャプションのバッジと aria-label)が持つので装飾扱い。
+        <div
+          className={[
+            "slide-overflow-edge",
+            overflow.bottom ? "bottom" : "",
+            overflow.right ? "right" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          aria-hidden="true"
+        />
+      ) : null}
       {menu && onDetachToCanvas ? (
         <div
           ref={menuRef}

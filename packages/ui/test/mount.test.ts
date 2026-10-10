@@ -1063,6 +1063,95 @@ describe("mountPreview", () => {
     expect(Number.parseFloat(layout.style.height)).toBeCloseTo(341.4267 * 3, 4);
   });
 
+  it("本文がはみ出したフレームだけに辺の破線とバッジを出し、測り直して収まれば消す(#193)", () => {
+    const observers: { callback: ResizeObserverCallback; targets: Element[] }[] = [];
+    class ResizeObserverMock {
+      private readonly targets: Element[] = [];
+      constructor(callback: ResizeObserverCallback) {
+        observers.push({ callback, targets: this.targets });
+      }
+      observe(target: Element) {
+        this.targets.push(target);
+      }
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    // 1 枚目の本文だけ寸法を変えられるようにする(jsdom はレイアウトしないので実測を差し替える)。
+    const firstBody = { height: 400, width: 607 };
+    const inFirstCard = (element: Element) =>
+      element.closest<HTMLElement>(".slide-card")?.dataset.index === "0";
+    const metric = (slide: number, body: (element: Element) => number) =>
+      function (this: Element) {
+        if (this.classList.contains("slide")) return slide;
+        if (this.classList.contains("slide-body")) return body(this);
+        return 0;
+      };
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(metric(607, () => 0));
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(metric(341, () => 0));
+    vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockImplementation(metric(0, () => 30));
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(
+      metric(607, () => 607),
+    );
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
+      metric(341, (body) => (inFirstCard(body) ? firstBody.height : 100)),
+    );
+    vi.spyOn(Element.prototype, "scrollWidth", "get").mockImplementation(
+      metric(607, (body) => (inFirstCard(body) ? firstBody.width : 607)),
+    );
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(
+      metric(341, (body) => (inFirstCard(body) ? firstBody.height : 100)),
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+    let unmount: () => void = () => {};
+    act(() => {
+      unmount = mountPreview(container, host);
+    });
+    act(() => host.push(DECK));
+    const cards = container.querySelectorAll<HTMLElement>(".slide-card");
+    const [first, second] = cards;
+    if (!first || !second) throw new Error("slide cards missing");
+    const remeasureFirst = () => {
+      const body = first.querySelector(".slide-body");
+      const observer = [...observers]
+        .reverse()
+        .find((entry) => body && entry.targets.includes(body));
+      if (!observer) throw new Error("slide body is not observed");
+      act(() => observer.callback([], {} as ResizeObserver));
+    };
+    try {
+      expect(first.querySelector(".slide-overflow-edge")?.className).toBe(
+        "slide-overflow-edge bottom",
+      );
+      const badge = first.querySelector<HTMLElement>(".slide-caption .slide-overflow-badge");
+      expect(badge?.textContent).toBe("はみ出し");
+      expect(badge?.title).toContain("本文がスライドの下端を超えています");
+      expect(first.getAttribute("aria-label")).toContain("下端を超えています");
+      // 印は .slide-scale(スライドの中身)の外に置き、本文のレイアウトに入らない。
+      expect(first.querySelector(".slide-scale .slide-overflow-edge")).toBeNull();
+      expect(second.querySelector(".slide-overflow-edge, .slide-overflow-badge")).toBeNull();
+      expect(second.getAttribute("aria-label")).not.toContain("超えています");
+
+      // 横に広い表など、右端だけを超えた場合。
+      firstBody.height = 200;
+      firstBody.width = 700;
+      remeasureFirst();
+      expect(first.querySelector(".slide-overflow-edge")?.className).toBe(
+        "slide-overflow-edge right",
+      );
+      expect(first.querySelector<HTMLElement>(".slide-overflow-badge")?.title).toContain("右端");
+
+      firstBody.width = 607;
+      remeasureFirst();
+      expect(first.querySelector(".slide-overflow-edge, .slide-overflow-badge")).toBeNull();
+      expect(first.getAttribute("aria-label")).not.toContain("超えています");
+    } finally {
+      act(() => unmount());
+    }
+  });
+
   it("外側の .slide-layout が transform のはみ出しを閉じ、影を持つ", () => {
     const container = document.createElement("div");
     document.body.append(container);
