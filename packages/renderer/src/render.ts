@@ -20,6 +20,8 @@ import type {
   LengthSpec,
   ListItemNode,
   ParagraphNode,
+  PreviewBlockKind,
+  PreviewBlockStyle,
   PreviewLogo,
   PreviewStyle,
   RawFrameNode,
@@ -269,6 +271,44 @@ function fontStack(slot: "main" | "mono", family: string): string {
 const sanitizeFontFamily = (family: string): string =>
   family.replaceAll('"', "").replaceAll("\\", "").replaceAll("\r", "").replaceAll("\n", "");
 
+/** ブロックの CSS 変数名の接頭辞(`--deck-block-title-bg` / `--deck-block-alerted-title-bg` 等)。 */
+const BLOCK_VAR_PREFIX: Record<PreviewBlockKind, string> = {
+  normal: "--deck-block-",
+  alerted: "--deck-block-alerted-",
+  example: "--deck-block-example-",
+};
+
+/** ブロック配色の CSS 変数(書かれた色だけ)。継承は PREVIEW_CSS の `.beamer-block` 規則が解く。 */
+function blockColorVars(blocks: PreviewBlockStyle | undefined): string[] {
+  const vars: string[] = [];
+  for (const kind of ["normal", "alerted", "example"] as const) {
+    const colors = blocks?.colors[kind];
+    if (!colors) continue;
+    const prefix = BLOCK_VAR_PREFIX[kind];
+    if (colors.titleFg) vars.push(`${prefix}title-fg: #${colors.titleFg};`);
+    if (colors.titleBg) vars.push(`${prefix}title-bg: #${colors.titleBg};`);
+    if (colors.bodyFg) vars.push(`${prefix}body-fg: #${colors.bodyFg};`);
+    if (colors.bodyBg) vars.push(`${prefix}body-bg: #${colors.bodyBg};`);
+  }
+  return vars;
+}
+
+/**
+ * ブロックの見た目のクラス(帯・箱・角丸・影)。指定が無ければ空文字で、マークアップは従来どおり。
+ * 帯・箱は bg が書かれた部位だけに付け、角丸・影は帯か箱があるときだけ付ける。
+ */
+function blockShapeClasses(blocks: PreviewBlockStyle | undefined, kind: PreviewBlockKind): string {
+  const colors = blocks?.colors[kind];
+  const classes: string[] = [];
+  if (colors?.titleBg) classes.push("block-title-filled");
+  if (colors?.bodyBg) classes.push("block-body-filled");
+  if (classes.length > 0 && blocks?.shape?.rounded) {
+    classes.push("block-rounded");
+    if (blocks.shape.shadow) classes.push("block-shadow");
+  }
+  return classes.map((name) => ` ${name}`).join("");
+}
+
 /**
  * 土台スタイル(テンプレート / preamble-extra 由来)と `%% style` 領域から CSS 変数ブロックを
  * 生成する。`%% style` が土台を上書きする。エントリが無ければ空文字。
@@ -285,6 +325,7 @@ export function styleCssOf(doc: DeckDocument, baseStyle?: PreviewStyle): string 
   const vars: string[] = [];
   for (const [role, hex] of colors) vars.push(`--deck-${role}: #${hex};`);
   for (const [slot, family] of fonts) vars.push(`--deck-font-${slot}: ${fontStack(slot, family)};`);
+  vars.push(...blockColorVars(baseStyle?.blocks));
   return vars.length > 0 ? `.slide {\n  ${vars.join("\n  ")}\n}` : "";
 }
 
@@ -310,6 +351,8 @@ class FrameRenderer {
     footerHtml: null,
   };
   private canvasElements: RenderedCanvasElement[] = [];
+  /** 土台スタイルのブロックの配色と形(preamble-extra の \setbeamercolor{block title} 等)。 */
+  private readonly blockStyle: PreviewBlockStyle | undefined;
   /** 描画中フレームの各フロー要素が「自由配置にする」候補になれるか(core と同じ判定)。 */
   private detachStatuses: Map<BlockNode, DetachStatus> = new Map();
 
@@ -324,6 +367,7 @@ class FrameRenderer {
     baseStyle?: PreviewStyle,
   ) {
     this.fragmentPreamble = fragmentPreambleOf(doc);
+    this.blockStyle = baseStyle?.blocks;
     // 土台(テンプレート / preamble-extra)を先に置き、%% style 領域で上書きする。
     if (baseStyle?.logo) this.decorations.logo = baseStyle.logo;
     if (baseStyle?.background) this.decorations.background = baseStyle.background.path;
@@ -504,12 +548,18 @@ class FrameRenderer {
         return `<div class="columns${block.topAligned ? " top" : ""}"${this.flowBlockAttrs(block)}>${cols}</div>`;
       }
       case "blockEnv": {
-        const kindClass =
+        const kind: PreviewBlockKind =
           block.kind === "alertblock"
-            ? "beamer-block alert"
+            ? "alerted"
             : block.kind === "exampleblock"
+              ? "example"
+              : "normal";
+        const kindClass =
+          (kind === "alerted"
+            ? "beamer-block alert"
+            : kind === "example"
               ? "beamer-block example"
-              : "beamer-block";
+              : "beamer-block") + blockShapeClasses(this.blockStyle, kind);
         return (
           `<div class="${kindClass}"${this.flowBlockAttrs(block)}${this.overlayAttrs(block.overlay)}>` +
           `<div class="block-title">${this.renderInlines(block.title)}</div>` +

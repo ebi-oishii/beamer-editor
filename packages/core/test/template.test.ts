@@ -113,11 +113,126 @@ describe("extractPreviewStyle", () => {
     });
   });
 
-  it("解釈できない色式(混色など)は落とし、他は保つ", () => {
+  it("解釈できない色式(補色・モデル指定・色の参照など)は落とし、他は保つ", () => {
+    for (const expression of [
+      "-red",
+      "rgb:red,1;blue,2",
+      "structure.fg!50",
+      "red!abc!blue",
+      "red!-20!blue",
+      "red!50!nosuchcolor",
+      "red!",
+      "nosuchcolor",
+    ]) {
+      const style = extractPreviewStyle(
+        `\\setbeamercolor{structure}{fg=${expression}}\\setbeamercolor{alerted text}{fg=red}`,
+      );
+      expect(style.colors, expression).toEqual({ alert: "FF0000" });
+    }
+  });
+});
+
+describe("xcolor の混色式", () => {
+  /** \colorlet で色式を読み、structure に使って RRGGBB を取り出す。 */
+  const mix = (expression: string, preamble = "") =>
+    extractPreviewStyle(
+      `${preamble}\\colorlet{probe}{${expression}}\\setbeamercolor{structure}{fg=probe}`,
+    ).colors.structure;
+
+  // 期待値は Tectonic(xcolor)で \extractcolorspecs した値を 255 倍して丸めたもの。
+  it("a!p!b は p% の a と残りの b、a!p は残りを white で混ぜる", () => {
+    expect(mix("red!75!black")).toBe("BF0000"); // rgb:0.75,0,0
+    expect(mix("blue!6")).toBe("F0F0FF"); // rgb:0.94,0.94,1
+    expect(mix("black!20")).toBe("CCCCCC"); // gray:0.8
+    expect(mix("red!33.3!blue")).toBe("5500AA"); // rgb:0.333,0,0.667
+  });
+
+  it("連鎖は左から順に、途中の結果を次の a として混ぜる", () => {
+    expect(mix("red!30!green!40!blue")).toBe("1F4799"); // rgb:0.12,0.28,0.6
+    expect(mix("red!30!green!40")).toBe("B8E099"); // rgb:0.72,0.88,0.6
+  });
+
+  it("\\definecolor / \\colorlet の名前も混ぜられ、割合は 0〜100 に丸める", () => {
+    expect(mix("corp!50!white", "\\definecolor{corp}{HTML}{0F62FE}")).toBe("87B1FF");
+    expect(mix("mid!50", "\\colorlet{mid}{red!40!blue}")).toBe("B380CC");
+    expect(mix("red!150!blue")).toBe("FF0000");
+    expect(mix("red!0!blue")).toBe("0000FF");
+  });
+
+  it("\\setbeamercolor の値にも直接書ける", () => {
+    expect(
+      extractPreviewStyle("\\setbeamercolor{alerted text}{fg=red!75!black}").colors.alert,
+    ).toBe("BF0000");
+  });
+});
+
+describe("ブロックの配色と形", () => {
+  const ISSUE_193 = `\\setbeamertemplate{blocks}[rounded][shadow=true]
+\\setbeamercolor{block title}{bg=blue!75!black,fg=white}
+\\setbeamercolor{block body}{bg=blue!6,fg=black}
+\\setbeamercolor{block title alerted}{bg=red!75!black,fg=white}
+\\setbeamercolor{block body alerted}{bg=red!6,fg=black}
+\\setbeamercolor{block title example}{bg=green!50!black,fg=white}
+\\setbeamercolor{block body example}{bg=green!6,fg=black}`;
+
+  it("block title / block body(alerted / example 含む)と角丸・影を読む", () => {
+    expect(extractPreviewStyle(ISSUE_193)).toEqual({
+      colors: {},
+      fonts: {},
+      blocks: {
+        colors: {
+          normal: { titleBg: "0000BF", titleFg: "FFFFFF", bodyBg: "F0F0FF", bodyFg: "000000" },
+          alerted: { titleBg: "BF0000", titleFg: "FFFFFF", bodyBg: "FFF0F0", bodyFg: "000000" },
+          example: { titleBg: "008000", titleFg: "FFFFFF", bodyBg: "F0FFF0", bodyFg: "000000" },
+        },
+        shape: { rounded: true, shadow: true },
+      },
+    });
+  });
+
+  it("書かれた種類・部位だけを持ち、alerted / example へは継がせない(継承はプレビュー側)", () => {
     const style = extractPreviewStyle(
-      "\\setbeamercolor{structure}{fg=blue!50!black}\\setbeamercolor{alerted text}{fg=red}",
+      "\\setbeamercolor{block title}{bg=blue}\\setbeamercolor{block body}{bg=white}",
     );
-    expect(style.colors).toEqual({ alert: "FF0000" });
+    expect(style.blocks).toEqual({ colors: { normal: { titleBg: "0000FF", bodyBg: "FFFFFF" } } });
+  });
+
+  it("後の指定がキーごとに勝ち、* 付き・空白の揺れも読み、use= / parent= と解釈できない色は無視する", () => {
+    const style = extractPreviewStyle(`\\setbeamercolor{block title alerted}{bg=red,fg=white}
+\\setbeamercolor*{block  title alerted}{use=structure,parent=alerted text,bg=red!75!black}
+\\setbeamercolor{block body example}{fg=structure.fg,bg=-green}`);
+    expect(style.blocks).toEqual({ colors: { alerted: { titleBg: "BF0000", titleFg: "FFFFFF" } } });
+  });
+
+  it("ブロックの指定が無ければ blocks を持たない", () => {
+    expect(extractPreviewStyle("\\setbeamercolor{structure}{fg=red}").blocks).toBeUndefined();
+  });
+
+  it("形は \\setbeamertemplate{blocks} と \\useinnertheme{rounded} の記述順で後が勝つ", () => {
+    const shape = (source: string) => extractPreviewStyle(source).blocks?.shape;
+    expect(shape("\\setbeamertemplate{blocks}[rounded]")).toEqual({ rounded: true, shadow: false });
+    expect(shape("\\setbeamertemplate{blocks}[rounded][shadow]")).toEqual({
+      rounded: true,
+      shadow: true,
+    });
+    expect(shape("\\setbeamertemplate{blocks}[rounded][shadow=false]")).toEqual({
+      rounded: true,
+      shadow: false,
+    });
+    expect(shape("\\useinnertheme[shadow]{rounded}")).toEqual({ rounded: true, shadow: true });
+    expect(shape("\\useinnertheme[shadow=true]{rounded}")).toEqual({ rounded: true, shadow: true });
+    expect(shape("\\useinnertheme{rounded}")).toEqual({ rounded: true, shadow: false });
+    expect(shape("\\useinnertheme[shadow]{rounded}\n\\setbeamertemplate{blocks}[default]")).toEqual(
+      { rounded: false, shadow: false },
+    );
+    expect(shape("\\setbeamertemplate{blocks}[default]\n\\useinnertheme{rounded}")).toEqual({
+      rounded: true,
+      shadow: false,
+    });
+    // 他の内側テーマ・コメントアウトは形を変えない。
+    expect(
+      shape("\\useinnertheme{circles}\n% \\setbeamertemplate{blocks}[rounded]"),
+    ).toBeUndefined();
   });
 });
 
@@ -139,6 +254,49 @@ describe("parseLength / mergePreviewStyles / templateImagePaths", () => {
       colors: { structure: "333333", alert: "222222" },
       fonts: { main: "A" },
       footer: "f",
+    });
+  });
+
+  it("ブロックの配色は種類・キーごとに、形は丸ごと後のスタイルが上書きする", () => {
+    const merged = mergePreviewStyles(
+      {
+        colors: {},
+        fonts: {},
+        blocks: {
+          colors: {
+            normal: { titleBg: "111111", bodyBg: "222222" },
+            alerted: { titleBg: "333333" },
+          },
+          shape: { rounded: true, shadow: true },
+        },
+      },
+      { colors: {}, fonts: {} },
+      {
+        colors: {},
+        fonts: {},
+        blocks: {
+          colors: { normal: { titleBg: "444444" }, example: { bodyFg: "555555" } },
+          shape: { rounded: false, shadow: false },
+        },
+      },
+    );
+    expect(merged.blocks).toEqual({
+      colors: {
+        normal: { titleBg: "444444", bodyBg: "222222" },
+        alerted: { titleBg: "333333" },
+        example: { bodyFg: "555555" },
+      },
+      shape: { rounded: false, shadow: false },
+    });
+    expect(mergePreviewStyles({ colors: {}, fonts: {} }).blocks).toBeUndefined();
+    expect(
+      mergePreviewStyles(
+        { colors: {}, fonts: {}, blocks: { colors: {}, shape: { rounded: true, shadow: false } } },
+        { colors: {}, fonts: {}, blocks: { colors: { normal: { titleFg: "FFFFFF" } } } },
+      ).blocks,
+    ).toEqual({
+      colors: { normal: { titleFg: "FFFFFF" } },
+      shape: { rounded: true, shadow: false },
     });
   });
 

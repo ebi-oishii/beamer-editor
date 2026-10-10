@@ -1,6 +1,6 @@
 # スタイル設計(指定フォーマットへのその場対応)
 
-ステータス: proposed decision / 最終更新: 2026-07-14
+ステータス: proposed decision / 最終更新: 2026-10-10
 
 社用スライドなどで強制される特定のスタイル(色・フォント・ロゴ・フッター・表紙様式)を、**事前のテーマ整備なしに、渡されたフォーマットへその場で柔軟に合わせられる**ようにする設計。
 
@@ -61,6 +61,8 @@
 - **指定**: `%% preamble-extra` に `\usetheme{Name}`(同じディレクトリ)または `\usepackage{templates/<name>/beamertheme<name>}`(サブフォルダ)を書く。テーマの README に書いてある行をそのまま貼れる
 - **画像パス**: `.sty` 内の `\includegraphics` は TeX の規則どおりコンパイル時の CWD(= デッキのディレクトリ)基準。`templates/<name>/assets/...` のように書く
 - **プレビュー**: `.sty` と preamble-extra から `\definecolor` / `\colorlet`、`\setbeamercolor` の structure・alerted text・example text・normal text・background canvas、`\setsansfont` / `\setmainfont` / `\setmonofont`、`\logo{\includegraphics...}`(`\pgfdeclareimage` + `\pgfuseimage` 含む)、`\usebackgroundtemplate` / `\setbeamertemplate{background canvas}` を抽出して近似する。`%% style` 領域はこれを上書きする。footline や表紙の様式など、それ以外は PDF 専用(近似の限界は Phase 6 のコンパイル画像で埋める)。PDF 形式の背景・ロゴはプレビューに出ない
+  - **ブロックの見た目(#193)**: `\setbeamercolor` の block title / block body(alerted / example 含む)の fg・bg と、`\setbeamertemplate{blocks}[rounded][shadow=true]` / `[default]`・`\useinnertheme[shadow]{rounded}` の形も読む。title の bg は色帯、body の bg は色付きの箱になり、rounded は角丸、shadow は右下の影で近似する(寸法は Beamer の `beamerboxesrounded` に合わせた近似。帯と箱の間のグラデーションやブロックタイトルの文字サイズは再現しない)。継承は Beamer 既定の色テーマ(`beamercolorthemedefault.sty`)どおり: title の fg が無ければその種類の文字色(structure / alerted text / example text)、alerted / example の title・body は block title / block body を**継がない**。`%% style` 語彙は増やさない(ブロックの色は生スタイルの近似としてだけ扱う)
+  - **色式**: 色名(xcolor の基本色・`\definecolor`・`\colorlet` の名前)と 6 桁の 16 進に加え、xcolor の混色 `a!p!b`・`a!p`(残りは white)・連鎖 `a!p1!b!p2!c`(左から順)を RGB の線形補間で読む。補色 `-red`、`rgb:...` などのモデル指定、`structure.fg` のような色の参照は読まず、その指定を無視する
 - **診断**: 参照先 `.sty` が無い(L022)、`.sty` が参照する画像が無い(L023)をデッキ側の参照行に出す。`\usetheme{X}` の不在は info(TeX 配布に含まれるテーマならコンパイルは通る)、パスで指した `\usepackage` の不在は warning
 - **更新**: `.sty` や画像を変えるとプレビューと診断を作り直す(キャッシュは持たない)
 - 見本: `fixtures/templates/corporate/` と `fixtures/templated.slide.tex`

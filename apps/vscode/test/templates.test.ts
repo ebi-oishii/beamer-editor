@@ -134,4 +134,20 @@ describe("baseStyleOf", () => {
     const doc = parseDeck(deckWithExtra("\\setbeamercolor{alerted text}{fg=red}"));
     expect(baseStyleOf(doc, fakeFs({})).colors).toEqual({ alert: "FF0000" });
   });
+
+  it("ブロックの配色と形もテンプレート → preamble-extra の順に重ねる", () => {
+    const doc = parseDeck(
+      deckWithExtra(
+        "\\usetheme{corporate}\n\\setbeamercolor{block title}{bg=red!75!black}\n\\setbeamertemplate{blocks}[default]",
+      ),
+    );
+    const fs = fakeFs({
+      "templates/corporate/beamerthemecorporate.sty":
+        "\\useinnertheme[shadow]{rounded}\n\\setbeamercolor{block title}{bg=blue,fg=white}",
+    });
+    expect(baseStyleOf(doc, fs).blocks).toEqual({
+      colors: { normal: { titleBg: "BF0000", titleFg: "FFFFFF" } },
+      shape: { rounded: false, shadow: false },
+    });
+  });
 });
