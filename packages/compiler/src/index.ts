@@ -1442,5 +1442,4 @@ export {
   buildFragmentDocument,
   FRAGMENT_DOCUMENT_VERSION,
   fragmentDependencies,
-  fragmentGraphicsPaths,
 } from "./fragment.js";

@@ -1382,6 +1382,33 @@ class Parser {
         cursor = g.next;
         continue;
       }
+      if (this.src.startsWith("\\deckbackground", cursor)) {
+        // \deckbackground{path} / \deckbackground[title]{path}。オプションは title だけ。
+        const optOpen = cursor + "\\deckbackground".length;
+        let gOpen = optOpen;
+        let slot: "all" | "title" | null = "all";
+        if (this.src[optOpen] === "[") {
+          const optClose = readBalanced(this.src, optOpen, "[", "]");
+          if (optClose === null || optClose > end) slot = null;
+          else {
+            slot = this.src.slice(optOpen + 1, optClose).trim() === "title" ? "title" : null;
+            gOpen = optClose + 1;
+          }
+        }
+        const g = slot !== null ? group(gOpen) : null;
+        if (slot === null || !g || g.body.trim() === "") {
+          cursor = rawToEol(cursor);
+          continue;
+        }
+        entries.push({
+          type: "styleBackground",
+          slot,
+          path: g.body.trim(),
+          span: span(cursor, g.next),
+        });
+        cursor = g.next;
+        continue;
+      }
       if (this.src.startsWith("\\deckfooter", cursor)) {
         const gOpen = cursor + "\\deckfooter".length;
         if (this.src[gOpen] !== "{") {

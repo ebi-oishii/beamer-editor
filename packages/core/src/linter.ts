@@ -12,7 +12,12 @@ import {
 } from "./ast.js";
 import type { FileExistsProbe, ImageFormat, ImageProbe } from "./image.js";
 import { parseDeck } from "./parser.js";
-import type { TemplateStatus } from "./template.js";
+import {
+  blankComments,
+  graphicsPathsOf,
+  joinImageSearchPath,
+  type TemplateStatus,
+} from "./template.js";
 import { VERBATIM_ENVS } from "./tex-scan.js";
 
 export type LintCode =
@@ -35,7 +40,8 @@ export type LintCode =
   | "L020"
   | "L021"
   | "L022"
-  | "L023";
+  | "L023"
+  | "L024";
 
 export type LintSeverity = "info" | "warning" | "error";
 
@@ -44,6 +50,17 @@ export interface LintDiagnostic {
   severity: LintSeverity;
   message: string;
   span: SourceSpan;
+  /**
+   * 機械的に直せる診断の修正案。診断の `span`(コマンド全体など)とは別に、
+   * 直す箇所だけを元ソースの UTF-16 オフセットで指す。
+   */
+  fix?: LintFix;
+}
+
+/** `span` の範囲を `replacement` に置き換える修正。 */
+export interface LintFix {
+  span: SourceSpan;
+  replacement: string;
 }
 
 export interface LintOptions {
@@ -791,19 +808,74 @@ function lintStyle(doc: DeckDocument): LintDiagnostic[] {
     }));
 }
 
+const MISSING_IMAGE_MESSAGE = "画像の参照先ファイルが存在しません";
+
+/** TeX(xelatex / lualatex)の既定の画像拡張子探索順(apps/vscode の IMAGE_EXTENSIONS と同じ)。 */
+const TEX_IMAGE_EXTENSIONS = [".pdf", ".png", ".jpg", ".jpeg"];
+
+/**
+ * 書かれたとおりのパスは無いが、TeX なら拾うファイルを探す(拡張子の省略・\graphicspath)。
+ * 探索はデッキのディレクトリ → \graphicspath の各ディレクトリの順。見つかったパスは
+ * デッキのディレクトリ基準で拡張子付きなので、そのままソースへ書ける。
+ */
+function suggestImagePath(
+  path: string,
+  graphicsPaths: readonly string[],
+  fileExists: FileExistsProbe,
+): string | null {
+  if (/[\\{}%]/.test(path)) return null;
+  const hasExtension = /\.[A-Za-z0-9]+$/.test(path.slice(path.lastIndexOf("/") + 1));
+  const names = hasExtension ? [path] : TEX_IMAGE_EXTENSIONS.map((extension) => path + extension);
+  for (const directory of ["", ...graphicsPaths]) {
+    for (const name of names) {
+      const candidate = directory === "" ? name : joinImageSearchPath(directory, name);
+      if (candidate !== path && fileExists(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/** コマンド `\name[opts]{path}` のうち、最後の `{...}` の中身(パス)の範囲。取れなければ null。 */
+function imagePathSpan(source: string, command: SourceSpan, path: string): SourceSpan | null {
+  const text = source.slice(command.start, command.end);
+  const open = text.lastIndexOf("{");
+  const close = text.indexOf("}", open);
+  if (open === -1 || close === -1) return null;
+  const inner = text.slice(open + 1, close);
+  if (inner.trim() !== path) return null;
+  const start = command.start + open + 1 + (inner.length - inner.trimStart().length);
+  return { start, end: start + path.length };
+}
+
 function lintImageReferences(
   doc: DeckDocument,
   fileExists: FileExistsProbe | undefined,
+  source: string | undefined,
 ): LintDiagnostic[] {
   if (fileExists === undefined) return [];
   const diagnostics: LintDiagnostic[] = [];
+  const graphicsPaths = graphicsPathsOf(doc.preambleExtra.tex);
   const check = (path: string, span: SourceSpan): void => {
-    if (!fileExists(path)) {
-      diagnostics.push(diagnostic("L004", "error", "画像の参照先ファイルが存在しません", span));
+    if (fileExists(path)) return;
+    const suggestion = suggestImagePath(path, graphicsPaths, fileExists);
+    if (suggestion === null) {
+      diagnostics.push(diagnostic("L004", "error", MISSING_IMAGE_MESSAGE, span));
+      return;
     }
+    const entry = diagnostic(
+      "L004",
+      "error",
+      `${MISSING_IMAGE_MESSAGE}。デッキのディレクトリ基準で拡張子まで書いてください: ${suggestion}`,
+      span,
+    );
+    const pathSpan = source === undefined ? null : imagePathSpan(source, span, path);
+    if (pathSpan !== null) entry.fix = { span: pathSpan, replacement: suggestion };
+    diagnostics.push(entry);
   };
   for (const entry of doc.style.entries) {
-    if (entry.type === "styleLogo") check(entry.path, entry.span);
+    if (entry.type === "styleLogo" || entry.type === "styleBackground") {
+      check(entry.path, entry.span);
+    }
   }
   for (const frame of framesOf(doc)) {
     if (frame.type !== "frame") continue;
@@ -936,6 +1008,15 @@ function skillMismatchMessage(expected: string, projectDirectory: string | undef
  * AST と、必要に応じて注入された外部プローブで lint 規則を実行する。
  */
 export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiagnostic[] {
+  return lintDeckAt(doc, options, undefined);
+}
+
+/** `source` が分かるとき(lintSource)だけ、L004 の修正案(`fix`)の置換範囲を計算できる。 */
+function lintDeckAt(
+  doc: DeckDocument,
+  options: LintOptions,
+  source: string | undefined,
+): LintDiagnostic[] {
   const expectedSourceVersion = options.expectedSourceVersion ?? CURRENT_DECK_SOURCE_VERSION;
   const diagnostics = [
     ...(options.skillFingerprint !== undefined &&
@@ -961,7 +1042,7 @@ export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiag
     ...lintCanvasTitles(doc),
     ...lintSourceVersion(doc, expectedSourceVersion),
     ...lintStyle(doc),
-    ...lintImageReferences(doc, options.fileExists),
+    ...lintImageReferences(doc, options.fileExists, source),
     ...lintCanvasImages(doc, options.probeImage),
     ...lintTemplates(options.templates),
   ];
@@ -1038,9 +1119,76 @@ function lintYenBackslashes(source: string): LintDiagnostic[] {
   return diagnostics;
 }
 
+const BACKGROUND_COMMAND =
+  /\\usebackgroundtemplate(?![A-Za-z@])|\\(?:setbeamertemplate|addtobeamertemplate)\*?\s*\{\s*background(?: canvas)?\s*\}/g;
+
+/**
+ * `deck*`(ツールの予約名前空間。利用者の再定義は L016)マクロ定義の見出しで、末尾は本文の `{`。
+ * \newcommand / \renewcommand / \providecommand(`*`・`\name` と `{\name}`・`[n]` `[n][既定値]`)、
+ * \def / \gdef / \edef / \xdef(仮引数テキスト付き)、\@namedef{deckX}。名前には `@` を含む。
+ */
+const DECK_MACRO_DEFINITION = new RegExp(
+  [
+    String.raw`\\(?:new|renew|provide)command\*?\s*(?:\{\s*\\deck[A-Za-z@]*\s*\}|\\deck[A-Za-z@]*)(?:\s*\[[^\]]*\]){0,2}\s*\{`,
+    String.raw`\\[gex]?def\s*\\deck[A-Za-z@]*(?![A-Za-z@])[^{}]*\{`,
+    String.raw`\\@namedef\s*\{\s*deck[A-Za-z@]*\s*\}\s*\{`,
+  ].join("|"),
+  "g",
+);
+
+/** コメントを空白にしたテキストから、`deck*` マクロ定義の本文(波括弧の内側)の範囲を集める。 */
+function deckMacroBodies(text: string): SourceSpan[] {
+  const bodies: SourceSpan[] = [];
+  for (const match of text.matchAll(DECK_MACRO_DEFINITION)) {
+    const start = (match.index ?? 0) + match[0].length;
+    let depth = 1;
+    let cursor = start;
+    for (; cursor < text.length && depth > 0; cursor++) {
+      const char = text[cursor];
+      if (char === "\\") cursor++;
+      else if (char === "{") depth++;
+      else if (char === "}") depth--;
+    }
+    // 閉じ括弧が無い定義は末尾までを本文とみなす(壊れたソースで誤警告を増やさない)。
+    bodies.push({ start, end: depth === 0 ? cursor - 1 : text.length });
+  }
+  return bodies;
+}
+
+/**
+ * L024: プレビューが読み取れない場所に書かれた背景指定。プレビューが背景を拾うのは
+ * `%% preamble-extra` とテンプレート .sty だけ(`%% style` は語彙外が L020 になる)。
+ * プリアンブルの管理領域の外・フレームの間・フレームの中に書いた背景指定は PDF には効くが
+ * プレビューには出ないので、気づけるよう警告する。
+ */
+function lintHiddenBackgrounds(source: string, doc: DeckDocument): LintDiagnostic[] {
+  // 見ない範囲: プレビューが読む領域(preamble-extra / style)と、`deck*` マクロ定義の本文
+  // (`deck init` が展開するツール自身の背景テンプレートは \deck@refresh@background の中にある)。
+  // マーカー間を丸ごと除外しないので、そこへ書かれた利用者の背景指定も警告できる。
+  const text = blankComments(source);
+  const visible = [doc.preambleExtra.span, doc.style.span, ...deckMacroBodies(text)];
+  const diagnostics: LintDiagnostic[] = [];
+  for (const match of text.matchAll(BACKGROUND_COMMAND)) {
+    const start = match.index ?? 0;
+    if (visible.some((region) => start >= region.start && start < region.end)) continue;
+    diagnostics.push(
+      diagnostic(
+        "L024",
+        "warning",
+        "この背景の指定は PDF には反映されますがプレビューには出ません。全スライド共通の背景は %% preamble-extra に、表紙と本文で分けるなら %% style の \\deckbackground / \\deckbackground[title] を使ってください",
+        { start, end: start + match[0].length },
+      ),
+    );
+  }
+  return diagnostics;
+}
+
 /** 元ソースを必要とする規則を含めて lint する公開 API。 */
 export function lintSource(source: string, options: LintOptions = {}): LintDiagnostic[] {
-  return [...lintDeck(parseDeck(source), options), ...lintYenBackslashes(source)].sort(
-    (a, b) => a.span.start - b.span.start || a.code.localeCompare(b.code),
-  );
+  const doc = parseDeck(source);
+  return [
+    ...lintDeckAt(doc, options, source),
+    ...lintYenBackslashes(source),
+    ...lintHiddenBackgrounds(source, doc),
+  ].sort((a, b) => a.span.start - b.span.start || a.code.localeCompare(b.code));
 }

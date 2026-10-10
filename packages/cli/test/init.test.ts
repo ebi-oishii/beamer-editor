@@ -337,3 +337,9 @@ it("updates a repository-like layout (skill at the Git root, no main.slide.tex) 
     );
   }
 });
+
+it("deck init が出力するデッキは、ツール自身の背景テンプレートを含んでも L024 にならない", async () => {
+  const source = await initialDeckSource();
+  expect(source).toContain("\\setbeamertemplate{background}");
+  expect(lintSource(source).filter((entry) => entry.code === "L024")).toEqual([]);
+});

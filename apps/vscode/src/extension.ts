@@ -4,7 +4,6 @@ import {
   compileFragment,
   FRAGMENT_DOCUMENT_VERSION,
   fragmentDependencies,
-  fragmentGraphicsPaths,
   PdfExportError,
 } from "@beamer-editor/compiler";
 import {
@@ -14,6 +13,7 @@ import {
   canvasWidthReplacement,
   detachBlockToCanvas,
   fragmentHash,
+  graphicsPathsOf,
   type LintDiagnostic,
   type LintSeverity,
   parseDeck,
@@ -34,6 +34,7 @@ import {
 } from "./export-controller";
 import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
 import { ImagePasteEditProvider } from "./image-paste-provider";
+import { ImagePathCodeActionProvider } from "./image-path-code-actions";
 import {
   appendUniqueIgnorePatterns,
   chooseLatexWorkshopTarget,
@@ -322,6 +323,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
   // lint → Problems パネル・波線(VS-5)。開いている .tex 文書ごとに独立管理する。
   const diagnosticCollection = vscode.languages.createDiagnosticCollection("beamer-editor");
+  // L004(画像パス)の Quick Fix は最新の lint 結果の fix を引く。
+  const imagePathActions = new ImagePathCodeActionProvider();
   const lintController = new LintController<vscode.TextDocument>(
     {
       onDidOpenTextDocument: (listener) => vscode.workspace.onDidOpenTextDocument(listener),
@@ -330,12 +333,16 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     },
     {
       set: (document, diagnostics) => {
+        imagePathActions.record(document, diagnostics);
         diagnosticCollection.set(
           document.uri,
           diagnostics.map((lint) => toVscodeDiagnostic(document, lint)),
         );
       },
-      delete: (document) => diagnosticCollection.delete(document.uri),
+      delete: (document) => {
+        imagePathActions.forget(document);
+        diagnosticCollection.delete(document.uri);
+      },
     },
     vscode.workspace.textDocuments,
     (document) => isManaged(document),
@@ -343,6 +350,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     (document) =>
       document.uri.scheme === "file"
         ? {
+            // 画像の存在(L004)。デッキのディレクトリ配下だけを見る(`..` や絶対パスは無いものとして扱う)。
+            fileExists: nodeTemplateFileSystem(path.dirname(document.uri.fsPath)).isFile,
             templates: templateStatuses(
               parseDeck(document.getText()),
               nodeTemplateFileSystem(path.dirname(document.uri.fsPath)),
@@ -479,7 +488,10 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       {
         provideCodeActions(document, range, context, token) {
           return isManaged(document)
-            ? yenCodeActions.provideCodeActions(document, range, context, token)
+            ? [
+                ...yenCodeActions.provideCodeActions(document, range, context, token),
+                ...imagePathActions.provideCodeActions(document, range, context, token),
+              ]
             : [];
         },
       },
@@ -749,7 +761,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           (name) => (path.isAbsolute(name) ? name : path.join(documentDir.fsPath, name)),
           statDependency,
           fragmentHash,
-          fragmentGraphicsPaths(`${preamble}\n${tex}`),
+          graphicsPathsOf(`${preamble}\n${tex}`),
         ),
       // Tectonic が無い・壊れているときは、ブロックごとに赤枠にせず一度だけ案内する(元 #119)。
       isUnavailable: (error) =>
