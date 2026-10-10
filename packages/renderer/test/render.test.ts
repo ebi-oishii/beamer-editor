@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { framesOf, parseDeck } from "@beamer-editor/core";
 import { describe, expect, it } from "vitest";
+import { MONO_FONT_FALLBACK } from "../src/font-stack.js";
 import { frameTitleText, renderDeck } from "../src/render.js";
 import { DEFAULT_THEME } from "../src/theme.js";
 
@@ -510,6 +511,27 @@ describe("renderDeck: styled.slide.tex(スタイル語彙)", () => {
     expect(deck2.css).toContain('"Noto Sans JP"');
     // mono は指定されていないので main のみが出る。
     expect(deck2.css).not.toContain("--deck-font-mono");
+  });
+
+  it("mono フォントは Windows の Latin 等幅を総称の前に挟む(日本語 Windows でバックスラッシュが ¥ に見えない)", () => {
+    const src = String.raw`\documentclass{beamer}
+%% style:begin
+\deckfont{mono}{JetBrains Mono}
+%% style:end
+\begin{document}
+\begin{frame}{A}x\end{frame}
+\end{document}
+`;
+    const css = renderDeck(parseDeck(src)).css;
+    expect(css).toContain(
+      '--deck-font-mono: "JetBrains Mono", Consolas, "Cascadia Mono", monospace;',
+    );
+  });
+
+  it("等幅の共通末尾は Courier New を含まず、monospace の直前が Windows の Latin 等幅", () => {
+    // Courier New を入れると macOS / Linux で Menlo や distro 既定の等幅の代わりに使われる。
+    expect(MONO_FONT_FALLBACK).not.toContain("Courier New");
+    expect(MONO_FONT_FALLBACK).toMatch(/(?:Consolas|"Cascadia Mono"), monospace$/);
   });
 
   it("ロゴとフッターが全フレームに入る(ページ番号付き)", () => {
