@@ -33,7 +33,7 @@ suite("Issue #181: deck 語彙の構文強調", () => {
         "\\begin{itemize}",
         "\\item point",
         "\\end{itemize}",
-        "% \\deckimage in a comment",
+        "% \\deckimage[x=0.999]{c.png} in a comment",
         "\\begin{deckcanvas}",
         "\\begin{decktext}[x=0.050,y=0.100,w=0.420,size=normal]",
         "body",
@@ -81,10 +81,19 @@ suite("Issue #181: deck 語彙の構文強調", () => {
       itemize.length > 0 && itemize.every((s) => !deck(s)),
       `itemize: ${itemize.join(" | ")}`,
     );
-    const comment = tokens.filter((token) => token.c.includes("in a comment"));
+    // 本文で見ると、命令だけが切り出されて deck の scope を持っても見逃すので、
+    // コメントの scope を持つトークンをすべて調べる。
+    const comment = tokens.filter((token) => token.t.includes("comment"));
     assert.ok(
-      comment.length > 0 && comment.every((token) => !deck(token.t)),
-      "コメント内の \\deckimage は色分けしない",
+      comment.some((token) => token.c.includes("in a comment")) &&
+        comment.every((token) => !deck(token.t)),
+      `コメント内の \\deckimage は色分けしない: ${comment.map((token) => token.t).join(" | ")}`,
+    );
+    const commented = tokens.filter((token) => token.c.includes("0.999"));
+    assert.ok(
+      commented.length > 0 &&
+        commented.every((token) => token.t.includes("comment") && !deck(token.t)),
+      `コメント内の option: ${commented.map((token) => token.t).join(" | ")}`,
     );
   });
 
@@ -101,17 +110,22 @@ suite("Issue #181: deck 語彙の構文強調", () => {
         "\\begin{deckcanvas}",
         "\\begin{decktext}[",
         "  x=0.111,",
-        "  % y=0.777, ] env comment",
+        "  % \\deckimage y=0.777, ] env comment",
         "  y=0.222,w=0.333",
         "]",
         "body",
         "\\end{decktext}",
         "\\deckimage[",
         "  x=0.444,",
-        "  % y=0.888, ] command comment",
+        "  % \\deckimage y=0.888, ] command comment",
         "  y=0.555,w=0.666",
         "]{a.png}",
+        // 閉じ括弧の無い option を、波括弧・次の命令・環境の終わりの手前で閉じる。
         "\\deckimage[x=0.5{b.png}",
+        "\\deckimage[x=0.6",
+        "\\begin{decktext}[x=0.7",
+        "body",
+        "\\end{decktext}",
         "\\end{deckcanvas}",
         "\\end{frame}",
         "\\begin{frame}[label=next]{Next}",
@@ -144,25 +158,56 @@ suite("Issue #181: deck 語彙の構文強調", () => {
         `${line}: ${inComment.map((token) => token.t).join(" | ")}`,
       );
     }
+    // コメントの中の \deckimage や値が、切り出されて deck の scope を持たない。
+    const comment = tokens.filter((token) => token.t.includes("comment"));
+    assert.ok(
+      comment.every((token) => !deck(token.t)),
+      `コメント: ${comment.map((token) => token.t).join(" | ")}`,
+    );
     for (const value of ["0.777", "0.888"]) {
-      const scopes = scopesOf(value);
+      const inComment = tokens.filter((token) => token.c.includes(value));
       assert.ok(
-        scopes.every((s) => !deck(s)),
-        `コメント内の ${value}: ${scopes.join(" | ")}`,
+        inComment.length > 0 &&
+          inComment.every((token) => token.t.includes("comment") && !deck(token.t)),
+        `コメント内の ${value}: ${inComment.map((token) => token.t).join(" | ")}`,
       );
     }
     for (const value of ["0.111", "0.222", "0.333", "0.444", "0.555", "0.666"]) {
       assert.ok(numeric(value), `option の ${value}: ${scopesOf(value).join(" | ")}`);
     }
+    for (const value of ["0.5", "0.6", "0.7"]) {
+      assert.ok(
+        numeric(value),
+        `閉じ括弧の無い option の ${value}: ${scopesOf(value).join(" | ")}`,
+      );
+    }
 
     // 閉じ括弧の無い option の後でも、次の frame と itemize は組み込みの文法のまま。
-    for (const name of ["frame", "itemize"]) {
+    const builtIn: Record<string, string> = {
+      frame: "meta.function.environment.frame.latex",
+      itemize: "meta.function.environment.list.latex",
+    };
+    for (const [name, environment] of Object.entries(builtIn)) {
       const scopes = scopesOf(name);
       assert.ok(
-        scopes.length > 0 && scopes.every((s) => !deck(s)),
+        scopes.length > 0 &&
+          scopes.every(
+            (s) =>
+              !deck(s) &&
+              s.includes(environment) &&
+              s.includes("variable.parameter.function.latex"),
+          ),
         `${name}: ${scopes.join(" | ")}`,
       );
     }
+    const commands = tokens.filter((token) =>
+      ["begin", "\\begin", "end", "\\end"].includes(token.c.trim()),
+    );
+    assert.ok(
+      commands.length > 0 &&
+        commands.every((token) => token.t.includes("support.function.be.latex")),
+      `\\begin / \\end: ${commands.map((token) => token.t).join(" | ")}`,
+    );
     // option が閉じないまま続くと、次の frame の `label` が deck のキーとして読まれる。
     const labelKey = scopesOf("label");
     assert.ok(
