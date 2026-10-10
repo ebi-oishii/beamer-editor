@@ -204,6 +204,9 @@ const XCOLOR_BASE: Record<string, string> = {
   violet: "800080",
 };
 
+/** xcolor の基本色の名前。プレビューが本文の `\color` / `\textcolor` で色を付ける名前と同じ一覧。 */
+export const XCOLOR_BASE_NAMES: readonly string[] = Object.keys(XCOLOR_BASE);
+
 const BEAMER_COLOR_ROLES: Record<string, { fg?: StyleColorRole; bg?: StyleColorRole }> = {
   structure: { fg: "structure" },
   "alerted text": { fg: "alert" },

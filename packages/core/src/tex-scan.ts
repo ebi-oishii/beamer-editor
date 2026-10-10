@@ -49,7 +49,9 @@ export type TexToken =
    * 後続の構造を失わないよう、走査は開始タグの直後から続ける。厳密さが要る呼び出し側
    * (slide-edit・折りたたみ)はこのトークンを見て処理を拒否する。
    */
-  | { kind: "unterminated"; name: string; start: number; end: number };
+  | { kind: "unterminated"; name: string; start: number; end: number }
+  /** 生きた波括弧(`texTokens` に `braces: true` を渡したときだけ)。`\{` `\}` は制御記号。 */
+  | { kind: "brace"; name: "{" | "}"; start: number; end: number };
 
 const LETTER = /[A-Za-z@]/;
 
@@ -268,8 +270,13 @@ function isDefinitionCommand(name: string): boolean {
   );
 }
 
-/** [from, to) の生きたトークンを先頭から列挙する。 */
-export function* texTokens(src: string, from = 0, to = src.length): Generator<TexToken> {
+/** [from, to) の生きたトークンを先頭から列挙する。`braces` なら生きた波括弧も 1 つずつ返す。 */
+export function* texTokens(
+  src: string,
+  from = 0,
+  to = src.length,
+  { braces = false }: { braces?: boolean } = {},
+): Generator<TexToken> {
   let i = from;
   while (i < to) {
     const ch = src[i];
@@ -278,6 +285,8 @@ export function* texTokens(src: string, from = 0, to = src.length): Generator<Te
       continue;
     }
     if (ch !== "\\") {
+      if (braces && (ch === "{" || ch === "}"))
+        yield { kind: "brace", name: ch, start: i, end: i + 1 };
       i++;
       continue;
     }
@@ -334,6 +343,20 @@ export function* texTokens(src: string, from = 0, to = src.length): Generator<Te
     }
     yield { kind: "command", name, start, end };
   }
+}
+
+/**
+ * `open` の `{` に対応する `}` の位置。コメント・`\verb`・verbatim 系環境の本文の中の
+ * 波括弧は数えない。[open, to) で閉じなければ null。
+ */
+export function braceClose(src: string, open: number, to = src.length): number | null {
+  let depth = 0;
+  for (const token of texTokens(src, open, to, { braces: true })) {
+    if (token.kind !== "brace") continue;
+    if (token.name === "{") depth++;
+    else if (--depth === 0) return token.start;
+  }
+  return null;
 }
 
 /** 定義本体の中の定義も含め、ソース中のマクロ定義をすべて集める。 */

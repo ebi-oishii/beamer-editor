@@ -13,14 +13,17 @@ import { CANVAS_FONT_SIZES } from "./ast.js";
 
 import type {
   AspectRatio,
+  BlockGroupNode,
   BlockNode,
   CanvasFontSize,
   CanvasItemNode,
   CanvasNode,
+  CanvasTextNode,
   ColumnNode,
   DeckDocument,
   DeckElement,
   DeckStyle,
+  DeclarationNode,
   DimFactor,
   FrameNode,
   FrameOptions,
@@ -36,10 +39,11 @@ import type {
   RawBlockNode,
   RawFrameNode,
   SourceSpan,
+  SpaceLength,
   StyleColorRole,
   TableRow,
 } from "./ast.js";
-import { documentTags, texTokens, VERBATIM_ENVS, verbArgumentEnd } from "./tex-scan.js";
+import { braceClose, documentTags, texTokens, VERBATIM_ENVS, verbArgumentEnd } from "./tex-scan.js";
 
 const BLOCK_ENVS = new Set([
   "itemize",
@@ -59,7 +63,67 @@ const BLOCK_ENVS = new Set([
   "decktext",
 ]);
 
-const STYLE_COMMANDS = new Set(["textbf", "emph", "textit", "texttt", "alert"]);
+const STYLE_COMMANDS = new Set([
+  "textbf",
+  "emph",
+  "textit",
+  "texttt",
+  "alert",
+  "underline",
+  "textsc",
+  "textsf",
+  "textrm",
+  "textsl",
+  "textup",
+  "textmd",
+  "textnormal",
+]);
+
+/** 引数を取らない宣言(§2.5)。後に続く内容へ、囲むグループか環境の終わりまで効く。 */
+const DECLARATIONS = new Set([
+  "centering",
+  "raggedright",
+  "raggedleft",
+  "tiny",
+  "scriptsize",
+  "footnotesize",
+  "small",
+  "normalsize",
+  "large",
+  "Large",
+  "LARGE",
+  "huge",
+  "Huge",
+  "bfseries",
+  "mdseries",
+  "itshape",
+  "slshape",
+  "upshape",
+  "scshape",
+  "ttfamily",
+  "sffamily",
+  "rmfamily",
+  "normalfont",
+]);
+
+/** `\hspace` / `\vspace` の引数。プレビューで寸法にできる形だけを受け、それ以外は生ブロックに残す。 */
+function parseSpaceLength(text: string): SpaceLength | null {
+  const value = text.trim();
+  const absolute = /^([-+]?(?:\d+\.?\d*|\.\d+))\s*(pt|bp|mm|cm|in|pc|em|ex)$/.exec(value);
+  if (absolute) return { value: Number(absolute[1]), unit: absolute[2] as SpaceLength["unit"] };
+  const relative = /^([-+]?(?:\d+\.?\d*|\.\d+))?\s*\\(?:textwidth|linewidth|columnwidth)$/.exec(
+    value,
+  );
+  if (relative)
+    return { value: relative[1] === undefined ? 1 : Number(relative[1]), unit: "linewidth" };
+  return null;
+}
+
+/**
+ * `\color` / `\textcolor` の色の引数として受ける形。名前付き色だけを受け、xcolor の式(`red!50`)や
+ * 色モデル指定、名前でない値は生ブロックに残す(プレビューの CSS に生の文字列を渡さない)。
+ */
+const COLOR_NAME = /^[A-Za-z][A-Za-z0-9]*$/;
 
 const CANVAS_SIZES = new Set<CanvasFontSize>(CANVAS_FONT_SIZES);
 
@@ -191,6 +255,37 @@ function lineBreakEnd(src: string, pos: number, limit: number): number {
       src.slice(i, limit),
     );
   return spacing ? i + spacing[0].length : i;
+}
+
+/**
+ * parseBlocks が段落を区切ってブロックとして読むコマンド(`\begin` の環境のほかに)。
+ * parseBlocks の分岐とグループの安い判定(blockStartIn)が同じこの一覧を見る。
+ */
+const BLOCK_COMMANDS = ["[", "pause", "titlepage", "tableofcontents", "includegraphics"] as const;
+type BlockCommand = (typeof BLOCK_COMMANDS)[number];
+
+function isBlockCommand(name: string): name is BlockCommand {
+  return (BLOCK_COMMANDS as readonly string[]).includes(name);
+}
+
+/** pos の `\` がブロックとして読むコマンドなら、その名前。 */
+function blockCommandAt(src: string, pos: number): BlockCommand | null {
+  const name = src[pos + 1] === "[" ? "[" : commandNameAt(src, pos);
+  return isBlockCommand(name) ? name : null;
+}
+
+/**
+ * [from, to) にあるブロック要素の始まり(環境・`\[`・`\pause` など)。deckcanvas があれば
+ * `canvas`、ほかのブロック要素だけなら `block`、無ければ null。
+ */
+function blockStartIn(src: string, from: number, to: number): "canvas" | "block" | null {
+  let found: "block" | null = null;
+  for (const token of texTokens(src, from, to)) {
+    if (token.kind === "begin" && token.name === "deckcanvas") return "canvas";
+    if (token.kind === "command" ? isBlockCommand(token.name) : token.kind !== "definition")
+      found = "block";
+  }
+  return found;
 }
 
 /** from 以降で最初の空行(段落の区切り)の手前の改行の位置。無ければ limit。CRLF も扱う。 */
@@ -374,6 +469,20 @@ class Parser {
         pos++;
         continue;
       }
+      if (ch === "{") {
+        // `{\small …}` のようなグループ。中の宣言はグループの終わりまで効く。
+        const close = braceClose(this.src, pos, end);
+        if (close !== null) {
+          flush(pos);
+          out.push({
+            type: "group",
+            children: this.parseInlines(pos + 1, close),
+            span: span(pos, close + 1),
+          });
+          pos = close + 1;
+          continue;
+        }
+      }
       if (ch === "-") {
         if (this.src.startsWith("---", pos)) {
           pushText("—", pos);
@@ -485,17 +594,95 @@ class Parser {
     if (name === "textcolor") {
       const g1 = group(argStart);
       const g2 = g1 && group(g1.next);
-      if (g1 && g2) {
+      const color = g1 && this.src.slice(g1.body[0], g1.body[1]).trim();
+      if (g1 && g2 && color && COLOR_NAME.test(color)) {
         return {
           node: {
             type: "colorText",
-            color: this.src.slice(g1.body[0], g1.body[1]).trim(),
+            color,
             children: this.parseInlines(g2.body[0], g2.body[1]),
             span: span(pos, g2.next),
           },
           next: g2.next,
         };
       }
+    }
+    if (DECLARATIONS.has(name)) {
+      return {
+        node: {
+          type: "declaration",
+          name: name as Exclude<DeclarationNode["name"], "color">,
+          span: span(pos, argStart),
+        },
+        next: argStart,
+      };
+    }
+    if (name === "color" && this.src[argStart] !== "[") {
+      const g = group(argStart);
+      const color = g && this.src.slice(g.body[0], g.body[1]).trim();
+      if (g && color && COLOR_NAME.test(color)) {
+        return {
+          node: {
+            type: "declaration",
+            name: "color",
+            color,
+            span: span(pos, g.next),
+          },
+          next: g.next,
+        };
+      }
+    }
+    if (name === "hspace" || name === "hspace*" || name === "vspace" || name === "vspace*") {
+      const g = group(argStart);
+      const length = g && parseSpaceLength(this.src.slice(g.body[0], g.body[1]));
+      if (g && length) {
+        return {
+          node: {
+            type: "space",
+            kind: name.startsWith("h") ? "hspace" : "vspace",
+            length,
+            span: span(pos, g.next),
+          },
+          next: g.next,
+        };
+      }
+    }
+    if (name === "hfill" || name === "quad" || name === "qquad") {
+      return {
+        node: { type: "space", kind: name, length: null, span: span(pos, argStart) },
+        next: argStart,
+      };
+    }
+    if (name === "footnote" && this.src[argStart] !== "[") {
+      const g = group(argStart);
+      if (g) {
+        return {
+          node: {
+            type: "footnote",
+            children: this.parseInlines(g.body[0], g.body[1]),
+            span: span(pos, g.next),
+          },
+          next: g.next,
+        };
+      }
+    }
+    if (name === "cite" && this.src[argStart] !== "[") {
+      const g = group(argStart);
+      if (g) {
+        const keys = this.src
+          .slice(g.body[0], g.body[1])
+          .split(",")
+          .map((key) => key.trim())
+          .filter((key) => key !== "");
+        if (keys.length > 0) {
+          return { node: { type: "cite", keys, span: span(pos, g.next) }, next: g.next };
+        }
+      }
+    }
+    if (name === "LaTeX" || name === "TeX") {
+      // `\LaTeX{}` の空グループは語の区切りなので一緒に読む。
+      const empty = this.src.startsWith("{}", argStart) ? argStart + 2 : argStart;
+      return { node: { type: "logo", name, span: span(pos, empty) }, next: empty };
     }
     if (name === "url") {
       const g = group(argStart);
@@ -578,6 +765,23 @@ class Parser {
         pos++;
         continue;
       }
+      if (ch === "{") {
+        // 空行やブロック要素をまたぐグループは段落を区切ってブロックのグループにする。
+        // 段落の中で閉じるグループは段落の一部として閉じの次まで進め、あとで parseInlines が
+        // インラインの group にする(中の `{` をここで読み直さない)。
+        const group = this.braceGroupAt(pos, end);
+        if (group?.type === "blockGroup") {
+          flushPara(pos);
+          out.push(group);
+          pos = group.span.end;
+          continue;
+        }
+        if (group) {
+          if (paraStart === -1) paraStart = pos;
+          pos = group.end;
+          continue;
+        }
+      }
       if (this.src.startsWith("\\begin{", pos)) {
         flushPara(pos);
         const parsed = this.parseEnvironment(pos, end);
@@ -591,52 +795,16 @@ class Parser {
         pos = lineBreakEnd(this.src, pos, end);
         continue;
       }
-      if (this.src.startsWith("\\[", pos)) {
+      const blockCommand = ch === "\\" ? blockCommandAt(this.src, pos) : null;
+      if (blockCommand) {
         flushPara(pos);
-        const close = this.displayMathClose(pos + 2, end);
-        if (close === null) {
-          // 閉じが見つからない `\[` は、その 2 文字だけを生ブロックにする。続きはこのループが
-          // 通常どおり読むので、後続のブロックを飲み込まない(#154)。
-          out.push(this.rawBlock(pos, pos + 2, null, "unknown-command"));
-          pos += 2;
-          continue;
-        }
-        out.push({
-          type: "displayMath",
-          kind: "bracket",
-          tex: this.src.slice(pos + 2, close).trim(),
-          span: span(pos, close + 2),
-        });
-        pos = close + 2;
+        const parsed = this.parseBlockCommand(blockCommand, pos, end);
+        out.push(parsed.node);
+        pos = parsed.next;
         continue;
       }
       if (ch === "\\") {
         const name = commandNameAt(this.src, pos);
-        if (name === "pause") {
-          flushPara(pos);
-          out.push({ type: "pause", span: span(pos, pos + 6) });
-          pos += 6;
-          continue;
-        }
-        if (name === "titlepage") {
-          flushPara(pos);
-          out.push({ type: "titlePage", span: span(pos, pos + 10) });
-          pos += 10;
-          continue;
-        }
-        if (name === "tableofcontents") {
-          flushPara(pos);
-          out.push({ type: "tableOfContents", span: span(pos, pos + 16) });
-          pos += 16;
-          continue;
-        }
-        if (name === "includegraphics") {
-          flushPara(pos);
-          const parsed = this.parseIncludeGraphics(pos, end);
-          out.push(parsed.node);
-          pos = parsed.next;
-          continue;
-        }
         // その他のコマンドはインラインとして段落に取り込む
         if (paraStart === -1) paraStart = pos;
         const step = this.parseInlineCommand(pos, name, end);
@@ -648,6 +816,66 @@ class Parser {
     }
     flushPara(end);
     return out;
+  }
+
+  /** ブロックとして読むコマンド(BLOCK_COMMANDS)を 1 つ読む。 */
+  private parseBlockCommand(
+    name: BlockCommand,
+    pos: number,
+    limit: number,
+  ): { node: BlockNode; next: number } {
+    switch (name) {
+      case "[": {
+        const close = this.displayMathClose(pos + 2, limit);
+        if (close === null) {
+          // 閉じが見つからない `\[` は、その 2 文字だけを生ブロックにする。続きは parseBlocks が
+          // 通常どおり読むので、後続のブロックを飲み込まない(#154)。
+          return { node: this.rawBlock(pos, pos + 2, null, "unknown-command"), next: pos + 2 };
+        }
+        return {
+          node: {
+            type: "displayMath",
+            kind: "bracket",
+            tex: this.src.slice(pos + 2, close).trim(),
+            span: span(pos, close + 2),
+          },
+          next: close + 2,
+        };
+      }
+      case "pause":
+        return { node: { type: "pause", span: span(pos, pos + 6) }, next: pos + 6 };
+      case "titlepage":
+        return { node: { type: "titlePage", span: span(pos, pos + 10) }, next: pos + 10 };
+      case "tableofcontents":
+        return { node: { type: "tableOfContents", span: span(pos, pos + 16) }, next: pos + 16 };
+      case "includegraphics":
+        return this.parseIncludeGraphics(pos, limit);
+    }
+  }
+
+  /**
+   * pos の `{` のグループ。空行かブロック要素をまたいで閉じるならブロックのグループ、段落の中で
+   * 閉じるなら `inline`(閉じの次の位置)。閉じない、または deckcanvas を含むなら null で、
+   * `{` は本文の文字として読む。deckcanvas はフレーム直下でしか canvas として扱われない
+   * (isCanvasFrame・canvas の lint・自由配置)ので、グループの子にしない。
+   */
+  private braceGroupAt(
+    pos: number,
+    limit: number,
+  ): BlockGroupNode | { type: "inline"; end: number } | null {
+    const close = braceClose(this.src, pos, limit);
+    if (close === null) return null;
+    const inline = { type: "inline" as const, end: close + 1 };
+    const blockStart = blockStartIn(this.src, pos + 1, close);
+    if (blockStart === "canvas") return null;
+    // 中身をパースする前に、空行もブロック要素の始まりも無いものを安く除く。入れ子の `{` ごとに
+    // 中身を読み直すと、深さに対して指数的に遅くなる。
+    const blankLine = blankLineAt(this.src, pos + 1, close) < close;
+    if (!blankLine && blockStart === null) return inline;
+    const children = this.parseBlocks(pos + 1, close);
+    return blankLine || children.some((block) => block.type !== "paragraph")
+      ? { type: "blockGroup", children, span: span(pos, close + 1) }
+      : inline;
   }
 
   /**
@@ -830,6 +1058,13 @@ class Parser {
       }
       i++;
     }
+    // 最初の \item より前は宣言だけを拾う(宣言は環境の終わりまで全項目に効く)。
+    const declarations = this.parseBlocks(bodyStart, itemPositions[0] ?? bodyEnd).flatMap(
+      (block) =>
+        block.type === "paragraph"
+          ? block.children.filter((node): node is DeclarationNode => node.type === "declaration")
+          : [],
+    );
     for (let k = 0; k < itemPositions.length; k++) {
       const itemPos = itemPositions[k] as number;
       const contentEnd = k + 1 < itemPositions.length ? (itemPositions[k + 1] as number) : bodyEnd;
@@ -843,7 +1078,7 @@ class Parser {
         span: span(itemPos, contentEnd),
       });
     }
-    return { type: "list", kind, items, span: span(pos, next) };
+    return { type: "list", kind, declarations, items, span: span(pos, next) };
   }
 
   private parseColumns(pos: number, bodyStart: number, bodyEnd: number, next: number): BlockNode {
@@ -1086,14 +1321,16 @@ class Parser {
           continue;
         }
         const contentStart = optClose === null ? optOpen : optClose + 1;
-        const children = this.parseBlocks(contentStart, envEnd).map((b) =>
-          b.type === "paragraph" ||
-          b.type === "displayMath" ||
-          b.type === "list" ||
-          b.type === "rawBlock"
-            ? b
-            : this.rawBlock(b.span.start, b.span.end, null, "canvas-unsupported-content"),
-        );
+        const decktextBlock = (b: BlockNode): CanvasTextNode["children"][number] =>
+          b.type === "blockGroup"
+            ? { ...b, children: b.children.map(decktextBlock) }
+            : b.type === "paragraph" ||
+                b.type === "displayMath" ||
+                b.type === "list" ||
+                b.type === "rawBlock"
+              ? b
+              : this.rawBlock(b.span.start, b.span.end, null, "canvas-unsupported-content");
+        const children = this.parseBlocks(contentStart, envEnd).map(decktextBlock);
         items.push({
           type: "canvasText",
           position: {

@@ -542,3 +542,249 @@ describe("parseDeck: TeX と同じ境界規則(tex-scan)", () => {
     });
   });
 });
+
+describe("parseDeck: よく使う整形命令(#180)", () => {
+  const blocks = (body: string) => {
+    const doc = parseDeck(
+      `\\documentclass{beamer}\n\\begin{document}\n\\begin{frame}[label=a]{T}\n${body}\n\\end{frame}\n\\end{document}\n`,
+    );
+    const frame = framesOf(doc)[0];
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    return frame.body;
+  };
+  const inlines = (body: string) => {
+    const paragraph = blocks(body)[0];
+    if (paragraph?.type !== "paragraph") throw new Error("paragraph missing");
+    return paragraph.children;
+  };
+  const types = (body: string) => inlines(body).map((node) => node.type);
+
+  it("揃え・サイズ・書体の宣言と \\color を宣言として読む", () => {
+    expect(inlines("\\centering \\small \\bfseries \\color{red} A")).toMatchObject([
+      { type: "declaration", name: "centering" },
+      { type: "declaration", name: "small" },
+      { type: "declaration", name: "bfseries" },
+      { type: "declaration", name: "color", color: "red" },
+      { type: "text" },
+    ]);
+  });
+
+  it("\\color / \\textcolor は名前の形の色だけを読み、式や名前でない値は生ブロックに残す", () => {
+    // 一覧に無い名前(\definecolor の色)も、名前の形なら構造化する。色を付けるかは描画側が決める。
+    expect(inlines("\\color{teal} A \\textcolor{corpblue}{B}")).toMatchObject([
+      { type: "declaration", name: "color", color: "teal" },
+      { type: "text", value: " A " },
+      { type: "colorText", color: "corpblue" },
+    ]);
+    for (const body of [
+      "\\color{red;position:fixed;inset:0}X",
+      "\\textcolor{red;position:fixed;inset:0}{X}",
+      "\\color{red!50}X",
+      "\\textcolor{red!50}{X}",
+    ]) {
+      expect(inlines(body)[0]).toMatchObject({ type: "rawInline", reason: "unknown-command" });
+    }
+  });
+
+  it("波括弧をグループとして読み、括弧を本文に残さない", () => {
+    const [before, group] = inlines("Before {\\color{red} A} after");
+    expect(before).toMatchObject({ type: "text", value: "Before " });
+    expect(group).toMatchObject({
+      type: "group",
+      children: [
+        { type: "declaration", name: "color" },
+        { type: "text", value: " A" },
+      ],
+    });
+  });
+
+  it("寸法にできる長さの \\hspace / \\vspace と、\\hfill / \\quad / \\qquad を空白として読む", () => {
+    expect(inlines("\\hspace{1.5em}\\vspace*{-2mm}\\hspace{0.5\\textwidth}")).toMatchObject([
+      { type: "space", kind: "hspace", length: { value: 1.5, unit: "em" } },
+      { type: "space", kind: "vspace", length: { value: -2, unit: "mm" } },
+      { type: "space", kind: "hspace", length: { value: 0.5, unit: "linewidth" } },
+    ]);
+    expect(types("A\\hfill B\\quad C\\qquad D")).toEqual([
+      "text",
+      "space",
+      "text",
+      "space",
+      "text",
+      "space",
+      "text",
+    ]);
+    // 寸法にできない長さは、これまでどおり生ブロックに残す。
+    expect(types("\\hspace{\\stretch{1}}")).toEqual(["rawInline"]);
+  });
+
+  it("\\footnote・\\cite・\\LaTeX・命令形の書体を読み、任意引数付きは生ブロックに残す", () => {
+    expect(inlines("A\\footnote{Note} \\cite{knuth84, lamport} \\LaTeX{} x")).toMatchObject([
+      { type: "text", value: "A" },
+      { type: "footnote", children: [{ type: "text", value: "Note" }] },
+      { type: "cite", keys: ["knuth84", "lamport"] },
+      { type: "logo", name: "LaTeX" },
+      { type: "text", value: " x " },
+    ]);
+    expect(inlines("\\underline{a}\\textsc{b}")).toMatchObject([
+      { type: "styled", style: "underline" },
+      { type: "styled", style: "textsc" },
+    ]);
+    expect(types("\\footnote[3]{Note}")).toEqual(["rawInline"]);
+    expect(types("\\cite[p.~3]{knuth84}")).toEqual(["rawInline"]);
+  });
+
+  it("空行やブロック要素をまたぐ波括弧はブロックのグループにする", () => {
+    expect(blocks("{\\small First\n\nSecond\n}\n\nNormal")).toMatchObject([
+      {
+        type: "blockGroup",
+        children: [
+          {
+            type: "paragraph",
+            children: [
+              { type: "declaration", name: "small" },
+              { type: "text", value: " First" },
+            ],
+          },
+          { type: "paragraph", children: [{ type: "text", value: "Second " }] },
+        ],
+      },
+      { type: "paragraph", children: [{ type: "text", value: "Normal " }] },
+    ]);
+    // 段落の途中で始まるグループは、そこまでの段落を確定してからグループにする。
+    const [lead, group, after] = blocks(
+      "Lead {\\color{red}\nIntro\n\\begin{itemize}\n\\item A\n\\end{itemize}\n} after",
+    );
+    expect(lead).toMatchObject({ type: "paragraph", children: [{ type: "text", value: "Lead " }] });
+    expect(group?.type === "blockGroup" && group.children.map((block) => block.type)).toEqual([
+      "paragraph",
+      "list",
+    ]);
+    expect(after).toMatchObject({
+      type: "paragraph",
+      children: [{ type: "text", value: "after " }],
+    });
+  });
+
+  it("段落の中で閉じるグループはインラインのまま、閉じないグループはこれまでどおり本文に残す", () => {
+    expect(blocks("A {\\small B} C")).toMatchObject([
+      { type: "paragraph", children: [{ type: "text" }, { type: "group" }, { type: "text" }] },
+    ]);
+    expect(blocks("{\\small First\n\nSecond")).toMatchObject([
+      { type: "paragraph", children: [{ type: "text", value: "{" }, { type: "declaration" }, {}] },
+      { type: "paragraph", children: [{ type: "text", value: "Second " }] },
+    ]);
+  });
+
+  it("入れ子の深い波括弧も、深さに対して指数的にならずに読む", () => {
+    const depth = 200;
+    const cases = [
+      `${"{".repeat(depth)}a${"}".repeat(depth)}`,
+      `${"{\\small a ".repeat(depth)}${"}".repeat(depth)}`,
+      // いちばん内側にだけ空行があり、どの深さのグループもブロックのグループになる。
+      `${"{".repeat(depth)}a\n\nb${"}".repeat(depth)}`,
+    ];
+    const [inline, declared, nested] = cases.map((body) => {
+      const started = performance.now();
+      const result = blocks(body);
+      expect(performance.now() - started).toBeLessThan(200);
+      return result;
+    });
+    expect(inline).toMatchObject([{ type: "paragraph", children: [{ type: "group" }] }]);
+    expect(declared).toMatchObject([{ type: "paragraph", children: [{ type: "group" }] }]);
+    expect(nested).toMatchObject([{ type: "blockGroup", children: [{ type: "blockGroup" }] }]);
+  });
+
+  it("グループの閉じは、コメント・\\verb・verbatim の本文の中の波括弧を数えない", () => {
+    // コメントの中の `}` / `{` は閉じにも開きにもならない。
+    expect(blocks("{\\small A % } {\nB}\nC")).toMatchObject([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "group",
+            children: [
+              { type: "declaration", name: "small" },
+              { type: "text", value: " A B" },
+            ],
+          },
+          { type: "text", value: " C " },
+        ],
+      },
+    ]);
+    expect(blocks("{\\small \\verb|}| A}\n\nB")).toMatchObject([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "group",
+            children: [
+              { type: "declaration" },
+              { type: "rawInline", tex: "\\verb|}|" },
+              { type: "text", value: " A" },
+            ],
+          },
+        ],
+      },
+      { type: "paragraph", children: [{ type: "text", value: "B " }] },
+    ]);
+    // verbatim は丸ごと 1 つの生ブロックのまま、グループはその後の `}` で閉じる。
+    expect(blocks("{\\small\n\\begin{verbatim}\n}\n\\end{verbatim}\n}\n\nAfter")).toMatchObject([
+      {
+        type: "blockGroup",
+        children: [
+          { type: "paragraph", children: [{ type: "declaration", name: "small" }] },
+          {
+            type: "rawBlock",
+            environment: "verbatim",
+            tex: "\\begin{verbatim}\n}\n\\end{verbatim}",
+          },
+        ],
+      },
+      { type: "paragraph", children: [{ type: "text", value: "After " }] },
+    ]);
+  });
+
+  it("decktext の中のブロックのグループは中身を decktext の語彙で読む", () => {
+    const [canvas] = blocks(
+      "\\begin{deckcanvas}\n\\begin{decktext}[x=0.100,y=0.200,w=0.500,size=normal]\n{\\small A\n\n\\includegraphics{a.png}}\n\\end{decktext}\n\\end{deckcanvas}",
+    );
+    expect(canvas).toMatchObject({
+      type: "canvas",
+      items: [
+        {
+          type: "canvasText",
+          children: [
+            {
+              type: "blockGroup",
+              children: [
+                { type: "paragraph" },
+                { type: "rawBlock", reason: "canvas-unsupported-content" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("箇条書きの最初の \\item より前の宣言を list に残す", () => {
+    for (const kind of ["itemize", "enumerate"]) {
+      const [list] = blocks(
+        `\\begin{${kind}}\n\\small \\color{red}\n\\bfseries\n\\item A\n\\item B\n\\end{${kind}}`,
+      );
+      expect(list).toMatchObject({
+        type: "list",
+        declarations: [
+          { type: "declaration", name: "small" },
+          { type: "declaration", name: "color", color: "red" },
+          { type: "declaration", name: "bfseries" },
+        ],
+        items: [{ type: "listItem" }, { type: "listItem" }],
+      });
+    }
+    expect(blocks("\\begin{itemize}\n\\item A\n\\end{itemize}")[0]).toMatchObject({
+      type: "list",
+      declarations: [],
+    });
+  });
+});

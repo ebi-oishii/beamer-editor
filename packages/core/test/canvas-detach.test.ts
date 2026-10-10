@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BlockNode, SourceSpan } from "../src/ast.js";
+import { type BlockNode, framesOf, isCanvasFrame, type SourceSpan } from "../src/ast.js";
 import { detachBlockToCanvas, detachStatusesOf, isDetachableBlock } from "../src/canvas-detach.js";
 import { lintSource } from "../src/linter.js";
 import { parseDeck } from "../src/parser.js";
@@ -50,6 +50,36 @@ function apply(
 }
 
 describe("detachBlockToCanvas", () => {
+  it("波括弧のグループの中の deckcanvas もフレーム直下の canvas として扱い、2 つ目を作らない", () => {
+    const frame = (canvasExtra: string) =>
+      deck(`\\begin{frame}[label=g]{T}
+Intro
+
+{\\small
+\\begin{deckcanvas}
+\\begin{decktext}[x=0.100,y=0.200,w=0.500,size=normal]
+A
+\\end{decktext}${canvasExtra}
+\\end{deckcanvas}
+}
+\\end{frame}`);
+    const source = frame("");
+    const parsed = framesOf(parseDeck(source))[0];
+    expect(parsed?.type === "frame" && isCanvasFrame(parsed)).toBe(true);
+    // canvas の lint が効く(deckcanvas 直下に decktext / deckimage 以外を置くと L014)。
+    expect(lintSource(source).map(({ code }) => code)).not.toContain("L014");
+    expect(lintSource(frame("\nstray")).map(({ code }) => code)).toContain("L014");
+
+    const result = detachBlockToCanvas(source, spanOf(source, "Intro"), {
+      x: 0.1,
+      y: 0.5,
+      width: 0.5,
+    });
+    const applied = apply(source, must(result));
+    expect(applied.match(/\\begin\{deckcanvas\}/g)).toHaveLength(1);
+    expect(applied).toContain("\\begin{decktext}[x=0.100,y=0.500,w=0.500,size=normal]");
+  });
+
   it("段落を取り除き、フレーム末尾に新設した deckcanvas の decktext へ移す", () => {
     const source = deck(`\\begin{frame}{T}
   Intro line one
