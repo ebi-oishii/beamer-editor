@@ -828,6 +828,17 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * snapshot が自分で投げる「選んだ frame に PDF page が無い」。コードは従来どおり E_COMPILE だが、
+ * コンパイル自体は成功しているので、コンパイラの E_COMPILE と違って lint を添えない。
+ */
+class NoSnapshotPageError extends Error {
+  readonly code = "E_COMPILE";
+  constructor() {
+    super("snapshot 可能な PDF page がありません");
+  }
+}
+
 async function runSnapshot(
   parsed: ParsedSnapshotArgs,
   dependencies: CliDependencies,
@@ -886,10 +897,7 @@ async function runSnapshot(
         file: snapshotFileName(item.address.number, image.page),
       })),
     );
-    if (!outputs.length)
-      throw Object.assign(new Error("snapshot 可能な PDF page がありません"), {
-        code: "E_COMPILE",
-      });
+    if (!outputs.length) throw new NoSnapshotPageError();
     // mkdir is atomic and never replaces an existing directory, so it doubles as the publication
     // reservation: a concurrent creator wins and we leave their entry untouched.
     try {
@@ -962,7 +970,11 @@ async function runSnapshot(
       typeof candidate === "string" && Object.hasOwn(ERROR_EXIT_CODE, candidate)
         ? (candidate as CliErrorCode)
         : "E_INTERNAL";
-    const linted = code === "E_COMPILE" ? await lintAfterCompileFailure(input) : null;
+    // 「ページが無い」はコンパイル自体は成功しているので lint を添えない(終了コード 3 のまま)。
+    const linted =
+      code === "E_COMPILE" && !(error instanceof NoSnapshotPageError)
+        ? await lintAfterCompileFailure(input)
+        : null;
     if (linted !== null)
       return reportCompileError(
         errorMessage(error),

@@ -1432,6 +1432,20 @@ describe("E_COMPILE に lint error を添える", () => {
     }
   });
 
+  it("deck snapshot の「ページが無い」(コンパイルは成功)には lint を添えず、終了コード 3 のまま", async () => {
+    const source = await fixture("talk.slide.tex", outdated);
+    await writeFile(source.path.replace("talk.slide.tex", "bg.png"), "");
+    const output = source.path.replace(/\.slide\.tex$/, "-snap");
+    const { code, stderr } = await snapshot(
+      [source.path, "-o", output, "--json"],
+      snapshotCompiled(snapshotFrame(1, null, [])),
+    );
+    expect(code).toBe(EXIT_CODE.operationalFailure);
+    expect(JSON.parse(stderr)).toEqual({
+      error: { code: "E_COMPILE", message: "snapshot 可能な PDF page がありません" },
+    });
+  });
+
   it("deck export --format pdf も同じ。lint error が無ければ従来どおり", async () => {
     const source = await fixture("talk.slide.tex", outdated);
     await writeFile(source.path.replace("talk.slide.tex", "bg.png"), "");
