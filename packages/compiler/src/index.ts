@@ -14,7 +14,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
-import { StringDecoder } from "node:string_decoder";
+import { lineSplitter } from "./line-splitter.js";
 
 const MAX_PROCESS_OUTPUT = 1024 * 1024;
 const DEFAULT_COMPILE_TIMEOUT_MS = 300_000;
@@ -133,31 +133,6 @@ function boundedCollector(limit: number) {
   };
 }
 
-/**
- * Split a byte stream into lines across chunk boundaries. A line longer than
- * the output limit is cut there, so one unterminated line cannot grow without
- * bound.
- */
-function lineSplitter(onLine: (line: string) => void) {
-  const decoder = new StringDecoder("utf8");
-  let pending = "";
-  const emit = (line: string) => onLine(line.endsWith("\r") ? line.slice(0, -1) : line);
-  return {
-    append(chunk: Buffer | string) {
-      const lines = (pending + (typeof chunk === "string" ? chunk : decoder.write(chunk))).split(
-        "\n",
-      );
-      pending = (lines.pop() as string).slice(0, MAX_PROCESS_OUTPUT);
-      for (const line of lines) emit(line);
-    },
-    end() {
-      const rest = pending + decoder.end();
-      pending = "";
-      if (rest.length > 0) emit(rest);
-    },
-  };
-}
-
 const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*[A-Za-z]`, "g");
 const TECTONIC_DOWNLOAD_LINE = /^note: downloading (.+)$/;
 
@@ -240,7 +215,7 @@ export const nodeProcessRunner: ProcessRunner = {
           } catch {
             // Ignored deliberately; the collected output is unaffected.
           }
-        });
+        }, MAX_PROCESS_OUTPUT);
       const lines =
         onOutputLine === undefined && restartTimeoutOn === undefined
           ? undefined
