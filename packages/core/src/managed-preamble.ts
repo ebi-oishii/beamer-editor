@@ -2,7 +2,7 @@ import type { SourceSpan } from "./ast.js";
 import { MANAGED_PREAMBLE_RESOURCES } from "./generated-managed-preamble.js";
 import type { LintFix } from "./linter.js";
 import { documentTags } from "./tex-scan.js";
-import { USER_REGION_NAMES, userRegion } from "./user-regions.js";
+import { USER_REGION_NAMES } from "./user-regions.js";
 
 /** `deck init` が書くツール管理プリアンブルの開始行。 */
 export const MANAGED_PREAMBLE_BEGIN =
@@ -33,8 +33,9 @@ export type ManagedPreambleLocation = { span: SourceSpan } | { problem: string }
  * ソース上のツール管理プリアンブル(開始行の先頭から終了行の末尾まで。改行は含まない)を探す。
  * 終了印は、開始印より後ろで、最初のユーザー領域の印と `\begin{document}` より前だけで探す
  * (終了印が消えたデッキで、後ろへ貼り付けた終了印の行まで差し替えてユーザー領域を消さない)。
- * ユーザー領域は parser と同じ規則(user-regions.ts)で判定する。コメントの中の印でも parser は
- * 領域と認めるので、ここでもそこで止まる(書き換えずに拒否する側に倒れる)。
+ * ユーザー領域の開始印は、開始印より後ろで最初に出てくる文字列で判定する(行頭か・コメントの中か・
+ * 終了印があるかは問わない)。parser の region() はファイル全体で最初の、終了印もそろった印だけを
+ * 領域と認めるので、それより手前で止まることがあるが、そのときは書き換えずに拒否する側に倒れる。
  * `preambleEnd` はプリアンブルの終わり(parse 済みなら渡すと全文の走査を省ける)。
  */
 export function locateManagedPreamble(
@@ -49,10 +50,13 @@ export function locateManagedPreamble(
     return { problem: "開始印(「% ---- ツール管理プリアンブル」で始まる行)がありません" };
   if (begins.length > 1) return { problem: "開始印がプリアンブルに複数あります" };
   const contentStart = begin.index + begin[0].length;
+  // 上限は、開始印より後ろで最初に出てくるユーザー領域の開始印の文字列(行頭か・終了印があるかは
+  // 問わない)と \begin{document} の手前のほう。parser の region() より手前で止まりうるが、迷ったら
+  // 書き換えずに拒否する側に倒す(後ろへ貼り付けた終了印まで差し替えてユーザー領域を消さない)。
   const limit = Math.min(
     preamble.length,
-    ...USER_REGION_NAMES.map((name) => userRegion(source, name)?.begin ?? -1).filter(
-      (index) => index >= contentStart,
+    ...USER_REGION_NAMES.map((name) => preamble.indexOf(`%% ${name}:begin`, contentStart)).filter(
+      (index) => index !== -1,
     ),
   );
   const endLine = END_LINE.exec(source.slice(contentStart, limit));

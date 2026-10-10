@@ -1,6 +1,7 @@
 /**
- * ユーザー領域(`%% macros` / `%% style` / `%% preamble-extra`)の印の位置。parser と、
- * ツール管理プリアンブルの範囲を決める処理(managed-preamble.ts)が同じ規則で判定するために共有する。
+ * ユーザー領域(`%% macros` / `%% style` / `%% preamble-extra`)の名前と、parser が領域と認める範囲。
+ * ツール管理プリアンブルの範囲決め(managed-preamble.ts)は名前だけを共有し、上限はより手前で止まる
+ * 独自の規則で決める(ユーザー領域を消さないよう、迷ったら拒否する側に倒すため)。
  * 公開 API ではない(index.ts から export しない)。
  */
 

@@ -437,6 +437,32 @@ describe("--update-preamble", () => {
     );
   });
 
+  it("%% macros:end の綴り違いや、手前のコメントの %% macros:begin があってもマクロ領域を書き換えない", async () => {
+    const withoutEnd = (await outdatedDeck()).replace(/^% ---- ツール管理ここまで ----\n/m, "");
+    for (const source of [
+      // (a) %% macros:end の綴りが違い、マクロの後ろに終了印を貼り付けた
+      withoutEnd.replace("%% macros:end", "%% macro:end\n% ---- ツール管理ここまで ----"),
+      // (b) 管理プリアンブルより前のコメントに %% macros:begin があり、本物のマクロ領域の後ろに終了印がある
+      withoutEnd
+        .replace(
+          "%% deck-source-version: 1\n",
+          "%% deck-source-version: 1\n% メモ: %% macros:begin の下に書く\n",
+        )
+        .replace("%% macros:end", "%% macros:end\n% ---- ツール管理ここまで ----"),
+    ]) {
+      const deck = join(await temp(), "talk.slide.tex");
+      await writeFile(deck, source);
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      expect(await run(["init", deck, "--update-preamble", "--json"])).toBe(3);
+      expect(JSON.parse(stderr.mock.calls.map((c) => c[0]).join(""))).toMatchObject({
+        error: { code: "E_INPUT" },
+      });
+      expect(await readFile(deck, "utf8")).toBe(source);
+      expect(lintSource(source).filter((entry) => entry.fix !== undefined)).toEqual([]);
+      stderr.mockRestore();
+    }
+  });
+
   it("引数の誤りは usage エラーにする", async () => {
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
     expect(await run(["init", "--update-preamble"])).toBe(3);

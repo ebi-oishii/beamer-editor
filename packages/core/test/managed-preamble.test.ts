@@ -229,7 +229,27 @@ describe("locateManagedPreamble: 終了印を探す範囲", () => {
     );
   });
 
-  it("ユーザー領域の印は parser と同じ規則で数え、コメントの中の印でも止まって書き換えない", () => {
+  it("(a) %% macros:end の綴りが違い、マクロの後ろに終了印を貼り付けたデッキは差し替えない", () => {
+    const source = initDeck(withoutEnd, BACKGROUNDS).replace(
+      "%% macros:begin\n%% macros:end\n",
+      `%% macros:begin\n\\newcommand{\\R}{\\mathbb{R}}\n%% macro:end\n${MANAGED_PREAMBLE_END}\n`,
+    );
+    expect(spanOf(source)).toBeNull();
+    expect(l025(source).map((entry) => entry.fix)).toEqual([undefined, undefined]);
+  });
+
+  it("(b) 管理プリアンブルより前のコメントに %% macros:begin があり、本物のマクロ領域の後ろに終了印があるデッキは差し替えない", () => {
+    const source = initDeck(withoutEnd, BACKGROUNDS)
+      .replace(
+        "%% deck-source-version: 1\n",
+        "%% deck-source-version: 1\n% メモ: %% macros:begin の下に書く\n",
+      )
+      .replace("%% macros:end\n", `%% macros:end\n${MANAGED_PREAMBLE_END}\n`);
+    expect(spanOf(source)).toBeNull();
+    expect(l025(source).map((entry) => entry.fix)).toEqual([undefined, undefined]);
+  });
+
+  it("コメントの中の印でも止まって書き換えない", () => {
     const source = initDeck(
       oldManaged.replace(
         `\n${MANAGED_PREAMBLE_END}`,
