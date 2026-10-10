@@ -277,7 +277,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
             title: "Beamer Editor: 書き出し中",
             cancellable: true,
           },
-          (_progress, token) => task(token),
+          (progress, token) => task(token, (message) => progress.report({ message })),
         ),
       showInformation: (message, ...actions) =>
         vscode.window.showInformationMessage(message, ...actions),

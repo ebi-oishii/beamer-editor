@@ -3,6 +3,7 @@ import {
   exportPdf,
   PdfExportError,
   type PdfExportErrorCode,
+  type PdfExportProgress,
   type PdfExportResult,
 } from "@beamer-editor/compiler";
 import {
@@ -35,7 +36,10 @@ export interface ExportHost {
   chooseFormat(): Thenable<"pdf" | "html" | undefined>;
   chooseOutput(defaultUri: ExportUri, format: "pdf" | "html"): Thenable<ExportUri | undefined>;
   outputExists(uri: ExportUri): Thenable<boolean>;
-  withProgress<T>(task: (token: ExportCancellationToken) => Thenable<T>): Thenable<T>;
+  /** `report` は進捗通知の本文を差し替える(VS Code の `progress.report({ message })`)。 */
+  withProgress<T>(
+    task: (token: ExportCancellationToken, report: (message: string) => void) => Thenable<T>,
+  ): Thenable<T>;
   showInformation(message: string, ...actions: string[]): Thenable<string | undefined>;
   showError(message: string, ...actions: string[]): Thenable<string | undefined>;
   showWarning(message: string, ...actions: string[]): Thenable<string | undefined>;
@@ -57,6 +61,7 @@ export interface ExportControllerDependencies {
     tectonicPath?: string;
     timeoutMs?: number;
     signal: AbortSignal;
+    onProgress?: (progress: PdfExportProgress) => void;
   }) => Promise<PdfExportResult>;
   exportHtml?: (request: HtmlExportRequest) => Promise<HtmlExportResult>;
   htmlKatexAssetsPath?: string;
@@ -90,6 +95,46 @@ const ERROR_MESSAGES: Record<Exclude<PdfExportErrorCode, "E_CANCELLED">, string>
 };
 
 const DETAIL_LIMIT = 64 * 1024;
+const PROGRESS_INTERVAL_MS = 250;
+
+/**
+ * 初回の TeX パッケージ取得は数百件続くため、通知の更新を間引く。間引いて保留中の最後の値は、
+ * 成功時に `flush()` で同期的に出し、キャンセル・破棄時は `dispose()` で捨てる。
+ */
+function throttledReporter(report: (message: string) => void) {
+  let lastReported = Number.NEGATIVE_INFINITY;
+  let latest: string | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const dispose = () => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    latest = undefined;
+  };
+  const flush = () => {
+    const message = latest;
+    dispose();
+    if (message === undefined) return;
+    lastReported = Date.now();
+    report(message);
+  };
+  return {
+    report(message: string) {
+      latest = message;
+      if (timer) return;
+      const wait = lastReported + PROGRESS_INTERVAL_MS - Date.now();
+      if (wait <= 0) flush();
+      else timer = setTimeout(flush, wait);
+    },
+    /** 保留中の値があれば今すぐ出す。 */
+    flush,
+    /** 保留中の値を出さずに捨てる。以降のタイマー通知も出ない。 */
+    dispose,
+  };
+}
+
+function downloadProgressMessage(progress: PdfExportProgress): string {
+  return `TeX パッケージを取得中（初回のみ）: ${progress.count} 件 — ${progress.file}`;
+}
 
 function stripAnsi(value: string): string {
   let result = "";
@@ -198,8 +243,9 @@ export class ExportController {
     if (this.disposed) return;
 
     try {
-      const result = await this.host.withProgress(async (token) => {
+      const result = await this.host.withProgress(async (token, report) => {
         const abort = new AbortController();
+        const progress = throttledReporter(report);
         this.activeAbortControllers.add(abort);
         const subscription = token.onCancellationRequested(() => abort.abort());
         try {
@@ -223,10 +269,20 @@ export class ExportController {
             overwrite,
             timeoutMs,
             signal: abort.signal,
+            onProgress: (value: PdfExportProgress) => {
+              if (!this.disposed && !abort.signal.aborted)
+                progress.report(downloadProgressMessage(value));
+            },
             ...(tectonicPath === undefined ? {} : { tectonicPath }),
           };
-          return await this.compile(request);
+          // Cancel and controller dispose both abort; the compile may take a
+          // while to settle after that, so drop the pending update right away.
+          abort.signal.addEventListener("abort", () => progress.dispose(), { once: true });
+          const compiled = await this.compile(request);
+          if (!this.disposed && !abort.signal.aborted) progress.flush();
+          return compiled;
         } finally {
+          progress.dispose();
           subscription.dispose();
           this.activeAbortControllers.delete(abort);
         }
