@@ -51,6 +51,8 @@ export interface ExportHost {
   showExportDetails(detail: string): void;
   /** Problems パネルを開く(コンパイル失敗に lint の error が伴うときの操作)。 */
   showProblems(): Thenable<unknown>;
+  /** Problems パネルにこの文書の診断が出るか(managed file か)。出ない文書には「問題を表示」を出さない。 */
+  showsProblems(document: ExportDocument): boolean;
   /** Problems パネルと同じ lint オプション(画像の存在・`text` から解決したテンプレート参照)。 */
   lintOptions(document: ExportDocument, text: string): LintOptions;
   uriForFile(path: string): ExportUri;
@@ -331,7 +333,8 @@ export class ExportController {
     const actions = [
       "詳細を表示",
       ...(error.code === "E_TECTONIC_NOT_FOUND" ? ["設定を開く"] : []),
-      ...(first === undefined ? [] : ["問題を表示"]),
+      // 管理対象外の .tex は Problems パネルに診断が出ないので、通知と詳細に入れるだけにする。
+      ...(first === undefined || !this.host.showsProblems(document) ? [] : ["問題を表示"]),
     ];
     const action = await this.host.showError(message, ...actions);
     if (action === "詳細を表示") {

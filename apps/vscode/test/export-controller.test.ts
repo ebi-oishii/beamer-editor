@@ -51,6 +51,7 @@ function createHost(overrides: Partial<ExportHost> = {}): ExportHost {
     openTectonicSettings: vi.fn(async () => undefined),
     showExportDetails: vi.fn(),
     showProblems: vi.fn(async () => undefined),
+    showsProblems: vi.fn(() => true),
     lintOptions: vi.fn(() => ({})),
     uriForFile: vi.fn(() => output),
     tectonicPath: vi.fn(() => "/custom/tectonic"),
@@ -494,6 +495,22 @@ ${managedPreambleBlock().replace(
       expect(problems.showExportDetails).not.toHaveBeenCalled();
       // 文書が変わっていなければ、位置は Problems パネルと同じ positionAt で出す。
       expect(document.positionAt).toHaveBeenCalled();
+    });
+
+    it("管理対象外の .tex では「問題を表示」を出さず、通知と詳細に lint の error を入れるだけにする", async () => {
+      const host = createHost({
+        showError: vi.fn(async () => "詳細を表示"),
+        showsProblems: vi.fn(() => false),
+      });
+      await new ExportController(host, failing()).export(
+        createDocument({ getText: () => outdated }),
+      );
+      const [message, ...actions] = vi.mocked(host.showError).mock.calls[0] ?? [];
+      expect(message).toContain("先頭: L025: ");
+      expect(actions).toEqual(["詳細を表示"]);
+      expect(String(vi.mocked(host.showExportDetails).mock.calls[0]?.[0])).toContain(
+        `\n${line}:1 L025 `,
+      );
     });
 
     it("コンパイル中に編集されても、コンパイルした本文を lint し、その行・列を出す", async () => {

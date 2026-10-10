@@ -317,6 +317,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         exportOutput.show(true);
       },
       showProblems: () => vscode.commands.executeCommand("workbench.actions.view.problems"),
+      showsProblems: (document) => isManaged(document as vscode.TextDocument),
       lintOptions: (document, text) => deckLintOptions(document as vscode.TextDocument, text),
       uriForFile: (path) => vscode.Uri.file(path) as ExportUri,
       tectonicPath: (document) => tectonicPathFor(document.uri as vscode.Uri),
