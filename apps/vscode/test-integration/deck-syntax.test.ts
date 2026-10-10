@@ -10,6 +10,10 @@ interface CapturedToken {
   t: string;
 }
 
+/** deck の色が付くか。option の範囲を示す meta.optional-arguments.deck は色ではないので数えない。 */
+const deck = (scopes: string): boolean =>
+  scopes.split(" ").some((s) => s.endsWith(".deck") && !s.startsWith("meta."));
+
 const tempDirs: string[] = [];
 
 suite("Issue #181: deck 語彙の構文強調", () => {
@@ -52,7 +56,6 @@ suite("Issue #181: deck 語彙の構文強調", () => {
     );
     const scopesOf = (text: string): string[] =>
       tokens.filter((token) => token.c.trim() === text).map((token) => token.t);
-    const deck = (scopes: string): boolean => scopes.split(" ").some((s) => s.endsWith(".deck"));
 
     for (const name of ["deckcanvas", "decktext", "\\deckimage", "\\deckcolor"]) {
       const scopes = scopesOf(name);
@@ -120,7 +123,8 @@ suite("Issue #181: deck 語彙の構文強調", () => {
         "  % \\deckimage y=0.888, ] command comment",
         "  y=0.555,w=0.666",
         "]{a.png}",
-        // 閉じ括弧の無い option を、波括弧・次の命令・環境の終わりの手前で閉じる。
+        // 閉じ括弧の無い option は、波括弧の手前か、option の続きに見えない行
+        // (ここでは \begin の行と本文の行)の頭で閉じる。
         "\\deckimage[x=0.5{b.png}",
         "\\deckimage[x=0.6",
         "\\begin{decktext}[x=0.7",
@@ -144,7 +148,6 @@ suite("Issue #181: deck 語彙の構文強調", () => {
     );
     const scopesOf = (text: string): string[] =>
       tokens.filter((token) => token.c.trim() === text).map((token) => token.t);
-    const deck = (scopes: string): boolean => scopes.split(" ").some((s) => s.endsWith(".deck"));
     const numeric = (value: string) => {
       const scopes = scopesOf(value);
       return scopes.length > 0 && scopes.every((s) => s.includes("constant.numeric.deck"));
@@ -220,6 +223,136 @@ suite("Issue #181: deck 語彙の構文強調", () => {
       label.length > 0 && label.every((token) => !deck(token.t)),
       `label=next: ${label.map((token) => token.t).join(" | ")}`,
     );
+  });
+
+  test("閉じ括弧の無い option は、option の続きに見えない行と次の命令で閉じる", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "beamer-deck-syntax-"));
+    tempDirs.push(directory);
+    const file = path.join(directory, "deck.slide.tex");
+    // option の中では injection が働かないので、deck 自身の命令や環境の終わりも option に取られない。
+    // 正しい option の続きの行は、parser の parseCanvasKeys と同じく「キー=」「,」「]」「%」の
+    // どれかで始まる。それ以外の行(空行を含む)の頭で option を閉じる。
+    // 既知の制限: parser は `x =` の直後で改行して値を次の行に書く形も受け付けるが、構文強調では
+    // その行の頭で閉じる。formatter も「自由配置にする」もこの形を書き出さないので扱わない。
+    await writeFile(
+      file,
+      [
+        "\\documentclass{beamer}",
+        "\\begin{document}",
+        "\\begin{frame}[label=u]{U}",
+        "  \\begin{deckcanvas}",
+        "    \\deckimage[x=0.6",
+        "    \\begin{decktext}[x=0.7",
+        "      body $a=b$ key=1",
+        "    \\end{decktext}",
+        "    \\deckimage[",
+        "      x=0.81,",
+        "      % y=0.82, ] comment",
+        "      , y=0.83",
+        "      ,w=0.84",
+        "    ]{a.png}",
+        "    \\deckimage[x=0.91",
+        "",
+        "    w=0.92]{b.png}",
+        "    \\deckimage[x=0.61 \\deckimage[x=0.62]{c.png}",
+        "  \\end{deckcanvas}",
+        "\\end{frame}",
+        "\\end{document}",
+        "",
+      ].join("\n"),
+    );
+
+    const tokens = await vscode.commands.executeCommand<CapturedToken[]>(
+      "_workbench.captureSyntaxTokens",
+      vscode.Uri.file(file),
+    );
+    const scopesOf = (text: string): string[] =>
+      tokens.filter((token) => token.c.trim() === text).map((token) => token.t);
+    const option = "meta.optional-arguments.deck";
+    const containing = (text: string) => tokens.filter((token) => token.c.includes(text));
+    const show = (list: CapturedToken[]) =>
+      list.map((token) => `${JSON.stringify(token.c)} ${token.t}`).join(" | ");
+
+    // 本文の行はまるごと option の外。数式は組み込みの文法で読み、key=1 は色分けしない。
+    const math = containing("a=b");
+    assert.ok(
+      math.length > 0 && math.every((token) => token.t.includes("meta.math") && !deck(token.t)),
+      `$a=b$: ${show(math)}`,
+    );
+    for (const text of ["body", "key"]) {
+      const outside = containing(text);
+      assert.ok(
+        outside.length > 0 && outside.every((token) => !deck(token.t) && !token.t.includes(option)),
+        `${text}: ${show(outside)}`,
+      );
+    }
+
+    // 環境の終わりは、deck のものも組み込みのものも、option の外でそれぞれの scope を持つ。
+    const ends = tokens.filter((token) => ["end", "\\end"].includes(token.c.trim()));
+    assert.ok(
+      ends.length === 4 &&
+        ends.every(
+          (token) => token.t.includes("support.function.be.latex") && !token.t.includes(option),
+        ),
+      `\\end: ${show(ends)}`,
+    );
+    for (const name of ["decktext", "deckcanvas"]) {
+      const scopes = scopesOf(name);
+      assert.ok(
+        scopes.length > 0 &&
+          scopes.every((s) => s.includes("entity.name.type.deck") && !s.includes(option)),
+        `${name}: ${scopes.join(" | ")}`,
+      );
+    }
+    const frame = scopesOf("frame");
+    assert.ok(
+      frame.length > 0 &&
+        frame.every(
+          (s) =>
+            s.includes("meta.function.environment.frame.latex") &&
+            s.includes("variable.parameter.function.latex") &&
+            !deck(s),
+        ),
+      `frame: ${frame.join(" | ")}`,
+    );
+    // 同じ行に続く deck の命令も option に取られず、命令として読む。
+    const images = scopesOf("\\deckimage");
+    assert.ok(
+      images.length === 5 &&
+        images.every((s) => s.includes("entity.name.type.deck") && !s.includes(option)),
+      `\\deckimage: ${images.join(" | ")}`,
+    );
+
+    // 正しい複数行の option は、続きの行が , やコメントで始まっても最後の ] まで続く。
+    for (const value of ["0.6", "0.7", "0.81", "0.83", "0.84", "0.91", "0.61", "0.62"]) {
+      const scopes = scopesOf(value);
+      assert.ok(
+        scopes.length > 0 &&
+          scopes.every((s) => s.includes("constant.numeric.deck") && s.includes(option)),
+        `option の ${value}: ${scopes.join(" | ")}`,
+      );
+    }
+    const closes = tokens.filter((token) =>
+      token.t.includes("punctuation.definition.optional-arguments.end.deck"),
+    );
+    assert.ok(closes.length === 2, `option の ] : ${show(closes)}`);
+    // 空行で閉じるので、その後の w=0.92 は option ではない。
+    const afterBlank = containing("0.92");
+    assert.ok(
+      afterBlank.length > 0 &&
+        afterBlank.every((token) => !deck(token.t) && !token.t.includes(option)),
+      `空行の後の 0.92: ${show(afterBlank)}`,
+    );
+
+    // option の中で色の付かないトークンは、空白・区切りの , ・コメントだけ。
+    const leaked = tokens.filter(
+      (token) =>
+        token.t.includes(option) &&
+        !deck(token.t) &&
+        !token.t.includes("comment") &&
+        !/^[\s,]*$/.test(token.c),
+    );
+    assert.ok(leaked.length === 0, `option の中に紛れたトークン: ${show(leaked)}`);
   });
 
   test("字下げしたキャンバスでも色分けし、後ろのフレームの組み込みの色分けを壊さない", async () => {

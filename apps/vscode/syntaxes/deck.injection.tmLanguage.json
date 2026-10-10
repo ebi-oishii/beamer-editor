@@ -1,6 +1,6 @@
 {
   "scopeName": "deck.injection",
-  "injectionSelector": "L:text.tex.latex -comment -markup.raw",
+  "injectionSelector": "L:text.tex.latex -comment -markup.raw -meta.optional-arguments.deck",
   "patterns": [
     {
       "include": "#environment-with-options"
@@ -76,12 +76,13 @@
     },
     "option-list": {
       "begin": "\\[",
+      "contentName": "meta.optional-arguments.deck",
       "beginCaptures": {
         "0": {
           "name": "punctuation.definition.optional-arguments.begin.deck"
         }
       },
-      "end": "\\]|(?=[{}]|\\\\[A-Za-z@]|^\\s*$)",
+      "end": "\\]|(?=[{}]|\\\\[A-Za-z@]|^(?!\\s*(?:[A-Za-z]+\\s*=|[,\\]%])))",
       "endCaptures": {
         "0": {
           "name": "punctuation.definition.optional-arguments.end.deck"
