@@ -94,15 +94,18 @@ function toVscodeDiagnostic(
 
 /**
  * Problems パネルと PDF 書き出しの失敗報告で共有する lint オプション。
- * テンプレート(.sty)参照の解決結果を L022 / L023 へ渡す(#70)。
+ * テンプレート(.sty)参照の解決結果を L022 / L023 へ渡す(#70)。参照は `text`(既定は今の本文)から読む。
  */
-function deckLintOptions(document: vscode.TextDocument): LintOptions {
+function deckLintOptions(
+  document: vscode.TextDocument,
+  text: string = document.getText(),
+): LintOptions {
   if (document.uri.scheme !== "file") return {};
   const files = nodeTemplateFileSystem(path.dirname(document.uri.fsPath));
   return {
     // 画像の存在(L004)。デッキのディレクトリ配下だけを見る(`..` や絶対パスは無いものとして扱う)。
     fileExists: files.isFile,
-    templates: templateStatuses(parseDeck(document.getText()), files),
+    templates: templateStatuses(parseDeck(text), files),
   };
 }
 
@@ -314,7 +317,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         exportOutput.show(true);
       },
       showProblems: () => vscode.commands.executeCommand("workbench.actions.view.problems"),
-      lintOptions: (document) => deckLintOptions(document as vscode.TextDocument),
+      lintOptions: (document, text) => deckLintOptions(document as vscode.TextDocument, text),
       uriForFile: (path) => vscode.Uri.file(path) as ExportUri,
       tectonicPath: (document) => tectonicPathFor(document.uri as vscode.Uri),
       timeoutMs: (document) => {
@@ -363,7 +366,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     },
     vscode.workspace.textDocuments,
     (document) => isManaged(document),
-    deckLintOptions,
+    (document) => deckLintOptions(document),
   );
   context.subscriptions.push(diagnosticCollection, lintController);
 

@@ -40,6 +40,7 @@ import {
   type LintDiagnostic,
   lintSource,
   parseDeck,
+  sourceLocation,
 } from "@beamer-editor/core";
 import {
   exportHtml,
@@ -313,13 +314,6 @@ async function lintAfterCompileFailure(
   }
 }
 
-function location(source: string, offset: number) {
-  const before = source.slice(0, offset);
-  const line = before.split("\n").length;
-  const lineStart = before.lastIndexOf("\n") + 1;
-  return { line, column: offset - lineStart + 1 };
-}
-
 function lintJson(file: string, source: string, diagnostics: readonly LintDiagnostic[]) {
   let errors = 0;
   let warnings = 0;
@@ -328,8 +322,8 @@ function lintJson(file: string, source: string, diagnostics: readonly LintDiagno
     if (diagnostic.severity === "error") errors++;
     else if (diagnostic.severity === "warning") warnings++;
     else infos++;
-    const start = location(source, diagnostic.span.start);
-    const end = location(source, diagnostic.span.end);
+    const start = sourceLocation(source, diagnostic.span.start);
+    const end = sourceLocation(source, diagnostic.span.end);
     return {
       code: diagnostic.code,
       severity: diagnostic.severity,
@@ -360,7 +354,7 @@ async function runLint(file: string, json: boolean): Promise<number> {
   else if (diagnostics.length === 0) process.stdout.write(`${file}: OK\n`);
   else {
     for (const diagnostic of diagnostics) {
-      const start = location(source, diagnostic.span.start);
+      const start = sourceLocation(source, diagnostic.span.start);
       process.stdout.write(
         `${file}:${start.line}:${start.column}: ${diagnostic.severity} ${diagnostic.code}: ${diagnostic.message}\n`,
       );
@@ -487,8 +481,8 @@ function lintCheckDiagnostics(
   result: DeckFramesResult,
 ): CheckDiagnostic[] {
   return diagnostics.map((diagnostic) => {
-    const start = location(source, diagnostic.span.start);
-    const end = location(source, diagnostic.span.end);
+    const start = sourceLocation(source, diagnostic.span.start);
+    const end = sourceLocation(source, diagnostic.span.end);
     return {
       category: "lint",
       code: diagnostic.code,

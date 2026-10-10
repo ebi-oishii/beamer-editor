@@ -71,13 +71,19 @@ const CLEAN_SOURCE = `%% deck-source-version: 1
 function createDocument(
   overrides: Partial<{ isDirty: boolean; save(): Promise<boolean>; getText(): string }> = {},
 ) {
-  return {
+  const document = {
     uri: input,
     isDirty: false,
     save: vi.fn(async () => true),
     getText: () => CLEAN_SOURCE,
+    // vscode.TextDocument.positionAt と同じく、呼んだ時点の本文で数える。
+    positionAt: vi.fn((offset: number) => {
+      const lines = document.getText().slice(0, offset).split("\n");
+      return { line: lines.length - 1, character: (lines.at(-1) ?? "").length };
+    }),
     ...overrides,
   };
+  return document;
 }
 
 describe("ExportController", () => {
@@ -482,11 +488,31 @@ ${managedPreambleBlock().replace(
       expect(detail.endsWith("\n\n[E_COMPILE] Undefined control sequence")).toBe(true);
 
       const problems = createHost({ showError: vi.fn(async () => "問題を表示") });
-      await new ExportController(problems, failing()).export(
-        createDocument({ getText: () => outdated }),
-      );
+      const document = createDocument({ getText: () => outdated });
+      await new ExportController(problems, failing()).export(document);
       expect(problems.showProblems).toHaveBeenCalledOnce();
       expect(problems.showExportDetails).not.toHaveBeenCalled();
+      // 文書が変わっていなければ、位置は Problems パネルと同じ positionAt で出す。
+      expect(document.positionAt).toHaveBeenCalled();
+    });
+
+    it("コンパイル中に編集されても、コンパイルした本文を lint し、その行・列を出す", async () => {
+      let text = outdated;
+      const document = createDocument({ getText: () => text });
+      const host = createHost({ showError: vi.fn(async () => "詳細を表示") });
+      await new ExportController(host, {
+        exportPdf: async () => {
+          // コンパイル中の未保存の編集: 先頭に 2 行足し、\deckbackground を消す。
+          text = `% a\n% b\n${outdated.replace("\\deckbackground{assets/bg.png}\n", "")}`;
+          throw new PdfExportError("E_COMPILE", "Undefined control sequence");
+        },
+      }).export(document);
+      expect(host.lintOptions).toHaveBeenCalledWith(document, outdated);
+      expect(String(vi.mocked(host.showError).mock.calls[0]?.[0])).toContain("先頭: L025: ");
+      expect(String(vi.mocked(host.showExportDetails).mock.calls[0]?.[0])).toContain(
+        `\n${line}:1 L025 `,
+      );
+      expect(document.positionAt).not.toHaveBeenCalled();
     });
 
     it("lint の error が無い・lint が例外を投げるときは今まで通り", async () => {

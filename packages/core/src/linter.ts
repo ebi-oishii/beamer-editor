@@ -88,6 +88,16 @@ export interface LintOptions {
 
 export const CURRENT_DECK_SOURCE_VERSION = 1;
 
+/**
+ * 診断の UTF-16 オフセットを 1 始まりの行・列にする(CLI の出力と、文書が手元に無いときの表示用)。
+ * 列は行頭からの UTF-16 コードユニット数 + 1 で、VS Code の `positionAt` と同じ数え方。
+ */
+export function sourceLocation(source: string, offset: number): { line: number; column: number } {
+  const before = source.slice(0, offset);
+  const lineStart = before.lastIndexOf("\n") + 1;
+  return { line: before.split("\n").length, column: offset - lineStart + 1 };
+}
+
 const VERBATIM_DELIMITERS = [...VERBATIM_ENVS].map((environment) => ({
   begin: `\\begin{${environment}}`,
   end: `\\end{${environment}}`,
