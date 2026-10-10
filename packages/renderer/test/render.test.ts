@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { framesOf, parseDeck } from "@beamer-editor/core";
+import { framesOf, parseDeck, XCOLOR_BASE_NAMES } from "@beamer-editor/core";
 import { describe, expect, it } from "vitest";
-import { frameTitleText, renderDeck } from "../src/render.js";
+import { frameTitleText, NAMED_COLORS, renderDeck } from "../src/render.js";
 import { DEFAULT_THEME } from "../src/theme.js";
 
 const fixture = (name: string) => readFileSync(join(__dirname, "../../../fixtures", name), "utf8");
@@ -613,6 +613,35 @@ Other
     const out = html("Before {\\color{red} A} after");
     expect(out).toContain('Before <span><span style="color:#e74c3c"> A</span></span> after');
     expect(out).not.toContain("{");
+  });
+
+  it("\\color / \\textcolor は一覧にある色名だけに色を付け、それ以外の値を CSS に出さない", () => {
+    expect(html("\\color{teal}A")).toContain('<span style="color:#00897b">A </span>');
+    expect(html("\\textcolor{teal}{A}")).toContain('<span style="color:#00897b">A</span>');
+    // 名前の形だが一覧に無い色(\definecolor の色など)は、色を付けずに本文として描く。
+    for (const body of [
+      "\\color{corpblue}A",
+      "\\textcolor{corpblue}{A}",
+      "\\color{constructor}A",
+    ]) {
+      const out = html(body);
+      expect(out).toContain("A");
+      expect(out).not.toContain("color:");
+      expect(out).not.toContain("raw-inline");
+    }
+    // 名前でない値は生ブロックに残し、style には出さない。
+    for (const body of [
+      "\\color{red;position:fixed;inset:0}X",
+      "\\textcolor{red;position:fixed;inset:0}{X}",
+    ]) {
+      const out = html(body);
+      expect(out).toContain("raw-inline");
+      expect(out).not.toMatch(/style="[^"]*position:fixed/);
+    }
+  });
+
+  it("色を付ける名前は core のテンプレートが読む xcolor の基本色と同じ一覧", () => {
+    expect(Object.keys(NAMED_COLORS).sort()).toEqual([...XCOLOR_BASE_NAMES].sort());
   });
 
   it("\\hfill は前後を横並びにして残りの幅を埋める", () => {

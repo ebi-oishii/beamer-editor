@@ -198,7 +198,11 @@ function figureLikeRawInline(children: InlineNode[]): RawInlineNode | null {
   return environment !== null && FIGURE_ENVIRONMENTS.has(environment) ? only : null;
 }
 
-const NAMED_COLORS: Record<string, string> = {
+/**
+ * プレビューで色を付ける名前付き色。名前の一覧は core の `XCOLOR_BASE_NAMES`(テンプレートの
+ * `\definecolor` が参照できる基本色)と同じ。ここに無い名前は色を付けない。
+ */
+export const NAMED_COLORS: Readonly<Record<string, string>> = {
   red: "#e74c3c",
   green: "#27ae60",
   blue: "#2e5cb8",
@@ -219,6 +223,11 @@ const NAMED_COLORS: Record<string, string> = {
   black: "#000000",
   white: "#ffffff",
 };
+
+/** 名前付き色の CSS 値。一覧に無い名前(`\definecolor` の色や不正な値)は null で、色を付けない。 */
+function namedColor(name: string): string | null {
+  return Object.hasOwn(NAMED_COLORS, name) ? (NAMED_COLORS[name] as string) : null;
+}
 
 /** renderDeck の追加入力。 */
 export interface RenderOptions {
@@ -431,7 +440,10 @@ class FrameRenderer {
 
   /** 宣言の CSS。揃えは段落単位で扱うので、ここでは空を返す。 */
   private declarationCss(node: DeclarationNode): string {
-    if (node.name === "color") return `color:${escapeHtml(NAMED_COLORS[node.color] ?? node.color)}`;
+    if (node.name === "color") {
+      const color = namedColor(node.color);
+      return color ? `color:${color}` : "";
+    }
     if (node.name in DECLARATION_ALIGN) return "";
     if (node.name in FONT_CSS) return FONT_CSS[node.name] as string;
     const size =
@@ -518,8 +530,9 @@ class FrameRenderer {
         return inner;
       }
       case "colorText": {
-        const color = NAMED_COLORS[node.color] ?? node.color;
-        return `<span style="color:${escapeHtml(color)}">${this.renderInlines(node.children)}</span>`;
+        const color = namedColor(node.color);
+        const style = color ? ` style="color:${color}"` : "";
+        return `<span${style}>${this.renderInlines(node.children)}</span>`;
       }
       case "group":
         return `<span>${this.renderInlines(node.children)}</span>`;

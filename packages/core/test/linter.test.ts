@@ -530,6 +530,19 @@ ordinary text
     );
   });
 
+  it("色名でない \\color / \\textcolor の引数を L001 で報告する", () => {
+    const source = deck(`
+\\begin{frame}{Color}
+\\color{red;position:fixed}A \\textcolor{red;inset:0}{B} \\color{red}C
+\\end{frame}`);
+
+    const raw = lintDeck(parseDeck(source))
+      .filter((entry) => entry.code === "L001")
+      .map((entry) => source.slice(entry.span.start, entry.span.end));
+
+    expect(raw).toEqual(["\\color{red;position:fixed}", "\\textcolor{red;inset:0}{B}"]);
+  });
+
   it("到達しないオーバーレイのステップを L005 で報告し、連続範囲は許可する", () => {
     const source = deck(`
 \\begin{frame}{Overlay}

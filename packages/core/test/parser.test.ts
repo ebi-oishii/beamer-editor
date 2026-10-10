@@ -566,6 +566,23 @@ describe("parseDeck: よく使う整形命令(#180)", () => {
     ]);
   });
 
+  it("\\color / \\textcolor は名前の形の色だけを読み、式や名前でない値は生ブロックに残す", () => {
+    // 一覧に無い名前(\definecolor の色)も、名前の形なら構造化する。色を付けるかは描画側が決める。
+    expect(inlines("\\color{teal} A \\textcolor{corpblue}{B}")).toMatchObject([
+      { type: "declaration", name: "color", color: "teal" },
+      { type: "text", value: " A " },
+      { type: "colorText", color: "corpblue" },
+    ]);
+    for (const body of [
+      "\\color{red;position:fixed;inset:0}X",
+      "\\textcolor{red;position:fixed;inset:0}{X}",
+      "\\color{red!50}X",
+      "\\textcolor{red!50}{X}",
+    ]) {
+      expect(inlines(body)[0]).toMatchObject({ type: "rawInline", reason: "unknown-command" });
+    }
+  });
+
   it("波括弧をグループとして読み、括弧を本文に残さない", () => {
     const [before, group] = inlines("Before {\\color{red} A} after");
     expect(before).toMatchObject({ type: "text", value: "Before " });

@@ -123,7 +123,7 @@ Markdown 風入力は `.slide.tex` の語彙ではない。入力補助が提供
 | 書体の宣言 | `\bfseries`, `\mdseries`, `\itshape`, `\slshape`, `\upshape`, `\scshape`, `\ttfamily`, `\sffamily`, `\rmfamily`, `\normalfont` |
 | 文字サイズの宣言 | `\tiny`, `\scriptsize`, `\footnotesize`, `\small`, `\normalsize`, `\large`, `\Large`, `\LARGE`, `\huge`, `\Huge` |
 | 揃えの宣言 | `\centering`, `\raggedright`, `\raggedleft`(段落単位で効く) |
-| 色 | `\textcolor{名前付き色}{…}`, 宣言 `\color{名前付き色}`(定義済み色名のみ) |
+| 色 | `\textcolor{名前付き色}{…}`, 宣言 `\color{名前付き色}`(定義済み色名のみ。プレビューで色が付くのは xcolor の基本 19 色 `black` `white` `red` `green` `blue` `cyan` `magenta` `yellow` `gray` `darkgray` `lightgray` `brown` `lime` `olive` `orange` `pink` `purple` `teal` `violet`。`\definecolor` で定義した名前は PDF では効くが、プレビューでは色を付けない。`red!50` などの xcolor の式や色名でない値は生ブロック) |
 | グループ | `{…}` |
 | 空白 | `\hspace{長さ}`, `\vspace{長さ}`, `\hfill`, `\quad`, `\qquad`(長さは `pt` `bp` `mm` `cm` `in` `pc` `em` `ex` と `\textwidth` などの行幅の倍数) |
 | 脚注・参照 | `\footnote{}`, `\cite{}`(参考文献リストは扱わず、プレビューはキーを `[…]` で示す) |

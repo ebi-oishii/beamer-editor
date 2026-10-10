@@ -117,6 +117,12 @@ function parseSpaceLength(text: string): SpaceLength | null {
   return null;
 }
 
+/**
+ * `\color` / `\textcolor` の色の引数として受ける形。名前付き色だけを受け、xcolor の式(`red!50`)や
+ * 色モデル指定、名前でない値は生ブロックに残す(プレビューの CSS に生の文字列を渡さない)。
+ */
+const COLOR_NAME = /^[A-Za-z][A-Za-z0-9]*$/;
+
 const CANVAS_SIZES = new Set<CanvasFontSize>(CANVAS_FONT_SIZES);
 
 const STYLE_COLOR_ROLES = new Set(["structure", "alert", "example", "text", "background"]);
@@ -555,11 +561,12 @@ class Parser {
     if (name === "textcolor") {
       const g1 = group(argStart);
       const g2 = g1 && group(g1.next);
-      if (g1 && g2) {
+      const color = g1 && this.src.slice(g1.body[0], g1.body[1]).trim();
+      if (g1 && g2 && color && COLOR_NAME.test(color)) {
         return {
           node: {
             type: "colorText",
-            color: this.src.slice(g1.body[0], g1.body[1]).trim(),
+            color,
             children: this.parseInlines(g2.body[0], g2.body[1]),
             span: span(pos, g2.next),
           },
@@ -579,12 +586,13 @@ class Parser {
     }
     if (name === "color" && this.src[argStart] !== "[") {
       const g = group(argStart);
-      if (g) {
+      const color = g && this.src.slice(g.body[0], g.body[1]).trim();
+      if (g && color && COLOR_NAME.test(color)) {
         return {
           node: {
             type: "declaration",
             name: "color",
-            color: this.src.slice(g.body[0], g.body[1]).trim(),
+            color,
             span: span(pos, g.next),
           },
           next: g.next,
