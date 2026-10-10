@@ -1266,6 +1266,7 @@ describe("deck export", () => {
         inputPath: "/tmp/talk.slide.tex",
         outputPath: "/tmp/talk-html",
         indexPath: "/tmp/talk-html/index.html",
+        placeholders: [],
       }));
       expect(
         await run(["export", "talk.slide.tex", "--format", "html", "--json"], { exportHtml: html }),
@@ -1322,6 +1323,41 @@ describe("deck export", () => {
       expect(JSON.parse(String(stderr.mock.calls[0]?.[0]))).toEqual({
         error: { code: "E_IO", message: "output cannot be inspected" },
       });
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it("warns with exit code 1 when HTML export replaces images with placeholders", async () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const placeholders = [
+        { path: "assets/chart.pdf", reason: "unsupported-format" as const, frames: [2, 3, 4, 7] },
+        { path: "assets/missing.png", reason: "missing" as const, frames: [3] },
+      ];
+      const html = vi.fn(async () => ({
+        format: "html" as const,
+        inputPath: "/tmp/talk.slide.tex",
+        outputPath: "/tmp/talk-html",
+        indexPath: "/tmp/talk-html/index.html",
+        placeholders,
+      }));
+      expect(
+        await run(["export", "talk.slide.tex", "--format", "html"], { exportHtml: html }),
+      ).toBe(1);
+      expect(stdout).toHaveBeenCalledWith("talk.slide.tex -> /tmp/talk-html/index.html\n");
+      const warning = String(stderr.mock.calls[0]?.[0]);
+      expect(warning).toContain("frame 2-4, 7: assets/chart.pdf(PNG / JPEG 以外の形式)");
+      expect(warning).toContain("frame 3: assets/missing.png(見つからない)");
+      stdout.mockClear();
+      stderr.mockClear();
+      expect(
+        await run(["export", "talk.slide.tex", "--format", "html", "--json"], { exportHtml: html }),
+      ).toBe(1);
+      expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({ placeholders });
+      expect(stderr).not.toHaveBeenCalled();
     } finally {
       stdout.mockRestore();
       stderr.mockRestore();
