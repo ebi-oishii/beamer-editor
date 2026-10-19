@@ -223,7 +223,8 @@ export const PREVIEW_CSS = `
   min-height: 19.06pt;
 }
 .slide .slide-body {
-  padding: 4pt 28.45pt 0;
+  /* 左右は TeX の text margin(既定 1cm。\\setbeamersize で変えたときは renderer が変数で渡す)。 */
+  padding: 4pt var(--deck-text-margin-right, 28.45pt) 0 var(--deck-text-margin-left, 28.45pt);
 }
 .slide.plain .slide-body {
   padding-top: 12pt;

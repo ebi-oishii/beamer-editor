@@ -193,6 +193,11 @@ export interface PreviewStyle {
    */
   imageSearchPaths?: string[];
   footer?: string;
+  /**
+   * 通常の本文の左右の余白(pt。`\setbeamersize{text margin left=…,text margin right=…}`)。
+   * 指定の無い側は既定(1cm)のまま。キャンバスの座標の基準(本文領域)はこれで変わらない。
+   */
+  textMargins?: { left?: number; right?: number };
 }
 
 const XCOLOR_BASE: Record<string, string> = {
@@ -542,6 +547,18 @@ export function extractPreviewStyle(source: string): PreviewStyle {
   for (const { groups } of commandGroups(text, "deckfooter", 1)) {
     style.footer = (groups[0] as string).trim();
   }
+  // 本文の左右の余白。長さは絶対単位(pt / bp / mm / cm / in)だけを読む。
+  for (const { groups } of commandGroups(text, "setbeamersize", 1)) {
+    for (const part of (groups[0] as string).split(",")) {
+      const [key, value] = part.split("=").map((piece) => piece.trim().replace(/\s+/g, " "));
+      const side =
+        key === "text margin left" ? "left" : key === "text margin right" ? "right" : null;
+      const length = side && value ? parseLength(value) : null;
+      if (side && length?.unit === "pt" && length.value >= 0) {
+        style.textMargins = { ...style.textMargins, [side]: length.value };
+      }
+    }
+  }
   const searchPaths = graphicsPathsOf(source);
   if (searchPaths.length > 0) style.imageSearchPaths = searchPaths;
   return style;
@@ -571,6 +588,7 @@ export function mergePreviewStyles(...styles: PreviewStyle[]): PreviewStyle {
       ];
     }
     if (style.footer !== undefined) merged.footer = style.footer;
+    if (style.textMargins) merged.textMargins = { ...merged.textMargins, ...style.textMargins };
   }
   return merged;
 }
