@@ -549,6 +549,40 @@ ordinary text
     );
   });
 
+  it("色名でない \\color / \\textcolor の引数を L001 で報告する", () => {
+    const source = deck(`
+\\begin{frame}{Color}
+\\color{red;position:fixed}A \\textcolor{red;inset:0}{B} \\color{red}C
+\\end{frame}`);
+
+    const raw = lintDeck(parseDeck(source))
+      .filter((entry) => entry.code === "L001")
+      .map((entry) => source.slice(entry.span.start, entry.span.end));
+
+    expect(raw).toEqual(["\\color{red;position:fixed}", "\\textcolor{red;inset:0}{B}"]);
+  });
+
+  it("ブロックのグループの中も、本文と decktext の検査の対象にする", () => {
+    const source = deck(`
+\\begin{frame}[label=g]{Group}
+{\\small A \\unknowncommand
+
+B}
+\\begin{deckcanvas}
+\\begin{decktext}[x=0.100,y=0.200,w=0.500,size=normal]
+{\\small C
+
+D}
+\\end{decktext}
+\\end{deckcanvas}
+\\end{frame}`);
+
+    const codes = lintDeck(parseDeck(source)).map((entry) => entry.code);
+
+    expect(codes).toContain("L001");
+    expect(codes).not.toContain("L014");
+  });
+
   it("到達しないオーバーレイのステップを L005 で報告し、連続範囲は許可する", () => {
     const source = deck(`
 \\begin{frame}{Overlay}
@@ -1137,6 +1171,34 @@ describe("L022 / L023: テンプレート参照", () => {
     expect(diagnostics[0]?.message).toContain("beamerthemecorporate.sty");
     expect(diagnostics[0]?.message).toContain("assets/logo.png");
     expect(sourceText(source, diagnostics[0])).toBe("\\usetheme{corporate}");
+  });
+});
+
+describe("よく使う整形命令(#180)", () => {
+  it("本文でも decktext の中でも L001 にしない", () => {
+    const commands =
+      "\\centering \\small \\bfseries {\\color{red} A} \\underline{u} \\textsc{s} \\hspace{1em} A\\hfill B\\quad C \\footnote{n} \\cite{k} \\LaTeX";
+    const codes = lintSource(
+      deck(`\\begin{frame}[label=a]{T}
+${commands}
+\\begin{deckcanvas}
+\\begin{decktext}[x=0.100,y=0.200,w=0.500,size=normal]
+${commands}
+\\end{decktext}
+\\end{deckcanvas}
+\\end{frame}`),
+    ).map((diagnostic) => diagnostic.code);
+    expect(codes).not.toContain("L001");
+    expect(codes).not.toContain("L014");
+  });
+
+  it("未対応の命令はこれまでどおり L001 にする", () => {
+    const codes = lintSource(
+      deck(
+        "\\begin{frame}[label=a]{T}\nA \\textsuperscript{x} \\hspace{\\stretch{1}}\n\\end{frame}",
+      ),
+    ).map((diagnostic) => diagnostic.code);
+    expect(codes.filter((code) => code === "L001")).toHaveLength(2);
   });
 });
 
