@@ -1090,6 +1090,7 @@ class Parser {
           b.type === "paragraph" ||
           b.type === "displayMath" ||
           b.type === "list" ||
+          b.type === "table" ||
           b.type === "rawBlock"
             ? b
             : this.rawBlock(b.span.start, b.span.end, null, "canvas-unsupported-content"),

@@ -772,6 +772,41 @@ ordinary flow
     expect(diagnostics.every((entry) => entry.span.end > entry.span.start)).toBe(true);
   });
 
+  it("decktext 内の基本の表は L014 にせず、縦罫線付きの表は報告する(#177)", () => {
+    const source = deck(`
+\\begin{frame}[label=canvas]{Canvas}
+\\begin{deckcanvas}
+\\begin{decktext}[x=0,y=0,w=0.5]
+\\begin{tabular}{lr}
+\\toprule
+A & 1 \\\\
+\\bottomrule
+\\end{tabular}
+\\end{decktext}
+\\begin{decktext}[x=0.5,y=0,w=0.5]
+\\begin{tabular}{|l|}
+B \\\\
+\\end{tabular}
+\\end{decktext}
+\\end{deckcanvas}
+\\end{frame}`);
+
+    const doc = parseDeck(source);
+    const frame = doc.body.find((element) => element.type === "frame");
+    const canvas =
+      frame?.type === "frame" ? frame.body.find((block) => block.type === "canvas") : undefined;
+    expect(
+      canvas?.type === "canvas"
+        ? canvas.items.map((item) =>
+            item.type === "canvasText" ? item.children[0]?.type : item.type,
+          )
+        : [],
+    ).toEqual(["table", "rawBlock"]);
+    const diagnostics = lintDeck(doc).filter((entry) => entry.code === "L014");
+    expect(diagnostics).toHaveLength(1);
+    expect(source.slice(diagnostics[0]?.span.start, diagnostics[0]?.span.end)).toContain("{|l|}");
+  });
+
   it("フロー要素と deckcanvas の共存は L014 にせず、deckcanvas が 2 つあれば 2 つ目を報告する", () => {
     const shared = deck(`
 \\begin{frame}[label=mixed]{Mixed}

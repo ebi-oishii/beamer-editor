@@ -498,6 +498,10 @@ export const PREVIEW_CSS = `
 .slide .canvas-text ol {
   margin: 0;
 }
+/* TeX と同じく、箱の中の表は左端に置く(通常フローの中央寄せを打ち消す)。 */
+.slide .canvas-text table.tabular {
+  margin: 0;
+}
 .slide img.canvas-item {
   max-width: none;
 }

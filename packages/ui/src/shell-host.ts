@@ -103,7 +103,7 @@ export interface ShellHost {
    */
   pasteCanvasElements?(frameIndex: number, version: number): void;
   /**
-   * ui → ホスト: フロー要素(段落・リスト・画像)を同じフレームの deckcanvas へ移す要求
+   * ui → ホスト: フロー要素(段落・リスト・表・画像)を同じフレームの deckcanvas へ移す要求
    * (「自由配置にする」)。sourceSpan は展開後ソース、rect はスライド全体を 1 とした
    * 左上座標と幅。実装しないホストではメニューを出さない。
    */
