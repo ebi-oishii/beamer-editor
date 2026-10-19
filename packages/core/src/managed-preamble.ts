@@ -10,16 +10,69 @@ export const MANAGED_PREAMBLE_BEGIN =
 /** ツール管理プリアンブルの終了行。 */
 export const MANAGED_PREAMBLE_END = "% ---- ツール管理ここまで ----";
 
+/** 現行のツール管理プリアンブルの中身(開始行と終了行の間)。resources の 3 ファイルをこの順に展開したもの。 */
+let currentContent: string | undefined;
+function managedPreambleContent(): string {
+  currentContent ??= Object.values(MANAGED_PREAMBLE_RESOURCES).join("\n").trimEnd();
+  return currentContent;
+}
+
+/** 行の `%` コメント(`\%` は除く)より前。 */
+function withoutComment(line: string): string {
+  const match = /(^|[^\\])(\\\\)*%/.exec(line);
+  return match ? line.slice(0, match.index + match[0].length - 1) : line;
+}
+
 /**
- * `deck init` が書く現行のツール管理プリアンブル(開始行から終了行まで。末尾改行なし)。
- * 中身は packages/core/resources の 3 ファイルをこの順に展開したもの。
+ * 比べる形。各行からコメントを除いて前後の空白を落とし、空行を除く(PDF に影響しない差は比べない)。
+ * 行は合わせない(blankComments のようにコメントの行末を読み捨てると、コメントの長さが次の行の
+ * 字下げとして残る)。
  */
+function comparableLines(text: string): string[] {
+  return text
+    .replaceAll("\r\n", "\n")
+    .split("\n")
+    .map((line) => withoutComment(line).trim())
+    .filter((line) => line !== "");
+}
+
+let currentLines: string[] | undefined;
+
+/** `deck init` が書く現行のツール管理プリアンブル(開始行から終了行まで。末尾改行なし)。 */
 export function managedPreambleBlock(): string {
-  return [
-    MANAGED_PREAMBLE_BEGIN,
-    Object.values(MANAGED_PREAMBLE_RESOURCES).join("\n").trimEnd(),
-    MANAGED_PREAMBLE_END,
-  ].join("\n");
+  return [MANAGED_PREAMBLE_BEGIN, managedPreambleContent(), MANAGED_PREAMBLE_END].join("\n");
+}
+
+/**
+ * `span`(locateManagedPreamble の結果)の開始行と終了行の間が、`deck init` が書く現行の中身と
+ * 同じか。開始行の文言・改行コード・コメント・空行・行末の空白の違いは見ない。
+ */
+export function isCurrentManagedPreamble(source: string, span: SourceSpan): boolean {
+  const block = source.slice(span.start, span.end).replaceAll("\r\n", "\n");
+  const firstBreak = block.indexOf("\n");
+  const lastBreak = block.lastIndexOf("\n");
+  const content = firstBreak === lastBreak ? "" : block.slice(firstBreak + 1, lastBreak);
+  currentLines ??= comparableLines(managedPreambleContent());
+  const lines = comparableLines(content);
+  return (
+    lines.length === currentLines.length && lines.every((line, i) => line === currentLines?.[i])
+  );
+}
+
+/**
+ * `\input{path}` が読むツール管理リソース(fixture のように resources を直接読む形)の現行の中身。
+ * path の拡張子とディレクトリは問わない。リソースでなければ undefined。
+ */
+export function managedPreambleResource(path: string): string | undefined {
+  const name = path
+    .trim()
+    .replace(/\.tex$/, "")
+    .split("/")
+    .at(-1);
+  const key = `${name}.tex`;
+  return Object.hasOwn(MANAGED_PREAMBLE_RESOURCES, key)
+    ? MANAGED_PREAMBLE_RESOURCES[key]
+    : undefined;
 }
 
 // 開始行は文言を問わない(fixture は `% ---- ツール管理プリアンブル ----`)。
