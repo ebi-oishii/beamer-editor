@@ -18,6 +18,7 @@ import {
   type CompileDeckFramesRequest,
   findDeckFrames,
   PdfExportError,
+  type PdfExportProgress,
 } from "@beamer-editor/compiler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1271,6 +1272,7 @@ describe("deck export", () => {
         inputPath: "/tmp/talk.slide.tex",
         outputPath: "/tmp/talk-html",
         indexPath: "/tmp/talk-html/index.html",
+        placeholders: [],
       }));
       expect(
         await run(["export", "talk.slide.tex", "--format", "html", "--json"], { exportHtml: html }),
@@ -1286,6 +1288,46 @@ describe("deck export", () => {
         }),
       ).toBe(0);
       expect(html).toHaveBeenLastCalledWith({ inputPath: "talk.slide.tex", overwrite: true });
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it("announces the first Tectonic package download once on stderr, except with --json", async () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const compiler = vi.fn(
+      async (request: { onProgress?: (progress: PdfExportProgress) => void }) => {
+        for (const [count, file] of ["latex.ltx", "beamer.cls", "pgf.sty"].entries())
+          request.onProgress?.({ kind: "download", file, count: count + 1 });
+        return {
+          format: "pdf" as const,
+          inputPath: "/tmp/talk.slide.tex",
+          outputPath: "/tmp/talk.pdf",
+          overwritten: false,
+          engineVersion: "0.17.0",
+        };
+      },
+    );
+    try {
+      expect(
+        await run(["export", "talk.slide.tex", "--format", "pdf"], { exportPdf: compiler }),
+      ).toBe(0);
+      expect(stderr.mock.calls).toEqual([
+        ["TeX パッケージを取得しています(初回のみ。数分かかることがあります)…\n"],
+      ]);
+      expect(stdout).toHaveBeenLastCalledWith("talk.slide.tex -> talk.pdf\n");
+      stderr.mockClear();
+      stdout.mockClear();
+      expect(
+        await run(["export", "talk.slide.tex", "--format", "pdf", "--json"], {
+          exportPdf: compiler,
+        }),
+      ).toBe(0);
+      expect(compiler.mock.calls.at(-1)?.[0].onProgress).toBeUndefined();
+      expect(stderr).not.toHaveBeenCalled();
+      expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({ format: "pdf" });
     } finally {
       stdout.mockRestore();
       stderr.mockRestore();
@@ -1327,6 +1369,41 @@ describe("deck export", () => {
       expect(JSON.parse(String(stderr.mock.calls[0]?.[0]))).toEqual({
         error: { code: "E_IO", message: "output cannot be inspected" },
       });
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it("warns with exit code 1 when HTML export replaces images with placeholders", async () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const placeholders = [
+        { path: "assets/chart.pdf", reason: "unsupported-format" as const, frames: [2, 3, 4, 7] },
+        { path: "assets/missing.png", reason: "missing" as const, frames: [3] },
+      ];
+      const html = vi.fn(async () => ({
+        format: "html" as const,
+        inputPath: "/tmp/talk.slide.tex",
+        outputPath: "/tmp/talk-html",
+        indexPath: "/tmp/talk-html/index.html",
+        placeholders,
+      }));
+      expect(
+        await run(["export", "talk.slide.tex", "--format", "html"], { exportHtml: html }),
+      ).toBe(1);
+      expect(stdout).toHaveBeenCalledWith("talk.slide.tex -> /tmp/talk-html/index.html\n");
+      const warning = String(stderr.mock.calls[0]?.[0]);
+      expect(warning).toContain("frame 2-4, 7: assets/chart.pdf(PNG / JPEG 以外の形式)");
+      expect(warning).toContain("frame 3: assets/missing.png(見つからない)");
+      stdout.mockClear();
+      stderr.mockClear();
+      expect(
+        await run(["export", "talk.slide.tex", "--format", "html", "--json"], { exportHtml: html }),
+      ).toBe(1);
+      expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({ placeholders });
+      expect(stderr).not.toHaveBeenCalled();
     } finally {
       stdout.mockRestore();
       stderr.mockRestore();

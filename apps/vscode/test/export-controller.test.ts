@@ -1,5 +1,9 @@
 import { readFileSync } from "node:fs";
-import { PdfExportError } from "@beamer-editor/compiler";
+import {
+  PdfExportError,
+  type PdfExportProgress,
+  type PdfExportResult,
+} from "@beamer-editor/compiler";
 import { managedPreambleBlock } from "@beamer-editor/core";
 import { HtmlExportError } from "@beamer-editor/html-export";
 import { describe, expect, it, vi } from "vitest";
@@ -40,7 +44,10 @@ function createHost(overrides: Partial<ExportHost> = {}): ExportHost {
     chooseOutput: vi.fn(async () => output),
     outputExists: vi.fn(async () => false),
     withProgress: vi.fn(async (task) =>
-      task({ isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) }),
+      task(
+        { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) },
+        () => {},
+      ),
     ),
     showInformation: vi.fn(async () => undefined),
     showError: vi.fn(async () => undefined),
@@ -142,6 +149,169 @@ describe("ExportController", () => {
     expect(host.openPdf).toHaveBeenCalledWith(output);
   });
 
+  it("reports Tectonic package downloads in the progress notification, throttled", async () => {
+    vi.useFakeTimers();
+    try {
+      const report = vi.fn<(message: string) => void>();
+      const host = createHost({
+        withProgress: async (task) =>
+          task(
+            { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) },
+            report,
+          ),
+      });
+      let finishCompile: (() => void) | undefined;
+      const compile = vi.fn(
+        async (request: { onProgress?: (progress: PdfExportProgress) => void }) => {
+          request.onProgress?.({ kind: "download", file: "latex.ltx", count: 1 });
+          request.onProgress?.({ kind: "download", file: "beamer.cls", count: 2 });
+          request.onProgress?.({ kind: "download", file: "pgf.sty", count: 3 });
+          await new Promise<void>((resolve) => {
+            finishCompile = resolve;
+          });
+          return {
+            format: "pdf" as const,
+            inputPath: input.fsPath,
+            outputPath: output.fsPath,
+            overwritten: false,
+            engineVersion: "0.17.0",
+          };
+        },
+      );
+      const exporting = new ExportController(host, { exportPdf: compile }).export(createDocument());
+      await vi.waitFor(() => expect(finishCompile).toBeDefined());
+      // The first update is immediate; later ones within 250 ms collapse into the latest.
+      expect(report.mock.calls).toEqual([["TeX パッケージを取得中（初回のみ）: 1 件 — latex.ltx"]]);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(report.mock.calls).toEqual([
+        ["TeX パッケージを取得中（初回のみ）: 1 件 — latex.ltx"],
+        ["TeX パッケージを取得中（初回のみ）: 3 件 — pgf.sty"],
+      ]);
+      finishCompile?.();
+      await exporting;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(report).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  describe("pending throttled progress at the end of a PDF export", () => {
+    const downloading = (count: number, file: string) =>
+      `TeX パッケージを取得中（初回のみ）: ${count} 件 — ${file}`;
+
+    /** Starts an export whose compile reports `files` back to back and then waits. */
+    function startDownloads(files: readonly string[]) {
+      const report = vi.fn<(message: string) => void>();
+      let cancel: (() => void) | undefined;
+      const host = createHost({
+        withProgress: async (task) =>
+          task(
+            {
+              isCancellationRequested: false,
+              onCancellationRequested: (listener) => {
+                cancel = listener;
+                return { dispose() {} };
+              },
+            },
+            report,
+          ),
+      });
+      let finish: (() => void) | undefined;
+      const compile = vi.fn(
+        async (request: {
+          signal: AbortSignal;
+          onProgress?: (progress: PdfExportProgress) => void;
+        }) => {
+          for (const [index, file] of files.entries())
+            request.onProgress?.({ kind: "download", file, count: index + 1 });
+          return new Promise<PdfExportResult>((resolve, reject) => {
+            finish = () =>
+              resolve({
+                format: "pdf",
+                inputPath: input.fsPath,
+                outputPath: output.fsPath,
+                overwritten: false,
+                engineVersion: "0.17.0",
+              });
+            // Like Tectonic, the process takes a while to stop after an abort.
+            request.signal.addEventListener("abort", () =>
+              setTimeout(() => reject(new PdfExportError("E_CANCELLED", "cancelled")), 1_000),
+            );
+          });
+        },
+      );
+      const controller = new ExportController(host, { exportPdf: compile });
+      const exporting = controller.export(createDocument());
+      return {
+        host,
+        report,
+        controller,
+        exporting,
+        started: () => vi.waitFor(() => expect(finish).toBeDefined()),
+        finish: () => finish?.(),
+        cancel: () => cancel?.(),
+      };
+    }
+
+    it("reports the last update once when the export succeeds right after it", async () => {
+      vi.useFakeTimers();
+      try {
+        const run = startDownloads(["latex.ltx", "beamer.cls", "pgf.sty"]);
+        await run.started();
+        expect(run.report.mock.calls).toEqual([[downloading(1, "latex.ltx")]]);
+        run.finish();
+        await run.exporting;
+        expect(run.report.mock.calls).toEqual([
+          [downloading(1, "latex.ltx")],
+          [downloading(3, "pgf.sty")],
+        ]);
+        // Flushed before the task returns, so before the success message.
+        expect(run.report.mock.invocationCallOrder[1]).toBeLessThan(
+          vi.mocked(run.host.showInformation).mock.invocationCallOrder[0] as number,
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(run.report).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not report again on success when nothing is pending", async () => {
+      vi.useFakeTimers();
+      try {
+        const run = startDownloads(["latex.ltx"]);
+        await run.started();
+        run.finish();
+        await run.exporting;
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(run.report.mock.calls).toEqual([[downloading(1, "latex.ltx")]]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each([
+      ["cancelled", (run: ReturnType<typeof startDownloads>) => run.cancel()],
+      ["disposed", (run: ReturnType<typeof startDownloads>) => run.controller.dispose()],
+    ])("drops the pending update when the export is %s", async (_name, stop) => {
+      vi.useFakeTimers();
+      try {
+        const run = startDownloads(["latex.ltx", "beamer.cls", "pgf.sty"]);
+        await run.started();
+        stop(run);
+        // Past both the throttle interval and the compile settling.
+        await vi.advanceTimersByTimeAsync(2_000);
+        await run.exporting;
+        expect(run.report.mock.calls).toEqual([[downloading(1, "latex.ltx")]]);
+        expect(run.host.showError).not.toHaveBeenCalled();
+        expect(run.host.showInformation).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("exports HTML in an untrusted workspace and opens the generated index", async () => {
     const host = createHost({
       isWorkspaceTrusted: false,
@@ -155,6 +325,7 @@ describe("ExportController", () => {
       inputPath: input.fsPath,
       outputPath: htmlOutput.fsPath,
       indexPath: htmlIndex.fsPath,
+      placeholders: [],
     }));
     await new ExportController(host, {
       exportHtml: html,
@@ -177,6 +348,7 @@ describe("ExportController", () => {
       inputPath: input.fsPath,
       outputPath: htmlOutput.fsPath,
       indexPath: htmlIndex.fsPath,
+      placeholders: [],
     }));
     const cancelled = createHost({
       chooseFormat: vi.fn(async () => "html" as const),
@@ -207,6 +379,7 @@ describe("ExportController", () => {
         inputPath: input.fsPath,
         outputPath: htmlOutput.fsPath,
         indexPath: htmlIndex.fsPath,
+        placeholders: [],
       }),
     }).export(createDocument());
     expect(host.revealInFileManager).toHaveBeenCalledWith(htmlOutput);
@@ -266,13 +439,16 @@ describe("ExportController", () => {
     let cancel: (() => void) | undefined;
     const host = createHost({
       withProgress: async (task) =>
-        task({
-          isCancellationRequested: false,
-          onCancellationRequested: (listener) => {
-            cancel = listener;
-            return { dispose() {} };
+        task(
+          {
+            isCancellationRequested: false,
+            onCancellationRequested: (listener) => {
+              cancel = listener;
+              return { dispose() {} };
+            },
           },
-        }),
+          () => {},
+        ),
     });
     const compile = vi.fn(async (_request) => {
       cancel?.();
@@ -287,10 +463,13 @@ describe("ExportController", () => {
     const subscription = { dispose: vi.fn() };
     const host = createHost({
       withProgress: async (task) =>
-        task({
-          isCancellationRequested: true,
-          onCancellationRequested: () => subscription,
-        }),
+        task(
+          {
+            isCancellationRequested: true,
+            onCancellationRequested: () => subscription,
+          },
+          () => {},
+        ),
     });
     const compile = vi.fn();
     await new ExportController(host, { exportPdf: compile }).export(createDocument());
@@ -302,7 +481,10 @@ describe("ExportController", () => {
     const subscription = { dispose: vi.fn() };
     const host = createHost({
       withProgress: async (task) =>
-        task({ isCancellationRequested: false, onCancellationRequested: () => subscription }),
+        task(
+          { isCancellationRequested: false, onCancellationRequested: () => subscription },
+          () => {},
+        ),
       tectonicPath: () => {
         throw new Error("invalid configuration");
       },
