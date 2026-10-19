@@ -1,5 +1,5 @@
 /**
- * フロー配置の要素(段落・リスト・画像)を同じフレームの deckcanvas へ移す
+ * フロー配置の要素(段落・リスト・表・画像)を同じフレームの deckcanvas へ移す
  * 「自由配置にする」のソース変換(design.md §4.6、subset-spec §2.8)。
  *
  * formatter と同じく source span ベースの局所置換で行い、触れていない箇所の原文
@@ -64,6 +64,7 @@ export function isDetachableBlock(block: BlockNode): boolean {
     case "paragraph":
     case "displayMath":
     case "image":
+    case "table":
       return true;
     case "list":
       return listFitsDecktext(block, 0);

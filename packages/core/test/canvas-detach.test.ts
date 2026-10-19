@@ -500,6 +500,43 @@ describe("detachBlockToCanvas", () => {
     expect(applied.replaceAll("\r\n", "")).not.toContain("\n");
   });
 
+  it("基本の表は decktext に入れて移し、移した後も L014 は出ない(#177)", () => {
+    const table = `\\begin{tabular}{lr}
+    \\toprule
+    Model & Acc \\\\
+    \\midrule
+    Ours & 92.1 \\\\
+    \\bottomrule
+  \\end{tabular}`;
+    const source = deck(`\\begin{frame}{T}
+  ${table}
+\\end{frame}`);
+    const result = detachBlockToCanvas(source, spanOf(source, table), {
+      x: 0.1,
+      y: 0.2,
+      width: 0.4,
+    });
+    const applied = apply(source, must(result));
+    expect(applied).toBe(
+      deck(`\\begin{frame}[label=canvas-1]{T}
+  \\begin{deckcanvas}
+    \\begin{decktext}[x=0.100,y=0.200,w=0.400,size=normal]
+      \\begin{tabular}{lr}
+        \\toprule
+        Model & Acc \\\\
+        \\midrule
+        Ours & 92.1 \\\\
+        \\bottomrule
+      \\end{tabular}
+    \\end{decktext}
+  \\end{deckcanvas}
+\\end{frame}`),
+    );
+    expect(lintSource(applied).map(({ code }) => code)).toEqual(
+      lintSource(source).map(({ code }) => code),
+    );
+  });
+
   it("移せない種類・span 不一致・deckcanvas が 2 つのフレームは null", () => {
     const columns = deck(`\\begin{frame}{T}
   \\begin{columns}
@@ -565,6 +602,8 @@ describe("detachBlockToCanvas", () => {
     \\end{itemize}
   \\end{itemize}
   \\begin{center}x\\end{center}
+  \\begin{tabular}{lc}a & b \\\\\\end{tabular}
+  \\begin{tabular}{|l|}a \\\\\\end{tabular}
 \\end{frame}`),
     );
     const frame = doc.body.find((element) => element.type === "frame");
@@ -573,6 +612,8 @@ describe("detachBlockToCanvas", () => {
       ["list", false],
       ["list", true],
       ["center", false],
+      ["table", true],
+      ["rawBlock", false],
     ]);
   });
 });

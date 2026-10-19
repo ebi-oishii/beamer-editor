@@ -390,10 +390,10 @@ export interface CanvasTextNode extends BaseNode {
   invalidSize: InvalidCanvasFontSize | null;
   /**
    * decktext 内の許容語彙(§2.8): paragraph(インライン要素・数式・改行)、
-   * displayMath と 3 段までのリスト。深さ・内容の逸脱は L014 が検査する
+   * displayMath、3 段までのリストと基本の表。深さ・内容の逸脱は L014 が検査する
    * (パーサは BlockNode として読めるものは読む)。
    */
-  children: Array<ParagraphNode | DisplayMathNode | ListNode | RawBlockNode>;
+  children: Array<ParagraphNode | DisplayMathNode | ListNode | TableNode | RawBlockNode>;
 }
 
 export interface CanvasImageNode extends BaseNode {
