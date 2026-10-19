@@ -31,6 +31,14 @@ export function imagePasteExtension(mimeType: string): string | null {
   return IMAGE_EXTENSIONS[mimeType] ?? null;
 }
 
+/**
+ * 画像と一緒にコピーされたテキストが、http(s) の URL 1 つだけか。Safari などのブラウザは
+ * Web の画像をコピーすると、その URL も文字列として入れる(#179)。
+ */
+export function isLoneWebUrl(text: string): boolean {
+  return /^https?:\/\/\S+$/.test(text.trim());
+}
+
 /** `image.<ext>`, `image-1.<ext>`, ... のうち、まだ無い最初の名前。 */
 export function nextImagePasteFileName(
   extension: string,

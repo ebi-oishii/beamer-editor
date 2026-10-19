@@ -4,6 +4,7 @@ import {
   IMAGE_PASTE_MIME_TYPES,
   imagePasteExtension,
   imagePasteInsertion,
+  isLoneWebUrl,
   nextImagePasteFileName,
 } from "./image-paste";
 
@@ -42,6 +43,7 @@ export class ImagePasteEditProvider implements vscode.DocumentPasteEditProvider 
     if (!insertion) return undefined;
     const moved = insertion.offset !== offset;
     const data = await image.file.data();
+    const text = await dataTransfer.get("text/plain")?.asString();
     if (token.isCancellationRequested) return undefined;
     const edit = new vscode.DocumentPasteEdit(
       // 挿入先を寄せるときは貼り付け範囲を書き換えない(選択中の文字を消さない)。
@@ -57,8 +59,10 @@ export class ImagePasteEditProvider implements vscode.DocumentPasteEditProvider 
         insertion.text,
       );
     edit.additionalEdit.createFile(vscode.Uri.joinPath(directory, name), { contents: data });
-    // テキストも一緒にコピーされているときは、既定を通常のテキスト貼り付けに譲る。
-    if (dataTransfer.get("text/plain")) edit.yieldTo = [vscode.DocumentDropOrPasteEditKind.Text];
+    // テキストも一緒にコピーされているときは、既定を通常のテキスト貼り付けに譲る。ただし
+    // ブラウザが Web の画像と一緒に入れる URL だけのテキストには譲らない(#179)。
+    if (text !== undefined && !isLoneWebUrl(text))
+      edit.yieldTo = [vscode.DocumentDropOrPasteEditKind.Text];
     return [edit];
   }
 }
