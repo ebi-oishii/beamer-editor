@@ -18,6 +18,15 @@
     "onCommand:beamerEditor.export"
   ],
   "contributes": {
+    "grammars": [
+      {
+        "scopeName": "deck.injection",
+        "path": "./syntaxes/deck.injection.tmLanguage.json",
+        "injectTo": [
+          "text.tex.latex"
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "beamerEditor.openPreview",
