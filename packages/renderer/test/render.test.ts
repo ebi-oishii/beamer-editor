@@ -112,6 +112,37 @@ describe("renderDeck: canvas.slide.tex", () => {
   });
 });
 
+describe("renderDeck: ダブルクリックでジャンプするソース位置(#186)", () => {
+  it("リストの項目とキャンバスの箱・生ブロックに、その要素の開始位置を付ける", () => {
+    const src = `\\documentclass[aspectratio=169]{beamer}
+\\begin{document}
+\\begin{frame}[label=c]{T}
+  \\begin{itemize}
+    \\item first
+    \\item second
+  \\end{itemize}
+  \\begin{deckcanvas}
+    \\begin{decktext}[x=0.100,y=0.100,w=0.400,size=normal]
+      box
+    \\end{decktext}
+    \\deckimage[x=0.500,y=0.100,w=0.400]{a.png}
+    \\begin{tikzpicture}\\end{tikzpicture}
+  \\end{deckcanvas}
+\\end{frame}
+\\end{document}
+`;
+    const rendered = renderDeck(parseDeck(src)).frames[0]?.html ?? "";
+    const at = (text: string) => `data-source-start="${src.indexOf(text)}"`;
+    expect(rendered).toContain(`<li ${at("\\item first")}>`);
+    expect(rendered).toContain(`<li ${at("\\item second")}>`);
+    expect(rendered).toMatch(
+      new RegExp(`class="canvas-item canvas-text"[^>]*${at("\\begin{decktext}")}`),
+    );
+    expect(rendered).toMatch(new RegExp(`<img class="canvas-item"[^>]*${at("\\deckimage")}`));
+    expect(rendered).toMatch(new RegExp(`canvas-item raw-block[^>]*${at("\\begin{tikzpicture}")}`));
+  });
+});
+
 describe("renderDeck: 自由配置候補の識別属性", () => {
   const source = `\\documentclass[aspectratio=169]{beamer}
 \\begin{document}
@@ -356,7 +387,7 @@ ${tikz}
     const out = html(
       "\\begin{itemize}\n\\item \\resizebox{0.5\\textwidth}{!}{\\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture}}\n\\item text \\myemph{x}\n\\end{itemize}",
     );
-    expect(out).toContain('<li><div class="raw-block placeholder"');
+    expect(out).toMatch(/<li[^>]*><div class="raw-block placeholder"/);
     expect(out).toContain("width:50.0%;aspect-ratio:4 / 3");
     expect(out).not.toMatch(/raw-inline[^<]*\\resizebox/);
     // 本文のある項目の生インラインは従来どおり原文のまま。

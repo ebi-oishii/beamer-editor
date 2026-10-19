@@ -356,7 +356,11 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
           leaveSelectionFor(i);
           dispatch({ type: "goto", index: i });
         }}
-        onJump={(i) => host.jumpToSource(i, version)}
+        onJump={(i, sourceOffset) =>
+          sourceOffset === undefined
+            ? host.jumpToSource(i, version)
+            : host.jumpToSource(i, version, sourceOffset)
+        }
         onEditSlide={
           host.editSlide
             ? (action, i) => {

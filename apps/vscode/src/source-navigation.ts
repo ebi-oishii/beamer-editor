@@ -44,3 +44,19 @@ export function resolveJumpOffset(outcome: RenderOutcome, frameIndex: number): n
   if (!frame) return null;
   return mapExpandedToSource(outcome.expansionMap, frame.sourceSpan.start);
 }
+
+/**
+ * ダブルクリックした要素のジャンプ先(#186)。sourceOffset(要素の展開後ソース上の開始位置)が
+ * そのフレームの範囲内なら元ソースへ戻した位置、無いか範囲外ならフレーム先頭。フレームが無ければ null。
+ */
+export function resolveElementJumpOffset(
+  outcome: RenderOutcome,
+  frameIndex: number,
+  sourceOffset: number | undefined,
+): number | null {
+  const frame = outcome.deck.frames[frameIndex];
+  if (!frame) return null;
+  const { start, end } = frame.sourceSpan;
+  const inFrame = sourceOffset !== undefined && sourceOffset >= start && sourceOffset < end;
+  return mapExpandedToSource(outcome.expansionMap, inFrame ? sourceOffset : start);
+}

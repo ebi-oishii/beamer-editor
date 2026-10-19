@@ -63,8 +63,9 @@ export interface ShellHost {
   /**
    * ui → ホスト: 対象フレームのソースへ移動要求。version は表示中 deck の document
    * version(ホスト側で古い版からのジャンプを検出し、移動せず再描画を要求する。VS-4)。
+   * sourceOffset はダブルクリックした要素の展開後ソース上の開始位置(#186)。無ければフレーム先頭へ。
    */
-  jumpToSource(frameIndex: number, version: number): void;
+  jumpToSource(frameIndex: number, version: number, sourceOffset?: number): void;
   /** ui → ホスト: プレビュー内でアクティブフレームが変わった通知。 */
   notifyActiveFrame(frameIndex: number): void;
   /**
@@ -173,8 +174,13 @@ export function createMessageShellHost(
         if (msg.type === "rawImagesCleared") listener();
       });
     },
-    jumpToSource(frameIndex, version) {
-      transport.post({ type: "jumpToSource", frameIndex, version });
+    jumpToSource(frameIndex, version, sourceOffset) {
+      transport.post({
+        type: "jumpToSource",
+        frameIndex,
+        version,
+        ...(sourceOffset === undefined ? {} : { sourceOffset }),
+      });
     },
     notifyActiveFrame(frameIndex) {
       transport.post({ type: "activeFrameChanged", frameIndex });

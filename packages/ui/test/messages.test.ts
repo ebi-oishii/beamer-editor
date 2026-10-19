@@ -95,6 +95,9 @@ describe("parseWebviewToExtension", () => {
       frameIndex: 4,
       version: 2,
     });
+    expect(
+      parseWebviewToExtension({ type: "jumpToSource", frameIndex: 4, version: 2, sourceOffset: 0 }),
+    ).toEqual({ type: "jumpToSource", frameIndex: 4, version: 2, sourceOffset: 0 });
     expect(parseWebviewToExtension({ type: "activeFrameChanged", frameIndex: 0 })).toEqual({
       type: "activeFrameChanged",
       frameIndex: 0,
@@ -144,6 +147,11 @@ describe("parseWebviewToExtension", () => {
     ).toBeNull();
     // version 欠落(古い版からのジャンプ検出に必須)
     expect(parseWebviewToExtension({ type: "jumpToSource", frameIndex: 4 })).toBeNull();
+    // 要素の位置は 0 以上の整数だけ(#186)
+    for (const sourceOffset of [-1, 1.5, "3"])
+      expect(
+        parseWebviewToExtension({ type: "jumpToSource", frameIndex: 4, version: 2, sourceOffset }),
+      ).toBeNull();
     // frameIndex 欠落
     expect(parseWebviewToExtension({ type: "activeFrameChanged" })).toBeNull();
     expect(

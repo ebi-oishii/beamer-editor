@@ -450,6 +450,41 @@ describe("PreviewController", () => {
     expect(posted).toHaveLength(1);
   });
 
+  it("jumpToSource: 要素の位置があればそこへ、フレームの外なら先頭へ移動する(#186)", () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const navigate = vi.fn();
+    const render = (_text: string, version: number): RenderOutcome => ({
+      deck: {
+        title: "t",
+        css: "",
+        frames: [
+          {
+            index: 1,
+            label: null,
+            titleText: "one",
+            html: "<div />",
+            stepCount: 1,
+            isRaw: false,
+            sourceSpan: { start: 25, end: 40 },
+          },
+        ],
+      },
+      version,
+      expansionMap: [
+        { expandedStart: 0, expandedEnd: 100, sourceStart: 10, sourceEnd: 110, exact: true },
+      ],
+      expandDiagnostics: [],
+    });
+    new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), { render, navigate });
+
+    fire({ type: "ready" });
+    fire({ type: "jumpToSource", frameIndex: 0, version: 7, sourceOffset: 30 });
+    fire({ type: "jumpToSource", frameIndex: 0, version: 7, sourceOffset: 60 });
+
+    expect(navigate.mock.calls).toEqual([[40], [35]]);
+  });
+
   it("jumpToSource: プレビューが古い版を見ていたら移動せず再描画を送る", () => {
     const { panel, posted, fire } = makePanel();
     const { events, change } = makeEvents();
