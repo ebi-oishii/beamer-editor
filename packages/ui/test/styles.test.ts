@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { parseDeck } from "@beamer-editor/core";
 import { renderDeck } from "@beamer-editor/renderer";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { PREVIEW_CSS } from "../src/preview/styles.js";
 
 /**
@@ -59,71 +60,102 @@ interface HfillLayout {
   nextTop: number;
 }
 
-/** Chrome の実レイアウトで hfill の行境界を確認する。jsdom には行ボックスの計算が無いため。 */
-function measuredHfillLayout(paragraph: string): HfillLayout {
+const execFileAsync = promisify(execFile);
+
+const hfillCases = [
+  ["通常の改行", String.raw`Left \hfill Right \\ Next line`],
+  ["入れ子の書式内の改行", String.raw`Left \hfill \textbf{Right \\ Next line}`],
+] as const;
+
+/**
+ * Chrome の実レイアウトで hfill の行境界を確認する。jsdom には行ボックスの計算が無いため。
+ * CI では headless Chrome の起動・終了がまれにハングするので、全ケースを1ページに並べて
+ * 1回の起動で測り、非同期に呼んでタイムアウト時は確実に kill する。
+ */
+async function measureHfillLayouts(paragraphs: readonly string[]): Promise<HfillLayout[]> {
   if (!chromeBin) throw new Error("Chrome executable not found");
-  const source = String.raw`\begin{frame}{T}
+  const cases = paragraphs.map((paragraph) => {
+    const source = String.raw`\begin{frame}{T}
 \begin{itemize}
 \item Name \hfill 2024
 \end{itemize}
 
 ${paragraph}
 \end{frame}`;
-  const html = renderDeck(parseDeck(source)).frames[0]?.html;
-  if (!html) throw new Error("expected rendered frame");
+    const html = renderDeck(parseDeck(source)).frames[0]?.html;
+    if (!html) throw new Error("expected rendered frame");
+    return `<section class="hfill-case">${html}</section>`;
+  });
   const dir = mkdtempSync(join(tmpdir(), "beamer-hfill-layout-"));
   const input = join(dir, "layout.html");
   const profile = join(dir, "profile");
   try {
     writeFileSync(
       input,
-      `<!doctype html><style>${PREVIEW_CSS}</style>${html}<pre id="result"></pre><script>
+      `<!doctype html><style>${PREVIEW_CSS}</style>${cases.join("")}<pre id="result"></pre><script>
 const rect = (element) => element.getBoundingClientRect();
-const fill = document.querySelectorAll('.hfill-line');
-const item = document.querySelector('li');
-const paragraph = document.querySelector('p');
-const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
-let next; while (walker.nextNode()) { if (walker.currentNode.textContent.includes('Next line')) { next = walker.currentNode; break; } }
-const range = document.createRange(); range.selectNode(next);
-const itemRect = rect(item), itemFill = rect(fill[0]), paragraphRect = rect(paragraph), lineFill = rect(fill[1]), nextRect = range.getBoundingClientRect();
-document.querySelector('#result').textContent = JSON.stringify({
-  itemTop: itemRect.top, itemHeight: itemRect.height, itemLineHeight: parseFloat(getComputedStyle(item).lineHeight), itemFillTop: itemFill.top,
-  paragraphLeft: paragraphRect.left, lineFillTop: lineFill.top, lineFillRight: lineFill.right, paragraphRight: paragraphRect.right,
-  nextLeft: nextRect.left, nextTop: nextRect.top
+const results = [...document.querySelectorAll('.hfill-case')].map((section) => {
+  const fill = section.querySelectorAll('.hfill-line');
+  const item = section.querySelector('li');
+  const paragraph = section.querySelector('p');
+  const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+  let next; while (walker.nextNode()) { if (walker.currentNode.textContent.includes('Next line')) { next = walker.currentNode; break; } }
+  const range = document.createRange(); range.selectNode(next);
+  const itemRect = rect(item), itemFill = rect(fill[0]), paragraphRect = rect(paragraph), lineFill = rect(fill[1]), nextRect = range.getBoundingClientRect();
+  return {
+    itemTop: itemRect.top, itemHeight: itemRect.height, itemLineHeight: parseFloat(getComputedStyle(item).lineHeight), itemFillTop: itemFill.top,
+    paragraphLeft: paragraphRect.left, lineFillTop: lineFill.top, lineFillRight: lineFill.right, paragraphRight: paragraphRect.right,
+    nextLeft: nextRect.left, nextTop: nextRect.top
+  };
 });
+document.querySelector('#result').textContent = JSON.stringify(results);
 </script>`,
     );
-    const result = spawnSync(
+    // 失敗時の execFile のエラーメッセージには Chrome の stderr が含まれる。
+    const { stdout } = await execFileAsync(
       chromeBin,
-      ["--headless", "--disable-gpu", `--user-data-dir=${profile}`, "--dump-dom", input],
-      { timeout: 15_000, maxBuffer: 1_000_000 },
+      [
+        "--headless=new",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-dev-shm-usage",
+        ...(process.env.CI ? ["--no-sandbox"] : []),
+        `--user-data-dir=${profile}`,
+        "--dump-dom",
+        input,
+      ],
+      { timeout: 60_000, killSignal: "SIGKILL", maxBuffer: 10_000_000 },
     );
-    if (result.error || result.status !== 0)
-      throw new Error(result.error?.message ?? result.stderr.toString());
-    const json = /<pre id="result">([^<]+)<\/pre>/.exec(result.stdout.toString())?.[1];
+    const json = /<pre id="result">([^<]+)<\/pre>/.exec(stdout)?.[1];
     if (!json) throw new Error("Chrome did not return layout measurements");
-    return JSON.parse(json) as HfillLayout;
+    return JSON.parse(json) as HfillLayout[];
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
 describe("PREVIEW_CSS: キャンバス幾何の契約", () => {
-  it.skipIf(!chromeBin).each([
-    ["通常の改行", String.raw`Left \hfill Right \\ Next line`],
-    ["入れ子の書式内の改行", String.raw`Left \hfill \textbf{Right \\ Next line}`],
-  ])(
-    "Chrome の実レイアウトで hfill は箇条書きのマーカーと同じ行にあり、%s の後へ続かない",
-    (_label, paragraph) => {
-      const measured = measuredHfillLayout(paragraph);
+  describe.skipIf(!chromeBin)("Chrome の実レイアウト", () => {
+    let layouts: HfillLayout[] = [];
+    beforeAll(async () => {
+      layouts = await measureHfillLayouts(hfillCases.map(([, paragraph]) => paragraph));
+    }, 90_000);
+
+    it.each(
+      hfillCases.map(([label], index) => [label, index] as const),
+    )("hfill は箇条書きのマーカーと同じ行にあり、%s の後へ続かない", (_label, index) => {
+      const measured = layouts[index];
+      if (!measured) throw new Error("Chrome did not measure this case");
       expect(measured.itemFillTop).toBeCloseTo(measured.itemTop, 1);
       expect(measured.itemHeight).toBeLessThan(measured.itemLineHeight * 1.5);
       expect(measured.lineFillRight).toBeCloseTo(measured.paragraphRight, 1);
       expect(measured.nextTop).toBeGreaterThan(measured.lineFillTop);
       expect(measured.nextLeft).toBeCloseTo(measured.paragraphLeft, 1);
-    },
-    20_000,
-  );
+    });
+  });
 
   it("文字サイズ select より幅変更ハンドルを前面に置く", () => {
     const sheet = injectPreviewCss();
