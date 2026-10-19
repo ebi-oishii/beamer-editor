@@ -11,9 +11,32 @@ export const MANAGED_PREAMBLE_BEGIN =
 export const MANAGED_PREAMBLE_END = "% ---- ツール管理ここまで ----";
 
 /** 現行のツール管理プリアンブルの中身(開始行と終了行の間)。resources の 3 ファイルをこの順に展開したもの。 */
+let currentContent: string | undefined;
 function managedPreambleContent(): string {
-  return Object.values(MANAGED_PREAMBLE_RESOURCES).join("\n").trimEnd();
+  currentContent ??= Object.values(MANAGED_PREAMBLE_RESOURCES).join("\n").trimEnd();
+  return currentContent;
 }
+
+/** 行の `%` コメント(`\%` は除く)より前。 */
+function withoutComment(line: string): string {
+  const match = /(^|[^\\])(\\\\)*%/.exec(line);
+  return match ? line.slice(0, match.index + match[0].length - 1) : line;
+}
+
+/**
+ * 比べる形。各行からコメントを除いて前後の空白を落とし、空行を除く(PDF に影響しない差は比べない)。
+ * 行は合わせない(blankComments のようにコメントの行末を読み捨てると、コメントの長さが次の行の
+ * 字下げとして残る)。
+ */
+function comparableLines(text: string): string[] {
+  return text
+    .replaceAll("\r\n", "\n")
+    .split("\n")
+    .map((line) => withoutComment(line).trim())
+    .filter((line) => line !== "");
+}
+
+let currentLines: string[] | undefined;
 
 /** `deck init` が書く現行のツール管理プリアンブル(開始行から終了行まで。末尾改行なし)。 */
 export function managedPreambleBlock(): string {
@@ -22,14 +45,18 @@ export function managedPreambleBlock(): string {
 
 /**
  * `span`(locateManagedPreamble の結果)の開始行と終了行の間が、`deck init` が書く現行の中身と
- * 同じか。開始行の文言・改行コード・末尾の空白の違いは見ない。
+ * 同じか。開始行の文言・改行コード・コメント・空行・行末の空白の違いは見ない。
  */
 export function isCurrentManagedPreamble(source: string, span: SourceSpan): boolean {
   const block = source.slice(span.start, span.end).replaceAll("\r\n", "\n");
   const firstBreak = block.indexOf("\n");
   const lastBreak = block.lastIndexOf("\n");
   const content = firstBreak === lastBreak ? "" : block.slice(firstBreak + 1, lastBreak);
-  return content.trimEnd() === managedPreambleContent();
+  currentLines ??= comparableLines(managedPreambleContent());
+  const lines = comparableLines(content);
+  return (
+    lines.length === currentLines.length && lines.every((line, i) => line === currentLines?.[i])
+  );
 }
 
 /**
@@ -51,11 +78,6 @@ export function managedPreambleResource(path: string): string | undefined {
 // 開始行は文言を問わない(fixture は `% ---- ツール管理プリアンブル ----`)。
 const BEGIN_LINE = /^% ---- ツール管理プリアンブル[^\n]*$/gm;
 const END_LINE = /^% ---- ツール管理ここまで ----[ \t]*(?=\r?$)/m;
-
-/** プリアンブルにツール管理プリアンブルの開始印があるか(終了印がそろっているかは問わない)。 */
-export function hasManagedPreambleBegin(preamble: string): boolean {
-  return preamble.match(BEGIN_LINE) !== null;
-}
 
 /** ツール管理プリアンブルの位置、または範囲を特定できない理由(そのまま利用者に見せる文)。 */
 export type ManagedPreambleLocation = { span: SourceSpan } | { problem: string };

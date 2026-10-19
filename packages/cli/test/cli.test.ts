@@ -50,9 +50,13 @@ async function fixture(name: string, source: string): Promise<{ path: string; ar
   return { path, argvPath: relative(ROOT, path) };
 }
 
+/**
+ * キャンバスとスタイルの定義を読むデッキ(deck init のデッキと同じく、deck の語彙を使っても L025 に
+ * ならない)。行番号を変えないよう、`\input` は `\documentclass` と同じ行に置く。
+ */
 function deck(body: string): string {
   return `%% deck-source-version: 1
-\\documentclass[aspectratio=169]{beamer}
+\\documentclass[aspectratio=169]{beamer}\\input{deck-canvas-preamble}\\input{deck-style-preamble}
 \\begin{document}
 ${body}
 \\end{document}
@@ -1183,7 +1187,7 @@ describe("deck format", () => {
     const expected = runCli("format", source.argvPath);
     expect(expected.status).toBe(0);
     expect(expected.stdout).toBe(
-      "%% deck-source-version: 1\n\\documentclass[aspectratio=169]{beamer}\n\\begin{document}\n\\begin{frame}[label=canvas]{Canvas}\n\\begin{deckcanvas}\n\\deckimage[x=0.800,y=0.000,w=0.300]{image.png}\n\\end{deckcanvas}\n\\end{frame}\n\\end{document}\n",
+      "%% deck-source-version: 1\n\\documentclass[aspectratio=169]{beamer}\\input{deck-canvas-preamble}\\input{deck-style-preamble}\n\\begin{document}\n\\begin{frame}[label=canvas]{Canvas}\n\\begin{deckcanvas}\n\\deckimage[x=0.800,y=0.000,w=0.300]{image.png}\n\\end{deckcanvas}\n\\end{frame}\n\\end{document}\n",
     );
     expect(await readFile(source.path, "utf8")).toBe(unformatted);
 
@@ -1437,8 +1441,6 @@ describe("E_COMPILE に lint error を添える", () => {
   // 管理プリアンブルに \deckbackground の定義が無いデッキ(L025)。TeX は Undefined control sequence で止まる。
   const outdated = `\\documentclass[aspectratio=169]{beamer}
 %% deck-source-version: 1
-% ---- ツール管理プリアンブル ----
-% ---- ツール管理ここまで ----
 %% style:begin
 \\deckbackground{bg.png}
 %% style:end
@@ -1475,7 +1477,7 @@ describe("E_COMPILE に lint error を添える", () => {
         stderr.mockClear();
         expect(await run([...argv], dependencies)).toBe(EXIT_CODE.lintError);
         expect(JSON.parse(String(stderr.mock.calls[0]?.[0])).error.diagnostics).toMatchObject([
-          { code: "L025", location: { line: 6, column: 1 } },
+          { code: "L025", location: { line: 4, column: 1 } },
         ]);
       }
     } finally {
@@ -1526,13 +1528,13 @@ describe("E_COMPILE に lint error を添える", () => {
       expect(payload.error).toMatchObject({
         code: "E_COMPILE",
         message: "Undefined control sequence",
-        diagnostics: [{ code: "L025", severity: "error", location: { line: 6, column: 1 } }],
+        diagnostics: [{ code: "L025", severity: "error", location: { line: 4, column: 1 } }],
       });
       stderr.mockClear();
       expect(await run(["check", source.path], dependencies)).toBe(EXIT_CODE.lintError);
       const text = stderr.mock.calls.map((call) => String(call[0])).join("");
       expect(text).toMatch(/^Undefined control sequence\n/);
-      expect(text).toContain(`${source.path}:6:1: error L025: `);
+      expect(text).toContain(`${source.path}:4:1: error L025: `);
       expect(stdout).not.toHaveBeenCalled();
     } finally {
       stdout.mockRestore();
@@ -1555,14 +1557,14 @@ describe("E_COMPILE に lint error を添える", () => {
       ).toBe(EXIT_CODE.lintError);
       expect(JSON.parse(String(stderr.mock.calls[0]?.[0])).error).toMatchObject({
         code: "E_COMPILE",
-        diagnostics: [{ code: "L025", location: { line: 6, column: 1 } }],
+        diagnostics: [{ code: "L025", location: { line: 4, column: 1 } }],
       });
       stderr.mockClear();
       expect(await run(["snapshot", source.path, "-o", out(source.path)], dependencies)).toBe(
         EXIT_CODE.lintError,
       );
       expect(stderr.mock.calls.map((call) => String(call[0])).join("")).toContain(
-        `${source.path}:6:1: error L025: `,
+        `${source.path}:4:1: error L025: `,
       );
       expect(existsSync(out(source.path))).toBe(false);
       stderr.mockClear();

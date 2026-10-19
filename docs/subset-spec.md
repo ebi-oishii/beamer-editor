@@ -308,7 +308,7 @@ pass では推測値を出力しないため、最終 pass で有効なレコー
 | L022 | preamble-extra が参照するテンプレート `.sty` がデッキのディレクトリ配下に無い | `\usetheme` は info(TeX 配布のテーマなら通る)、パス指定の `\usepackage` は warning |
 | L023 | テンプレート `.sty` が参照する画像が無い(デッキのディレクトリ基準) | warning |
 | L024 | 背景の指定(`\usebackgroundtemplate` / `\setbeamertemplate{background}` / `\addtobeamertemplate{background}` ほか)が `%% preamble-extra` と `%% style` のどちらの中にもない(PDF には効くがプレビューには出ない。ツール管理プリアンブルの中も対象で、`deck*` マクロ定義の本文だけは除く) | warning |
-| L025 | ツール管理プリアンブルが古い。現行の管理プリアンブルが定義する命令・環境(`\deckbackground` など)を使っているのに、使う位置より前に定義が無ければ error(その機能の追加前に `deck init` したデッキ。プレビューには出るが PDF 書き出しは Undefined control sequence で止まる。ユーザー領域とコメントの定義は数えず、resources を読む `\input` は現行の中身として数える)。使う機能は揃っていても、管理プリアンブルの中身が `deck init` の現行と違えば開始行に warning(古い版か手で編集した版)。resources を `\input` で読むデッキと、管理プリアンブルの開始印も定義も無いデッキは比べない。`deck init <file> --update-preamble` で直る | error / warning。VS Code では管理プリアンブルを差し替える Quick Fix を提供 |
+| L025 | ツール管理プリアンブルが古い。現行の管理プリアンブルが定義する命令・環境(`\deckbackground` など)を使っているのに、使う位置より前に定義が無ければ error(その機能の追加前に `deck init` したデッキや、`deck init` を通さずに書いたデッキ。プレビューには出るが PDF 書き出しは Undefined control sequence で止まる。ユーザー領域とコメントの定義は数えず、resources を読む `\input` は現行の中身として数える。verbatim・`\verb`・`\string` の中は TeX が実行しないので使用に数えない)。使う機能は揃っていても、管理プリアンブルの中身が `deck init` の現行と違えば開始行に warning(古い版か手で編集した版。コメントと空行の違いは比べない)。resources を `\input` で読むデッキは比べない。`deck init <file> --update-preamble` で直る | error / warning。VS Code では管理プリアンブルを差し替える Quick Fix を提供 |
 
 オブジェクト同士の重なりは意図的な場合があるため lint 対象にしない(`deck check` の実測レポートで info 表示のみ。§2.8)。
 

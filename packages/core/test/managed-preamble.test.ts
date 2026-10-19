@@ -217,7 +217,6 @@ describe("lintSource: L025(管理プリアンブルが使っているマクロ�
       "canvas-math",
       "japanese",
       "kitchen-sink",
-      "lint-static",
       "macros",
       "measure-body-area",
       "styled",
@@ -229,6 +228,12 @@ describe("lintSource: L025(管理プリアンブルが使っているマクロ�
       );
       expect(l025(fixture), name).toEqual([]);
     }
+    // lint-static は管理プリアンブルを持たずにキャンバスを使うので、PDF は止まる。
+    const lintStatic = readFileSync(
+      new URL("../../../fixtures/lint-static.slide.tex", import.meta.url),
+      "utf8",
+    );
+    expect(new Set(l025(lintStatic).map((entry) => entry.severity))).toEqual(new Set(["error"]));
   });
 
   it("ユーザー領域やコメントにある定義は数えない", () => {
@@ -243,6 +248,92 @@ describe("lintSource: L025(管理プリアンブルが使っているマクロ�
       BACKGROUNDS,
     );
     expect(l025(commented)).toHaveLength(2);
+  });
+
+  it("印も定義も無いデッキでも、現行の命令を使っていれば fix なしの error を出す", () => {
+    // deck init を通さずに書いたデッキ。PDF は Undefined control sequence で止まる。
+    const source = [
+      "\\documentclass[aspectratio=169]{beamer}",
+      "%% deck-source-version: 1",
+      "%% style:begin",
+      "\\deckbackground{bg.png}",
+      "%% style:end",
+      "\\begin{document}",
+      "\\begin{frame}{T}x\\end{frame}",
+      "\\end{document}",
+      "",
+    ].join("\n");
+    const found = l025(source);
+    expect(found.map((entry) => entry.severity)).toEqual(["error"]);
+    expect(found[0]?.fix).toBeUndefined();
+    expect(found[0]?.message).toContain("範囲を特定できないため自動では直せません(開始印");
+    // deck の語彙を使わない普通の Beamer 文書には出さない。
+    expect(l025(source.replace("\\deckbackground{bg.png}\n", ""))).toEqual([]);
+  });
+
+  it("verbatim・\\verb・\\string の中の \\deckX は使用と数えない", () => {
+    const withBody = (body: string) =>
+      initDeck(oldManaged, "").replace(
+        "\\begin{frame}[label=title]\n  \\titlepage",
+        `\\begin{frame}[fragile,label=title]\n${body}`,
+      );
+    const quoted = withBody(
+      [
+        "\\begin{verbatim}\\deckbackground{x}\\end{verbatim}",
+        "\\verb|\\deckbackground|",
+        "\\texttt{\\string\\deckbackground}",
+      ].join("\n"),
+    );
+    // 中身が現行と違う warning だけで、使用の error は出ない。
+    expect(l025(quoted).map((entry) => entry.severity)).toEqual(["warning"]);
+    expect(l025(withBody("\\deckbackground{x}")).map((entry) => entry.severity)).toEqual(["error"]);
+  });
+
+  it("\\DeclareRobustCommand と \\let の定義も数える", () => {
+    for (const definition of [
+      "\\DeclareRobustCommand\\deckbackground[2][]{}",
+      "\\let\\deckbackground\\relax",
+    ]) {
+      const managed = oldManaged.replace(
+        `\n${MANAGED_PREAMBLE_END}`,
+        `\n${definition}\n${MANAGED_PREAMBLE_END}`,
+      );
+      expect(
+        l025(initDeck(managed, BACKGROUNDS)).map((entry) => entry.severity),
+        definition,
+      ).toEqual(["warning"]);
+    }
+  });
+
+  it("中身の比較では、コメントと空行の違いを見ない(命令の違いは見る)", () => {
+    const block = managedPreambleBlock();
+    const comment = block
+      .split("\n")
+      .find(
+        (line) =>
+          line.startsWith("%") && line !== MANAGED_PREAMBLE_BEGIN && line !== MANAGED_PREAMBLE_END,
+      );
+    if (comment === undefined) throw new Error("管理プリアンブルにコメント行が無い");
+    expect(l025(initDeck(block.replace(comment, "% 別のコメント"), ""))).toEqual([]);
+    expect(
+      l025(
+        initDeck(block.replace(`${MANAGED_PREAMBLE_BEGIN}\n`, `${MANAGED_PREAMBLE_BEGIN}\n\n`), ""),
+      ),
+    ).toEqual([]);
+    expect(
+      l025(initDeck(block.replace("\\setbeamertemplate{navigation symbols}{}", "\\relax"), "")).map(
+        (entry) => entry.severity,
+      ),
+    ).toEqual(["warning"]);
+  });
+
+  it("CRLF のデッキでは、warning の範囲を開始行の \\r の手前で止める", () => {
+    const source = initDeck(oldManaged, "").replaceAll("\n", "\r\n");
+    const found = l025(source);
+    expect(found.map((entry) => entry.severity)).toEqual(["warning"]);
+    const span = found[0]?.span;
+    expect(source.slice(span?.start, span?.end)).toBe(MANAGED_PREAMBLE_BEGIN);
+    expect(source[span?.end ?? 0]).toBe("\r");
   });
 
   it("印が無いデッキは fix を付けず、自動では直せないと伝える", () => {
