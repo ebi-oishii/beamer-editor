@@ -8,6 +8,7 @@
 import type { RenderedDeck } from "@beamer-editor/renderer";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ShellHost } from "../shell-host.js";
+import { findCanvasOverflows } from "./canvas-overflow.js";
 import { applyRawImages, RawImageStore } from "./raw-images.js";
 import { type RevealRequest, SlideScroll } from "./SlideScroll.js";
 import { type PreviewAction, type PreviewState, previewReducer } from "./state.js";
@@ -156,6 +157,37 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     },
     [],
   );
+
+  // 本文領域の下端からはみ出したキャンバス要素をホストへ伝える(#178)。箱の高さはフォントや画像の
+  // 読み込みで後から変わるので、本文領域と各要素の大きさが変わるたびに測り直し、結果が変わったときだけ送る。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 同じ version の再描画(画像の再読込)でも DOM が作り直されるので deck を依存に含める
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!host.reportCanvasOverflow || !preview || !Number.isFinite(version)) return;
+    let sent: string | undefined;
+    let pending: number | undefined;
+    const measure = () => {
+      pending = undefined;
+      const overflows = findCanvasOverflows(preview);
+      const key = JSON.stringify(overflows);
+      if (key === sent) return;
+      sent = key;
+      host.reportCanvasOverflow?.(version, overflows);
+    };
+    const schedule = () => {
+      pending ??= requestAnimationFrame(measure);
+    };
+    schedule();
+    const view = preview.ownerDocument.defaultView;
+    const observer = view?.ResizeObserver ? new view.ResizeObserver(schedule) : undefined;
+    for (const element of preview.querySelectorAll(".canvas, .canvas > [data-canvas-element-id]")) {
+      observer?.observe(element);
+    }
+    return () => {
+      observer?.disconnect();
+      if (pending !== undefined) cancelAnimationFrame(pending);
+    };
+  }, [host, deck, version]);
 
   // アクティブフレームの変化をホストへ通知する。
   useEffect(() => {

@@ -79,6 +79,13 @@ export type WebviewToExtension =
       sourceSpan: { start: number; end: number };
       /** スライド全体を 1 とした左上座標と幅。ホストが本文領域座標へ変換する。 */
       rect: { x: number; y: number; width: number };
+    }
+  /** 描いた高さで本文領域の下端からはみ出したキャンバス要素(#178)。空なら「はみ出しなし」。 */
+  | {
+      type: "canvasOverflow";
+      /** 測った deck の document version。 */
+      version: number;
+      elements: { frameIndex: number; elementId: string }[];
     };
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -266,6 +273,22 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
         };
       }
       return null;
+    }
+    case "canvasOverflow": {
+      const { elements } = raw;
+      if (!isNonNegativeInteger(raw.version) || !Array.isArray(elements)) return null;
+      const parsed: { frameIndex: number; elementId: string }[] = [];
+      for (const element of elements) {
+        if (
+          !isRecord(element) ||
+          !isNonNegativeInteger(element.frameIndex) ||
+          typeof element.elementId !== "string" ||
+          element.elementId.length === 0
+        )
+          return null;
+        parsed.push({ frameIndex: element.frameIndex, elementId: element.elementId });
+      }
+      return { type: "canvasOverflow", version: raw.version, elements: parsed };
     }
     default:
       return null;

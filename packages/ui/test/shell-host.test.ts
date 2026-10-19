@@ -213,3 +213,21 @@ describe("createMessageShellHost: canvas clipboard(#148)", () => {
     ]);
   });
 });
+
+describe("createMessageShellHost: canvasOverflow(#178)", () => {
+  it("測ったはみ出しを version 付きで transport へ post する", () => {
+    const posted: unknown[] = [];
+    const host = createMessageShellHost({
+      post: (msg) => posted.push(msg),
+      subscribe: () => () => {},
+    });
+    host.reportCanvasOverflow?.(5, [{ frameIndex: 0, elementId: "canvas-image-0" }]);
+    expect(posted).toEqual([
+      {
+        type: "canvasOverflow",
+        version: 5,
+        elements: [{ frameIndex: 0, elementId: "canvas-image-0" }],
+      },
+    ]);
+  });
+});

@@ -370,6 +370,10 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     (document) => deckLintOptions(document),
   );
   context.subscriptions.push(diagnosticCollection, lintController);
+  // プレビューで描いた高さで測った、キャンバス要素の下端のはみ出し(#178)。静的 lint とは別に持ち、
+  // プレビューが測るたびに入れ替え、閉じたら消す。
+  const measuredDiagnostics = vscode.languages.createDiagnosticCollection("beamer-editor-preview");
+  context.subscriptions.push(measuredDiagnostics);
 
   function managedPatterns(document: vscode.TextDocument): readonly string[] {
     if (document.uri.scheme !== "file") return [];
@@ -1020,6 +1024,13 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           const result = pasteCanvasObjects(target.getText(), request.frameOffset, clipboard);
           if (result === null) return "notCanvas";
           return (await applyReplacement(target, result)) ? "applied" : "failed";
+        },
+        reportCanvasOverflow: (target, diagnostics) => {
+          const textDocument = target as vscode.TextDocument;
+          measuredDiagnostics.set(
+            textDocument.uri,
+            diagnostics.map((lint) => toVscodeDiagnostic(textDocument, lint)),
+          );
         },
       },
     );

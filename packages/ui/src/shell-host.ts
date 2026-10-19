@@ -9,6 +9,7 @@ import type { CanvasFontSize } from "@beamer-editor/core";
 
 import type { RenderedDeck } from "@beamer-editor/renderer";
 import type { ExtensionToWebview, WebviewToExtension } from "./messages.js";
+import type { CanvasOverflow } from "./preview/canvas-overflow.js";
 import { parseZoom, type ZoomState } from "./preview/zoom.js";
 
 /**
@@ -113,6 +114,11 @@ export interface ShellHost {
     sourceSpan: { start: number; end: number },
     rect: { x: number; y: number; width: number },
   ): void;
+  /**
+   * ui → ホスト: 描いた高さで本文領域の下端からはみ出したキャンバス要素(#178)。version は
+   * 測った deck の document version。版ごとに 1 回は送り、空の一覧は「はみ出しなし」を表す。
+   */
+  reportCanvasOverflow?(version: number, elements: CanvasOverflow[]): void;
 }
 
 /**
@@ -205,6 +211,9 @@ export function createMessageShellHost(
     },
     pasteCanvasElements(frameIndex, version) {
       transport.post({ type: "pasteCanvasElements", frameIndex, version });
+    },
+    reportCanvasOverflow(version, elements) {
+      transport.post({ type: "canvasOverflow", version, elements });
     },
     loadNavState() {
       return parseNavState(state?.getState());

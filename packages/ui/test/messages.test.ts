@@ -211,3 +211,40 @@ describe("parseWebviewToExtension: canvas clipboard(#148)", () => {
     ).toBeNull();
   });
 });
+
+describe("parseWebviewToExtension: canvasOverflow(#178)", () => {
+  it("version と要素の一覧を受理し、空の一覧も受ける", () => {
+    const elements = [{ frameIndex: 1, elementId: "canvas-text-0" }];
+    expect(parseWebviewToExtension({ type: "canvasOverflow", version: 3, elements })).toEqual({
+      type: "canvasOverflow",
+      version: 3,
+      elements,
+    });
+    expect(parseWebviewToExtension({ type: "canvasOverflow", version: 3, elements: [] })).toEqual({
+      type: "canvasOverflow",
+      version: 3,
+      elements: [],
+    });
+  });
+
+  it("一覧でない値・不正な要素が 1 つでもあれば null", () => {
+    expect(parseWebviewToExtension({ type: "canvasOverflow", version: 3 })).toBeNull();
+    expect(
+      parseWebviewToExtension({ type: "canvasOverflow", version: -1, elements: [] }),
+    ).toBeNull();
+    expect(
+      parseWebviewToExtension({
+        type: "canvasOverflow",
+        version: 3,
+        elements: [{ frameIndex: 0, elementId: "a" }, { frameIndex: 0 }],
+      }),
+    ).toBeNull();
+    expect(
+      parseWebviewToExtension({
+        type: "canvasOverflow",
+        version: 3,
+        elements: [{ frameIndex: -1, elementId: "a" }],
+      }),
+    ).toBeNull();
+  });
+});

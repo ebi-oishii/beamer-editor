@@ -1559,3 +1559,89 @@ describe("PreviewController: canvas clipboard(#148)", () => {
     );
   });
 });
+
+describe("canvas overflow measured by the preview (#178)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const overflowRender = (_text: string, version: number): RenderOutcome => {
+    const outcome = canvasRender(_text, version);
+    const frame = outcome.deck.frames[0];
+    frame?.canvasElements?.push(
+      // 書かれた x + w だけで静的な L012 が出る要素。
+      {
+        id: "canvas-text-1",
+        kind: "text",
+        position: { x: 0.8, y: 0.2, width: 0.4 },
+        sourceSpan: { start: 50, end: 60 },
+        editable: true,
+      },
+      // マクロ展開だけの要素は元ソースを指せない。
+      {
+        id: "canvas-text-2",
+        kind: "text",
+        position: { x: 0.1, y: 0.9, width: 0.4 },
+        sourceSpan: { start: 70, end: 80 },
+      },
+    );
+    return outcome;
+  };
+  const overflow = (version: number, ...ids: string[]) => ({
+    type: "canvasOverflow",
+    version,
+    elements: ids.map((elementId) => ({ frameIndex: 0, elementId })),
+  });
+
+  it("今の版の測定を、静的な L012 と重ならない editable な要素だけの L012 にする", async () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const reportCanvasOverflow = vi.fn();
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: overflowRender,
+      reportCanvasOverflow,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    await controller.handleMessageForTest(
+      overflow(7, "canvas-text-0", "canvas-text-1", "canvas-text-2", "missing"),
+    );
+    expect(reportCanvasOverflow).toHaveBeenCalledExactlyOnceWith(doc, [
+      {
+        code: "L012",
+        severity: "warning",
+        message: "キャンバス要素が本文領域の下にはみ出しています(プレビューで描いた高さ)",
+        span: { start: 30, end: 45 },
+      },
+    ]);
+    // 空の一覧は「はみ出しなし」として前の診断を消す。
+    await controller.handleMessageForTest(overflow(7));
+    expect(reportCanvasOverflow).toHaveBeenLastCalledWith(doc, []);
+  });
+
+  it("古い版の測定は捨て、閉じたら診断を消す", async () => {
+    const { panel } = makePanel();
+    const { events, change } = makeEvents();
+    const doc = makeDoc();
+    const reportCanvasOverflow = vi.fn();
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: overflowRender,
+      reportCanvasOverflow,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    doc.edit(`${doc.text} `);
+    change(doc);
+    // 描画前(debounce 中)に届いた旧版 7 の測定も、まだ描いていない版 8 の測定も使わない。
+    await controller.handleMessageForTest(overflow(7, "canvas-text-0"));
+    await controller.handleMessageForTest(overflow(8, "canvas-text-0"));
+    expect(reportCanvasOverflow).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(RENDER_DEBOUNCE_MS);
+    await controller.handleMessageForTest(overflow(8, "canvas-text-0"));
+    expect(reportCanvasOverflow).toHaveBeenCalledTimes(1);
+
+    controller.dispose();
+    expect(reportCanvasOverflow).toHaveBeenLastCalledWith(doc, []);
+  });
+});
