@@ -1,6 +1,8 @@
 import {
   type CanvasFontSize,
+  canvasPositionOutOfBounds,
   isCanvasFontSize,
+  type LintDiagnostic,
   mapExpandedRangeToSourceExact,
   normalizeCanvasWidth,
   roundCanvasCoordinate,
@@ -183,6 +185,12 @@ export interface PreviewControllerOptions {
     frameOffset: number;
     document: PreviewDocument;
   }) => Promise<PasteResult>;
+  /**
+   * プレビューで測った、本文領域の下端からはみ出したキャンバス要素の診断(#178)。span は元ソース。
+   * 測るたびに文書の全件を渡し、プレビューを閉じたときは空で呼ぶ。Diagnostics への変換は
+   * extension.ts が担う。
+   */
+  reportCanvasOverflow?: (document: PreviewDocument, diagnostics: LintDiagnostic[]) => void;
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -291,6 +299,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly deleteCanvasElement: PreviewControllerOptions["deleteCanvasElement"];
   private readonly copyCanvasElement: PreviewControllerOptions["copyCanvasElement"];
   private readonly pasteCanvasElements: PreviewControllerOptions["pasteCanvasElements"];
+  private readonly reportCanvasOverflow: PreviewControllerOptions["reportCanvasOverflow"];
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
@@ -351,6 +360,7 @@ export class PreviewController implements vscode.Disposable {
     this.deleteCanvasElement = options.deleteCanvasElement;
     this.copyCanvasElement = options.copyCanvasElement;
     this.pasteCanvasElements = options.pasteCanvasElements;
+    this.reportCanvasOverflow = options.reportCanvasOverflow;
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
@@ -435,6 +445,8 @@ export class PreviewController implements vscode.Disposable {
       await this.enqueueClipboard(() => this.handleCopy(msg));
     } else if (msg.type === "pasteCanvasElements") {
       await this.enqueueClipboard(() => this.handlePaste(msg));
+    } else if (msg.type === "canvasOverflow") {
+      this.handleCanvasOverflow(msg.version, msg.elements);
     } else if (msg.type === "undoRedo") {
       // 注入された処理は同期で呼び出し、同期の例外も非同期の rejection も onError へ回す。
       const report = () => this.onError(`failed to ${msg.kind} the source document.`);
@@ -445,6 +457,42 @@ export class PreviewController implements vscode.Disposable {
       }
     }
     // activeFrameChanged はソース側カーソル追従(VS-5 以降)で使う予定(現状 no-op)。
+  }
+
+  /**
+   * プレビューで測った下端のはみ出しを、元ソースの `[...]` を指す L012 にする(#178)。今の文書の
+   * 今の version を描いた結果に対する測定だけを使い、古い版の測定は捨てる(次の描画で測り直される)。
+   * 書かれた x, y, w だけで分かるはみ出しは静的な L012 が出すので重ねない。元ソースに対応しない
+   * 要素(マクロ展開だけの要素)は指す場所が無いので出さない。
+   */
+  private handleCanvasOverflow(
+    version: number,
+    elements: readonly { frameIndex: number; elementId: string }[],
+  ): void {
+    const latest = this.latest;
+    if (
+      !this.reportCanvasOverflow ||
+      !latest ||
+      this.latestDocument !== this.document ||
+      version !== this.document.version ||
+      latest.version !== version
+    ) {
+      return;
+    }
+    const diagnostics: LintDiagnostic[] = [];
+    for (const { frameIndex, elementId } of elements) {
+      const element = latest.deck.frames[frameIndex]?.canvasElements?.find(
+        (candidate) => candidate.id === elementId && candidate.editable,
+      );
+      if (!element || canvasPositionOutOfBounds(element.position)) continue;
+      diagnostics.push({
+        code: "L012",
+        severity: "warning",
+        message: "キャンバス要素が本文領域の下にはみ出しています(プレビューで描いた高さ)",
+        span: element.sourceSpan,
+      });
+    }
+    this.reportCanvasOverflow(this.document, diagnostics);
   }
 
   private enqueueClipboard(operation: () => Promise<void>): Promise<void> {
@@ -1109,6 +1157,8 @@ export class PreviewController implements vscode.Disposable {
     for (const disposable of this.disposables.splice(0)) {
       disposable.dispose();
     }
+    // 測る者がいなくなるので、プレビューで測った診断を残さない。
+    this.reportCanvasOverflow?.(this.document, []);
     this.onDispose();
   }
 }

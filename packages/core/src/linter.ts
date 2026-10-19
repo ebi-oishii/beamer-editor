@@ -653,6 +653,19 @@ function balancedArgumentEnd(source: string, index: number): number | null {
   return null;
 }
 
+/**
+ * 書かれた x, y, w だけで本文領域からはみ出すと分かるか(静的な L012 の条件)。箱の高さは見ない。
+ * プレビューで測った下端のはみ出し(#178)を、静的な L012 と重ねて出さないためにも使う。
+ */
+export function canvasPositionOutOfBounds(position: {
+  x: number;
+  y: number;
+  width: number;
+}): boolean {
+  const { x, y, width } = position;
+  return x < 0 || x > 1 || y < 0 || y > 1 || width <= 0 || width > 1 || x + width > 1;
+}
+
 function lintCanvas(canvas: CanvasNode): LintDiagnostic[] {
   const diagnostics: LintDiagnostic[] = [];
   for (const item of canvas.items) {
@@ -667,14 +680,13 @@ function lintCanvas(canvas: CanvasNode): LintDiagnostic[] {
       );
       continue;
     }
-    const { x, y, width, span } = item.position;
-    if (x < 0 || x > 1 || y < 0 || y > 1 || width <= 0 || width > 1 || x + width > 1) {
+    if (canvasPositionOutOfBounds(item.position)) {
       diagnostics.push(
         diagnostic(
           "L012",
           "warning",
           "キャンバス要素が本文領域からはみ出しています(x, y, w が 0〜1 の範囲外)",
-          span,
+          item.position.span,
         ),
       );
     }

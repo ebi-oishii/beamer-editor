@@ -2393,3 +2393,35 @@ describe("canvas selection across frames(#148)", () => {
     expect(deleteCanvasElement).toHaveBeenCalledExactlyOnceWith(1, "canvas-text-0", 5);
   });
 });
+
+it("描いた deck の版ごとに、下端のはみ出しを 1 回ホストへ伝える(#178)", () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const reportCanvasOverflow = vi.fn();
+  const host = { ...fakeHost(), reportCanvasOverflow };
+  const savedRaf = globalThis.requestAnimationFrame;
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callback(0);
+    return 0;
+  });
+  let unmount: () => void = () => {};
+  try {
+    act(() => {
+      unmount = mountPreview(container, host);
+    });
+    // deck が届く前は測らない。jsdom は大きさを持たないので、はみ出しは無い。
+    expect(reportCanvasOverflow).not.toHaveBeenCalled();
+    act(() => host.push(DECK, 1));
+    act(() => host.push(DECK, 2));
+    expect(reportCanvasOverflow.mock.calls).toEqual([
+      [1, []],
+      [2, []],
+    ]);
+  } finally {
+    Object.defineProperty(globalThis, "requestAnimationFrame", {
+      configurable: true,
+      value: savedRaf,
+    });
+    act(() => unmount());
+  }
+});
