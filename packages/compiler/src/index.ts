@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { lineSplitter } from "./line-splitter.js";
 
 const MAX_PROCESS_OUTPUT = 1024 * 1024;
 const DEFAULT_COMPILE_TIMEOUT_MS = 300_000;
@@ -33,8 +34,20 @@ export interface PdfExportRequest {
   overwrite?: boolean;
   tectonicPath?: string;
   signal?: AbortSignal;
-  /** Tectonic compile timeout. Defaults to 5 minutes. */
+  /**
+   * Tectonic compile timeout. Defaults to 5 minutes. Each TeX package download
+   * restarts it, so a slow first run is measured from its latest download.
+   */
   timeoutMs?: number;
+  /** Tectonic の進捗(初回の TeX パッケージ取得)を受け取る。例外は書き出しに影響しない。 */
+  onProgress?: (progress: PdfExportProgress) => void;
+}
+
+/** `count` は 1 始まりの累計ダウンロード数。 */
+export interface PdfExportProgress {
+  kind: "download";
+  file: string;
+  count: number;
 }
 
 export interface PdfExportResult {
@@ -57,14 +70,32 @@ export type PdfExportErrorCode =
   | "E_CANCELLED";
 
 export class PdfExportError extends Error {
+  /**
+   * TeX(Tectonic)が非 0 の終了コードで終わった E_COMPILE(ソースのコンパイルエラー)。起動の失敗・
+   * タイムアウト・log の欠落・frame marker の不整合など、環境やツール側の E_COMPILE では false。
+   * 呼び出し側はこれが true のときだけ、デッキ側の原因(lint error)を添える。
+   */
+  public readonly texFailed: boolean;
+
   constructor(
     public readonly code: PdfExportErrorCode,
     message: string,
     public readonly cause?: unknown,
+    options: { texFailed?: boolean } = {},
   ) {
     super(message);
     this.name = "PdfExportError";
+    this.texFailed = code === "E_COMPILE" && options.texFailed === true;
   }
+}
+
+/**
+ * Tectonic が終わったのに PDF が得られなかったときの E_COMPILE。非 0 の終了コードなら TeX の
+ * コンパイルエラーとして texFailed を立てる(シグナルで止まった・終了 0 で PDF が無いなどは立てない)。
+ */
+function compileFailure(result: ProcessResult, message: string): PdfExportError {
+  const texFailed = typeof result.exitCode === "number" && result.exitCode !== 0;
+  return new PdfExportError("E_COMPILE", message, undefined, { texFailed });
 }
 
 export interface ProcessResult {
@@ -75,12 +106,21 @@ export interface ProcessResult {
   timedOut?: boolean;
 }
 
+export interface ProcessRunOptions {
+  cwd: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  /**
+   * stdout / stderr を 1 行ずつ(改行を除いて)受け取る。最後の改行なし行は終了時に渡す。
+   * Tectonic は note(取得中のファイル名など)を stdout、warning / error を stderr に出す。
+   */
+  onOutputLine?: (line: string, stream: "stdout" | "stderr") => void;
+  /** true を返した出力行(stdout / stderr とも)でタイムアウトを最初から計り直す。 */
+  restartTimeoutOn?: (line: string) => boolean;
+}
+
 export interface ProcessRunner {
-  run(
-    command: string,
-    args: readonly string[],
-    options: { cwd: string; signal?: AbortSignal; timeoutMs?: number },
-  ): Promise<ProcessResult>;
+  run(command: string, args: readonly string[], options: ProcessRunOptions): Promise<ProcessResult>;
 }
 
 export interface PdfExportDependencies {
@@ -109,6 +149,21 @@ function boundedCollector(limit: number) {
     },
     value: () => value,
   };
+}
+
+const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*[A-Za-z]`, "g");
+const TECTONIC_DOWNLOAD_LINE = /^note: downloading (.+)$/;
+
+/**
+ * Tectonic が TeX パッケージ・フォントを初回取得するときの出力行(`note: downloading <file>`)
+ * から、取得中のファイル名を返す。端末向けに色が付いていても判定できるよう ANSI を除く。
+ */
+function tectonicDownloadFile(line: string): string | undefined {
+  return TECTONIC_DOWNLOAD_LINE.exec(line.replace(ANSI_ESCAPE, "").trim())?.[1]?.trim();
+}
+
+function isTectonicDownloadLine(line: string): boolean {
+  return tectonicDownloadFile(line) !== undefined;
 }
 
 /** Node の spawn を shell なし・argv のままで呼ぶ標準ランナー。 */
@@ -158,8 +213,35 @@ export const nodeProcessRunner: ProcessRunner = {
         if (hardSettle) clearTimeout(hardSettle);
         options.signal?.removeEventListener("abort", onAbort);
       };
+      const armTimeout = () => {
+        if (options.timeoutMs === undefined || options.timeoutMs <= 0) return;
+        if (timeout) clearTimeout(timeout);
+        timeout = setTimeout(() => {
+          if (settled) return;
+          timedOut = true;
+          terminate();
+        }, options.timeoutMs);
+      };
+      const { onOutputLine, restartTimeoutOn } = options;
+      const outputLines = (stream: "stdout" | "stderr") =>
+        lineSplitter((line) => {
+          // A listener runs inside a stream event; its failure must not
+          // become an uncaught exception or stop the remaining output.
+          try {
+            if (!settled && !terminating && restartTimeoutOn?.(line)) armTimeout();
+            onOutputLine?.(line, stream);
+          } catch {
+            // Ignored deliberately; the collected output is unaffected.
+          }
+        }, MAX_PROCESS_OUTPUT);
+      const lines =
+        onOutputLine === undefined && restartTimeoutOn === undefined
+          ? undefined
+          : { stdout: outputLines("stdout"), stderr: outputLines("stderr") };
       const finish = (exitCode: number | null) => {
         if (settled) return;
+        lines?.stdout.end();
+        lines?.stderr.end();
         settled = true;
         cleanup();
         resolveResult({
@@ -193,6 +275,10 @@ export const nodeProcessRunner: ProcessRunner = {
       if (options.signal?.aborted) onAbort();
       child.stdout?.on("data", stdout.append);
       child.stderr?.on("data", stderr.append);
+      if (lines) {
+        child.stdout?.on("data", lines.stdout.append);
+        child.stderr?.on("data", lines.stderr.append);
+      }
       child.on("error", (error: NodeJS.ErrnoException) => {
         if (settled) return;
         settled = true;
@@ -201,13 +287,7 @@ export const nodeProcessRunner: ProcessRunner = {
         else reject(error);
       });
       child.on("close", finish);
-      if (options.timeoutMs !== undefined && options.timeoutMs > 0) {
-        timeout = setTimeout(() => {
-          if (settled) return;
-          timedOut = true;
-          terminate();
-        }, options.timeoutMs);
-      }
+      armTimeout();
     });
   },
 };
@@ -279,6 +359,24 @@ function runnerOptions(
   timeoutMs: number,
 ): { cwd: string; signal?: AbortSignal; timeoutMs: number } {
   return signal === undefined ? { cwd, timeoutMs } : { cwd, signal, timeoutMs };
+}
+
+/**
+ * Options for a Tectonic compile. A cold cache can make Tectonic fetch hundreds
+ * of files one by one, so the timeout counts from the latest download rather
+ * than from the start; a compile that stops making progress still times out.
+ */
+function compileRunnerOptions(
+  cwd: string,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  onOutputLine?: (line: string) => void,
+): ProcessRunOptions {
+  return {
+    ...runnerOptions(cwd, signal, timeoutMs),
+    restartTimeoutOn: isTectonicDownloadLine,
+    ...(onOutputLine === undefined ? {} : { onOutputLine }),
+  };
 }
 
 function throwIfCancelled(signal: AbortSignal | undefined): void {
@@ -398,17 +496,30 @@ export async function exportPdf(
   try {
     tempDirectory = await makeTemp("beamer-editor-pdf-");
     throwIfCancelled(signal);
+    const onProgress = request.onProgress;
+    let downloads = 0;
     let compileResult: ProcessResult;
     try {
       compileResult = await runner.run(
         tectonic,
         ["-X", "compile", "--outdir", tempDirectory, inputPath],
-        runnerOptions(
+        compileRunnerOptions(
           dirname(inputPath),
           signal,
           request.timeoutMs && request.timeoutMs > 0
             ? request.timeoutMs
             : DEFAULT_COMPILE_TIMEOUT_MS,
+          onProgress &&
+            ((line) => {
+              const file = tectonicDownloadFile(line);
+              if (file === undefined) return;
+              downloads += 1;
+              try {
+                onProgress({ kind: "download", file, count: downloads });
+              } catch {
+                // Progress is advisory; a failing listener must not fail the export.
+              }
+            }),
         ),
       );
     } catch (error) {
@@ -429,13 +540,13 @@ export async function exportPdf(
         request.timeoutMs && request.timeoutMs > 0 ? request.timeoutMs : DEFAULT_COMPILE_TIMEOUT_MS;
       throw new PdfExportError(
         "E_COMPILE",
-        `PDF のコンパイルが ${timeoutMs / 1000} 秒でタイムアウトしました${processDetail(compileResult)}`,
+        `PDF のコンパイルが ${timeoutMs / 1000} 秒でタイムアウトしました(TeX パッケージの取得中は最後の取得から計測)${processDetail(compileResult)}`,
       );
     }
     const compiledPdf = join(tempDirectory, compiledPdfName(inputPath));
     if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(compiledPdf))) {
-      throw new PdfExportError(
-        "E_COMPILE",
+      throw compileFailure(
+        compileResult,
         `PDF のコンパイルに失敗しました${processDetail(compileResult)}`,
       );
     }
@@ -1169,7 +1280,7 @@ export async function compileDeckFrames(
           temporaryDirectory,
           measuredInput,
         ],
-        runnerOptions(
+        compileRunnerOptions(
           dirname(inputPath),
           signal,
           request.timeoutMs && request.timeoutMs > 0
@@ -1197,8 +1308,8 @@ export async function compileDeckFrames(
       );
     const pdfPath = join(temporaryDirectory, compiledPdfName(inputPath));
     if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(pdfPath)))
-      throw new PdfExportError(
-        "E_COMPILE",
+      throw compileFailure(
+        compileResult,
         `PDF のコンパイルに失敗しました${processDetail(compileResult)}`,
       );
     const pdfInfo = await stat(pdfPath);
@@ -1389,7 +1500,7 @@ export async function compileFragment(
       compileResult = await runner.run(
         tectonic,
         ["-X", "compile", "--outdir", tempDirectory, inputPath],
-        runnerOptions(request.cwd ?? tempDirectory, signal, timeoutMs),
+        compileRunnerOptions(request.cwd ?? tempDirectory, signal, timeoutMs),
       );
     } catch (error) {
       if (isAbort(error, signal))
@@ -1407,12 +1518,12 @@ export async function compileFragment(
     if (compileResult.timedOut)
       throw new PdfExportError(
         "E_COMPILE",
-        `部分コンパイルが ${timeoutMs / 1000} 秒でタイムアウトしました${processDetail(compileResult)}`,
+        `部分コンパイルが ${timeoutMs / 1000} 秒でタイムアウトしました(TeX パッケージの取得中は最後の取得から計測)${processDetail(compileResult)}`,
       );
     const compiledPdf = join(tempDirectory, "fragment.pdf");
     if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(compiledPdf)))
-      throw new PdfExportError(
-        "E_COMPILE",
+      throw compileFailure(
+        compileResult,
         `部分コンパイルに失敗しました${processDetail(compileResult)}`,
       );
     const { size } = await stat(compiledPdf);
@@ -1442,5 +1553,4 @@ export {
   buildFragmentDocument,
   FRAGMENT_DOCUMENT_VERSION,
   fragmentDependencies,
-  fragmentGraphicsPaths,
 } from "./fragment.js";

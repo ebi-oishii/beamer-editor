@@ -35,6 +35,7 @@ import {
   rawFragmentKey,
 } from "@beamer-editor/core";
 import katex from "katex";
+import { MONO_FONT_FALLBACK } from "./font-stack.js";
 import { DEFAULT_THEME, type Theme } from "./theme.js";
 
 export interface RenderedFrame {
@@ -231,8 +232,10 @@ export interface RenderOptions {
 interface FrameDecorations {
   /** `%% style` の \decklogo(本文領域の座標)か、テンプレートの \logo(右下)か。 */
   logo: PreviewLogo | null;
-  /** 全スライドの背景画像(テンプレートの \usebackgroundtemplate 等)。 */
+  /** 全スライドの背景画像(テンプレートの \usebackgroundtemplate 等、または %% style の \deckbackground)。 */
   background: string | null;
+  /** 表紙(\titlepage を含むフレーム)だけの背景画像(%% style の \deckbackground[title])。 */
+  titleBackground: string | null;
   footerHtml: string | null;
 }
 
@@ -249,15 +252,15 @@ function cornerLogoWidthPct(width: LengthSpec | null, metrics: Theme["metrics"])
   }
 }
 
-/** フォント family の CSS スタック(main は和文ローカルフォントへフォールバック)。 */
+/** フォント family の CSS スタック(main は和文ローカルフォント、mono は Windows の Latin 等幅を挟んで総称へ落とす)。 */
 function fontStack(slot: "main" | "mono", family: string): string {
   const name = sanitizeFontFamily(family);
   // main は和文のローカルフォントへフォールバックしてからサンス総称へ落とす
-  // (プレビューは近似でよい。theme-design.md §4)。mono は等幅のまま総称へ委ねる。
-  // 和文フォールバックは Linux(Noto Sans CJK JP / Noto Sans JP)・macOS(Hiragino Sans)・
-  // Windows(Yu Gothic)を順に並べる。先頭 family と重複しても害はない。
+  // (プレビューは近似でよい。theme-design.md §4)。和文フォールバックは
+  // Linux(Noto Sans CJK JP / Noto Sans JP)・macOS(Hiragino Sans)・Windows(Yu Gothic)を
+  // 順に並べる。先頭 family と重複しても害はない。mono は指定名の後に MONO_FONT_FALLBACK を続ける。
   return slot === "mono"
-    ? `"${name}", monospace`
+    ? `"${name}", ${MONO_FONT_FALLBACK}`
     : `"${name}", "Noto Sans CJK JP", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif`;
 }
 
@@ -307,6 +310,7 @@ class FrameRenderer {
   private readonly decorations: FrameDecorations = {
     logo: null,
     background: null,
+    titleBackground: null,
     footerHtml: null,
   };
   private canvasElements: RenderedCanvasElement[] = [];
@@ -332,6 +336,9 @@ class FrameRenderer {
       if (entry.type === "styleLogo") {
         const { x, y, width } = entry.position;
         this.decorations.logo = { path: entry.path, placement: { kind: "canvas", x, y, width } };
+      } else if (entry.type === "styleBackground") {
+        if (entry.slot === "title") this.decorations.titleBackground = entry.path;
+        else this.decorations.background = entry.path;
       } else if (entry.type === "styleFooter") {
         this.decorations.footerHtml = this.renderInlines(entry.text);
       }
@@ -342,11 +349,13 @@ class FrameRenderer {
    * ロゴ・フッターのオーバーレイ(TeX 側の背景テンプレートに対応)。
    * .slide 直下の先頭に入れ、CSS の z-index で本文の背面に置く。
    */
-  private renderDecorations(frameIndex: number, frameTotal: number): string {
+  private renderDecorations(frameIndex: number, frameTotal: number, isTitleFrame: boolean): string {
     let out = "";
     const { slideWidthPt, slideHeightPt, bodyAreaPt: body } = this.theme.metrics;
     // 背景画像は最背面。PDF は <img> で出せないので出さない(Phase 6 のコンパイル画像待ち)。
-    const background = this.decorations.background;
+    // 表紙では表紙用の背景があればそちらを優先する(TeX 側の \deckbackground[title] と同じ)。
+    const background =
+      (isTitleFrame ? this.decorations.titleBackground : null) ?? this.decorations.background;
     if (background && !background.toLowerCase().endsWith(".pdf")) {
       out += `<img class="deck-background" src="${escapeHtml(background)}">`;
     }
@@ -733,16 +742,19 @@ class FrameRenderer {
       frame.title && frame.title.length > 0
         ? `<div class="frametitle">${this.renderInlines(frame.title)}</div>`
         : "";
+    const isTitleFrame = frame.body.some((block) => block.type === "titlePage");
     return {
-      html: `<div class="slide${frame.options.plain ? " plain" : ""}">${this.renderDecorations(frameIndex, frameTotal)}${title}<div class="slide-body">${body}</div></div>`,
+      html: `<div class="slide${frame.options.plain ? " plain" : ""}">${this.renderDecorations(frameIndex, frameTotal, isTitleFrame)}${title}<div class="slide-body">${body}</div></div>`,
       stepCount: this.maxStep,
       canvasElements: this.canvasElements,
     };
   }
 
   renderRawFrame(frame: RawFrameNode, frameIndex: number, frameTotal: number): string {
+    // 解釈不能フレームでも、\titlepage を含むなら表紙として背景を選ぶ。
+    const isTitleFrame = /\\titlepage(?![A-Za-z@])/.test(frame.tex);
     return (
-      `<div class="slide raw-frame">${this.renderDecorations(frameIndex, frameTotal)}` +
+      `<div class="slide raw-frame">${this.renderDecorations(frameIndex, frameTotal, isTitleFrame)}` +
       `<div class="frametitle">${escapeHtml(frame.title ?? "(生フレーム)")}</div>` +
       '<div class="slide-body"><div class="raw-block"><div class="raw-badge">解釈不能フレーム(一覧・並べ替えのみ可能。プレビューは Phase 6 で画像に)</div>' +
       `<pre>${escapeHtml(frame.tex)}</pre></div></div></div>`

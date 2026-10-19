@@ -160,6 +160,16 @@ export interface StyleLogoNode extends BaseNode {
   path: string;
 }
 
+/**
+ * 背景画像。slot "all" は全スライド、"title" は表紙(\titlepage を含むフレーム)だけで、
+ * 表紙では "all" より優先する。
+ */
+export interface StyleBackgroundNode extends BaseNode {
+  type: "styleBackground";
+  slot: "all" | "title";
+  path: string;
+}
+
 /** フッター(左: テキスト、右: ページ番号)。本文領域を消費しないオーバーレイ。 */
 export interface StyleFooterNode extends BaseNode {
   type: "styleFooter";
@@ -170,6 +180,7 @@ export type StyleEntry =
   | StyleColorNode
   | StyleFontNode
   | StyleLogoNode
+  | StyleBackgroundNode
   | StyleFooterNode
   | RawBlockNode;
 
