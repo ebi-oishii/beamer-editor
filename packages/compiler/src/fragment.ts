@@ -35,8 +35,8 @@ function keepPreambleLine(line: string): string | null {
 }
 
 /**
- * standalone(preview)の文書。beamer が暗黙に読み込むパッケージのうち生ブロックが頼りがちなもの
- * (amsmath / amssymb / graphicx / xcolor)と、beamer 既定のサンセリフ本文を前置し、
+ * standalone(preview)の文書。beamer やツール管理プリアンブルが読み込むパッケージのうち生ブロックが
+ * 頼りがちなもの(amsmath / amssymb / graphicx / xcolor / booktabs)と、beamer 既定のサンセリフ本文を前置し、
  * その後に preamble-extra とマクロ定義(beamer 専用の行は除く)、最後に生ブロック本文を置く。
  */
 export function buildFragmentDocument(body: string, preamble: string): string {
@@ -48,7 +48,7 @@ export function buildFragmentDocument(body: string, preamble: string): string {
     .trim();
   return [
     "\\documentclass[preview,border=2pt]{standalone}",
-    "\\usepackage{amsmath,amssymb,graphicx,xcolor}",
+    "\\usepackage{amsmath,amssymb,graphicx,xcolor,booktabs}",
     "\\renewcommand{\\familydefault}{\\sfdefault}",
     kept,
     "\\begin{document}",
@@ -64,7 +64,7 @@ export function buildFragmentDocument(body: string, preamble: string): string {
  * standalone 文書の組み立て方の版。buildFragmentDocument の前置きを変えたら上げる。
  * 画像キャッシュの置き場に入り、古い組み立て方で作った PDF を使い続けない。
  */
-export const FRAGMENT_DOCUMENT_VERSION = 2;
+export const FRAGMENT_DOCUMENT_VERSION = 3;
 
 const FILE_ARGUMENT =
   /\\(?:includegraphics|includepdf|includesvg|includestandalone|input|include|InputIfFileExists|lstinputlisting|verbatiminput|pgfplotstableread)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;

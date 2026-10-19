@@ -14,15 +14,18 @@ describe("canvasHoverAt", () => {
     expect(CANVAS_HOVER_DOCUMENTATION.deckimage.markdown).toContain("`y`");
     expect(CANVAS_HOVER_DOCUMENTATION.deckimage.markdown).toContain("`w`");
     expect(CANVAS_HOVER_DOCUMENTATION.deckimage.markdown).toContain("\\deckimage[");
+    expect(CANVAS_HOVER_DOCUMENTATION.deckfigure.markdown).toContain("`w`");
+    expect(CANVAS_HOVER_DOCUMENTATION.deckfigure.markdown).toContain("\\begin{deckfigure}");
   });
 
   it("returns Japanese documentation and the command-name range for each canvas construct", () => {
     const source = String.raw`\begin{deckcanvas}
   \begin{decktext}[x=0.050,y=0.100,w=0.420,size=normal]Text\end{decktext}
   \deckimage[x=0.520,y=0.140,w=0.400]{assets/image.pdf}
+  \begin{deckfigure}[x=0.100,y=0.500,w=0.300]\begin{tikzpicture}\end{tikzpicture}\end{deckfigure}
 \end{deckcanvas}`;
 
-    for (const name of ["deckcanvas", "decktext", "deckimage"] as const) {
+    for (const name of ["deckcanvas", "decktext", "deckimage", "deckfigure"] as const) {
       const start = source.indexOf(name);
       const hover = canvasHoverAt(documentFor(source, start + 2), undefined);
       expect(hover).toMatchObject({ range: { start, end: start + name.length } });

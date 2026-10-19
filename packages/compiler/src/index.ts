@@ -652,7 +652,7 @@ export interface CanvasGeometry {
   frame: FrameAddress;
   /** Physical PDF page on which Tectonic measured this object. */
   page: number;
-  kind: "text" | "image";
+  kind: "text" | "image" | "figure";
   x: number;
   y: number;
   width: number;
@@ -957,7 +957,7 @@ const DECK_BODY_RECORD = new RegExp(
   `^DECKBODY\\s+left=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+top=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+width=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+height=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}${MANAGED_RECORD_BOUNDARY}`,
 );
 const DECK_GEOMETRY_RECORD = new RegExp(
-  `^DECKGEOM\\s+frame=(\\d+)\\s+page=(\\d+)\\s+kind=(text|image)\\s+x=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+y=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+w=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+h=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}${MANAGED_RECORD_BOUNDARY}`,
+  `^DECKGEOM\\s+frame=(\\d+)\\s+page=(\\d+)\\s+kind=(text|image|figure)\\s+x=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+y=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+w=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}\\s+h=(${PT_NUMBER})${LOG_FOLD}${PT_UNIT}${MANAGED_RECORD_BOUNDARY}`,
 );
 const DECK_GEOMETRY_ERROR_RECORD = new RegExp(
   `^DECKGEOMERROR\\s+reason=unresolved${MANAGED_RECORD_BOUNDARY}`,

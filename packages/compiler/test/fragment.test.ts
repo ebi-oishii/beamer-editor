@@ -14,7 +14,7 @@ describe("buildFragmentDocument", () => {
       "\\usepackage{tikz}\n\\newcommand{\\code}[1]{\\texttt{#1}}",
     );
     expect(doc).toBe(`\\documentclass[preview,border=2pt]{standalone}
-\\usepackage{amsmath,amssymb,graphicx,xcolor}
+\\usepackage{amsmath,amssymb,graphicx,xcolor,booktabs}
 \\renewcommand{\\familydefault}{\\sfdefault}
 \\usepackage{tikz}
 \\newcommand{\\code}[1]{\\texttt{#1}}

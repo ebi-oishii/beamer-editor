@@ -1,4 +1,4 @@
-% deckcanvas / decktext / deckimage のツール管理実装(Phase 0.5)
+% deckcanvas / decktext / deckimage / deckfigure のツール管理実装(Phase 0.5)
 %
 % subset-spec.md §2.8 の公開契約を提供する。内部実装(textpos)は公開契約に含めない。
 % 本文領域の定数(default テーマ・16:9・タイトル帯 1 行固定高)は
@@ -12,13 +12,14 @@
 % 各オブジェクトの配置時に、絶対座標と実測寸法(ボックスの幅・高さ)を
 % コンパイルログへ出力する。deck check(Phase 6)がこれを解析して
 % 本文領域外へのはみ出し(warning)とオブジェクト重なり(info)を機械検出する。
-%   書式: DECKGEOM frame=<フレーム番号> page=<物理ページ番号> kind=<text|image> x=<pt> y=<pt> w=<pt> h=<pt>
+%   書式: DECKGEOM frame=<フレーム番号> page=<物理ページ番号> kind=<text|image|figure> x=<pt> y=<pt> w=<pt> h=<pt>
 %   本文領域: DECKBODY left=<pt> top=<pt> width=<pt> height=<pt>(文書冒頭に 1 回)
 % 高さはボックス実測なので、テキストのリフロー結果を正しく反映する。
 % (絶対配置は Overfull 警告を出さないため、この機構が check の安全網になる)
 \usepackage[absolute,overlay]{textpos}
 \usepackage{keyval}
 \usepackage{zref-savepos}
+\usepackage{varwidth}
 \makeatletter
 % ---- 本文領域の定数 ----
 \newdimen\deck@body@left   \deck@body@left=28.45pt
@@ -88,4 +89,15 @@
   \deck@pos@reset\setkeys{deckpos}{#1}\deck@computepos
   \sbox\deck@contentbox{\includegraphics[width=\deck@abs@w]{#2}}%
   \deck@place{image}}
+% TikZ・表など任意の LaTeX を、縦横比を保って幅 w に拡大縮小して置く(#191)。
+% varwidth で包むのは、center・figure など段落を要する環境も中身の幅で組むため。
+\newenvironment{deckfigure}[1][]{%
+  \deck@pos@reset\setkeys{deckpos}{#1}\deck@computepos
+  \begin{lrbox}{\deck@contentbox}%
+  \begin{varwidth}{\deck@body@width}\ignorespaces
+}{%
+  \unskip\end{varwidth}%
+  \end{lrbox}%
+  \sbox\deck@contentbox{\resizebox{\deck@abs@w}{!}{\usebox\deck@contentbox}}%
+  \deck@place{figure}}
 \makeatother

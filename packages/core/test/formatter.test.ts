@@ -19,6 +19,9 @@ const UNFORMATTED = String.raw`\documentclass[aspectratio=169]{beamer}
       Hello \textbf{world}.
     \end{decktext}
     \deckimage[w=0.333333,y=-0,x=0.666666]{asset.png}
+    \begin{deckfigure}[ w=.5, x=.25, y=.1 ]
+      \begin{tikzpicture}\draw (0,0) -- (1,1);\end{tikzpicture}
+    \end{deckfigure}
     \unknown{raw content remains byte-for-byte}
   \end{deckcanvas}
 \end{frame}
@@ -38,6 +41,9 @@ const FORMATTED = String.raw`\documentclass[aspectratio=169]{beamer}
       Hello \textbf{world}.
     \end{decktext}
     \deckimage[x=0.667,y=0.000,w=0.333]{asset.png}
+    \begin{deckfigure}[x=0.250,y=0.100,w=0.500]
+      \begin{tikzpicture}\draw (0,0) -- (1,1);\end{tikzpicture}
+    \end{deckfigure}
     \unknown{raw content remains byte-for-byte}
   \end{deckcanvas}
 \end{frame}

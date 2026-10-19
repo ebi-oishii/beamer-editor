@@ -48,13 +48,13 @@ export interface RenderedFrame {
   /** オーバーレイの総ステップ数(1 なら段階表示なし)。 */
   stepCount: number;
   isRaw: boolean;
-  /** deckcanvas 直下の画像・テキスト。ID はこの描画 version の frame 内だけで有効。 */
+  /** deckcanvas 直下の画像・テキスト・図。ID はこの描画 version の frame 内だけで有効。 */
   canvasElements?: RenderedCanvasElement[];
 }
 
 export interface RenderedCanvasElement {
   id: string;
-  kind: "image" | "text";
+  kind: "image" | "text" | "figure";
   fontSize?: CanvasFontSize;
   /** ソースに書かれた許可外の size。描画は fontSize のフォールバックを使い、選択 UI はこちらを見せる。 */
   invalidFontSize?: string;
@@ -689,6 +689,16 @@ class FrameRenderer {
         } else {
           html += `<img class="canvas-item"${attrs} src="${escapeHtml(item.path)}" style="${posStyle(item.position.x, item.position.y, item.position.width)}">`;
         }
+      } else if (item.type === "canvasFigure") {
+        // 中身は部分コンパイル画像(#81)で描き、縦横比はその画像から決まる(#191)。
+        const environment = environmentOf(item.tex);
+        html += placeholderHtml(
+          "canvas-item canvas-figure",
+          environment ?? "deckfigure",
+          item.tex,
+          `${posStyle(item.position.x, item.position.y, item.position.width)};aspect-ratio:4 / 3`,
+          `${describe("figure", item.position)}${this.rawKeyAttr(item.tex, environment)}`,
+        );
       } else {
         html += placeholderHtml(
           "canvas-item raw-block",

@@ -198,6 +198,16 @@ describe("analyzeCanvasGeometry", () => {
     ]);
   });
 
+  it("reads deckfigure records (kind=figure) like images (#191)", () => {
+    const diagnostics = analyzeCanvasGeometry(
+      `${body}\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=1 page=1 kind=figure x=105pt y=20pt w=10pt h=10pt`,
+      frames,
+    );
+    expect(diagnostics).toMatchObject([
+      { kind: "canvas-overflow", geometry: { kind: "figure", x: 105, width: 10 } },
+    ]);
+  });
+
   it("reports real overlap but not edge contact, with the documented epsilon", () => {
     const diagnostics = analyzeCanvasGeometry(
       `${body}\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=1 page=1 kind=text x=10pt y=20pt w=20pt h=20pt\nDECKGEOM frame=1 page=1 kind=image x=30pt y=20pt w=10pt h=20pt\nDECKGEOM frame=1 page=1 kind=image x=29.98pt y=20pt w=10pt h=20pt`,

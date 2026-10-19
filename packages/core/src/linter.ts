@@ -661,7 +661,7 @@ function lintCanvas(canvas: CanvasNode): LintDiagnostic[] {
         diagnostic(
           "L014",
           "warning",
-          "deckcanvas 直下には decktext または deckimage だけを置けます",
+          "deckcanvas 直下には decktext・deckimage・deckfigure だけを置けます",
           item.span,
         ),
       );
@@ -1214,7 +1214,25 @@ const LATER_MANAGED_MACROS: ReadonlyArray<{
         .filter((entry) => entry.type === "styleBackground")
         .map((entry) => entry.span),
   },
+  {
+    name: "deckfigure",
+    resource: "deck-canvas-preamble",
+    uses: (doc) => {
+      const spans: SourceSpan[] = [];
+      for (const frame of framesOf(doc)) {
+        if (frame.type !== "frame") continue;
+        visitBlocks(frame.body, (block) => {
+          if (block.type !== "canvas") return;
+          for (const item of block.items) if (item.type === "canvasFigure") spans.push(item.span);
+        });
+      }
+      return spans;
+    },
+  },
 ];
+
+/** `deck*` 環境の定義(`deckfigure` など。L025 で管理プリアンブルに定義があるかを見る)。 */
+const DECK_ENVIRONMENT_DEFINITION = /\\(?:new|renew)environment\s*\{\s*(deck[A-Za-z@]*)\s*\}/g;
 
 /**
  * L025: ツール管理プリアンブルが、使っているマクロより古い。ユーザー領域(macros / style /
@@ -1234,9 +1252,12 @@ function lintOutdatedManagedPreamble(source: string, doc: DeckDocument): LintDia
     const end = Math.min(region.end, text.length);
     text = text.slice(0, region.start) + " ".repeat(end - region.start) + text.slice(end);
   }
-  const defined = new Set(
-    [...text.matchAll(DECK_MACRO_DEFINITION)].map((match) => /deck[A-Za-z@]*/.exec(match[0])?.[0]),
-  );
+  const defined = new Set([
+    ...[...text.matchAll(DECK_MACRO_DEFINITION)].map(
+      (match) => /deck[A-Za-z@]*/.exec(match[0])?.[0],
+    ),
+    ...[...text.matchAll(DECK_ENVIRONMENT_DEFINITION)].map((match) => match[1]),
+  ]);
   const inputs = [...text.matchAll(/\\input\s*\{([^{}]*)\}/g)].map((match) =>
     (match[1] ?? "").trim().replace(/\.tex$/, ""),
   );

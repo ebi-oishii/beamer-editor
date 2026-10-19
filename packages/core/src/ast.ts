@@ -390,7 +390,7 @@ export interface CanvasNode extends BaseNode {
   items: CanvasItemNode[];
 }
 
-export type CanvasItemNode = CanvasTextNode | CanvasImageNode | RawBlockNode;
+export type CanvasItemNode = CanvasTextNode | CanvasImageNode | CanvasFigureNode | RawBlockNode;
 
 export interface CanvasTextNode extends BaseNode {
   type: "canvasText";
@@ -412,6 +412,17 @@ export interface CanvasImageNode extends BaseNode {
   position: CanvasPosition;
   /** PNG / JPEG / PDF のみ(L015)。高さは寸法プローブの縦横比から自動算出。 */
   path: string;
+}
+
+/**
+ * `deckfigure`: TikZ・表など任意の LaTeX を、幅 w に縦横比を保って拡大縮小して置く(#191)。
+ * 中身はソースが正で、プレビューは部分コンパイル画像で表示する。
+ */
+export interface CanvasFigureNode extends BaseNode {
+  type: "canvasFigure";
+  position: CanvasPosition;
+  /** `\begin{deckfigure}[...]` と `\end{deckfigure}` の間の原文(前後の空白は除く)。 */
+  tex: string;
 }
 
 // ---------------------------------------------------------------------------

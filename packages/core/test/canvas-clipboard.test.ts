@@ -293,3 +293,43 @@ ${occupied}
     expect(pasteCanvasObjects(twoCanvases, frameOffsetOf(twoCanvases, 0), IMAGE)).toBeNull();
   });
 });
+
+describe("deckfigure のコピー・貼り付け(#191)", () => {
+  const FIGURE_FRAME = `\\begin{frame}[label=fig]{F}
+  \\begin{deckcanvas}
+    \\begin{deckfigure}[x=0.100,y=0.200,w=0.300]
+      \\begin{tikzpicture}
+        \\draw (0,0) -- (1,1);
+      \\end{tikzpicture}
+    \\end{deckfigure}
+  \\end{deckcanvas}
+\\end{frame}`;
+  const FIGURE = `\\begin{deckfigure}[x=0.100,y=0.200,w=0.300]
+  \\begin{tikzpicture}
+    \\draw (0,0) -- (1,1);
+  \\end{tikzpicture}
+\\end{deckfigure}`;
+
+  it("原文をコピーし、同じフレームへ貼るとずらして入れ、消すと deckcanvas だけが残る", () => {
+    const source = deck(FIGURE_FRAME);
+    expect(canvasObjectSource(source, optionsSpanOf(source, 0))).toBe(FIGURE);
+    const pasted = apply(
+      source,
+      must(pasteCanvasObjects(source, frameOffsetOf(source, 0), FIGURE)),
+    );
+    expect(pasted).toContain(
+      `    \\end{deckfigure}
+    \\begin{deckfigure}[x=0.120,y=0.220,w=0.300]
+      \\begin{tikzpicture}
+        \\draw (0,0) -- (1,1);
+      \\end{tikzpicture}
+    \\end{deckfigure}
+  \\end{deckcanvas}`,
+    );
+    expect(apply(source, must(removeCanvasObject(source, optionsSpanOf(source, 0))))).toBe(
+      deck(
+        "\\begin{frame}[label=fig]{F}\n  \\begin{deckcanvas}\n  \\end{deckcanvas}\n\\end{frame}",
+      ),
+    );
+  });
+});

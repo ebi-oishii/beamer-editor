@@ -952,7 +952,7 @@ export class PreviewController implements vscode.Disposable {
       }
       if (result === "notCanvas") {
         this.onWarning(
-          "貼り付けられませんでした。クリップボードがキャンバスの要素(decktext / deckimage)でないか、対象のフレームが受け付けられない形です。",
+          "貼り付けられませんでした。クリップボードがキャンバスの要素(decktext / deckimage / deckfigure)でないか、対象のフレームが受け付けられない形です。",
         );
         this.sendDeck();
         return;
