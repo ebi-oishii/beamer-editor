@@ -696,11 +696,45 @@ Other
       );
       expect(out).toMatch(
         new RegExp(
-          `<div class="declared" style="font-size:10pt;color:#e74c3c;font-weight:bold"><${tag}[^>]*><li><span>First </span></li><li><span>Second </span></li></${tag}></div>`,
+          `<${tag}[^>]* style="font-size:10pt;color:#e74c3c;font-weight:bold"><li><span>First </span></li><li><span>Second </span></li></${tag}><p[^>]*>After`,
         ),
       );
-      expect(out).toMatch(/<\/div><p[^>]*>After/);
     }
+  });
+
+  it("箇条書き・段組み・block は外の揃えを引き継がず、揃え以外の宣言は引き継ぐ", () => {
+    const out = html(`\\centering \\small
+\\includegraphics[width=0.5\\textwidth]{a.png}
+
+\\begin{itemize}
+\\item First point
+\\end{itemize}
+\\begin{block}{B}
+Body
+\\end{block}
+\\begin{columns}
+\\begin{column}{0.5\\textwidth}
+Col
+\\end{column}
+\\end{columns}
+After`);
+    expect(out).toMatch(/<div class="declared" style="text-align:center;font-size:10pt"><img /);
+    expect(out).toMatch(/<div class="declared" style="font-size:10pt"><ul[^>]*><li><span>First/);
+    expect(out).toMatch(/<div class="declared" style="font-size:10pt"><div class="beamer-block"/);
+    expect(out).toMatch(/<div class="declared" style="font-size:10pt"><div class="columns/);
+    // 環境の後ろでは、元の揃えが続く。
+    expect(out).toMatch(
+      /<div class="declared" style="text-align:center;font-size:10pt"><p[^>]*>After/,
+    );
+  });
+
+  it("箇条書きの中の \\centering はリスト自身に付け、グループの中の揃えは引き継ぐ", () => {
+    expect(html("\\begin{itemize}\n\\centering\n\\item A\n\\end{itemize}")).toMatch(
+      /<ul[^>]* style="text-align:center"><li>/,
+    );
+    expect(html("\\centering\nIntro\n\n{Grouped\n\nText\n}")).toMatch(
+      /<div class="declared" style="text-align:center"><div class="block-group"/,
+    );
   });
 
   it("\\hfill は前後を横並びにして残りの幅を埋める", () => {

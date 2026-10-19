@@ -320,6 +320,9 @@ const DECLARATION_ALIGN: Partial<Record<DeclarationNode["name"], "center" | "lef
   raggedleft: "right",
 };
 
+/** beamer が中で揃えを `\raggedright` に戻す環境(Tectonic で確認)。外の揃えの宣言を引き継がない。 */
+const ALIGN_RESET_BLOCKS: ReadonlySet<BlockNode["type"]> = new Set(["list", "columns", "blockEnv"]);
+
 /** 11pt の文書クラスでの文字サイズ(pt)。テーマに無い大きさは LaTeX の標準値を使う。 */
 const EXTRA_SIZES_PT = { LARGE: 17.28, huge: 20.74, Huge: 24.88 } as const;
 
@@ -653,18 +656,23 @@ class FrameRenderer {
     return { align, css };
   }
 
-  private withState(html: string, state: DeclarationState): string {
-    if (!state.align && !state.css) return html;
-    const style = [state.align ? `text-align:${state.align}` : "", state.css]
+  private declarationStyle(state: DeclarationState): string {
+    return [state.align ? `text-align:${state.align}` : "", state.css]
       .filter((part) => part !== "")
       .join(";");
-    return `<div class="declared"${styleAttr(style)}>${html}</div>`;
+  }
+
+  private withState(html: string, state: DeclarationState): string {
+    if (!state.align && !state.css) return html;
+    return `<div class="declared"${styleAttr(this.declarationStyle(state))}>${html}</div>`;
   }
 
   /**
    * ブロックの並び。`\centering` や `\small` は TeX と同じく、同じ環境(グループ)の
    * 後続の要素にも効くので、段落で見つけた宣言を次の要素へ引き継ぐ。キャンバスは
-   * 箱の中で揃えが戻る(minipage)ので引き継がない。
+   * 箱の中で揃えが戻る(minipage)ので引き継がない。箇条書き・段組み・block は、
+   * beamer が中で `\raggedright` に戻すので、揃え以外の宣言だけを引き継ぐ
+   * (PREVIEW_CSS もこれらを左揃えに戻し、`center` などの外側の揃えを継承させない)。
    */
   renderBlocks(blocks: BlockNode[]): string {
     let out = "";
@@ -690,7 +698,10 @@ class FrameRenderer {
       out +=
         block.type === "canvas"
           ? this.renderBlock(block)
-          : this.withState(this.renderBlock(block), state);
+          : this.withState(
+              this.renderBlock(block),
+              ALIGN_RESET_BLOCKS.has(block.type) ? { align: null, css: state.css } : state,
+            );
     }
     return out;
   }
@@ -749,10 +760,9 @@ class FrameRenderer {
           )
           .join("");
         // 最初の \item より前の宣言は、環境の中の全項目に効く(外の宣言はこの外側で掛かる)。
-        return this.withState(
-          `<${tag}${flow}>${items}</${tag}>`,
-          this.paragraphDeclarations(block.declarations),
-        );
+        // 揃えは PREVIEW_CSS がリストで左に戻すので、外側の div ではなくリスト自身に付ける。
+        const own = this.declarationStyle(this.paragraphDeclarations(block.declarations));
+        return `<${tag}${flow}${own ? styleAttr(own) : ""}>${items}</${tag}>`;
       }
       case "columns": {
         const cols = block.columns

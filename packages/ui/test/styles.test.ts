@@ -269,6 +269,33 @@ describe("PREVIEW_CSS: キャンバス幾何の契約", () => {
     expect(inner).toContain("--deck-structure");
   });
 
+  it("center の中の箇条書き・段組み・block は左揃えに戻り、リスト自身の \\centering は効く", () => {
+    injectPreviewCss();
+    const src = String.raw`\documentclass{beamer}
+\begin{document}
+\begin{frame}{A}
+\begin{center}
+\begin{itemize}\item a\end{itemize}
+\begin{block}{B}x\end{block}
+\begin{columns}\begin{column}{0.5\textwidth}c\end{column}\end{columns}
+\begin{enumerate}\centering\item b\end{enumerate}
+\end{center}
+\end{frame}
+\end{document}
+`;
+    const html = renderDeck(parseDeck(src)).frames[0]?.html ?? "";
+    document.body.innerHTML = `<div class="beamer-preview"><div class="slide">${html}</div></div>`;
+    const align = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(`.center ${selector}`);
+      if (!element) throw new Error(`${selector} was not rendered`);
+      return getComputedStyle(element).textAlign;
+    };
+    expect(align("ul")).toBe("left");
+    expect(align(".beamer-block")).toBe("left");
+    expect(align(".columns")).toBe("left");
+    expect(align("ol")).toBe("center");
+  });
+
   it("等幅スタックは総称 monospace の前に Windows の Latin 等幅を挟む", () => {
     const stacks = PREVIEW_CSS.match(/font-family:[^;]*monospace/g) ?? [];
     expect(stacks.length).toBeGreaterThan(0);
