@@ -253,3 +253,35 @@ describe("\\deckbackground を .sty で読む", () => {
     expect(extractPreviewStyle("\\deckbackground[title]{t.png}").background).toBeUndefined();
   });
 });
+
+describe("本文の左右の余白(\\setbeamersize。#159)", () => {
+  it("text margin left / right を pt で読み、空白や単位の揺れを吸収する", () => {
+    expect(
+      extractPreviewStyle("\\setbeamersize{text margin left=5mm,text margin right=0.5cm}")
+        .textMargins,
+    ).toEqual({ left: 14.225, right: 14.225 });
+    expect(
+      extractPreviewStyle("\\setbeamersize{ text  margin left = 10pt }\n").textMargins,
+    ).toEqual({ left: 10 });
+  });
+
+  it("絶対単位でない長さや、他のキーは読まない", () => {
+    expect(
+      extractPreviewStyle("\\setbeamersize{text margin left=0.05\\paperwidth}").textMargins,
+    ).toBeUndefined();
+    expect(
+      extractPreviewStyle("\\setbeamersize{sidebar width left=2cm}").textMargins,
+    ).toBeUndefined();
+    expect(
+      extractPreviewStyle("% \\setbeamersize{text margin left=5mm}").textMargins,
+    ).toBeUndefined();
+  });
+
+  it("mergePreviewStyles は側ごとに後の指定で上書きする", () => {
+    const merged = mergePreviewStyles(
+      { colors: {}, fonts: {}, textMargins: { left: 10, right: 20 } },
+      { colors: {}, fonts: {}, textMargins: { right: 5 } },
+    );
+    expect(merged.textMargins).toEqual({ left: 10, right: 5 });
+  });
+});

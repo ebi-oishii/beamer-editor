@@ -240,7 +240,11 @@ interface FrameDecorations {
 }
 
 /** 右下ロゴの幅(スライド幅に対する %)。指定が無ければ 8%。 */
-function cornerLogoWidthPct(width: LengthSpec | null, metrics: Theme["metrics"]): number {
+function cornerLogoWidthPct(
+  width: LengthSpec | null,
+  metrics: Theme["metrics"],
+  textWidthPt: number,
+): number {
   if (!width) return 8;
   switch (width.unit) {
     case "pt":
@@ -248,7 +252,7 @@ function cornerLogoWidthPct(width: LengthSpec | null, metrics: Theme["metrics"])
     case "paperwidth":
       return width.value * 100;
     case "textwidth":
-      return ((width.value * metrics.bodyAreaPt.width) / metrics.slideWidthPt) * 100;
+      return ((width.value * textWidthPt) / metrics.slideWidthPt) * 100;
   }
 }
 
@@ -288,6 +292,10 @@ export function styleCssOf(doc: DeckDocument, baseStyle?: PreviewStyle): string 
   const vars: string[] = [];
   for (const [role, hex] of colors) vars.push(`--deck-${role}: #${hex};`);
   for (const [slot, family] of fonts) vars.push(`--deck-font-${slot}: ${fontStack(slot, family)};`);
+  // 通常の本文の左右の余白(\setbeamersize)。キャンバスはスライド基準で置くので影響しない。
+  const margins = baseStyle?.textMargins;
+  if (margins?.left !== undefined) vars.push(`--deck-text-margin-left: ${margins.left}pt;`);
+  if (margins?.right !== undefined) vars.push(`--deck-text-margin-right: ${margins.right}pt;`);
   return vars.length > 0 ? `.slide {\n  ${vars.join("\n  ")}\n}` : "";
 }
 
@@ -304,6 +312,11 @@ class FrameRenderer {
   private pauseCount = 0;
   /** 今描いている場所の行幅(本文幅に対する比)。段組みの中では段の幅になる。 */
   private linewidthFactor = 1;
+  /**
+   * 通常の本文の幅(pt。TeX の \textwidth)。\setbeamersize の左右の余白で変わる。キャンバスの
+   * 座標の基準(theme の bodyAreaPt)とは別に持つ。
+   */
+  private readonly textWidthPt: number;
   /** フレーム内で観測したオーバーレイの最大ステップ。 */
   private maxStep = 1;
 
@@ -328,6 +341,12 @@ class FrameRenderer {
     baseStyle?: PreviewStyle,
   ) {
     this.fragmentPreamble = fragmentPreambleOf(doc);
+    const { slideWidthPt, bodyAreaPt: body } = theme.metrics;
+    const margins = baseStyle?.textMargins;
+    this.textWidthPt =
+      slideWidthPt -
+      (margins?.left ?? body.left) -
+      (margins?.right ?? slideWidthPt - body.left - body.width);
     // 土台(テンプレート / preamble-extra)を先に置き、%% style 領域で上書きする。
     if (baseStyle?.logo) this.decorations.logo = baseStyle.logo;
     if (baseStyle?.background) this.decorations.background = baseStyle.background.path;
@@ -370,7 +389,11 @@ class FrameRenderer {
         pos = `left:${leftPct}%;top:${topPct}%;width:${widthPct}%`;
       } else {
         // \logo の既定配置(default テーマ)は右下。
-        const widthPct = cornerLogoWidthPct(logo.placement.width, this.theme.metrics).toFixed(2);
+        const widthPct = cornerLogoWidthPct(
+          logo.placement.width,
+          this.theme.metrics,
+          this.textWidthPt,
+        ).toFixed(2);
         pos = `right:2%;bottom:3%;width:${widthPct}%`;
       }
       out += logo.path.toLowerCase().endsWith(".pdf")
@@ -608,9 +631,9 @@ class FrameRenderer {
     const { bodyAreaPt: body, slideHeightPt } = this.theme.metrics;
     switch (length.unit) {
       case "textheight":
-        return (length.factor * body.height) / body.width / this.linewidthFactor;
+        return (length.factor * body.height) / this.textWidthPt / this.linewidthFactor;
       case "paperheight":
-        return (length.factor * slideHeightPt) / body.width / this.linewidthFactor;
+        return (length.factor * slideHeightPt) / this.textWidthPt / this.linewidthFactor;
       default:
         return length.factor;
     }

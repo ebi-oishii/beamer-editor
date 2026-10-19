@@ -488,6 +488,34 @@ describe("renderDeck: テンプレート由来の土台スタイル", () => {
     expect(html).not.toContain("deck-background");
     expect(html).toContain("width:10.00%");
   });
+
+  it("\\setbeamersize の左右の余白は本文の CSS 変数になり、キャンバスの位置は変えない(#159)", () => {
+    const textMargins = { left: 14.225, right: 14.225 };
+    const narrow = renderDeck(parseDeck(fixture("canvas.slide.tex")), undefined, {
+      baseStyle: { colors: {}, fonts: {}, textMargins },
+    });
+    expect(narrow.css).toContain("--deck-text-margin-left: 14.225pt;");
+    expect(narrow.css).toContain("--deck-text-margin-right: 14.225pt;");
+    const normal = renderDeck(parseDeck(fixture("canvas.slide.tex")));
+    expect(normal.css).not.toContain("--deck-text-margin");
+    expect(narrow.frames.map((frame) => frame.html)).toEqual(
+      normal.frames.map((frame) => frame.html),
+    );
+  });
+
+  it("右下ロゴの \\textwidth は、余白を変えた本文の幅で測る(#159)", () => {
+    const logo = {
+      path: "logo.png",
+      placement: { kind: "corner" as const, width: { unit: "textwidth" as const, value: 0.1 } },
+    };
+    const html = (textMargins?: { left?: number; right?: number }) =>
+      renderDeck(parseDeck(fixture("basic.slide.tex")), undefined, {
+        baseStyle: { colors: {}, fonts: {}, logo, ...(textMargins ? { textMargins } : {}) },
+      }).frames[0]?.html ?? "";
+    // 既定は本文幅 398.34pt → 0.1 倍はスライド幅の 8.75%。余白 0 なら用紙幅の 10%。
+    expect(html()).toContain("width:8.75%");
+    expect(html({ left: 0, right: 0 })).toContain("width:10.00%");
+  });
 });
 
 describe("renderDeck: styled.slide.tex(スタイル語彙)", () => {
