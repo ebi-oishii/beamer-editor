@@ -4,7 +4,6 @@ import {
   compileFragment,
   FRAGMENT_DOCUMENT_VERSION,
   fragmentDependencies,
-  fragmentGraphicsPaths,
   PdfExportError,
 } from "@beamer-editor/compiler";
 import {
@@ -14,7 +13,9 @@ import {
   canvasWidthReplacement,
   detachBlockToCanvas,
   fragmentHash,
+  graphicsPathsOf,
   type LintDiagnostic,
+  type LintOptions,
   type LintSeverity,
   parseDeck,
   pasteCanvasObjects,
@@ -34,6 +35,7 @@ import {
 } from "./export-controller";
 import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
 import { ImagePasteEditProvider } from "./image-paste-provider";
+import { LintFixCodeActionProvider } from "./lint-fix-code-actions";
 import {
   appendUniqueIgnorePatterns,
   chooseLatexWorkshopTarget,
@@ -90,6 +92,23 @@ function toVscodeDiagnostic(
   diagnostic.code = lint.code;
   diagnostic.source = "beamer-editor";
   return diagnostic;
+}
+
+/**
+ * Problems パネルと PDF 書き出しの失敗報告で共有する lint オプション。
+ * テンプレート(.sty)参照の解決結果を L022 / L023 へ渡す(#70)。参照は `text`(既定は今の本文)から読む。
+ */
+function deckLintOptions(
+  document: vscode.TextDocument,
+  text: string = document.getText(),
+): LintOptions {
+  if (document.uri.scheme !== "file") return {};
+  const files = nodeTemplateFileSystem(path.dirname(document.uri.fsPath));
+  return {
+    // 画像の存在(L004)。デッキのディレクトリ配下だけを見る(`..` や絶対パスは無いものとして扱う)。
+    fileExists: files.isFile,
+    templates: templateStatuses(parseDeck(text), files),
+  };
 }
 
 /**
@@ -307,7 +326,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
             title: "Beamer Editor: 書き出し中",
             cancellable: true,
           },
-          (_progress, token) => task(token),
+          (progress, token) => task(token, (message) => progress.report({ message })),
         ),
       showInformation: (message, ...actions) =>
         vscode.window.showInformationMessage(message, ...actions),
@@ -327,6 +346,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         exportOutput.appendLine(detail);
         exportOutput.show(true);
       },
+      showProblems: () => vscode.commands.executeCommand("workbench.actions.view.problems"),
+      showsProblems: (document) => isManaged(document as vscode.TextDocument),
+      lintOptions: (document, text) => deckLintOptions(document as vscode.TextDocument, text),
       uriForFile: (path) => vscode.Uri.file(path) as ExportUri,
       tectonicPath: (document) => tectonicPathFor(document.uri as vscode.Uri),
       timeoutMs: (document) => {
@@ -352,6 +374,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
   // lint → Problems パネル・波線(VS-5)。開いている .tex 文書ごとに独立管理する。
   const diagnosticCollection = vscode.languages.createDiagnosticCollection("beamer-editor");
+  // L004(画像パス)・L025(管理プリアンブル)の Quick Fix は最新の lint 結果の fix を引く。
+  const lintFixActions = new LintFixCodeActionProvider();
   const lintController = new LintController<vscode.TextDocument>(
     {
       onDidOpenTextDocument: (listener) => vscode.workspace.onDidOpenTextDocument(listener),
@@ -360,25 +384,20 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     },
     {
       set: (document, diagnostics) => {
+        lintFixActions.record(document, diagnostics);
         diagnosticCollection.set(
           document.uri,
           diagnostics.map((lint) => toVscodeDiagnostic(document, lint)),
         );
       },
-      delete: (document) => diagnosticCollection.delete(document.uri),
+      delete: (document) => {
+        lintFixActions.forget(document);
+        diagnosticCollection.delete(document.uri);
+      },
     },
     vscode.workspace.textDocuments,
     (document) => isManaged(document),
-    // テンプレート(.sty)参照の解決結果を L022 / L023 へ渡す(#70)。
-    (document) =>
-      document.uri.scheme === "file"
-        ? {
-            templates: templateStatuses(
-              parseDeck(document.getText()),
-              nodeTemplateFileSystem(path.dirname(document.uri.fsPath)),
-            ),
-          }
-        : {},
+    (document) => deckLintOptions(document),
   );
   context.subscriptions.push(diagnosticCollection, lintController);
 
@@ -509,7 +528,10 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       {
         provideCodeActions(document, range, context, token) {
           return isManaged(document)
-            ? yenCodeActions.provideCodeActions(document, range, context, token)
+            ? [
+                ...yenCodeActions.provideCodeActions(document, range, context, token),
+                ...lintFixActions.provideCodeActions(document, range, context, token),
+              ]
             : [];
         },
       },
@@ -789,7 +811,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           (name) => (path.isAbsolute(name) ? name : path.join(documentDir.fsPath, name)),
           statDependency,
           fragmentHash,
-          fragmentGraphicsPaths(`${preamble}\n${tex}`),
+          graphicsPathsOf(`${preamble}\n${tex}`),
         ),
       // Tectonic が無い・壊れているときは、ブロックごとに赤枠にせず一度だけ案内する(元 #119)。
       isUnavailable: (error) =>

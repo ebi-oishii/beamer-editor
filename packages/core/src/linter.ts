@@ -11,8 +11,14 @@ import {
   type SourceSpan,
 } from "./ast.js";
 import type { FileExistsProbe, ImageFormat, ImageProbe } from "./image.js";
+import { locateManagedPreamble, managedPreambleReplacement } from "./managed-preamble.js";
 import { parseDeck } from "./parser.js";
-import type { TemplateStatus } from "./template.js";
+import {
+  blankComments,
+  graphicsPathsOf,
+  joinImageSearchPath,
+  type TemplateStatus,
+} from "./template.js";
 import { VERBATIM_ENVS } from "./tex-scan.js";
 
 export type LintCode =
@@ -35,7 +41,9 @@ export type LintCode =
   | "L020"
   | "L021"
   | "L022"
-  | "L023";
+  | "L023"
+  | "L024"
+  | "L025";
 
 export type LintSeverity = "info" | "warning" | "error";
 
@@ -44,6 +52,17 @@ export interface LintDiagnostic {
   severity: LintSeverity;
   message: string;
   span: SourceSpan;
+  /**
+   * 機械的に直せる診断の修正案。診断の `span`(コマンド全体など)とは別に、
+   * 直す箇所だけを元ソースの UTF-16 オフセットで指す。
+   */
+  fix?: LintFix;
+}
+
+/** `span` の範囲を `replacement` に置き換える修正。 */
+export interface LintFix {
+  span: SourceSpan;
+  replacement: string;
 }
 
 export interface LintOptions {
@@ -68,6 +87,16 @@ export interface LintOptions {
 }
 
 export const CURRENT_DECK_SOURCE_VERSION = 1;
+
+/**
+ * 診断の UTF-16 オフセットを 1 始まりの行・列にする(CLI の出力と、文書が手元に無いときの表示用)。
+ * 列は行頭からの UTF-16 コードユニット数 + 1 で、VS Code の `positionAt` と同じ数え方。
+ */
+export function sourceLocation(source: string, offset: number): { line: number; column: number } {
+  const before = source.slice(0, offset);
+  const lineStart = before.lastIndexOf("\n") + 1;
+  return { line: before.split("\n").length, column: offset - lineStart + 1 };
+}
 
 const VERBATIM_DELIMITERS = [...VERBATIM_ENVS].map((environment) => ({
   begin: `\\begin{${environment}}`,
@@ -791,19 +820,74 @@ function lintStyle(doc: DeckDocument): LintDiagnostic[] {
     }));
 }
 
+const MISSING_IMAGE_MESSAGE = "画像の参照先ファイルが存在しません";
+
+/** TeX(xelatex / lualatex)の既定の画像拡張子探索順(apps/vscode の IMAGE_EXTENSIONS と同じ)。 */
+const TEX_IMAGE_EXTENSIONS = [".pdf", ".png", ".jpg", ".jpeg"];
+
+/**
+ * 書かれたとおりのパスは無いが、TeX なら拾うファイルを探す(拡張子の省略・\graphicspath)。
+ * 探索はデッキのディレクトリ → \graphicspath の各ディレクトリの順。見つかったパスは
+ * デッキのディレクトリ基準で拡張子付きなので、そのままソースへ書ける。
+ */
+function suggestImagePath(
+  path: string,
+  graphicsPaths: readonly string[],
+  fileExists: FileExistsProbe,
+): string | null {
+  if (/[\\{}%]/.test(path)) return null;
+  const hasExtension = /\.[A-Za-z0-9]+$/.test(path.slice(path.lastIndexOf("/") + 1));
+  const names = hasExtension ? [path] : TEX_IMAGE_EXTENSIONS.map((extension) => path + extension);
+  for (const directory of ["", ...graphicsPaths]) {
+    for (const name of names) {
+      const candidate = directory === "" ? name : joinImageSearchPath(directory, name);
+      if (candidate !== path && fileExists(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/** コマンド `\name[opts]{path}` のうち、最後の `{...}` の中身(パス)の範囲。取れなければ null。 */
+function imagePathSpan(source: string, command: SourceSpan, path: string): SourceSpan | null {
+  const text = source.slice(command.start, command.end);
+  const open = text.lastIndexOf("{");
+  const close = text.indexOf("}", open);
+  if (open === -1 || close === -1) return null;
+  const inner = text.slice(open + 1, close);
+  if (inner.trim() !== path) return null;
+  const start = command.start + open + 1 + (inner.length - inner.trimStart().length);
+  return { start, end: start + path.length };
+}
+
 function lintImageReferences(
   doc: DeckDocument,
   fileExists: FileExistsProbe | undefined,
+  source: string | undefined,
 ): LintDiagnostic[] {
   if (fileExists === undefined) return [];
   const diagnostics: LintDiagnostic[] = [];
+  const graphicsPaths = graphicsPathsOf(doc.preambleExtra.tex);
   const check = (path: string, span: SourceSpan): void => {
-    if (!fileExists(path)) {
-      diagnostics.push(diagnostic("L004", "error", "画像の参照先ファイルが存在しません", span));
+    if (fileExists(path)) return;
+    const suggestion = suggestImagePath(path, graphicsPaths, fileExists);
+    if (suggestion === null) {
+      diagnostics.push(diagnostic("L004", "error", MISSING_IMAGE_MESSAGE, span));
+      return;
     }
+    const entry = diagnostic(
+      "L004",
+      "error",
+      `${MISSING_IMAGE_MESSAGE}。デッキのディレクトリ基準で拡張子まで書いてください: ${suggestion}`,
+      span,
+    );
+    const pathSpan = source === undefined ? null : imagePathSpan(source, span, path);
+    if (pathSpan !== null) entry.fix = { span: pathSpan, replacement: suggestion };
+    diagnostics.push(entry);
   };
   for (const entry of doc.style.entries) {
-    if (entry.type === "styleLogo") check(entry.path, entry.span);
+    if (entry.type === "styleLogo" || entry.type === "styleBackground") {
+      check(entry.path, entry.span);
+    }
   }
   for (const frame of framesOf(doc)) {
     if (frame.type !== "frame") continue;
@@ -936,6 +1020,15 @@ function skillMismatchMessage(expected: string, projectDirectory: string | undef
  * AST と、必要に応じて注入された外部プローブで lint 規則を実行する。
  */
 export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiagnostic[] {
+  return lintDeckAt(doc, options, undefined);
+}
+
+/** `source` が分かるとき(lintSource)だけ、L004 の修正案(`fix`)の置換範囲を計算できる。 */
+function lintDeckAt(
+  doc: DeckDocument,
+  options: LintOptions,
+  source: string | undefined,
+): LintDiagnostic[] {
   const expectedSourceVersion = options.expectedSourceVersion ?? CURRENT_DECK_SOURCE_VERSION;
   const diagnostics = [
     ...(options.skillFingerprint !== undefined &&
@@ -961,7 +1054,7 @@ export function lintDeck(doc: DeckDocument, options: LintOptions = {}): LintDiag
     ...lintCanvasTitles(doc),
     ...lintSourceVersion(doc, expectedSourceVersion),
     ...lintStyle(doc),
-    ...lintImageReferences(doc, options.fileExists),
+    ...lintImageReferences(doc, options.fileExists, source),
     ...lintCanvasImages(doc, options.probeImage),
     ...lintTemplates(options.templates),
   ];
@@ -1038,9 +1131,143 @@ function lintYenBackslashes(source: string): LintDiagnostic[] {
   return diagnostics;
 }
 
+const BACKGROUND_COMMAND =
+  /\\usebackgroundtemplate(?![A-Za-z@])|\\(?:setbeamertemplate|addtobeamertemplate)\*?\s*\{\s*background(?: canvas)?\s*\}/g;
+
+/**
+ * `deck*`(ツールの予約名前空間。利用者の再定義は L016)マクロ定義の見出しで、末尾は本文の `{`。
+ * \newcommand / \renewcommand / \providecommand(`*`・`\name` と `{\name}`・`[n]` `[n][既定値]`)、
+ * \def / \gdef / \edef / \xdef(仮引数テキスト付き)、\@namedef{deckX}。名前には `@` を含む。
+ */
+const DECK_MACRO_DEFINITION = new RegExp(
+  [
+    String.raw`\\(?:new|renew|provide)command\*?\s*(?:\{\s*\\deck[A-Za-z@]*\s*\}|\\deck[A-Za-z@]*)(?:\s*\[[^\]]*\]){0,2}\s*\{`,
+    String.raw`\\[gex]?def\s*\\deck[A-Za-z@]*(?![A-Za-z@])[^{}]*\{`,
+    String.raw`\\@namedef\s*\{\s*deck[A-Za-z@]*\s*\}\s*\{`,
+  ].join("|"),
+  "g",
+);
+
+/** コメントを空白にしたテキストから、`deck*` マクロ定義の本文(波括弧の内側)の範囲を集める。 */
+function deckMacroBodies(text: string): SourceSpan[] {
+  const bodies: SourceSpan[] = [];
+  for (const match of text.matchAll(DECK_MACRO_DEFINITION)) {
+    const start = (match.index ?? 0) + match[0].length;
+    let depth = 1;
+    let cursor = start;
+    for (; cursor < text.length && depth > 0; cursor++) {
+      const char = text[cursor];
+      if (char === "\\") cursor++;
+      else if (char === "{") depth++;
+      else if (char === "}") depth--;
+    }
+    // 閉じ括弧が無い定義は末尾までを本文とみなす(壊れたソースで誤警告を増やさない)。
+    bodies.push({ start, end: depth === 0 ? cursor - 1 : text.length });
+  }
+  return bodies;
+}
+
+/**
+ * L024: プレビューが読み取れない場所に書かれた背景指定。プレビューが背景を拾うのは
+ * `%% preamble-extra` とテンプレート .sty だけ(`%% style` は語彙外が L020 になる)。
+ * プリアンブルの管理領域の外・フレームの間・フレームの中に書いた背景指定は PDF には効くが
+ * プレビューには出ないので、気づけるよう警告する。
+ */
+function lintHiddenBackgrounds(source: string, doc: DeckDocument): LintDiagnostic[] {
+  // 見ない範囲: プレビューが読む領域(preamble-extra / style)と、`deck*` マクロ定義の本文
+  // (`deck init` が展開するツール自身の背景テンプレートは \deck@refresh@background の中にある)。
+  // マーカー間を丸ごと除外しないので、そこへ書かれた利用者の背景指定も警告できる。
+  const text = blankComments(source);
+  const visible = [doc.preambleExtra.span, doc.style.span, ...deckMacroBodies(text)];
+  const diagnostics: LintDiagnostic[] = [];
+  for (const match of text.matchAll(BACKGROUND_COMMAND)) {
+    const start = match.index ?? 0;
+    if (visible.some((region) => start >= region.start && start < region.end)) continue;
+    diagnostics.push(
+      diagnostic(
+        "L024",
+        "warning",
+        "この背景の指定は PDF には反映されますがプレビューには出ません。全スライド共通の背景は %% preamble-extra に、表紙と本文で分けるなら %% style の \\deckbackground / \\deckbackground[title] を使ってください",
+        { start, end: start + match[0].length },
+      ),
+    );
+  }
+  return diagnostics;
+}
+
+/**
+ * deck-source-version を上げずにツール管理プリアンブルへ後から足したマクロと、それを定義する
+ * リソース(`deck init` が展開する。fixture のように `\input` で読むデッキは常に最新)。
+ * 足す前に `deck init` したデッキには定義が無く、lint もプレビューも通るのに PDF だけが
+ * Undefined control sequence で止まる。
+ */
+const LATER_MANAGED_MACROS: ReadonlyArray<{
+  name: string;
+  resource: string;
+  uses: (doc: DeckDocument) => SourceSpan[];
+}> = [
+  {
+    name: "deckbackground",
+    resource: "deck-style-preamble",
+    uses: (doc) =>
+      doc.style.entries
+        .filter((entry) => entry.type === "styleBackground")
+        .map((entry) => entry.span),
+  },
+];
+
+/**
+ * L025: ツール管理プリアンブルが、使っているマクロより古い。ユーザー領域(macros / style /
+ * preamble-extra)の外に定義も該当リソースの `\input` も無いものを報告し、管理プリアンブルを
+ * 現行へ差し替える修正(`deck init --update-preamble` と同じ)を付ける。
+ */
+function lintOutdatedManagedPreamble(source: string, doc: DeckDocument): LintDiagnostic[] {
+  const pending = LATER_MANAGED_MACROS.map((macro) => ({ macro, uses: macro.uses(doc) })).filter(
+    (entry) => entry.uses.length > 0,
+  );
+  if (pending.length === 0) return [];
+  // プリアンブル(\begin{document} が無ければ全体)から、コメントとユーザー領域を空白にする。
+  const preambleEnd = doc.managedPreamble.span.end || source.length;
+  let text = blankComments(source).slice(0, preambleEnd);
+  for (const region of [doc.macros.span, doc.style.span, doc.preambleExtra.span]) {
+    if (region.end <= region.start || region.start >= text.length) continue;
+    const end = Math.min(region.end, text.length);
+    text = text.slice(0, region.start) + " ".repeat(end - region.start) + text.slice(end);
+  }
+  const defined = new Set(
+    [...text.matchAll(DECK_MACRO_DEFINITION)].map((match) => /deck[A-Za-z@]*/.exec(match[0])?.[0]),
+  );
+  const inputs = [...text.matchAll(/\\input\s*\{([^{}]*)\}/g)].map((match) =>
+    (match[1] ?? "").trim().replace(/\.tex$/, ""),
+  );
+  const located = locateManagedPreamble(source, preambleEnd);
+  const fix = "span" in located ? managedPreambleReplacement(source, located.span) : null;
+  const diagnostics: LintDiagnostic[] = [];
+  for (const { macro, uses } of pending) {
+    if (defined.has(macro.name)) continue;
+    if (inputs.some((path) => path === macro.resource || path.endsWith(`/${macro.resource}`)))
+      continue;
+    const message = `ツール管理プリアンブルが \\${macro.name} より古く、定義がありません。プレビューには出ますが PDF 書き出しは Undefined control sequence で止まります。${
+      "problem" in located
+        ? `ツール管理プリアンブルの範囲を特定できないため自動では直せません(${located.problem})。印を直すか、deck init で作ったデッキの管理プリアンブルを写してください`
+        : "deck init <file> --update-preamble で管理プリアンブルを最新に差し替えてください"
+    }`;
+    for (const span of uses)
+      diagnostics.push({
+        ...diagnostic("L025", "error", message, span),
+        ...(fix === null ? {} : { fix }),
+      });
+  }
+  return diagnostics;
+}
+
 /** 元ソースを必要とする規則を含めて lint する公開 API。 */
 export function lintSource(source: string, options: LintOptions = {}): LintDiagnostic[] {
-  return [...lintDeck(parseDeck(source), options), ...lintYenBackslashes(source)].sort(
-    (a, b) => a.span.start - b.span.start || a.code.localeCompare(b.code),
-  );
+  const doc = parseDeck(source);
+  return [
+    ...lintDeckAt(doc, options, source),
+    ...lintYenBackslashes(source),
+    ...lintHiddenBackgrounds(source, doc),
+    ...lintOutdatedManagedPreamble(source, doc),
+  ].sort((a, b) => a.span.start - b.span.start || a.code.localeCompare(b.code));
 }

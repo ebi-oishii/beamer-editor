@@ -78,8 +78,13 @@ suite("#85: slide list source edits", () => {
       if (action === "duplicate" || action === "insert")
         assert.ok(changed.includes("label=slide-1"));
       await vscode.window.showTextDocument(document);
+      // Global undo/redo route to the focused editor group, not just the visible document.
+      await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
+      assert.equal(vscode.window.activeTextEditor?.document, document);
       await vscode.commands.executeCommand("undo");
       await waitFor(() => document.getText() === SOURCE, "single undo restores source");
+      await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
+      assert.equal(vscode.window.activeTextEditor?.document, document);
       await vscode.commands.executeCommand("redo");
       await waitFor(() => document.getText() === changed, "redo restores edit");
       assert.equal(await document.save(), true);

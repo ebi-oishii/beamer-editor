@@ -279,7 +279,7 @@ describe("analyzeCanvasGeometry", () => {
         analyzeCanvasGeometry(log, frames);
         expect.unreachable("broken managed log should throw");
       } catch (error) {
-        expect(error).toMatchObject({ code: "E_COMPILE" });
+        expect(error).toMatchObject({ code: "E_COMPILE", texFailed: false });
       }
     }
   });
@@ -340,10 +340,12 @@ describe("compileDeckFrames", () => {
     const inputPath = await source(deck);
     const calls: Array<readonly string[]> = [];
     let measuredSource = "";
+    let restartTimeoutOn: ((line: string) => boolean) | undefined;
     const runner: ProcessRunner = {
-      async run(_command, args) {
+      async run(_command, args, options) {
         calls.push(args);
         if (args[0] === "--version") return result();
+        restartTimeoutOn = options.restartTimeoutOn;
         const outdir = args[args.indexOf("--outdir") + 1] as string;
         const measuredInput = args.at(-1) as string;
         measuredSource = await readFile(measuredInput, "utf8");
@@ -362,6 +364,9 @@ describe("compileDeckFrames", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[1]).toContain("--keep-logs");
+    // A cold Tectonic cache keeps the compile alive while packages download.
+    expect(restartTimeoutOn?.("note: downloading beamer.cls")).toBe(true);
+    expect(restartTimeoutOn?.("compiler output")).toBe(false);
     const searchPathIndex = calls[1].indexOf("-Z");
     expect(calls[1].slice(searchPathIndex, searchPathIndex + 2)).toEqual([
       "-Z",
@@ -593,9 +598,10 @@ describe("compileDeckFrames", () => {
         return result();
       },
     };
+    // 最終 pass の log が無いのは TeX の失敗ではない。
     await expect(
       compileDeckFrames({ inputPath }, { runner, rasterizer: rasterizer([]) }),
-    ).rejects.toMatchObject({ code: "E_COMPILE" });
+    ).rejects.toMatchObject({ code: "E_COMPILE", texFailed: false });
     writeLog = true;
     await expect(
       compileDeckFrames({ inputPath, maxLogBytes: 1 }, { runner, rasterizer: rasterizer([]) }),
@@ -621,7 +627,7 @@ describe("compileDeckFrames", () => {
           },
         },
       ),
-    ).rejects.toMatchObject({ code: "E_COMPILE" });
+    ).rejects.toMatchObject({ code: "E_COMPILE", texFailed: true });
     await expect(readFile(join(temporary, "talk.slide.tex"), "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });

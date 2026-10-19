@@ -6,6 +6,7 @@ import {
   exportPdf,
   nodeProcessRunner,
   PdfExportError,
+  type PdfExportProgress,
   type ProcessResult,
   type ProcessRunner,
 } from "../src/index.ts";
@@ -191,7 +192,12 @@ describe("exportPdf", () => {
       temps.push(value);
       return value;
     };
-    for (const compile of [result({ exitCode: 1, stderr: "bad tex" }), result({ stdout: "" })]) {
+    // TeX が非 0 で終わったときだけ texFailed(終了 0 で PDF が無い・シグナルで止まったは立てない)。
+    for (const [compile, texFailed] of [
+      [result({ exitCode: 1, stderr: "bad tex" }), true],
+      [result({ stdout: "" }), false],
+      [result({ exitCode: null, stderr: "killed" }), false],
+    ] as const) {
       let call = 0;
       const runner: ProcessRunner = { run: async () => (call++ === 0 ? result() : compile) };
       await expect(
@@ -199,7 +205,7 @@ describe("exportPdf", () => {
           { inputPath: input.path, overwrite: true },
           { runner, temporaryDirectory: makeTemp },
         ),
-      ).rejects.toMatchObject({ code: "E_COMPILE" });
+      ).rejects.toMatchObject({ code: "E_COMPILE", texFailed });
       expect(await readFile(output, "utf8")).toBe("old PDF");
     }
     await expect(Promise.all(temps.map((path) => access(path)))).rejects.toBeDefined();
@@ -411,6 +417,127 @@ describe("exportPdf", () => {
     }
   }, 10_000);
 
+  it("Tectonic の起動に失敗した E_COMPILE は TeX の失敗として扱わない", async () => {
+    const input = await source();
+    let call = 0;
+    const runner: ProcessRunner = {
+      run: async () => {
+        if (call++ === 0) return result();
+        throw new Error("spawn EACCES");
+      },
+    };
+    await expect(
+      exportPdf({ inputPath: input.path, overwrite: true }, { runner }),
+    ).rejects.toMatchObject({
+      code: "E_COMPILE",
+      texFailed: false,
+      message: expect.stringContaining("Tectonic の実行に失敗しました"),
+    });
+  });
+
+  it("splits stdout and stderr into lines across chunk boundaries and flushes the last unterminated line", async () => {
+    // Each write is a separate chunk, so lines and a multi-byte character are cut mid-way.
+    const script = [
+      "const sleep = () => new Promise((resolve) => setTimeout(resolve, 30));",
+      "(async () => {",
+      "  process.stdout.write('note: down'); await sleep();",
+      "  process.stdout.write('loading a.sty\\r\\nnote: downloading b'); await sleep();",
+      "  process.stdout.write('.sty\\n');",
+      "  const kanji = Buffer.from('警告: 漢字\\n');",
+      "  process.stderr.write(kanji.subarray(0, 9)); await sleep();",
+      "  process.stderr.write(kanji.subarray(9)); await sleep();",
+      "  process.stderr.write('tail without newline');",
+      "})();",
+    ].join("\n");
+    const lines: Array<[string, string]> = [];
+    const value = await nodeProcessRunner.run(process.execPath, ["-e", script], {
+      cwd: tmpdir(),
+      onOutputLine: (line, stream) => lines.push([stream, line]),
+    });
+    expect(value).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(lines).toEqual([
+      ["stdout", "note: downloading a.sty"],
+      ["stdout", "note: downloading b.sty"],
+      ["stderr", "警告: 漢字"],
+      ["stderr", "tail without newline"],
+    ]);
+    // The collected output is unchanged by line handling.
+    expect(value.stdout).toBe("note: downloading a.sty\r\nnote: downloading b.sty\n");
+  });
+
+  it("restarts the timeout on matching output lines only and survives a throwing listener", async () => {
+    // Five progress lines 150 ms apart keep a 400 ms timeout alive for ~750 ms.
+    const progressing = [
+      "let n = 0;",
+      "const timer = setInterval(() => {",
+      "  console.log('note: downloading file' + n);",
+      "  if (++n === 5) { clearInterval(timer); process.exit(0); }",
+      "}, 150);",
+    ].join("\n");
+    const started = Date.now();
+    const restarted = await nodeProcessRunner.run(process.execPath, ["-e", progressing], {
+      cwd: tmpdir(),
+      timeoutMs: 400,
+      restartTimeoutOn: (line) => line.startsWith("note: downloading "),
+      onOutputLine: () => {
+        throw new Error("listener failure");
+      },
+    });
+    expect(restarted).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(600);
+
+    // Output that does not match keeps the original deadline.
+    const chatty = "setInterval(() => console.log('working'), 100);";
+    const timedOut = await nodeProcessRunner.run(process.execPath, ["-e", chatty], {
+      cwd: tmpdir(),
+      timeoutMs: 400,
+      restartTimeoutOn: (line) => line.startsWith("note: downloading "),
+    });
+    expect(timedOut).toMatchObject({ timedOut: true, cancelled: false });
+  });
+
+  it("reports Tectonic downloads with a running count and restarts the compile timeout on them", async () => {
+    const input = await source();
+    const progress: PdfExportProgress[] = [];
+    let restart: ((line: string) => boolean) | undefined;
+    const runner: ProcessRunner = {
+      async run(_command, args, options) {
+        if (args[0] === "--version") {
+          expect(options.restartTimeoutOn).toBeUndefined();
+          return result();
+        }
+        restart = options.restartTimeoutOn;
+        for (const line of [
+          'note: "version 2" Tectonic command-line interface activated',
+          "note: downloading latex.ltx",
+          "warning: something unrelated",
+          "\u001b[1;32mnote:\u001b[0m downloading beamer.cls",
+        ])
+          options.onOutputLine?.(line, "stdout");
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        await writeFile(join(outdir, "talk.slide.pdf"), "%PDF-1.7\n");
+        return result({ stdout: "" });
+      },
+    };
+    await exportPdf(
+      {
+        inputPath: input.path,
+        onProgress: (value) => {
+          progress.push(value);
+          throw new Error("a broken listener must not fail the export");
+        },
+      },
+      { runner },
+    );
+    expect(progress).toEqual([
+      { kind: "download", file: "latex.ltx", count: 1 },
+      { kind: "download", file: "beamer.cls", count: 2 },
+    ]);
+    expect(restart?.("note: downloading pgf.sty")).toBe(true);
+    expect(restart?.('note: generating format "latex"')).toBe(false);
+    expect(await readFile(join(input.dir, "talk.pdf"), "utf8")).toBe("%PDF-1.7\n");
+  });
+
   it("uses separate version and compile timeouts and maps compile timeout without replacing output", async () => {
     const input = await source();
     const output = join(input.dir, "talk.pdf");
@@ -430,6 +557,7 @@ describe("exportPdf", () => {
       ),
     ).rejects.toMatchObject({
       code: "E_COMPILE",
+      texFailed: false,
       message: expect.stringContaining("12.345 秒でタイムアウト"),
     });
     expect(timeoutValues).toEqual([10_000, 12_345]);
@@ -466,5 +594,7 @@ describe("exportPdf", () => {
 describe("PdfExportError", () => {
   it("exposes a stable machine-readable code", () => {
     expect(new PdfExportError("E_COMPILE", "failed").code).toBe("E_COMPILE");
+    expect(new PdfExportError("E_COMPILE", "failed").texFailed).toBe(false);
+    expect(new PdfExportError("E_IO", "io", undefined, { texFailed: true }).texFailed).toBe(false);
   });
 });

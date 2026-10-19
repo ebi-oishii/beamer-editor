@@ -40,6 +40,7 @@ import type {
   TableRow,
 } from "./ast.js";
 import { documentTags, texTokens, VERBATIM_ENVS, verbArgumentEnd } from "./tex-scan.js";
+import { type UserRegionName, userRegion } from "./user-regions.js";
 
 const BLOCK_ENVS = new Set([
   "itemize",
@@ -1382,6 +1383,33 @@ class Parser {
         cursor = g.next;
         continue;
       }
+      if (this.src.startsWith("\\deckbackground", cursor)) {
+        // \deckbackground{path} / \deckbackground[title]{path}。オプションは title だけ。
+        const optOpen = cursor + "\\deckbackground".length;
+        let gOpen = optOpen;
+        let slot: "all" | "title" | null = "all";
+        if (this.src[optOpen] === "[") {
+          const optClose = readBalanced(this.src, optOpen, "[", "]");
+          if (optClose === null || optClose > end) slot = null;
+          else {
+            slot = this.src.slice(optOpen + 1, optClose).trim() === "title" ? "title" : null;
+            gOpen = optClose + 1;
+          }
+        }
+        const g = slot !== null ? group(gOpen) : null;
+        if (slot === null || !g || g.body.trim() === "") {
+          cursor = rawToEol(cursor);
+          continue;
+        }
+        entries.push({
+          type: "styleBackground",
+          slot,
+          path: g.body.trim(),
+          span: span(cursor, g.next),
+        });
+        cursor = g.next;
+        continue;
+      }
       if (this.src.startsWith("\\deckfooter", cursor)) {
         const gOpen = cursor + "\\deckfooter".length;
         if (this.src[gOpen] !== "{") {
@@ -1415,12 +1443,10 @@ class Parser {
     const versionMatch = /^%% deck-source-version:\s*(\d+)\s*$/m.exec(src);
     const sourceVersion = versionMatch ? Number(versionMatch[1]) : null;
 
-    const region = (name: string): [number, number] | null => {
-      const begin = src.indexOf(`%% ${name}:begin`);
-      const endMark = src.indexOf(`%% ${name}:end`);
-      if (begin === -1 || endMark === -1) return null;
-      const contentStart = src.indexOf("\n", begin) + 1;
-      return [contentStart, endMark];
+    // 印の判定はツール管理プリアンブルの範囲決め(managed-preamble.ts)と共有する。
+    const region = (name: UserRegionName): [number, number] | null => {
+      const found = userRegion(src, name);
+      return found === null ? null : [found.contentStart, found.end];
     };
     const macrosRegion = region("macros");
     const styleRegion = region("style");

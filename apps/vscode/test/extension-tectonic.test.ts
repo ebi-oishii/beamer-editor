@@ -63,6 +63,9 @@ vi.mock("vscode", () => {
       onDidChangeTextDocument: disposable,
       onDidCloseTextDocument: disposable,
       onDidChangeConfiguration: disposable,
+      onDidRenameFiles: disposable,
+      onDidDeleteFiles: disposable,
+      onDidCreateFiles: disposable,
       createFileSystemWatcher: () => ({
         ...disposable(),
         onDidChange: disposable,
