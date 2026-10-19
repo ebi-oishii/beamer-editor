@@ -44,6 +44,7 @@ import {
   latexWorkshopPromptSignature,
   ManagedPreviewLifecycle,
   needsLatexWorkshopIgnorePrompt,
+  type PreviewOwner,
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
 import { executeHistoryCommand, PreviewHistory } from "./preview-history";
@@ -148,6 +149,15 @@ async function jumpToOffset(
     preserveFocus: false,
   });
   if (!isCurrent()) return;
+  selectOffset(editor, offset, lineFlash);
+}
+
+function selectOffset(
+  editor: vscode.TextEditor,
+  offset: number,
+  lineFlash: ReturnType<typeof createLineFlash>,
+): void {
+  const document = editor.document;
   const position = document.positionAt(offset);
   const range = document.lineAt(position.line).range;
   editor.selection = new vscode.Selection(range.start, range.end);
@@ -158,11 +168,13 @@ async function jumpToOffset(
 /** 統合テストからの観測用 API(activate の戻り値)。製品コードから参照しない。 */
 export interface TestApi {
   _previewControllerForTest(): PreviewController | undefined;
+  _setRenameOpenBarrierForTest(barrier?: (uri: vscode.Uri) => Promise<void>): void;
   _slideItemsForTest(): unknown[];
   _imagePasteProviderForTest(): ImagePasteEditProvider;
 }
 
 export function activate(context: vscode.ExtensionContext): TestApi {
+  let renameOpenBarrierForTest: ((uri: vscode.Uri) => Promise<void>) | undefined;
   // プラットフォーム別 VSIX に同梱した Tectonic(#130)。設定で上書きされない限りこれを使う。
   const bundledTectonic = detectBundledTectonic(context.extensionPath);
   // 書き出しと部分コンパイルは、同じ設定スコープ・優先順位で実行ファイルを選ぶ。
@@ -178,10 +190,21 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   const latexWorkshopSessionPrompted = new Set<string>();
   const lineFlash = createLineFlash();
   const previewSources = new Map<vscode.WebviewPanel, vscode.TextDocument>();
+  const deletedSourceUris = new Set<string>();
   // #155: 配置復元で controller からパネルを引き、移した先のグループで #94 のロックを掛け直させる。
   const previewHosts = new Map<
     PreviewController,
     { panel: vscode.WebviewPanel; resetGroupLock: () => void }
+  >();
+  const pendingRenames = new Map<
+    PreviewController,
+    {
+      oldKey: string;
+      destination: vscode.Uri;
+      owner: PreviewOwner<PreviewController, vscode.TextDocument>;
+      column: vscode.ViewColumn | undefined;
+      attached: boolean;
+    }
   >();
   // Webview からの undo / redo(#103)。対象のソースへフォーカスを移してコマンドを実行し、終わったら
   // Webview へ戻す。要求は拡張全体で直列にし、押下時点の panel と文書に対して実行する。
@@ -653,6 +676,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     document: vscode.TextDocument,
     automatic: boolean,
     preserveFocus = automatic,
+    requestedColumn?: vscode.ViewColumn,
   ): void {
     const prepared = previewLifecycle.prepareOpen(document.uri, automatic);
     if (prepared.kind === "existing") {
@@ -677,9 +701,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     const panel = vscode.window.createWebviewPanel(
       "beamerEditor.preview",
       `Beamer Preview: ${document.fileName.split(/[\\/]/).pop()}`,
-      preserveFocus
-        ? { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }
-        : vscode.ViewColumn.Beside,
+      requestedColumn !== undefined
+        ? { viewColumn: requestedColumn, preserveFocus }
+        : preserveFocus
+          ? { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }
+          : vscode.ViewColumn.Beside,
       {
         enableScripts: true,
         localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media"), documentDir],
@@ -822,14 +848,20 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       () => {
         previewSources.delete(panel);
         previewHosts.delete(controller);
+        pendingRenames.delete(controller);
         rawBlockCompiler.dispose();
         rawBlockSettings.dispose();
         templateWatcher.dispose();
         viewStateSubscription.dispose();
         // TextDocument は tab を閉じても cache に残る。source tab の有無で「開いている」を判定する。
         const sourceIsOpen = sourceTabUris().has(document.uri.toString());
-        if (!previewLifecycle.panelDisposed(document.uri, controller, sourceIsOpen)) return;
+        const disposedOwner = previewLifecycle.panelDisposed(
+          document.uri,
+          controller,
+          sourceIsOpen,
+        );
         if (previewController === controller) previewController = undefined;
+        if (!disposedOwner) return;
       },
       {
         render: (text, version) =>
@@ -867,11 +899,28 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         navigateDetached: async (frameIndex) => {
           // 凍結した TextDocument の offset は使わない。最新の文書を開き、再描画済みの
           // ExpansionMap から frame を引き直してから移動する。
+          const initialGeneration = controller.generation;
           const target = await vscode.workspace.openTextDocument(document.uri);
+          if (!previewHosts.has(controller) || controller.generation !== initialGeneration) return;
+          // Do not use the old source column: it may be the preview's locked group.
+          // Opening Beside first gives the source an unlocked host before reconnecting.
+          const opened = await vscode.window.showTextDocument(target, {
+            viewColumn: vscode.ViewColumn.Beside,
+            preserveFocus: false,
+            preview: false,
+          });
+          if (!previewHosts.has(controller)) return;
+          if (
+            controller.generation !== initialGeneration &&
+            !controller.isCurrentConnection(controller.generation, target)
+          )
+            return;
           controller.attachDocument(target);
+          const navigationGeneration = controller.generation;
           const outcome = controller.latestOutcome;
           const offset = outcome ? resolveJumpOffset(outcome, frameIndex) : null;
-          if (offset !== null) await jumpToOffset(target, offset, lineFlash, sourceViewColumn);
+          if (offset !== null && controller.isCurrentConnection(navigationGeneration, target))
+            selectOffset(opened, offset, lineFlash);
         },
         // Webview からの Cmd/Ctrl+Z(#103)。押下時点の panel と文書を固定して列に入れる。
         undoRedo: (kind, generation, targetDocument): Promise<void> =>
@@ -1074,6 +1123,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
   function handleManagedDocument(document: vscode.TextDocument | undefined): void {
     if (!document || !isManaged(document)) return;
+    if (deletedSourceUris.has(document.uri.toString())) return;
     openPreview(document, true);
     void offerLatexWorkshopIgnore(document).catch((error) => {
       void vscode.window.showErrorMessage(
@@ -1087,8 +1137,15 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     const columns = new Map<string, number[]>();
     for (const group of vscode.window.tabGroups?.all ?? []) {
       for (const tab of group.tabs) {
-        if (!(tab.input instanceof vscode.TabInputText)) continue;
-        const uri = tab.input.uri.toString();
+        const input = tab.input;
+        const tabUri =
+          input instanceof vscode.TabInputText
+            ? input.uri
+            : input instanceof vscode.TabInputTextDiff
+              ? input.modified
+              : undefined;
+        if (!tabUri) continue;
+        const uri = tabUri.toString();
         const list = columns.get(uri) ?? [];
         if (!list.includes(group.viewColumn)) list.push(group.viewColumn);
         columns.set(uri, list);
@@ -1131,9 +1188,15 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     controller: PreviewController,
     sourceColumns: readonly number[],
     sourceSide: SourceSide,
+    sourceUri: string,
   ): Promise<void> {
     const host = previewHosts.get(controller);
     if (!host) return;
+    const focusedEditor =
+      vscode.window.activeTextEditor ??
+      vscode.window.visibleTextEditors.find(
+        (editor) => editor.document.uri.toString() === sourceUri,
+      );
     const previousGroup = previewTabGroup(host.panel);
     const target = planPreviewLayoutRestore({
       previewColumn: previousGroup?.viewColumn ?? controller.viewColumn,
@@ -1143,18 +1206,52 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     if (target === undefined) return;
     controller.moveTo(target);
     host.resetGroupLock();
-    if (!previousGroup) return;
+    // A recreated/moved webview is otherwise a preview tab and VS Code may replace it when the
+    // next editor opens. Pin it through the real workbench command after the move has landed.
+    let kept = false;
+    for (let attempt = 0; attempt < 20 && !kept; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const movedGroup = previewTabGroup(host.panel);
+      if (!movedGroup || (previousGroup && movedGroup === previousGroup)) continue;
+      controller.reveal(false);
+      for (let focusAttempt = 0; focusAttempt < 20; focusAttempt += 1) {
+        if (host.panel.active) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      if (!host.panel.active) continue;
+      await vscode.commands.executeCommand("workbench.action.keepEditor");
+      for (let keptAttempt = 0; keptAttempt < 20; keptAttempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        const tab = previewTabGroup(host.panel)?.tabs.find((tab) => isPreviewTab(tab, host.panel));
+        if (tab && !tab.isPreview) {
+          kept = true;
+          break;
+        }
+      }
+    }
     // reveal による移動は workbench 側で非同期に反映される。反映を短く待ってから元のグループを見る
     // (列番号はずれうるので、移動前に取った group object で照合する)。
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    for (let attempt = 0; previousGroup && attempt < 20; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 50));
-      if (!vscode.window.tabGroups.all.includes(previousGroup)) return;
+      if (!vscode.window.tabGroups.all.includes(previousGroup)) break;
       if (previousGroup.tabs.length === 0) {
         await vscode.window.tabGroups.close(previousGroup, true);
-        return;
+        break;
       }
       // source と同じグループから移した場合は、元のグループに source が残る。
-      if (!previousGroup.tabs.some((tab) => isPreviewTab(tab, host.panel))) return;
+      if (!previousGroup.tabs.some((tab) => isPreviewTab(tab, host.panel))) break;
+    }
+    // keepEditor requires focus; return it to the editor that was active before restoration,
+    // but only if the preview still has focus and that editor is still visible.
+    if (
+      host.panel.active &&
+      focusedEditor &&
+      vscode.window.visibleTextEditors.includes(focusedEditor)
+    ) {
+      await vscode.window.showTextDocument(focusedEditor.document, {
+        ...(focusedEditor.viewColumn !== undefined ? { viewColumn: focusedEditor.viewColumn } : {}),
+        preserveFocus: false,
+      });
     }
   }
 
@@ -1178,9 +1275,12 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       // 切断中のジャンプ(navigateDetached)は tab より先に接続するので、接続の遷移ではなく
       // 「source tab が無かった URI に tab が戻った」ことを復元の契機にする。
       if (layoutRestorePending.delete(uri)) {
-        void restorePreviewLayout(owner.controller, columns, sourceSides.get(uri) ?? "left").catch(
-          () => {},
-        );
+        void restorePreviewLayout(
+          owner.controller,
+          columns,
+          sourceSides.get(uri) ?? "left",
+          uri,
+        ).catch(() => {});
         continue;
       }
       const host = previewHosts.get(owner.controller);
@@ -1205,13 +1305,148 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     }, 0);
   };
 
+  const uriIsWithin = (candidate: vscode.Uri, root: vscode.Uri): boolean =>
+    candidate.scheme === root.scheme &&
+    candidate.authority === root.authority &&
+    (candidate.path === root.path || candidate.path.startsWith(`${root.path}/`));
+
+  const clearDeletedUnder = (uri: vscode.Uri): void => {
+    for (const key of deletedSourceUris) {
+      if (uriIsWithin(vscode.Uri.parse(key), uri)) deletedSourceUris.delete(key);
+    }
+  };
+
+  const finishRename = async (
+    pending: typeof pendingRenames extends Map<PreviewController, infer T> ? T : never,
+  ) => {
+    const { owner, oldKey } = pending;
+    const previousUri = vscode.Uri.parse(oldKey);
+    const isCurrent = () =>
+      pendingRenames.get(owner.controller) === pending &&
+      previewLifecycle.registry.get(previousUri)?.controller === owner.controller &&
+      previewHosts.has(owner.controller);
+    while (isCurrent()) {
+      const destination = pending.destination;
+      let document: vscode.TextDocument;
+      try {
+        await renameOpenBarrierForTest?.(destination);
+        if (!isCurrent()) return;
+        if (pending.destination.toString() !== destination.toString()) continue;
+        document = await vscode.workspace.openTextDocument(destination);
+      } catch (error) {
+        if (!isCurrent()) return;
+        if (pending.destination.toString() !== destination.toString()) continue;
+        pendingRenames.delete(owner.controller);
+        previewLifecycle.registry.delete(previousUri);
+        owner.controller.close();
+        sourceSides.delete(oldKey);
+        layoutRestorePending.delete(oldKey);
+        void vscode.window.showErrorMessage(
+          `Beamer preview: renamed source could not be opened: ${String(error)}`,
+        );
+        return;
+      }
+      if (!isCurrent()) return;
+      if (pending.destination.toString() !== destination.toString()) continue;
+      pendingRenames.delete(owner.controller);
+      previewLifecycle.registry.delete(previousUri);
+      if (!owner.automatic || isManaged(document)) {
+        const existing = previewLifecycle.registry.get(destination);
+        if (existing && existing.controller !== owner.controller) {
+          if (!owner.automatic) previewLifecycle.registry.promoteManual(destination);
+          if (pending.attached) existing.controller.attachDocument(document);
+        } else {
+          openPreview(document, owner.automatic, true, pending.column);
+          if (!pending.attached)
+            previewLifecycle.registry.get(destination)?.controller.detachDocument();
+        }
+        const destinationKey = destination.toString();
+        const sourceSide = sourceSides.get(oldKey);
+        if (sourceSide) sourceSides.set(destinationKey, sourceSide);
+        if (layoutRestorePending.has(oldKey)) layoutRestorePending.add(destinationKey);
+      }
+      owner.controller.close();
+      sourceSides.delete(oldKey);
+      layoutRestorePending.delete(oldKey);
+      schedulePreviewTabReconciliation();
+      return;
+    }
+  };
+
+  const handleRenamedFiles = (files: readonly { oldUri: vscode.Uri; newUri: vscode.Uri }[]) => {
+    const started: (typeof pendingRenames extends Map<PreviewController, infer T> ? T : never)[] =
+      [];
+    for (const { oldUri, newUri } of files) {
+      clearDeletedUnder(newUri);
+      for (const pending of pendingRenames.values()) {
+        if (uriIsWithin(pending.destination, oldUri))
+          pending.destination = newUri.with({
+            path: `${newUri.path}${pending.destination.path.slice(oldUri.path.length)}`,
+          });
+      }
+      for (const [oldKey, owner] of previewLifecycle.registry.entries()) {
+        const previousUri = vscode.Uri.parse(oldKey);
+        if (pendingRenames.has(owner.controller) || !uriIsWithin(previousUri, oldUri)) continue;
+        deletedSourceUris.add(oldKey);
+        const pending = {
+          oldKey,
+          owner,
+          destination: newUri.with({
+            path: `${newUri.path}${previousUri.path.slice(oldUri.path.length)}`,
+          }),
+          column:
+            previewHosts.get(owner.controller)?.panel.viewColumn ?? owner.controller.viewColumn,
+          attached: owner.controller.isAttached,
+        };
+        pendingRenames.set(owner.controller, pending);
+        started.push(pending);
+      }
+    }
+    for (const pending of started) void finishRename(pending);
+    handleManagedDocument(vscode.window.activeTextEditor?.document);
+  };
+
+  const handleDeletedFiles = (files: readonly vscode.Uri[]): void => {
+    for (const uri of files) {
+      for (const [controller, pending] of pendingRenames) {
+        if (!uriIsWithin(pending.destination, uri)) continue;
+        deletedSourceUris.add(pending.destination.toString());
+        deletedSourceUris.add(pending.oldKey);
+        pendingRenames.delete(controller);
+        previewLifecycle.registry.delete(vscode.Uri.parse(pending.oldKey));
+        sourceSides.delete(pending.oldKey);
+        layoutRestorePending.delete(pending.oldKey);
+        controller.close();
+      }
+      for (const [key, owner] of [...previewLifecycle.registry.entries()]) {
+        const candidate = vscode.Uri.parse(key);
+        if (!uriIsWithin(candidate, uri)) continue;
+        deletedSourceUris.add(key);
+        previewLifecycle.registry.delete(candidate);
+        owner.controller.close();
+        sourceSides.delete(key);
+        layoutRestorePending.delete(key);
+      }
+    }
+    schedulePreviewTabReconciliation();
+  };
+
   context.subscriptions.push(
+    vscode.workspace.onDidRenameFiles((event) => {
+      handleRenamedFiles(event.files);
+    }),
+    vscode.workspace.onDidDeleteFiles((event) => handleDeletedFiles(event.files)),
+    vscode.workspace.onDidCreateFiles((event) => {
+      for (const uri of event.files) clearDeletedUnder(uri);
+      handleManagedDocument(vscode.window.activeTextEditor?.document);
+    }),
     vscode.workspace.onDidCloseTextDocument((document) => {
       // tab の最終集合で切断する。TextDocument close は複数 tab / cache と一致しない。
       schedulePreviewTabReconciliation();
       if (slideOutlineState.hasDocument(document)) updateSlideOutline(undefined);
     }),
     vscode.workspace.onDidOpenTextDocument((document) => {
+      deletedSourceUris.delete(document.uri.toString());
       if (!isManaged(document)) return;
       // openTextDocument だけでは source tab を開いたことにならない。tabGroups の最終状態で接続する。
       schedulePreviewTabReconciliation();
@@ -1385,6 +1620,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
   return {
     _previewControllerForTest: () => previewController,
+    _setRenameOpenBarrierForTest: (barrier) => {
+      renameOpenBarrierForTest = barrier;
+    },
     _slideItemsForTest: () =>
       slideOutlineState.getEntries().map((entry) => new SlideOutlineItem(entry)),
     _imagePasteProviderForTest: () => imagePaste,

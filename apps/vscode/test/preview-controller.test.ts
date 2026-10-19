@@ -542,6 +542,57 @@ describe("PreviewController", () => {
     expect(posted).toHaveLength(1);
   });
 
+  it("jumpToSource: 切断中の移動失敗は一度だけ host error にし、閲覧専用のまま残す", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const onError = vi.fn();
+    const navigateDetached = vi.fn(async () => {
+      throw new Error("open failed");
+    });
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      onError,
+      navigateDetached,
+    });
+    controller.detachDocument();
+    fire({ type: "jumpToSource", frameIndex: 0, version: 7, generation: controller.generation });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(navigateDetached).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledExactlyOnceWith("failed to open the detached preview source.");
+    expect(controller.isAttached).toBe(false);
+  });
+
+  it("jumpToSource: 切断中の連続クリックは開く処理が終わるまで重複させない", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    let finish: (() => void) | undefined;
+    const navigateDetached = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      navigateDetached,
+    });
+    controller.detachDocument();
+    const request = {
+      type: "jumpToSource",
+      frameIndex: 0,
+      version: 7,
+      generation: controller.generation,
+    };
+    fire(request);
+    fire(request);
+    expect(navigateDetached).toHaveBeenCalledOnce();
+    finish?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    fire(request);
+    expect(navigateDetached).toHaveBeenCalledTimes(2);
+  });
+
   it("moveCanvasElement: 最新・editable な画像だけを一度 callback へ渡す", async () => {
     const { panel, fire } = makePanel();
     const { events } = makeEvents();

@@ -339,6 +339,7 @@ export class PreviewController implements vscode.Disposable {
   /** close → reopen の間に完了する非同期操作を隔離する接続世代。 */
   private connectionGeneration = 0;
   private attached = true;
+  private detachedNavigationPending = false;
 
   /**
    * プレビュー対象の文書。エディタタブを閉じると TextDocument は close され
@@ -1071,7 +1072,21 @@ export class PreviewController implements vscode.Disposable {
    */
   private handleJump(frameIndex: number, version: number): void {
     if (!this.attached) {
-      void this.navigateDetached?.(frameIndex);
+      if (this.detachedNavigationPending) return;
+      this.detachedNavigationPending = true;
+      const report = () => {
+        if (!this.disposed) this.onError("failed to open the detached preview source.");
+      };
+      try {
+        void Promise.resolve(this.navigateDetached?.(frameIndex))
+          .catch(report)
+          .finally(() => {
+            this.detachedNavigationPending = false;
+          });
+      } catch {
+        this.detachedNavigationPending = false;
+        report();
+      }
       return;
     }
     const latest = this.latest;
