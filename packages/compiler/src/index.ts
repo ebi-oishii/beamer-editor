@@ -72,7 +72,8 @@ export type PdfExportErrorCode =
 export class PdfExportError extends Error {
   /**
    * TeX のエラーで止まった E_COMPILE(ソースのコンパイルエラー)。起動の失敗・タイムアウト・
-   * TeX パッケージの取得の失敗・Tectonic の panic・log の欠落・frame marker の不整合など、
+   * TeX パッケージの取得の失敗・Tectonic の panic・TeX のエラー行が無い非 0 終了・log の欠落・
+   * frame marker の不整合など、
    * 環境やツール側の E_COMPILE では false。呼び出し側はこれが true のときだけ、デッキ側の原因
    * (lint error)を添える。
    */
@@ -161,11 +162,16 @@ class ProcessNotFoundError extends Error {
   }
 }
 
+/**
+ * 出力の末尾 limit 文字だけを残す。Tectonic は TeX のエラー行を出力の最後に写すので、先頭を残すと
+ * 大量の警告の後のエラー行を落とし、TeX のエラーを見落とす(#205)。
+ */
 function boundedCollector(limit: number) {
   let value = "";
   return {
     append(chunk: Buffer | string) {
-      if (value.length < limit) value += String(chunk).slice(0, limit - value.length);
+      value += String(chunk);
+      if (value.length > limit) value = value.slice(value.length - limit);
     },
     value: () => value,
   };

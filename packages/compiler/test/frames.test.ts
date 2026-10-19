@@ -635,6 +635,22 @@ describe("compileDeckFrames", () => {
     });
   });
 
+  it("TeX パッケージの取得の失敗は TeX のエラーとして扱わない(#205)", async () => {
+    const inputPath = await source(deck);
+    // 取得を諦めたファイルは、TeX からは「ファイルが無い」という `! ` 行に見える。
+    const stderr = [
+      'caused by: failed to download "chemfig.sty"; please check your network connection.',
+      "! LaTeX Error: File `chemfig.sty' not found.",
+    ].join("\n");
+    const runner: ProcessRunner = {
+      run: async (_command, args) =>
+        args[0] === "--version" ? result() : result({ exitCode: 1, stderr }),
+    };
+    await expect(
+      compileDeckFrames({ inputPath }, { runner, rasterizer: rasterizer([]) }),
+    ).rejects.toMatchObject({ code: "E_COMPILE", texFailed: false });
+  });
+
   it("cleans temporary files after rasterizer failure and propagates cancellation", async () => {
     const inputPath = await source(deck);
     let temporary = "";

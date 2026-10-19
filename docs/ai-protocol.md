@@ -62,7 +62,7 @@
 
 `deck check` はキャンバスフレーム([subset-spec.md](subset-spec.md) §2.8)について、savepos 実測による本文領域外へのはみ出し・オブジェクト重なりの検出も報告する(絶対配置は Overfull 警告が出ないため)。
 
-`deck check`・`deck snapshot`・`deck export --format pdf` は、TeX のコンパイルエラー(Tectonic が TeX のエラーで止まった `E_COMPILE`)のときにデッキの lint エラーも添え(テキストではメッセージの後、`--json` では `error.diagnostics`)、そのときの終了コードは 3(操作失敗)ではなく 2(lint error)になる。環境の失敗とみなさず、TeX のエラーより先にそちらを直す(例: L025 は `deck init <file> --update-preamble`)。Tectonic の起動の失敗・タイムアウト・TeX パッケージの取得の失敗・log の欠落など、TeX のエラーでない `E_COMPILE` には lint エラーを添えず、終了コードは 3 のまま。
+`deck check`・`deck snapshot`・`deck export --format pdf` は、TeX のコンパイルエラー(Tectonic が TeX のエラーで止まった `E_COMPILE`)のときにデッキの lint エラーも添え(テキストではメッセージの後、`--json` では `error.diagnostics`)、そのときの終了コードは 3(操作失敗)ではなく 2(lint error)になる。環境の失敗とみなさず、TeX のエラーより先にそちらを直す(例: L025 は `deck init <file> --update-preamble`)。Tectonic の起動の失敗・タイムアウト・TeX パッケージの取得の失敗・Tectonic の panic・TeX のエラー行が無い非 0 終了・log の欠落など、TeX のエラーでない `E_COMPILE` には lint エラーを添えず、終了コードは 3 のまま。
 
 `snapshot` の出力先は新規ディレクトリのみを受け付ける。既存のパス(ディレクトリ・通常ファイル・壊れたシンボリックリンクを含む)は `E_OUTPUT_EXISTS` で拒否し、その中身には一切触れない。全 PNG の書き込み後に空の `.deck-snapshot-complete` を作成して公開する。このマーカーがないディレクトリは書き込み中・クラッシュ・失敗後の残留として未完成扱いにし、消費者はマーカーの存在を確認してから JSON または `*.png` だけを読む。失敗した場合は自分が作成した出力ディレクトリだけを削除するので、既存のディレクトリが消えることはない。
 

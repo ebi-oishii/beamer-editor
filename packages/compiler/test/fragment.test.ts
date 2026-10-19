@@ -181,6 +181,23 @@ describe("compileFragment", () => {
     );
   });
 
+  it("Tectonic の panic は TeX のエラーとして扱わない(#205)", async () => {
+    const panicking: ProcessRunner = {
+      run: async (_command, args) =>
+        args[0] === "--version"
+          ? { exitCode: 0, stdout: "tectonic 0.16.9", stderr: "" }
+          : {
+              exitCode: 101,
+              stdout: "",
+              stderr:
+                "thread 'main' (64083727) panicked at src/config.rs:154:18:\ncalled `Result::unwrap()` on an `Err` value\n",
+            },
+    };
+    await expect(
+      compileFragment({ document: "\\bad" }, { runner: panicking }),
+    ).rejects.toMatchObject({ code: "E_COMPILE", texFailed: false });
+  });
+
   it("生成 PDF が上限を超えたら読み込まずに E_COMPILE にする", async () => {
     const calls: { command: string; args: string[]; cwd: string }[] = [];
     await expect(

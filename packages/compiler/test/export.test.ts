@@ -274,6 +274,30 @@ describe("exportPdf", () => {
     }
   });
 
+  it("出力が上限を超えても、末尾に写された TeX のエラー行で texFailed を立てる(#205)", async () => {
+    const input = await source();
+    // 大量の警告(上限の 1 MiB を超える)の後に、Tectonic が TeX のエラー行を写す。
+    const script = [
+      "const warning = 'Overfull \\\\hbox (12.3pt too wide) in paragraph\\n';",
+      "process.stderr.write(warning.repeat(Math.ceil((1.5 * 1024 * 1024) / warning.length)));",
+      "process.stderr.write('! Undefined control sequence.\\nl.3 Hello \\\\undefinedmacro\\n', () => process.exit(1));",
+    ].join("\n");
+    let collected: ProcessResult | undefined;
+    const runner: ProcessRunner = {
+      run: async (_command, args, options) => {
+        if (args[0] === "--version") return result();
+        collected = await nodeProcessRunner.run(process.execPath, ["-e", script], options);
+        return collected;
+      },
+    };
+    await expect(
+      exportPdf({ inputPath: input.path, overwrite: true }, { runner }),
+    ).rejects.toMatchObject({ code: "E_COMPILE", texFailed: true });
+    // 残すのは上限までの末尾。
+    expect(collected?.stderr.length).toBeLessThanOrEqual(1024 * 1024);
+    expect(collected?.stderr.endsWith("l.3 Hello \\undefinedmacro\n")).toBe(true);
+  });
+
   it("does not clobber an output created after preflight while Tectonic is running", async () => {
     const input = await source();
     const output = join(input.dir, "talk.pdf");
