@@ -297,6 +297,7 @@ describe("ExportController", () => {
       inputPath: input.fsPath,
       outputPath: htmlOutput.fsPath,
       indexPath: htmlIndex.fsPath,
+      placeholders: [],
     }));
     await new ExportController(host, {
       exportHtml: html,
@@ -319,6 +320,7 @@ describe("ExportController", () => {
       inputPath: input.fsPath,
       outputPath: htmlOutput.fsPath,
       indexPath: htmlIndex.fsPath,
+      placeholders: [],
     }));
     const cancelled = createHost({
       chooseFormat: vi.fn(async () => "html" as const),
@@ -349,6 +351,7 @@ describe("ExportController", () => {
         inputPath: input.fsPath,
         outputPath: htmlOutput.fsPath,
         indexPath: htmlIndex.fsPath,
+        placeholders: [],
       }),
     }).export(createDocument());
     expect(host.revealInFileManager).toHaveBeenCalledWith(htmlOutput);
