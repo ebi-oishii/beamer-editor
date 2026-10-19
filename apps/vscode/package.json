@@ -15,7 +15,8 @@
   "activationEvents": [
     "onLanguage:latex",
     "onCommand:beamerEditor.openPreview",
-    "onCommand:beamerEditor.export"
+    "onCommand:beamerEditor.export",
+    "onWebviewPanel:beamerEditor.preview"
   ],
   "contributes": {
     "grammars": [

@@ -49,6 +49,7 @@ import {
 } from "./managed-files";
 import { PreviewController } from "./preview-controller";
 import { executeHistoryCommand, PreviewHistory } from "./preview-history";
+import { PREVIEW_VIEW_TYPE, parsePreviewRestoreState, previewTitle } from "./preview-restore";
 import {
   affectsRawBlockCompile,
   dependencyFingerprint,
@@ -178,6 +179,8 @@ export interface TestApi {
   _previewControllerForTest(): PreviewController | undefined;
   _slideItemsForTest(): unknown[];
   _imagePasteProviderForTest(): ImagePasteEditProvider;
+  /** VS Code が前回のプレビューを復元するときと同じ経路で、panel をつなぎ直す(#199)。 */
+  _restorePreviewForTest(panel: vscode.WebviewPanel, state: unknown): Promise<void>;
 }
 
 export function activate(context: vscode.ExtensionContext): TestApi {
@@ -664,12 +667,16 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   }
 
   /** preserveFocus はソース側の操作(#66)から開くときに使う。既定は自動オープンのときだけ保つ。 */
+  /** restored は VS Code が再読み込みで復元したパネル(#199)。渡されたら作らずにそれを使う。 */
   function openPreview(
     document: vscode.TextDocument,
     automatic: boolean,
     preserveFocus = automatic,
+    restored?: vscode.WebviewPanel,
   ): void {
     const prepared = previewLifecycle.prepareOpen(document.uri, automatic);
+    // 同じ文書のプレビューが既にある・自動オープンを断られたときは、復元したパネルを残さない。
+    if (prepared.kind !== "create") restored?.dispose();
     if (prepared.kind === "existing") {
       if (!automatic) {
         // 同じグループの別タブの後ろに隠れていても表示する。preserveFocus ならフォーカスはソースに残す。
@@ -686,17 +693,24 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     // 画像(includegraphics / deckimage / logo)は文書からの相対パスで参照される
     // ため、文書のあるフォルダだけを workspace 側のリソース範囲として開ける。
     const documentDir = vscode.Uri.joinPath(document.uri, "..");
-    const panel = vscode.window.createWebviewPanel(
-      "beamerEditor.preview",
-      `Beamer Preview: ${document.fileName.split(/[\\/]/).pop()}`,
-      preserveFocus
-        ? { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }
-        : vscode.ViewColumn.Beside,
-      {
-        enableScripts: true,
-        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media"), documentDir],
-      },
-    );
+    const webviewOptions: vscode.WebviewOptions = {
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media"), documentDir],
+    };
+    let panel: vscode.WebviewPanel;
+    if (restored) {
+      panel = restored;
+      panel.webview.options = webviewOptions;
+    } else {
+      panel = vscode.window.createWebviewPanel(
+        PREVIEW_VIEW_TYPE,
+        previewTitle(document.fileName),
+        preserveFocus
+          ? { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }
+          : vscode.ViewColumn.Beside,
+        webviewOptions,
+      );
+    }
     previewSources.set(panel, document);
 
     // #94: プレビューが表示されているエディタグループをロックし、他のファイルが同じグループに
@@ -846,6 +860,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           );
         },
         onWebviewReady: () => rawBlockCompiler.forgetDelivered(),
+        restore: { uri: document.uri.toString(), automatic },
         onError: (message) => {
           void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
         },
@@ -1048,7 +1063,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
   function handleManagedDocument(document: vscode.TextDocument | undefined): void {
     if (!document || !isManaged(document)) return;
-    openPreview(document, true);
+    // VS Code が復元したプレビューのタブがまだつながっていなければ、つなぎ直しを待つ(二重に開かない)。
+    if (!restoredPreviewPending(document)) openPreview(document, true);
     void offerLatexWorkshopIgnore(document).catch((error) => {
       void vscode.window.showErrorMessage(
         `Beamer Editor: LaTeX Workshop settings update failed: ${String(error)}`,
@@ -1087,6 +1103,53 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       handleManagedDocument(activeDocument);
     }),
   );
+  // ---- 再起動・再読み込みでのプレビューの復元(#199) ----
+  // Webview は state に元ソースを残している。VS Code が前回のパネルを復元したら、同じパネルのまま
+  // 元ソースへつなぎ直す。今はソースを閉じるとプレビューも閉じるので、ソースのタブが戻っていない
+  // とき・元ソースを開けないとき・同じ文書のプレビューが既にあるときは、復元したパネルを閉じる。
+  const hasSourceTab = (uri: vscode.Uri): boolean =>
+    vscode.window.tabGroups.all.some((group) =>
+      group.tabs.some(
+        (tab) =>
+          tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === uri.toString(),
+      ),
+    );
+  // まだつながっていない復元タブ。VS Code は復元したパネルを、見えたときに初めてシリアライザへ渡す。
+  function restoredPreviewPending(document: vscode.TextDocument): boolean {
+    if (previewLifecycle.registry.get(document.uri)) return false;
+    const title = previewTitle(document.fileName);
+    return vscode.window.tabGroups.all.some((group) =>
+      group.tabs.some(
+        (tab) =>
+          tab.input instanceof vscode.TabInputWebview &&
+          tab.input.viewType.endsWith(PREVIEW_VIEW_TYPE) &&
+          tab.label === title &&
+          ![...previewSources.keys()].some((panel) => panel.title === title),
+      ),
+    );
+  }
+  async function restorePreview(panel: vscode.WebviewPanel, state: unknown): Promise<void> {
+    const restore = parsePreviewRestoreState(state);
+    const uri = restore ? vscode.Uri.parse(restore.uri) : undefined;
+    if (!restore || !uri || !hasSourceTab(uri) || previewLifecycle.registry.get(uri)) {
+      panel.dispose();
+      return;
+    }
+    let document: vscode.TextDocument;
+    try {
+      document = await vscode.workspace.openTextDocument(uri);
+    } catch {
+      panel.dispose();
+      return;
+    }
+    openPreview(document, restore.automatic, true, panel);
+  }
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer(PREVIEW_VIEW_TYPE, {
+      deserializeWebviewPanel: restorePreview,
+    }),
+  );
+
   const activeEditor = vscode.window.activeTextEditor;
   if (activeEditor)
     updateSlideOutline(isManaged(activeEditor.document) ? activeEditor.document : undefined);
@@ -1230,6 +1293,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     _slideItemsForTest: () =>
       slideOutlineState.getEntries().map((entry) => new SlideOutlineItem(entry)),
     _imagePasteProviderForTest: () => imagePaste,
+    _restorePreviewForTest: restorePreview,
   };
 }
 

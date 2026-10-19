@@ -10,6 +10,7 @@ import type { ExtensionToWebview } from "@beamer-editor/ui";
 import { parseWebviewToExtension } from "@beamer-editor/ui";
 import type * as vscode from "vscode";
 import { type RenderOutcome, renderDocument } from "./document-controller";
+import type { PreviewRestoreState } from "./preview-restore";
 import { frameIndexAtSourceOffset } from "./reveal-slide";
 import { resolveJumpOffset } from "./source-navigation";
 
@@ -183,6 +184,8 @@ export interface PreviewControllerOptions {
     frameOffset: number;
     document: PreviewDocument;
   }) => Promise<PasteResult>;
+  /** Webview の state に残す元ソース(#199)。VS Code を再読み込みしたとき、拡張がこれでパネルをつなぎ直す。 */
+  restore?: PreviewRestoreState;
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -230,7 +233,12 @@ export function withAssetGeneration(url: string, generation: number): string {
  * (移植計画 VS-8)。script は nonce 必須、style は ui / deck.css が動的に
  * <style> を注入するため 'unsafe-inline' を許可、img は拡張リソースと data: のみ。
  */
-export function emptyPreviewHtml(assets: WebviewAssets, cspSource: string, nonce: string): string {
+export function emptyPreviewHtml(
+  assets: WebviewAssets,
+  cspSource: string,
+  nonce: string,
+  restore?: PreviewRestoreState,
+): string {
   const csp = [
     "default-src 'none'",
     `img-src ${cspSource} data:`,
@@ -242,6 +250,9 @@ export function emptyPreviewHtml(assets: WebviewAssets, cspSource: string, nonce
     `worker-src blob: ${cspSource}`,
   ].join("; ");
   const pdfWorker = assets.pdfWorkerUri ? ` data-pdf-worker="${assets.pdfWorkerUri}"` : "";
+  const restoreAttrs = restore
+    ? ` data-source-uri="${escapeAttr(restore.uri)}" data-automatic="${restore.automatic}"`
+    : "";
   return `<!DOCTYPE html>
 <html lang="ja">
   <head>
@@ -256,7 +267,7 @@ export function emptyPreviewHtml(assets: WebviewAssets, cspSource: string, nonce
     </style>
   </head>
   <body>
-    <main id="app" aria-label="Beamer preview"${pdfWorker}></main>
+    <main id="app" aria-label="Beamer preview"${pdfWorker}${restoreAttrs}></main>
     <script nonce="${nonce}" src="${assets.scriptUri}"></script>
   </body>
 </html>`;
@@ -351,7 +362,12 @@ export class PreviewController implements vscode.Disposable {
     this.deleteCanvasElement = options.deleteCanvasElement;
     this.copyCanvasElement = options.copyCanvasElement;
     this.pasteCanvasElements = options.pasteCanvasElements;
-    this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
+    this.panel.webview.html = emptyPreviewHtml(
+      assets,
+      this.panel.webview.cspSource,
+      createNonce(),
+      options.restore,
+    );
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
       this.panel.webview.onDidReceiveMessage((raw) => this.handleMessage(raw)),
