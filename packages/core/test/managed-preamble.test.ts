@@ -121,9 +121,23 @@ describe("lintSource: L025(管理プリアンブルが使っているマクロ�
     expect(again && apply(fixed, again)).toBe(fixed);
   });
 
-  it("現行の管理プリアンブル・\\input 形式・背景を使わない古いデッキには出さない", () => {
+  it("現行の管理プリアンブルと \\input 形式には出さない", () => {
     expect(l025(initDeck(managedPreambleBlock(), BACKGROUNDS))).toEqual([]);
-    expect(l025(initDeck(oldManaged, "\\deckcolor{structure}{0F62FE}"))).toEqual([]);
+    // 改行コードと開始行の文言の違いは見ない。
+    expect(l025(initDeck(managedPreambleBlock(), BACKGROUNDS).replaceAll("\n", "\r\n"))).toEqual(
+      [],
+    );
+    expect(
+      l025(
+        initDeck(
+          managedPreambleBlock().replace(
+            MANAGED_PREAMBLE_BEGIN,
+            "% ---- ツール管理プリアンブル ----",
+          ),
+          BACKGROUNDS,
+        ),
+      ),
+    ).toEqual([]);
     const input = [
       "% ---- ツール管理プリアンブル ----",
       "\\input{../packages/core/resources/deck-managed-header}",
@@ -138,6 +152,83 @@ describe("lintSource: L025(管理プリアンブルが使っているマクロ�
     );
     expect(fixture).toContain("\\deckbackground");
     expect(l025(fixture)).toEqual([]);
+  });
+
+  it("使う機能が揃っていても、中身が現行と違えば開始行に warning と差し替えの fix を出す", () => {
+    const source = initDeck(oldManaged, "\\deckcolor{structure}{0F62FE}");
+    const found = l025(source);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.severity).toBe("warning");
+    expect(source.slice(found[0]?.span.start, found[0]?.span.end)).toBe(MANAGED_PREAMBLE_BEGIN);
+    expect(found[0]?.fix).toEqual(updateOf(source));
+    // 既存のマクロの中身だけを手で変えた場合も同じ。
+    const edited = initDeck(
+      managedPreambleBlock().replace("\\setbeamertemplate{navigation symbols}{}", ""),
+      "",
+    );
+    expect(l025(edited).map((entry) => entry.severity)).toEqual(["warning"]);
+  });
+
+  it("管理プリアンブルへ後から足した命令・環境は、対応表なしで使う位置に error を出す", () => {
+    // \deckfooter の定義が無い管理プリアンブル(\deckfooter を足す前の版を模す)。
+    const withoutFooter = managedPreambleBlock().replace(
+      "\\newcommand\\deckfooter",
+      "\\newcommand\\deckfooterOld",
+    );
+    expect(withoutFooter).not.toBe(managedPreambleBlock());
+    const footer = initDeck(withoutFooter, "\\deckfooter{left}");
+    expect(
+      l025(footer).map((entry) => [entry.severity, footer.slice(entry.span.start, entry.span.end)]),
+    ).toEqual([["error", "\\deckfooter{left}"]]);
+    // canvas の定義が無い管理プリアンブルで deckcanvas を使う。
+    const withoutCanvas = [
+      MANAGED_PREAMBLE_BEGIN,
+      [resource("deck-managed-header.tex"), resource("deck-style-preamble.tex")]
+        .join("\n")
+        .trimEnd(),
+      MANAGED_PREAMBLE_END,
+    ].join("\n");
+    const canvas = initDeck(withoutCanvas, "").replace(
+      "\\end{document}",
+      "\\begin{frame}[label=c]\n\\begin{deckcanvas}\n\\deckimage[x=0,y=0,w=0.5]{a.png}\n\\end{deckcanvas}\n\\end{frame}\n\\end{document}",
+    );
+    expect(
+      l025(canvas).map((entry) => [entry.severity, canvas.slice(entry.span.start, entry.span.end)]),
+    ).toEqual([
+      ["error", "\\begin{deckcanvas}"],
+      ["error", "\\deckimage"],
+    ]);
+  });
+
+  it("使う位置より後ろにある定義は数えない", () => {
+    // preamble-extra の後ろ(ユーザー領域の外)に定義を足しても、style の \deckbackground の時点では未定義。
+    const source = initDeck(oldManaged, BACKGROUNDS).replace(
+      "%% preamble-extra:end\n",
+      "%% preamble-extra:end\n\\newcommand\\deckbackground[2][]{}\n",
+    );
+    expect(l025(source).map((entry) => entry.severity)).toEqual(["error", "error"]);
+  });
+
+  it("deck init 直後のデッキと fixture には出さない", () => {
+    expect(l025(initDeck(managedPreambleBlock(), ""))).toEqual([]);
+    for (const name of [
+      "basic",
+      "canvas",
+      "canvas-math",
+      "japanese",
+      "kitchen-sink",
+      "lint-static",
+      "macros",
+      "measure-body-area",
+      "styled",
+      "templated",
+    ]) {
+      const fixture = readFileSync(
+        new URL(`../../../fixtures/${name}.slide.tex`, import.meta.url),
+        "utf8",
+      );
+      expect(l025(fixture), name).toEqual([]);
+    }
   });
 
   it("ユーザー領域やコメントにある定義は数えない", () => {

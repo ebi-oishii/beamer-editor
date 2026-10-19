@@ -10,21 +10,52 @@ export const MANAGED_PREAMBLE_BEGIN =
 /** ツール管理プリアンブルの終了行。 */
 export const MANAGED_PREAMBLE_END = "% ---- ツール管理ここまで ----";
 
-/**
- * `deck init` が書く現行のツール管理プリアンブル(開始行から終了行まで。末尾改行なし)。
- * 中身は packages/core/resources の 3 ファイルをこの順に展開したもの。
- */
+/** 現行のツール管理プリアンブルの中身(開始行と終了行の間)。resources の 3 ファイルをこの順に展開したもの。 */
+function managedPreambleContent(): string {
+  return Object.values(MANAGED_PREAMBLE_RESOURCES).join("\n").trimEnd();
+}
+
+/** `deck init` が書く現行のツール管理プリアンブル(開始行から終了行まで。末尾改行なし)。 */
 export function managedPreambleBlock(): string {
-  return [
-    MANAGED_PREAMBLE_BEGIN,
-    Object.values(MANAGED_PREAMBLE_RESOURCES).join("\n").trimEnd(),
-    MANAGED_PREAMBLE_END,
-  ].join("\n");
+  return [MANAGED_PREAMBLE_BEGIN, managedPreambleContent(), MANAGED_PREAMBLE_END].join("\n");
+}
+
+/**
+ * `span`(locateManagedPreamble の結果)の開始行と終了行の間が、`deck init` が書く現行の中身と
+ * 同じか。開始行の文言・改行コード・末尾の空白の違いは見ない。
+ */
+export function isCurrentManagedPreamble(source: string, span: SourceSpan): boolean {
+  const block = source.slice(span.start, span.end).replaceAll("\r\n", "\n");
+  const firstBreak = block.indexOf("\n");
+  const lastBreak = block.lastIndexOf("\n");
+  const content = firstBreak === lastBreak ? "" : block.slice(firstBreak + 1, lastBreak);
+  return content.trimEnd() === managedPreambleContent();
+}
+
+/**
+ * `\input{path}` が読むツール管理リソース(fixture のように resources を直接読む形)の現行の中身。
+ * path の拡張子とディレクトリは問わない。リソースでなければ undefined。
+ */
+export function managedPreambleResource(path: string): string | undefined {
+  const name = path
+    .trim()
+    .replace(/\.tex$/, "")
+    .split("/")
+    .at(-1);
+  const key = `${name}.tex`;
+  return Object.hasOwn(MANAGED_PREAMBLE_RESOURCES, key)
+    ? MANAGED_PREAMBLE_RESOURCES[key]
+    : undefined;
 }
 
 // 開始行は文言を問わない(fixture は `% ---- ツール管理プリアンブル ----`)。
 const BEGIN_LINE = /^% ---- ツール管理プリアンブル[^\n]*$/gm;
 const END_LINE = /^% ---- ツール管理ここまで ----[ \t]*(?=\r?$)/m;
+
+/** プリアンブルにツール管理プリアンブルの開始印があるか(終了印がそろっているかは問わない)。 */
+export function hasManagedPreambleBegin(preamble: string): boolean {
+  return preamble.match(BEGIN_LINE) !== null;
+}
 
 /** ツール管理プリアンブルの位置、または範囲を特定できない理由(そのまま利用者に見せる文)。 */
 export type ManagedPreambleLocation = { span: SourceSpan } | { problem: string };

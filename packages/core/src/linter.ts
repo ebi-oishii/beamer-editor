@@ -11,7 +11,14 @@ import {
   type SourceSpan,
 } from "./ast.js";
 import type { FileExistsProbe, ImageFormat, ImageProbe } from "./image.js";
-import { locateManagedPreamble, managedPreambleReplacement } from "./managed-preamble.js";
+import {
+  hasManagedPreambleBegin,
+  isCurrentManagedPreamble,
+  locateManagedPreamble,
+  managedPreambleBlock,
+  managedPreambleReplacement,
+  managedPreambleResource,
+} from "./managed-preamble.js";
 import { parseDeck } from "./parser.js";
 import {
   blankComments,
@@ -1195,69 +1202,126 @@ function lintHiddenBackgrounds(source: string, doc: DeckDocument): LintDiagnosti
   return diagnostics;
 }
 
-/**
- * deck-source-version を上げずにツール管理プリアンブルへ後から足したマクロと、それを定義する
- * リソース(`deck init` が展開する。fixture のように `\input` で読むデッキは常に最新)。
- * 足す前に `deck init` したデッキには定義が無く、lint もプレビューも通るのに PDF だけが
- * Undefined control sequence で止まる。
- */
-const LATER_MANAGED_MACROS: ReadonlyArray<{
-  name: string;
-  resource: string;
-  uses: (doc: DeckDocument) => SourceSpan[];
-}> = [
-  {
-    name: "deckbackground",
-    resource: "deck-style-preamble",
-    uses: (doc) =>
-      doc.style.entries
-        .filter((entry) => entry.type === "styleBackground")
-        .map((entry) => entry.span),
-  },
-];
+/** `deck*` 環境の定義(`\newenvironment{deckcanvas}` など)。名前を 1 番目に取る。 */
+const DECK_ENVIRONMENT_DEFINITION = /\\(?:new|renew)environment\s*\{\s*(deck[A-Za-z@]*)\s*\}/g;
+
+/** コメントを空白にしたテキストにある `deck*` の命令と環境の定義を、名前と位置で返す。 */
+function deckDefinitions(text: string): { name: string; index: number }[] {
+  return [
+    ...[...text.matchAll(DECK_MACRO_DEFINITION)].map((match) => ({
+      name: /deck[A-Za-z@]*/.exec(match[0])?.[0] ?? "",
+      index: match.index ?? 0,
+    })),
+    ...[...text.matchAll(DECK_ENVIRONMENT_DEFINITION)].map((match) => ({
+      name: match[1] ?? "",
+      index: match.index ?? 0,
+    })),
+  ];
+}
 
 /**
- * L025: ツール管理プリアンブルが、使っているマクロより古い。ユーザー領域(macros / style /
- * preamble-extra)の外に定義も該当リソースの `\input` も無いものを報告し、管理プリアンブルを
- * 現行へ差し替える修正(`deck init --update-preamble` と同じ)を付ける。
+ * 現行のツール管理プリアンブルが定義する、利用者が使う命令と環境の名前(`deckbackground`・
+ * `deckcanvas` など。`@` を含む内部名は除く)。管理プリアンブルへ後から足したものも自動で入る。
+ */
+let managedPublicNames: Set<string> | undefined;
+function currentManagedPublicNames(): Set<string> {
+  managedPublicNames ??= new Set(
+    deckDefinitions(blankComments(managedPreambleBlock()))
+      .map((definition) => definition.name)
+      .filter((name) => !name.includes("@")),
+  );
+  return managedPublicNames;
+}
+
+/** 本文やユーザー領域での `deck*` の命令(`\deckbackground`)と環境(`\begin{deckcanvas}`)の使用。 */
+const DECK_USE = /\\begin\s*\{\s*(deck[A-Za-z]+)\s*\}|\\(deck[A-Za-z]+)(?![A-Za-z@])/g;
+
+/**
+ * L025: ツール管理プリアンブルが古い。
+ * - error: 現行の管理プリアンブルが定義する命令・環境を使っているのに、使う位置より前に定義が無い
+ *   (その機能の追加前に `deck init` したデッキ。lint もプレビューも通るのに PDF だけが
+ *   Undefined control sequence で止まる)。ユーザー領域とコメントの定義は数えず、`\input` で
+ *   読むリソースは現行の中身として数える
+ * - warning: 使う機能は揃っているが、管理プリアンブルの中身が `deck init` の現行と違う
+ *   (古い版か手で編集した版。既存のマクロの中身が変わった場合もここで分かる)。fixture のように
+ *   リソースを `\input` で読むデッキは常に現行なので比べない
+ * どちらも、管理プリアンブルを現行へ差し替える修正(`deck init --update-preamble` と同じ)を付ける。
  */
 function lintOutdatedManagedPreamble(source: string, doc: DeckDocument): LintDiagnostic[] {
-  const pending = LATER_MANAGED_MACROS.map((macro) => ({ macro, uses: macro.uses(doc) })).filter(
-    (entry) => entry.uses.length > 0,
-  );
-  if (pending.length === 0) return [];
-  // プリアンブル(\begin{document} が無ければ全体)から、コメントとユーザー領域を空白にする。
+  const blanked = blankComments(source);
+  // プリアンブル(\begin{document} が無ければ全体)から、ユーザー領域を空白にする。
   const preambleEnd = doc.managedPreamble.span.end || source.length;
-  let text = blankComments(source).slice(0, preambleEnd);
+  let text = blanked.slice(0, preambleEnd);
   for (const region of [doc.macros.span, doc.style.span, doc.preambleExtra.span]) {
     if (region.end <= region.start || region.start >= text.length) continue;
     const end = Math.min(region.end, text.length);
     text = text.slice(0, region.start) + " ".repeat(end - region.start) + text.slice(end);
   }
-  const defined = new Set(
-    [...text.matchAll(DECK_MACRO_DEFINITION)].map((match) => /deck[A-Za-z@]*/.exec(match[0])?.[0]),
-  );
-  const inputs = [...text.matchAll(/\\input\s*\{([^{}]*)\}/g)].map((match) =>
-    (match[1] ?? "").trim().replace(/\.tex$/, ""),
-  );
+  const inputs = [...text.matchAll(/\\input\s*\{([^{}]*)\}/g)].flatMap((match) => {
+    const resource = managedPreambleResource(match[1] ?? "");
+    return resource === undefined ? [] : [{ resource, index: match.index ?? 0 }];
+  });
+  // `\input` で読むリソースの定義は、`\input` の位置にあるものとして数える。
+  const definitions = [
+    ...deckDefinitions(text),
+    ...inputs.flatMap(({ resource, index }) =>
+      deckDefinitions(blankComments(resource)).map(({ name }) => ({ name, index })),
+    ),
+  ];
   const located = locateManagedPreamble(source, preambleEnd);
-  const fix = "span" in located ? managedPreambleReplacement(source, located.span) : null;
+  const managed = "span" in located ? located.span : null;
+  const fix = managed ? managedPreambleReplacement(source, managed) : null;
+  const withFix = (entry: LintDiagnostic): LintDiagnostic => (fix ? { ...entry, fix } : entry);
+
+  // 管理プリアンブルの開始印も deck の定義も無いデッキは、管理プリアンブルが古いのではなく
+  // 持っていないので比べない。
+  if (definitions.length === 0 && !hasManagedPreambleBegin(source.slice(0, preambleEnd))) return [];
+  const names = currentManagedPublicNames();
+  // 定義の見出し(`\newcommand\deckimage`)の中の名前は使用に数えない。
+  const headers = [...blanked.matchAll(DECK_MACRO_DEFINITION)].map((match) => ({
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + match[0].length,
+  }));
   const diagnostics: LintDiagnostic[] = [];
-  for (const { macro, uses } of pending) {
-    if (defined.has(macro.name)) continue;
-    if (inputs.some((path) => path === macro.resource || path.endsWith(`/${macro.resource}`)))
+  for (const match of blanked.matchAll(DECK_USE)) {
+    const name = match[1] ?? match[2] ?? "";
+    const start = match.index ?? 0;
+    if (!names.has(name)) continue;
+    if (managed && start >= managed.start && start < managed.end) continue;
+    if (headers.some((header) => start >= header.start && start < header.end)) continue;
+    if (definitions.some((definition) => definition.name === name && definition.index < start))
       continue;
-    const message = `ツール管理プリアンブルが \\${macro.name} より古く、定義がありません。プレビューには出ますが PDF 書き出しは Undefined control sequence で止まります。${
+    const label = match[1] === undefined ? `\\${name}` : `${name} 環境`;
+    const message = `ツール管理プリアンブルが ${label} より古く、定義がありません。プレビューには出ますが PDF 書き出しは Undefined control sequence で止まります。${
       "problem" in located
         ? `ツール管理プリアンブルの範囲を特定できないため自動では直せません(${located.problem})。印を直すか、deck init で作ったデッキの管理プリアンブルを写してください`
         : "deck init <file> --update-preamble で管理プリアンブルを最新に差し替えてください"
     }`;
-    for (const span of uses)
-      diagnostics.push({
-        ...diagnostic("L025", "error", message, span),
-        ...(fix === null ? {} : { fix }),
-      });
+    // `%% style` のエントリ(`\deckbackground{…}`)の中ならエントリ全体を指す。
+    const span = doc.style.entries.find(
+      (entry) => entry.span.start <= start && start < entry.span.end,
+    )?.span ?? { start, end: start + match[0].length };
+    diagnostics.push(withFix(diagnostic("L025", "error", message, span)));
   }
+  if (diagnostics.length > 0 || !managed) return diagnostics;
+
+  const readsResources = inputs.some(({ index }) => index >= managed.start && index < managed.end);
+  if (readsResources || isCurrentManagedPreamble(source, managed)) return diagnostics;
+  const firstLineEnd = source.indexOf("\n", managed.start);
+  const beginLine = {
+    start: managed.start,
+    end: firstLineEnd === -1 || firstLineEnd > managed.end ? managed.end : firstLineEnd,
+  };
+  diagnostics.push(
+    withFix(
+      diagnostic(
+        "L025",
+        "warning",
+        "ツール管理プリアンブルが今の deck init の内容と違います(古い deck init で作ったか、手で編集されています)。古いままだと PDF 書き出しで新しい機能が効かないことがあります。deck init <file> --update-preamble で現行に差し替えてください(管理プリアンブルの中の手編集は消えます)",
+        beginLine,
+      ),
+    ),
+  );
   return diagnostics;
 }
 
