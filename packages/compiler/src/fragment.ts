@@ -82,23 +82,6 @@ function withoutComments(tex: string): string {
   return tex.replace(/(^|[^\\])%[^\n]*/g, "$1");
 }
 
-const GRAPHICS_PATH = /\\graphicspath\s*\{((?:\s*\{[^{}]*\}\s*)+)\}/g;
-
-/**
- * `\\graphicspath{{images/}{figs/}}` の探索ディレクトリ(出現順、重複なし)。`\\includegraphics{foo}` の
- * 実体はこの下にもあり得るので、依存ファイルの指紋を取るときはここも探す。
- */
-export function fragmentGraphicsPaths(tex: string): string[] {
-  const found = new Set<string>();
-  for (const match of withoutComments(tex).matchAll(GRAPHICS_PATH)) {
-    for (const entry of (match[1] ?? "").matchAll(/\{([^{}]*)\}/g)) {
-      const directory = (entry[1] ?? "").trim();
-      if (directory !== "" && !/[\\\n%]/.test(directory)) found.add(directory);
-    }
-  }
-  return [...found];
-}
-
 export function fragmentDependencies(tex: string): string[] {
   const code = withoutComments(tex);
   const hits: { index: number; name: string }[] = [];

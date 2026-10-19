@@ -279,7 +279,7 @@ describe("analyzeCanvasGeometry", () => {
         analyzeCanvasGeometry(log, frames);
         expect.unreachable("broken managed log should throw");
       } catch (error) {
-        expect(error).toMatchObject({ code: "E_COMPILE" });
+        expect(error).toMatchObject({ code: "E_COMPILE", texFailed: false });
       }
     }
   });
@@ -598,9 +598,10 @@ describe("compileDeckFrames", () => {
         return result();
       },
     };
+    // 最終 pass の log が無いのは TeX の失敗ではない。
     await expect(
       compileDeckFrames({ inputPath }, { runner, rasterizer: rasterizer([]) }),
-    ).rejects.toMatchObject({ code: "E_COMPILE" });
+    ).rejects.toMatchObject({ code: "E_COMPILE", texFailed: false });
     writeLog = true;
     await expect(
       compileDeckFrames({ inputPath, maxLogBytes: 1 }, { runner, rasterizer: rasterizer([]) }),
@@ -626,7 +627,7 @@ describe("compileDeckFrames", () => {
           },
         },
       ),
-    ).rejects.toMatchObject({ code: "E_COMPILE" });
+    ).rejects.toMatchObject({ code: "E_COMPILE", texFailed: true });
     await expect(readFile(join(temporary, "talk.slide.tex"), "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });

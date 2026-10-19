@@ -70,14 +70,32 @@ export type PdfExportErrorCode =
   | "E_CANCELLED";
 
 export class PdfExportError extends Error {
+  /**
+   * TeX(Tectonic)が非 0 の終了コードで終わった E_COMPILE(ソースのコンパイルエラー)。起動の失敗・
+   * タイムアウト・log の欠落・frame marker の不整合など、環境やツール側の E_COMPILE では false。
+   * 呼び出し側はこれが true のときだけ、デッキ側の原因(lint error)を添える。
+   */
+  public readonly texFailed: boolean;
+
   constructor(
     public readonly code: PdfExportErrorCode,
     message: string,
     public readonly cause?: unknown,
+    options: { texFailed?: boolean } = {},
   ) {
     super(message);
     this.name = "PdfExportError";
+    this.texFailed = code === "E_COMPILE" && options.texFailed === true;
   }
+}
+
+/**
+ * Tectonic が終わったのに PDF が得られなかったときの E_COMPILE。非 0 の終了コードなら TeX の
+ * コンパイルエラーとして texFailed を立てる(シグナルで止まった・終了 0 で PDF が無いなどは立てない)。
+ */
+function compileFailure(result: ProcessResult, message: string): PdfExportError {
+  const texFailed = typeof result.exitCode === "number" && result.exitCode !== 0;
+  return new PdfExportError("E_COMPILE", message, undefined, { texFailed });
 }
 
 export interface ProcessResult {
@@ -527,8 +545,8 @@ export async function exportPdf(
     }
     const compiledPdf = join(tempDirectory, compiledPdfName(inputPath));
     if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(compiledPdf))) {
-      throw new PdfExportError(
-        "E_COMPILE",
+      throw compileFailure(
+        compileResult,
         `PDF のコンパイルに失敗しました${processDetail(compileResult)}`,
       );
     }
@@ -1290,8 +1308,8 @@ export async function compileDeckFrames(
       );
     const pdfPath = join(temporaryDirectory, compiledPdfName(inputPath));
     if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(pdfPath)))
-      throw new PdfExportError(
-        "E_COMPILE",
+      throw compileFailure(
+        compileResult,
         `PDF のコンパイルに失敗しました${processDetail(compileResult)}`,
       );
     const pdfInfo = await stat(pdfPath);
@@ -1504,8 +1522,8 @@ export async function compileFragment(
       );
     const compiledPdf = join(tempDirectory, "fragment.pdf");
     if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(compiledPdf)))
-      throw new PdfExportError(
-        "E_COMPILE",
+      throw compileFailure(
+        compileResult,
         `部分コンパイルに失敗しました${processDetail(compileResult)}`,
       );
     const { size } = await stat(compiledPdf);
@@ -1535,5 +1553,4 @@ export {
   buildFragmentDocument,
   FRAGMENT_DOCUMENT_VERSION,
   fragmentDependencies,
-  fragmentGraphicsPaths,
 } from "./fragment.js";

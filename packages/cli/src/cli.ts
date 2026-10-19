@@ -13,7 +13,7 @@
  * | --- | --- |
  * | 0 | 成功または情報のみ |
  * | 1 | lint warning |
- * | 2 | lint error |
+ * | 2 | lint error(check / snapshot / export の TeX のコンパイルエラー E_COMPILE に lint error が伴う場合を含む) |
  * | 3 | 操作失敗 (E_USAGE / E_IO / E_INTERNAL / 取得不能な font など) |
  */
 
@@ -29,6 +29,7 @@ import {
   type DeckFramesResult,
   exportPdf,
   frameSelectorFromAddress,
+  PdfExportError,
   type PdfExportErrorCode,
   type PdfExportProgress,
   type PdfExportResult,
@@ -41,6 +42,7 @@ import {
   type LintDiagnostic,
   lintSource,
   parseDeck,
+  sourceLocation,
 } from "@beamer-editor/core";
 import {
   exportHtml,
@@ -57,7 +59,7 @@ import {
   nodeFontIO,
   resolveFont,
 } from "./fonts.ts";
-import { InitError, initDeck } from "./init.ts";
+import { InitError, initDeck, updateManagedPreamble } from "./init.ts";
 import { nodePdfRasterizer } from "./pdf-rasterizer.ts";
 import { skillLintOptions } from "./skill.ts";
 
@@ -105,6 +107,8 @@ export interface ParsedArgs {
   write: boolean;
   /** init の同梱スキルだけを更新する。 */
   updateSkill: boolean;
+  /** init でデッキのツール管理プリアンブルだけを更新する。 */
+  updatePreamble: boolean;
   /** 未対応のオプション。 */
   unknownOptions: string[];
 }
@@ -121,10 +125,12 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   let json = false;
   let write = false;
   let updateSkill = false;
+  let updatePreamble = false;
   for (const arg of argv) {
     if (arg === "--json") json = true;
     else if (arg === "--write") write = true;
     else if (arg === "--update-skill") updateSkill = true;
+    else if (arg === "--update-preamble") updatePreamble = true;
     else if (arg.startsWith("-")) unknownOptions.push(arg);
     else positional.push(arg);
   }
@@ -136,6 +142,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     json,
     write,
     updateSkill,
+    updatePreamble,
     unknownOptions,
   };
 }
@@ -232,6 +239,7 @@ export const USAGE = `使い方: deck <command> ...
 
   deck init [directory] [--json]      新規または空のディレクトリへ新規デッキを生成
   deck init <directory> --update-skill [--json]  既存ディレクトリの .claude と .agents 配下の skills/beamer-deck/ を更新
+  deck init <file> --update-preamble [--json]  デッキのツール管理プリアンブルを現行の内容に差し替える
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示
@@ -253,11 +261,79 @@ function writeError(code: CliErrorCode, message: string, json: boolean): void {
   }
 }
 
-function location(source: string, offset: number) {
-  const before = source.slice(0, offset);
-  const line = before.split("\n").length;
-  const lineStart = before.lastIndexOf("\n") + 1;
-  return { line, column: offset - lineStart + 1 };
+/**
+ * TeX が非 0 で終わった E_COMPILE か(compiler の PdfExportError.texFailed)。lint error を添えるのは
+ * この失敗だけで、起動の失敗・タイムアウト・log の欠落など環境やツール側の E_COMPILE には添えない。
+ */
+function isTexFailure(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && "texFailed" in error && error.texFailed === true
+  );
+}
+
+/**
+ * TeX のコンパイルエラー(isTexFailure)に、同じデッキの lint error を添えて出す。古い管理
+ * プリアンブル(L025)のように lint が原因を先に検出できる失敗を、TeX のエラーだけで終わらせない。
+ * 終了コードを返す。lint error があれば失敗の原因はデッキ側にあるかもしれないので 2(lint error)に
+ * し、エージェントが環境の失敗と取り違えないようにする。lint error が無ければ通常の E_COMPILE(3)。
+ */
+function reportCompileError(
+  message: string,
+  json: boolean,
+  file: string,
+  source: string,
+  diagnostics: readonly LintDiagnostic[],
+): number {
+  const errors = lintJson(
+    file,
+    source,
+    diagnostics.filter((diagnostic) => diagnostic.severity === "error"),
+  ).diagnostics;
+  if (errors.length === 0) {
+    writeError("E_COMPILE", message, json);
+    return exitCodeForError("E_COMPILE");
+  }
+  if (json) {
+    process.stderr.write(
+      `${JSON.stringify({ error: { code: "E_COMPILE", message, diagnostics: errors } }, null, 2)}\n`,
+    );
+  } else {
+    process.stderr.write(`${message}\nlint のエラー(コンパイル失敗の原因かもしれません):\n`);
+    for (const entry of errors)
+      process.stderr.write(
+        `${file}:${entry.location.line}:${entry.location.column}: error ${entry.code}: ${entry.message}\n`,
+      );
+  }
+  return EXIT_CODE.lintError;
+}
+
+/**
+ * コンパイルの前に読んだ本文(コンパイル中にファイルが編集されても、失敗の報告ではこれを lint する)。
+ * 読めなければ null(読めない入力はコンパイラが E_INPUT にする)。
+ */
+async function readSourceBeforeCompile(input: string): Promise<string | null> {
+  return readFile(resolve(input), "utf8").catch(() => null);
+}
+
+/**
+ * コンパイルに失敗したデッキの、コンパイル前に読んだ本文を deck check と同じオプションで lint する
+ * (TeX のコンパイルエラーに添える用)。本文が無い・lint が例外を投げるときは null(元の E_COMPILE
+ * だけを出す)。
+ */
+async function lintCompiledSource(
+  input: string,
+  source: string | null,
+): Promise<{ source: string; diagnostics: LintDiagnostic[] } | null> {
+  if (source === null) return null;
+  try {
+    const diagnostics = lintSource(source, {
+      ...createNodeFileProbes(dirname(resolve(input))),
+      ...(await skillLintOptions(input)),
+    });
+    return { source, diagnostics };
+  } catch {
+    return null;
+  }
 }
 
 function lintJson(file: string, source: string, diagnostics: readonly LintDiagnostic[]) {
@@ -268,8 +344,8 @@ function lintJson(file: string, source: string, diagnostics: readonly LintDiagno
     if (diagnostic.severity === "error") errors++;
     else if (diagnostic.severity === "warning") warnings++;
     else infos++;
-    const start = location(source, diagnostic.span.start);
-    const end = location(source, diagnostic.span.end);
+    const start = sourceLocation(source, diagnostic.span.start);
+    const end = sourceLocation(source, diagnostic.span.end);
     return {
       code: diagnostic.code,
       severity: diagnostic.severity,
@@ -300,7 +376,7 @@ async function runLint(file: string, json: boolean): Promise<number> {
   else if (diagnostics.length === 0) process.stdout.write(`${file}: OK\n`);
   else {
     for (const diagnostic of diagnostics) {
-      const start = location(source, diagnostic.span.start);
+      const start = sourceLocation(source, diagnostic.span.start);
       process.stdout.write(
         `${file}:${start.line}:${start.column}: ${diagnostic.severity} ${diagnostic.code}: ${diagnostic.message}\n`,
       );
@@ -427,8 +503,8 @@ function lintCheckDiagnostics(
   result: DeckFramesResult,
 ): CheckDiagnostic[] {
   return diagnostics.map((diagnostic) => {
-    const start = location(source, diagnostic.span.start);
-    const end = location(source, diagnostic.span.end);
+    const start = sourceLocation(source, diagnostic.span.start);
+    const end = sourceLocation(source, diagnostic.span.end);
     return {
       category: "lint",
       code: diagnostic.code,
@@ -537,6 +613,8 @@ async function runCheck(parsed: ParsedCheckArgs, dependencies: CliDependencies):
       possibleCode !== undefined && possibleCode in ERROR_EXIT_CODE
         ? (possibleCode as CliErrorCode)
         : "E_INTERNAL";
+    if (code === "E_COMPILE" && isTexFailure(error))
+      return reportCompileError(errorMessage(error), parsed.json, input, source, lintDiagnostics);
     writeError(code, errorMessage(error), parsed.json);
     return exitCodeForError(code);
   }
@@ -796,6 +874,7 @@ async function runSnapshot(
     writeError("E_IO", `出力先を作成できません: ${errorMessage(error)}`, parsed.json);
     return 3;
   }
+  const compiledSource = await readSourceBeforeCompile(input);
   // Only a successful mkdir makes this process the owner of `filesystemOutput`, and only an owner
   // may remove it on failure. Its parent is canonicalized above so a retargeted symlink cannot
   // redirect writes or cleanup after the reservation.
@@ -831,10 +910,10 @@ async function runSnapshot(
         file: snapshotFileName(item.address.number, image.page),
       })),
     );
+    // コンパイル自体は成功しているので TeX の失敗ではない。texFailed を渡さない PdfExportError は
+    // texFailed が false になり、lint は添えない。
     if (!outputs.length)
-      throw Object.assign(new Error("snapshot 可能な PDF page がありません"), {
-        code: "E_COMPILE",
-      });
+      throw new PdfExportError("E_COMPILE", "snapshot 可能な PDF page がありません");
     // mkdir is atomic and never replaces an existing directory, so it doubles as the publication
     // reservation: a concurrent creator wins and we leave their entry untouched.
     try {
@@ -907,6 +986,18 @@ async function runSnapshot(
       typeof candidate === "string" && Object.hasOwn(ERROR_EXIT_CODE, candidate)
         ? (candidate as CliErrorCode)
         : "E_INTERNAL";
+    const linted =
+      code === "E_COMPILE" && isTexFailure(error)
+        ? await lintCompiledSource(input, compiledSource)
+        : null;
+    if (linted !== null)
+      return reportCompileError(
+        errorMessage(error),
+        parsed.json,
+        input,
+        linted.source,
+        linted.diagnostics,
+      );
     writeError(code, errorMessage(error), parsed.json);
     return exitCodeForError(code);
   }
@@ -934,6 +1025,8 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
   if (parsed.error) return usageError(parsed.error, parsed.json);
   // parseExportArgs has validated these conditions above.
   const input = parsed.input as string;
+  // 失敗の報告で lint する、コンパイル前の本文(PDF のときだけ読む)。
+  let compiledSource: string | null = null;
   try {
     if (parsed.format === "html") {
       if (parsed.tectonic !== undefined)
@@ -963,6 +1056,7 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
       }
       return placeholders.length > 0 ? EXIT_CODE.lintWarning : EXIT_CODE.success;
     }
+    compiledSource = await readSourceBeforeCompile(input);
     // A cold Tectonic cache downloads hundreds of files before compiling. Say
     // so once, on stderr, so the wait is explained; --json keeps output machine-only.
     let announcedDownload = false;
@@ -1013,6 +1107,19 @@ async function runExport(parsed: ParsedExportArgs, dependencies: CliDependencies
       possibleCode !== undefined && possibleCode in ERROR_EXIT_CODE
         ? (possibleCode as CliErrorCode)
         : "E_INTERNAL";
+    // lint は失敗したときだけ走らせる(成功時の書き出しを遅くしない)。
+    const linted =
+      code === "E_COMPILE" && isTexFailure(error)
+        ? await lintCompiledSource(input, compiledSource)
+        : null;
+    if (linted !== null)
+      return reportCompileError(
+        errorMessage(error),
+        parsed.json,
+        input,
+        linted.source,
+        linted.diagnostics,
+      );
     writeError(code, errorMessage(error), parsed.json);
     return exitCodeForError(code);
   }
@@ -1031,10 +1138,32 @@ export async function run(
   if (argv[0] === "export") return runExport(parseExportArgs(argv.slice(1)), dependencies);
   if (argv[0] === "check") return runCheck(parseCheckArgs(argv.slice(1)), dependencies);
   if (argv[0] === "snapshot") return runSnapshot(parseSnapshotArgs(argv.slice(1)), dependencies);
-  const { command, sub, family, json, write, updateSkill, unknownOptions } = parseArgs(argv);
+  const { command, sub, family, json, write, updateSkill, updatePreamble, unknownOptions } =
+    parseArgs(argv);
   if (unknownOptions.length > 0) return usageError(`不明なオプション: ${unknownOptions[0]}`, json);
   if (updateSkill && command !== "init")
     return usageError("--update-skill は init でだけ使用できます", json);
+  if (updatePreamble && command !== "init")
+    return usageError("--update-preamble は init でだけ使用できます", json);
+  if (command === "init" && updatePreamble) {
+    if (updateSkill)
+      return usageError("--update-skill と --update-preamble は併用できません", json);
+    if (write || sub === undefined || family !== undefined)
+      return usageError("init --update-preamble にはデッキのファイルを1つ指定してください", json);
+    try {
+      const result = await updateManagedPreamble(sub);
+      process.stdout.write(
+        json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : `${result.file}: ${result.changed ? "ツール管理プリアンブルを更新しました" : "ツール管理プリアンブルは最新です"}\n`,
+      );
+      return EXIT_CODE.success;
+    } catch (error) {
+      const code = error instanceof InitError ? error.code : "E_INTERNAL";
+      writeError(code, errorMessage(error), json);
+      return exitCodeForError(code);
+    }
+  }
   if (command === "init") {
     if (write || family !== undefined || (updateSkill && sub === undefined))
       return usageError("init にはディレクトリを1つまで指定してください（--write 非対応）", json);

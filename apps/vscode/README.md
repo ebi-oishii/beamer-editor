@@ -48,7 +48,7 @@ LaTeX Workshop が入っている環境で managed file を初めて開くと、
 
 会社・組織の Beamer テーマは、そのままデッキのディレクトリ配下に置いて読めます。デッキと同じディレクトリに `beamertheme<Name>.sty` と画像を置いて `%% preamble-extra` に `\usetheme{Name}` を書くか、`templates/<name>/` に一式を置いて `\usepackage{templates/<name>/beamertheme<name>}` を書きます。`.sty` 内の画像パスはデッキのディレクトリ基準です(`templates/<name>/assets/logo.png` など)。
 
-プレビューには `.sty` の `\definecolor` / `\setbeamercolor`(structure・alerted text・example text・normal text・background canvas)、`\setsansfont` / `\setmonofont`、`\logo`、`\usebackgroundtemplate` から取れる色・フォント・ロゴ・背景だけが近似で反映されます。それ以外の様式は PDF にだけ効きます。`.sty` や画像を変更するとプレビューと診断は自動で更新されます。参照先の `.sty` や画像が無い場合は Problems パネルに L022 / L023 が出ます。見本は `fixtures/templates/corporate/` と `fixtures/templated.slide.tex` です。
+プレビューには `.sty` の `\definecolor` / `\setbeamercolor`(structure・alerted text・example text・normal text・background canvas)、`\setsansfont` / `\setmonofont`、`\logo`、`\usebackgroundtemplate` から取れる色・フォント・ロゴ・背景だけが近似で反映されます(`\addtobeamertemplate{background}`・`\graphicspath`・単純な `\newcommand` の画像パスも読みます)。`%% style` の `\deckbackground{path}` / `\deckbackground[title]{path}` で全スライド / 表紙だけの背景を指定でき(この機能より前に作ったデッキはツール管理プリアンブルに定義が無いため L025 のエラーになり、Quick Fix または `deck init <file> --update-preamble` で管理プリアンブルを最新に差し替えます)、背景指定を `%% preamble-extra` と `%% style` の外(ツール管理プリアンブルの中を含む)に書くと PDF にだけ効くため L024 の警告が出ます。画像のパスはデッキのディレクトリ基準で拡張子まで書きます(`assets/bg.png`)。拡張子の省略や `\graphicspath` は PDF では通りますがプレビューが解決しないため、本文・`%% style` のパスは L004 になり、TeX が拾うファイルが分かるときは Quick Fix で正しいパスへ直せます。それ以外の様式は PDF にだけ効きます。`.sty` や画像を変更するとプレビューと診断は自動で更新されます。参照先の `.sty` や画像が無い場合は Problems パネルに L022 / L023 が出ます。見本は `fixtures/templates/corporate/` と `fixtures/templated.slide.tex` です。
 
 ## 生ブロックの部分コンパイル
 
@@ -64,7 +64,7 @@ managed な `.tex` エディターで、クリップボードの画像(PNG / JPE
 
 コマンドパレット、`.tex` エディター、または対応するプレビューのタイトルから **Beamer Editor: Export...** を実行すると、保存先を選んで PDF を書き出せます。コンパイルには [Tectonic](https://tectonic-typesetting.github.io/) を使います。Tectonic は拡張に同梱されているので(macOS arm64 / x86_64、Linux x64 / arm64、Windows x64)、別途インストールする必要はありません。初回のコンパイル時に TeX のパッケージを Tectonic が必要な分だけダウンロードします(数分かかることがあり、進み具合は書き出し中の通知に表示されます)。対象外の環境や別の版を使いたいときは `beamerEditor.tectonicPath` で実行ファイルを指定してください(同梱の無い環境では PATH の `tectonic` を使います)。
 
-編集中の内容は先に保存され、コンパイルは既定で300秒後に停止します（`beamerEditor.pdfExport.timeoutSeconds` で5〜1800秒に変更可。初回のパッケージ取得中は取得のたびに計測をやり直します）。失敗時は通知の「詳細を表示」からTectonicのエラーを確認できます。既存PDFはコンパイルが成功するまで置換されません。PDF は外部プログラムを起動するため、Restricted Modeでは形式選択後に実行を拒否します。
+編集中の内容は先に保存され、コンパイルは既定で300秒後に停止します（`beamerEditor.pdfExport.timeoutSeconds` で5〜1800秒に変更可。初回のパッケージ取得中は取得のたびに計測をやり直します）。失敗時は通知の「詳細を表示」からTectonicのエラーを確認できます。TeX のコンパイルエラーで失敗したデッキに lint のエラーがあると(Tectonic の起動の失敗やタイムアウトには添えません)、原因の手がかりとして、通知にその件数と先頭 1 件(例: `L025: ツール管理プリアンブルが…`)が、「詳細を表示」には全件(`行:列 コード メッセージ`)が入ります。lint するのは書き出し時に保存した内容で、コンパイル中の編集は混ざりません。managed file では「問題を表示」で Problems パネルを開けます(コンパイルの間に文書を編集したときは、Problems パネルの診断が通知と合わないため出ません)。既存PDFはコンパイルが成功するまで置換されません。PDF は外部プログラムを起動するため、Restricted Modeでは形式選択後に実行を拒否します。
 
 Export の形式で **HTML（プレビュー相当）** を選ぶと、保存済みの内容から `index.html` を含むフォルダーを作成します。これは `file:` で直接開ける高速プレビューの固定スナップショットであり、正式な TeX 出力ではありません。PDF 画像と raw TeX はプレースホルダーのまま、外部 URL の画像は開いたブラウザーでネットワークを必要とします。HTML は外部プロセスを使わないため Restricted Mode でも利用できます。
 

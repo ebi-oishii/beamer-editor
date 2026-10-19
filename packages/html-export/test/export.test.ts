@@ -332,6 +332,47 @@ describe("exportHtml", () => {
     ]);
   });
 
+  it("copies deckbackground images and graphicspath-resolved template backgrounds", async () => {
+    const { dir, input } = await fixture(`\\documentclass{beamer}
+%% style:begin
+\\deckbackground{assets/all.png}
+\\deckbackground[title]{assets/title.png}
+%% style:end
+%% preamble-extra:begin
+\\graphicspath{{images/}}
+%% preamble-extra:end
+\\begin{document}
+\\begin{frame}\\titlepage\\end{frame}
+\\begin{frame}{Body}x\\end{frame}
+\\end{document}`);
+    await mkdir(join(dir, "assets"), { recursive: true });
+    await writeFile(join(dir, "assets", "all.png"), "all");
+    await writeFile(join(dir, "assets", "title.png"), "title");
+    const result = await exportHtml({ inputPath: input });
+    const html = await readFile(result.indexPath, "utf8");
+    expect(html).not.toContain("assets/all.png");
+    expect(html.match(/deck-background/g)).toHaveLength(2);
+    expect(await readdir(join(result.outputPath, "assets"))).toHaveLength(2);
+  });
+
+  it("resolves a graphicspath background relative to the deck directory", async () => {
+    const { dir, input } = await fixture(`\\documentclass{beamer}
+%% preamble-extra:begin
+\\graphicspath{{images/}}
+\\usebackgroundtemplate{\\includegraphics{bg.png}}
+%% preamble-extra:end
+\\begin{document}
+\\begin{frame}{Body}x\\end{frame}
+\\end{document}`);
+    await mkdir(join(dir, "images"), { recursive: true });
+    await writeFile(join(dir, "images", "bg.png"), "bg");
+    const result = await exportHtml({ inputPath: input });
+    const html = await readFile(result.indexPath, "utf8");
+    expect(html).toContain("deck-background");
+    expect(html).not.toContain("image-placeholder");
+    expect(await readdir(join(result.outputPath, "assets"))).toHaveLength(1);
+  });
+
   it("escapes embedded JSON and emits shared overlay predicate data", async () => {
     const { input } = await fixture(
       deck(

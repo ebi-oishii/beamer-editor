@@ -3,6 +3,7 @@ import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   type DeckDocument,
   extractPreviewStyle,
+  joinImageSearchPath,
   mergePreviewStyles,
   type PreviewStyle,
   templateReferencesOf,
@@ -69,11 +70,22 @@ export async function nodePreviewBaseStyle(
   }
   styles.push(extractPreviewStyle(doc.preambleExtra.tex));
   const merged = mergePreviewStyles(...styles);
-  const resolveImage = async (path: string): Promise<string> => {
-    if (extname(path)) return path;
+  const resolveExact = async (path: string): Promise<string | undefined> => {
+    if (extname(path)) return (await actualFile(root, path)) !== undefined ? path : undefined;
     for (const extension of [".pdf", ".png", ".jpg", ".jpeg"]) {
       if ((await actualFile(root, `${path}${extension}`)) !== undefined)
         return `${path}${extension}`;
+    }
+    return undefined;
+  };
+  // デッキのディレクトリ基準を先に、無ければ \graphicspath の探索ディレクトリを順に試す。
+  // 見つからないものは元のパスのまま返す(下流が欠落画像として扱う)。
+  const resolveImage = async (path: string): Promise<string> => {
+    const direct = await resolveExact(path);
+    if (direct !== undefined) return direct;
+    for (const directory of merged.imageSearchPaths ?? []) {
+      const found = await resolveExact(joinImageSearchPath(directory, path));
+      if (found !== undefined) return found;
     }
     return path;
   };
