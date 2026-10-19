@@ -35,6 +35,7 @@ import {
   rawFragmentKey,
 } from "@beamer-editor/core";
 import katex from "katex";
+import { MONO_FONT_FALLBACK } from "./font-stack.js";
 import { DEFAULT_THEME, type Theme } from "./theme.js";
 
 export interface RenderedFrame {
@@ -249,15 +250,15 @@ function cornerLogoWidthPct(width: LengthSpec | null, metrics: Theme["metrics"])
   }
 }
 
-/** フォント family の CSS スタック(main は和文ローカルフォントへフォールバック)。 */
+/** フォント family の CSS スタック(main は和文ローカルフォント、mono は Windows の Latin 等幅を挟んで総称へ落とす)。 */
 function fontStack(slot: "main" | "mono", family: string): string {
   const name = sanitizeFontFamily(family);
   // main は和文のローカルフォントへフォールバックしてからサンス総称へ落とす
-  // (プレビューは近似でよい。theme-design.md §4)。mono は等幅のまま総称へ委ねる。
-  // 和文フォールバックは Linux(Noto Sans CJK JP / Noto Sans JP)・macOS(Hiragino Sans)・
-  // Windows(Yu Gothic)を順に並べる。先頭 family と重複しても害はない。
+  // (プレビューは近似でよい。theme-design.md §4)。和文フォールバックは
+  // Linux(Noto Sans CJK JP / Noto Sans JP)・macOS(Hiragino Sans)・Windows(Yu Gothic)を
+  // 順に並べる。先頭 family と重複しても害はない。mono は指定名の後に MONO_FONT_FALLBACK を続ける。
   return slot === "mono"
-    ? `"${name}", monospace`
+    ? `"${name}", ${MONO_FONT_FALLBACK}`
     : `"${name}", "Noto Sans CJK JP", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif`;
 }
 

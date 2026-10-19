@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { parseDeck } from "@beamer-editor/core";
+import { renderDeck } from "@beamer-editor/renderer";
 import { describe, expect, it } from "vitest";
 import { PREVIEW_CSS } from "../src/preview/styles.js";
 
@@ -97,6 +99,60 @@ describe("PREVIEW_CSS: キャンバス幾何の契約", () => {
         declarations.some((declaration) => declaration.getPropertyValue("position") === "absolute"),
         selector,
       ).toBe(true);
+    }
+  });
+
+  it("インライン alert の色は alertblock の容器(本文)へ掛けない", () => {
+    const sheet = injectPreviewCss();
+    for (const rule of styleRules(sheet)) {
+      for (const part of rule.selectorText.split(",").map((p) => p.trim())) {
+        if (/\.alert(?![\w-])/.test(part) && !part.includes(".block-title")) {
+          expect(part, `${part} は .beamer-block を除外する`).toContain(":not(.beamer-block)");
+        }
+      }
+    }
+  });
+
+  it("block の種類別タイトル色は直下の .block-title だけに当てる(入れ子の block へ漏らさない)", () => {
+    const sheet = injectPreviewCss();
+    for (const rule of styleRules(sheet)) {
+      for (const part of rule.selectorText.split(",").map((p) => p.trim())) {
+        if (/\.beamer-block\.[\w-]+/.test(part) && part.includes(".block-title")) {
+          expect(part, `${part} は .block-title を > で繋ぐ`).toMatch(
+            /\.beamer-block\.[\w-]+\s*>\s*\.block-title/,
+          );
+        }
+      }
+    }
+  });
+
+  it.each([
+    ["alertblock", "--deck-alert"],
+    ["exampleblock", "--deck-example"],
+  ])("%s の中に入れ子にした block のタイトルは structure 色のまま", (env, outerVar) => {
+    injectPreviewCss();
+    const src = String.raw`\documentclass{beamer}
+\begin{document}
+\begin{frame}{A}
+\begin{${env}}{Outer}\begin{block}{Inner}x\end{block}\end{${env}}
+\end{frame}
+\end{document}
+`;
+    const html = renderDeck(parseDeck(src)).frames[0]?.html ?? "";
+    document.body.innerHTML = `<div class="beamer-preview"><div class="slide">${html}</div></div>`;
+    const titles = [...document.querySelectorAll<HTMLElement>(".block-title")];
+    expect(titles.map((title) => title.textContent)).toEqual(["Outer", "Inner"]);
+    const [outer, inner] = titles.map((title) => getComputedStyle(title).color);
+    expect(outer).toContain(outerVar);
+    expect(inner).toContain("--deck-structure");
+  });
+
+  it("等幅スタックは総称 monospace の前に Windows の Latin 等幅を挟む", () => {
+    const stacks = PREVIEW_CSS.match(/font-family:[^;]*monospace/g) ?? [];
+    expect(stacks.length).toBeGreaterThan(0);
+    for (const stack of stacks) {
+      expect(stack).toMatch(/(?:Consolas|"Cascadia Mono"), monospace$/);
+      expect(stack).not.toContain("Courier New");
     }
   });
 });
