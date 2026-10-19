@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatDeck, frameLabel, framesOf, type SlideEditAction } from "../src/index.js";
 import { parseDeck } from "../src/parser.js";
-import { editSlide } from "../src/slide-edit.js";
+import { editSlide, pasteSlides, slideSource } from "../src/slide-edit.js";
 
 const frame = (title: string, options = "") =>
   `\\begin{frame}${options}{${title}}\n${title} body\n\\end{frame}`;
@@ -536,5 +536,67 @@ describe("slide source edits", () => {
         }
       }
     }
+  });
+});
+
+describe("slide copy and paste", () => {
+  const startOf = (source: string, index: number) =>
+    framesOf(parseDeck(source))[index]?.span.start ?? -1;
+  function copy(source: string, index: number) {
+    const result = slideSource(source, startOf(source, index));
+    if (!result.ok) throw new Error(result.reason);
+    return result.text;
+  }
+  function paste(source: string, index: number, clipboard: string) {
+    const result = pasteSlides(source, startOf(source, index), clipboard);
+    if (!result?.ok) throw new Error(result === null ? "not slides" : result.reason);
+    for (const { span, text } of result.edits)
+      source = source.slice(0, span.start) + text + source.slice(span.end);
+    return { source, firstFrameStart: result.firstFrameStart };
+  }
+
+  it("copies a frame with its attached comments, and pasting it after itself matches duplicate", () => {
+    const source = deck(
+      `% note A\n${frame("A", "[label=a]")} % tail A\n${frame("B", "[label=b]")}`,
+    );
+    const text = copy(source, 0);
+    expect(text).toBe(`% note A\n${frame("A", "[label=a]")} % tail A\n`);
+    expect(paste(source, 0, text).source).toBe(apply(source, "duplicate", 0));
+  });
+  it("pastes every clipboard frame after the target with fresh labels and reports the first one", () => {
+    const source = deck(`${frame("A", "[label=a]")}\n${frame("B", "[label=slide-1]")}`);
+    const clipboard = `${frame("X", "[label=a]")}\n% between\n\n${frame("Y")}\n`;
+    const { source: next, firstFrameStart } = paste(source, 0, clipboard);
+    expect(labels(next)).toEqual(["a", "slide-2", "slide-3", "slide-1"]);
+    expect(firstFrameStart).toBe(startOf(next, 1));
+    expect(next).toContain(frame("X", "[label=slide-2]"));
+    expect(next).toContain(frame("Y", "[label=slide-3]"));
+  });
+  it("pastes after the last frame and converts the clipboard to the document's line endings", () => {
+    const source = deck(`${frame("A")}\n${frame("日本語")}`).replace(/\n/g, "\r\n");
+    const next = paste(source, 1, `${frame("X")}\n`).source;
+    expect(next).not.toMatch(/(?<!\r)\n/);
+    expect(next).toContain("日本語");
+    expect(labels(next)).toEqual([null, null, "slide-1"]);
+  });
+  it("returns null when the clipboard is not frames", () => {
+    const source = deck(frame("A"));
+    for (const clipboard of [
+      "",
+      "plain text",
+      "\\decktext[x=0.1,y=0.1,w=0.3]{Hi}",
+      `\\section{S}\n${frame("X")}`,
+      `${frame("X")}\ntrailing text`,
+      "\\begin{frame}{Unclosed}\nbody",
+      `\\begin{document}\n${frame("X")}\n\\end{document}`,
+    ])
+      expect(pasteSlides(source, startOf(source, 0), clipboard), clipboard).toBeNull();
+  });
+  it("refuses stale targets and frames with document-wide unique definitions", () => {
+    const source = deck(frame("A"));
+    expect(slideSource(source, startOf(source, 0) + 1).ok).toBe(false);
+    expect(pasteSlides(source, startOf(source, 0) + 1, frame("X"))?.ok).toBe(false);
+    const labeled = frame("X").replace("X body", "\\label{eq:x}");
+    expect(pasteSlides(source, startOf(source, 0), labeled)?.ok).toBe(false);
   });
 });

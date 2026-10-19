@@ -257,3 +257,101 @@ export function editSlide(
     return fail("変更後のフレーム境界を確認できないため、操作を中止しました。");
   return { ok: true, edits };
 }
+
+export type SlideCopyResult = { ok: true; text: string } | { ok: false; reason: string };
+
+/** Clipboard text for the frame at frameStart (#174): its attached span, byte for byte. */
+export function slideSource(source: string, frameStart: number): SlideCopyResult {
+  const deck = editableFrames(source);
+  if (!deck.ok) return deck;
+  const { frames, bodyStart } = deck;
+  const index = frames.findIndex((frame) => frame.span.start === frameStart);
+  const frame = frames[index];
+  if (!frame) return { ok: false, reason: "対象スライドが更新されています。選び直してください。" };
+  const span = attachedSpan(source, frame, frames[index - 1]?.span.end ?? bodyStart);
+  return { ok: true, text: source.slice(span.start, span.end) };
+}
+
+interface ClipboardFrames {
+  /** The clipboard wrapped in a document environment; frame spans point into it. */
+  source: string;
+  frames: AnyFrameNode[];
+  spans: SourceSpan[];
+}
+
+/**
+ * Frames on the clipboard: one or more complete frames with only blank lines and comments
+ * around them. Anything else (text, sections, canvas objects) is null.
+ */
+function clipboardFrames(clipboard: string): ClipboardFrames | null {
+  const source = `\\begin{document}\n${clipboard}\n\\end{document}\n`;
+  const deck = editableFrames(source);
+  if (!deck.ok || deck.frames.length === 0) return null;
+  const { frames, bodyStart, bodyEnd } = deck;
+  const spans = frames.map((frame, i) =>
+    attachedSpan(source, frame, frames[i - 1]?.span.end ?? bodyStart),
+  );
+  let cursor = bodyStart;
+  for (const span of [...spans, { start: bodyEnd, end: bodyEnd }]) {
+    const between = source.slice(cursor, span.start).split(/\r?\n/);
+    if (!between.every((line) => /^[ \t]*(?:%.*)?$/.test(line))) return null;
+    cursor = span.end;
+  }
+  return { source, frames, spans };
+}
+
+export type SlidePasteResult =
+  | { ok: true; edits: SlideSourceEdit[]; firstFrameStart: number }
+  | { ok: false; reason: string };
+
+/**
+ * Paste clipboard frames after the frame at frameStart (#174). Like `duplicate`, every copy gets
+ * a fresh label and frames with document-wide unique definitions are refused.
+ * Null when the clipboard is not frames, so the caller can paste it another way.
+ * firstFrameStart is where the first pasted frame begins after the edit.
+ */
+export function pasteSlides(
+  source: string,
+  frameStart: number,
+  clipboard: string,
+): SlidePasteResult | null {
+  const pasted = clipboardFrames(clipboard);
+  if (!pasted) return null;
+  const fail = (reason: string): SlidePasteResult => ({ ok: false, reason });
+  const deck = editableFrames(source);
+  if (!deck.ok) return deck;
+  const { frames, bodyStart } = deck;
+  const index = frames.findIndex((frame) => frame.span.start === frameStart);
+  const frame = frames[index];
+  if (!frame) return fail("対象スライドが更新されています。選び直してください。");
+  const at = attachedSpan(source, frame, frames[index - 1]?.span.end ?? bodyStart).end;
+  const producers = uniqueNameProducers(source);
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  // Labels already in the deck or on the clipboard are not reused.
+  let taken = `${source}\n${clipboard}`;
+  let text = "";
+  for (const [i, copied] of pasted.frames.entries()) {
+    const span = pasted.spans[i];
+    if (!span) return fail("クリップボードのスライドを読み取れません。");
+    if (definesUniqueName(pasted.source, copied.span, producers))
+      return fail(
+        "本文に\\label・\\hypertarget・\\newcounterなど文書内で一意な定義があるスライドは貼り付けられません。参照先を確認してソース上で貼り付けてください。",
+      );
+    const label = unusedLabel(taken);
+    taken += `\n${label}`;
+    const copy = duplicateFrame(pasted.source, copied, span, label)?.replace(/\r?\n/g, newline);
+    if (copy === undefined)
+      return fail("貼り付けるフレームのlabelを安全に変更できません。コピー元を確認してください。");
+    text += `${newline}${copy}${copy.endsWith("\n") ? "" : newline}`;
+  }
+  const next = source.slice(0, at) + text + source.slice(at);
+  const after = editableFrames(next);
+  const first = after.ok ? after.frames[index + 1] : undefined;
+  if (!after.ok || after.frames.length !== frames.length + pasted.frames.length || !first)
+    return fail("変更後のフレーム境界を確認できないため、操作を中止しました。");
+  return {
+    ok: true,
+    edits: [{ span: { start: at, end: at }, text }],
+    firstFrameStart: first.span.start,
+  };
+}

@@ -179,6 +179,42 @@ it("tells why a preview move was refused, as the Explorer does", async () => {
   expect(host.warn.mock.calls[0]?.[0]).toMatch(/閉じていない/);
   expect(host.apply).not.toHaveBeenCalled();
 });
+it("pastes clipboard slides after the preview's slide in one edit, or leaves other clipboards to the caller", async () => {
+  const { controller, host, entry, document } = setup();
+  if (!entry) throw new Error("missing outline entry");
+  const clipboard = "\\begin{frame}{X}x\\end{frame}\n";
+  const pasted = await controller.pasteAt(document, document.version, entry.start, clipboard);
+  expect(pasted).toEqual({ applied: true, newFrameStart: expect.any(Number) });
+  expect(host.apply).toHaveBeenCalledTimes(1);
+  expect(host.apply).toHaveBeenCalledWith(document, [
+    expect.objectContaining({ text: expect.stringContaining("\\begin{frame}[label=slide-1]{X}") }),
+  ]);
+  expect(host.changed).toHaveBeenCalledWith(document);
+  // スライドでないクリップボードは呼び出し側(キャンバス要素の貼り付け)へ返す。
+  expect(await controller.pasteAt(document, document.version, entry.start, "text")).toBeNull();
+  // 古い版・明示フレームでない位置・編集できない文書には書かない。
+  expect(await controller.pasteAt(document, document.version - 1, entry.start, clipboard)).toEqual({
+    applied: false,
+  });
+  expect(await controller.pasteAt(document, document.version, entry.start + 1, clipboard)).toEqual({
+    applied: false,
+  });
+  host.isEditable = () => false;
+  expect(await controller.pasteAt(document, document.version, entry.start, clipboard)).toEqual({
+    applied: false,
+  });
+  expect(host.apply).toHaveBeenCalledTimes(1);
+});
+it("tells why clipboard slides were refused", async () => {
+  const { controller, host, entry, document } = setup();
+  if (!entry) throw new Error("missing outline entry");
+  const labeled = "\\begin{frame}{X}\\label{eq:x}\\end{frame}";
+  expect(await controller.pasteAt(document, document.version, entry.start, labeled)).toEqual({
+    applied: false,
+  });
+  expect(host.warn).toHaveBeenCalledOnce();
+  expect(host.apply).not.toHaveBeenCalled();
+});
 it("palette commands pick a slide; palette insert inserts after the chosen slide", async () => {
   const { entry, state } = setup();
   const entries = state.getEntries();

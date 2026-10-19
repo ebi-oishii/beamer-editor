@@ -213,3 +213,19 @@ describe("createMessageShellHost: canvas clipboard(#148)", () => {
     ]);
   });
 });
+
+describe("createMessageShellHost: slide clipboard(#174)", () => {
+  it("copySlide / pasteSlides を transport へ post する", () => {
+    const posted: unknown[] = [];
+    const host = createMessageShellHost({
+      post: (msg) => posted.push(msg),
+      subscribe: () => () => {},
+    });
+    host.copySlide?.(1, 4);
+    host.pasteSlides?.(2, 4);
+    expect(posted).toEqual([
+      { type: "copySlide", frameIndex: 1, version: 4 },
+      { type: "pasteSlides", frameIndex: 2, version: 4 },
+    ]);
+  });
+});

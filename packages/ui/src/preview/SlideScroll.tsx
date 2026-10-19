@@ -58,10 +58,26 @@ export interface RevealRequest {
   token: number;
 }
 
+/**
+ * カードのクリックが要素(編集できるキャンバス要素とその操作部品、要素の右クリックメニュー)か、
+ * スライドそのものか(#174)。
+ */
+export type SelectTarget = "slide" | "element";
+
+function clickTarget(target: EventTarget): SelectTarget {
+  return target instanceof Element &&
+    target.closest(
+      ".canvas-editable, [data-resize-element-id], .canvas-font-size, .context-menu",
+    ) !== null
+    ? "element"
+    : "slide";
+}
+
 function SlideCard({
   frame,
   index,
   active,
+  selected,
   step,
   scale,
   slideSize,
@@ -80,11 +96,13 @@ function SlideCard({
   frame: RenderedFrame;
   index: number;
   active: boolean;
+  /** スライドとして選択されている(#174)。 */
+  selected: boolean;
   step: number;
   scale: number;
   slideSize: SlideSize;
   version: number;
-  onSelect: (index: number) => void;
+  onSelect: (index: number, target: SelectTarget) => void;
   onJump: (index: number) => void;
   onOpenOrderMenu?: ((index: number, x: number, y: number) => void) | undefined;
   cardRef?: (element: HTMLElement | null) => void;
@@ -113,20 +131,20 @@ function SlideCard({
     event.preventDefault();
     // Ctrl/Cmd+Enter はダブルクリックと等価のソースジャンプ。
     if (event.ctrlKey || event.metaKey) onJump(index);
-    else onSelect(index);
+    else onSelect(index, "slide");
   };
 
   return (
     // biome-ignore lint/a11y/useSemanticElements: スライド html（内部に <a> 等）を含むため button 不可
     <div
-      className={active ? "slide-card active" : "slide-card"}
+      className={`slide-card${active ? " active" : ""}${selected ? " selected" : ""}`}
       data-index={index}
       role="button"
       tabIndex={0}
       ref={cardRef}
       aria-current={active ? true : undefined}
       aria-label={`フレーム ${frame.index}: ${frame.titleText}（Enter で選択、${MODIFIER_LABEL}+Enter でソースへ移動）`}
-      onClick={() => onSelect(index)}
+      onClick={(event) => onSelect(index, clickTarget(event.target))}
       onDoubleClick={() => onJump(index)}
       onKeyDown={handleKeyDown}
     >
@@ -191,6 +209,7 @@ export function SlideScroll({
   onMoveCanvasElement,
   onDetachToCanvas,
   selection,
+  selectedSlide,
   onSelectionChange,
   onFitScaleChange,
 }: {
@@ -200,7 +219,7 @@ export function SlideScroll({
   zoom: ZoomState;
   version: number;
   reveal: RevealRequest | undefined;
-  onSelect: (index: number) => void;
+  onSelect: (index: number, target: SelectTarget) => void;
   onJump: (index: number) => void;
   onEditSlide?: ((action: "moveUp" | "moveDown", index: number) => void) | undefined;
   editableFrameIndexes: number[];
@@ -220,6 +239,8 @@ export function SlideScroll({
   onDetachToCanvas?: ((frameIndex: number, request: DetachRequest) => void) | undefined;
   /** 選択中のキャンバス要素(#148)。持ち主は呼び出し側で、各フレームはこの値から枠を描く。 */
   selection: { frameIndex: number; elementId: string } | null;
+  /** 選択中のスライド(#174)。持ち主は呼び出し側。 */
+  selectedSlide: number | null;
   onSelectionChange: (frameIndex: number, elementId: string | null) => void;
   onFitScaleChange: (scale: number) => void;
 }): JSX.Element {
@@ -254,7 +275,7 @@ export function SlideScroll({
   );
   const openOrderMenu = (index: number, x: number, y: number) => {
     if (!onEditSlide || !editableSet.has(index)) return;
-    onSelect(index);
+    onSelect(index, "slide");
     const viewport = {
       width: window.innerWidth || document.documentElement.clientWidth,
       height: window.innerHeight || document.documentElement.clientHeight,
@@ -469,6 +490,7 @@ export function SlideScroll({
           frame={frame}
           index={i}
           active={i === current}
+          selected={i === selectedSlide}
           step={i === current ? step : ALL_STEPS}
           scale={scale}
           slideSize={slideSize}

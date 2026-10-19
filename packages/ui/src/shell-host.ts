@@ -103,6 +103,16 @@ export interface ShellHost {
    */
   pasteCanvasElements?(frameIndex: number, version: number): void;
   /**
+   * ui → ホスト: 選択中のスライドのソースをクリップボードへ写す(Cmd/Ctrl+C。#174)。
+   * 実装しないホストではスライドを選択状態にしない。
+   */
+  copySlide?(frameIndex: number, version: number): void;
+  /**
+   * ui → ホスト: 選択中のスライドへの貼り付け(Cmd/Ctrl+V。#174)。クリップボードがフレームなら
+   * その後ろへ挿入し、そうでなければキャンバス要素としてそのフレームへ貼り付ける。
+   */
+  pasteSlides?(frameIndex: number, version: number): void;
+  /**
    * ui → ホスト: フロー要素(段落・リスト・画像)を同じフレームの deckcanvas へ移す要求
    * (「自由配置にする」)。sourceSpan は展開後ソース、rect はスライド全体を 1 とした
    * 左上座標と幅。実装しないホストではメニューを出さない。
@@ -205,6 +215,12 @@ export function createMessageShellHost(
     },
     pasteCanvasElements(frameIndex, version) {
       transport.post({ type: "pasteCanvasElements", frameIndex, version });
+    },
+    copySlide(frameIndex, version) {
+      transport.post({ type: "copySlide", frameIndex, version });
+    },
+    pasteSlides(frameIndex, version) {
+      transport.post({ type: "pasteSlides", frameIndex, version });
     },
     loadNavState() {
       return parseNavState(state?.getState());

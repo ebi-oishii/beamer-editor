@@ -59,6 +59,11 @@ export const PREVIEW_CSS = `
   outline-color: var(--vscode-focusBorder, #3344b3);
   background: var(--vscode-list-activeSelectionBackground, #e8eaf9);
 }
+/* スライドとしての選択(#174)。スライドそのものを囲み、表示中の印(.active)と区別する。 */
+.slide-card.selected .slide-layout {
+  outline: 3px solid var(--vscode-focusBorder, #3344b3);
+  outline-offset: 1px;
+}
 .slide-card:focus-visible {
   outline: 2px solid var(--vscode-focusBorder, #3344b3);
   outline-offset: 2px;
