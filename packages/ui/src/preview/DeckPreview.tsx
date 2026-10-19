@@ -242,17 +242,15 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     const preview = previewRef.current;
     const ownerDocument = preview?.ownerDocument;
     if (!preview || !ownerDocument) return;
+    const inPreview = (target: EventTarget | null): target is Node =>
+      target instanceof Node &&
+      (preview.contains(target) ||
+        target === ownerDocument.body ||
+        target === ownerDocument.documentElement);
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       const target = event.target;
-      if (
-        !(target instanceof Node) ||
-        (!preview.contains(target) &&
-          target !== ownerDocument.body &&
-          target !== ownerDocument.documentElement)
-      ) {
-        return;
-      }
+      if (!inPreview(target)) return;
       if ((event.ctrlKey || event.metaKey) && !event.altKey) {
         // Cmd/Ctrl+Z はソース文書の取り消し(Shift 付き、または Ctrl+Y はやり直し)。#103
         // ドラッグや自由配置の編集はソースへの WorkspaceEdit なので、プレビューにいるまま戻せる。
@@ -262,7 +260,8 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
           hostRef.current.undoRedo(key === "y" || event.shiftKey ? "redo" : "undo");
           return;
         }
-        // 選択中のキャンバス要素の Cmd/Ctrl+C(コピー)/ +X(切り取り)、表示中フレームへの +V(貼り付け)。#148
+        // 選択中のキャンバス要素の Cmd/Ctrl+C(コピー)/ +X(切り取り)。#148
+        // +V(貼り付け)はクリップボードの中身で行き先が変わるので、paste イベントで扱う。
         if (!event.shiftKey) {
           const selection = selectionRef.current;
           // 本文をドラッグ選択しているときは、ブラウザ既定の文字コピーに譲る。
@@ -281,11 +280,6 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
               versionRef.current,
               key === "x",
             );
-            return;
-          }
-          if (key === "v" && hostRef.current.pasteCanvasElements) {
-            event.preventDefault();
-            hostRef.current.pasteCanvasElements(currentRef.current, versionRef.current);
             return;
           }
         }
@@ -338,8 +332,35 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         moveRef.current({ type: "next" });
       }
     };
+    // Cmd/Ctrl+V。VS Code の Webview はキーでの貼り付けを止め、貼り付けコマンドとして送り直すので、
+    // キーではなく paste イベントで受ける。画像があれば表示中のフレームへ画像を置き(#160)、
+    // 無ければクリップボードのキャンバス要素を貼り付ける(#148)。
+    const handlePaste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented || !inPreview(event.target)) return;
+      const host = hostRef.current;
+      const frameIndex = currentRef.current;
+      const version = versionRef.current;
+      const image = [...(event.clipboardData?.files ?? [])].find((file) =>
+        file.type.startsWith("image/"),
+      );
+      if (image && host.pasteImage) {
+        event.preventDefault();
+        void image.arrayBuffer().then((buffer) => {
+          host.pasteImage?.(frameIndex, version, image.type, toBase64(new Uint8Array(buffer)));
+        });
+        return;
+      }
+      if (host.pasteCanvasElements) {
+        event.preventDefault();
+        host.pasteCanvasElements(frameIndex, version);
+      }
+    };
     ownerDocument.addEventListener("keydown", handleKeyDown);
-    return () => ownerDocument.removeEventListener("keydown", handleKeyDown);
+    ownerDocument.addEventListener("paste", handlePaste);
+    return () => {
+      ownerDocument.removeEventListener("keydown", handleKeyDown);
+      ownerDocument.removeEventListener("paste", handlePaste);
+    };
   }, []);
 
   return (
@@ -418,4 +439,13 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
       ) : null}
     </section>
   );
+}
+
+/** メッセージは JSON で送るので、画像のバイト列は base64 にする。大きな画像でも引数の上限を超えないよう区切る。 */
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let start = 0; start < bytes.length; start += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
+  }
+  return btoa(binary);
 }

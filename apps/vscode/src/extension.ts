@@ -33,7 +33,13 @@ import {
   resolveExportDocument,
 } from "./export-controller";
 import { FrameFoldCache, provideFrameFoldRanges } from "./frame-folding";
-import { ImagePasteEditProvider } from "./image-paste-provider";
+import {
+  canvasImageSource,
+  IMAGE_PASTE_DIRECTORY,
+  imagePasteExtension,
+  nextImagePasteFileName,
+} from "./image-paste";
+import { ImagePasteEditProvider, listDirectory } from "./image-paste-provider";
 import {
   appendUniqueIgnorePatterns,
   chooseLatexWorkshopTarget,
@@ -998,6 +1004,38 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           const result = pasteCanvasObjects(target.getText(), request.frameOffset, clipboard);
           if (result === null) return "notCanvas";
           return (await applyReplacement(target, result)) ? "applied" : "failed";
+        },
+        // 画像は文書と同じ場所の assets/ に保存し、エディタへの貼り付け(#153)が deckcanvas に
+        // 置くときと同じ位置・幅の \deckimage として、キャンバス要素の貼り付けと同じ規則で置く(#160)。
+        pasteImage: async (request) => {
+          const extension = imagePasteExtension(request.mimeType);
+          if (extension === null) return "notCanvas";
+          const document = liveDocument(request.document, request.version);
+          if (!document) return "cancelled";
+          const directory = vscode.Uri.joinPath(document.uri, "..", IMAGE_PASTE_DIRECTORY);
+          const existing = new Set((await listDirectory(directory)).map(([name]) => name));
+          // ディレクトリを読む間に文書が進んでいたら書かない。
+          const target = liveDocument(request.document, request.version);
+          if (!target) return "cancelled";
+          const name = nextImagePasteFileName(extension, (candidate) => existing.has(candidate));
+          const result = pasteCanvasObjects(
+            target.getText(),
+            request.frameOffset,
+            canvasImageSource(`${IMAGE_PASTE_DIRECTORY}/${name}`),
+          );
+          if (result === null) return "notCanvas";
+          // 保存と配置を 1 つの WorkspaceEdit にまとめる(1 操作 = 1 undo)。
+          const edit = new vscode.WorkspaceEdit();
+          edit.createFile(vscode.Uri.joinPath(directory, name), { contents: request.data });
+          edit.replace(
+            target.uri,
+            new vscode.Range(
+              target.positionAt(result.span.start),
+              target.positionAt(result.span.end),
+            ),
+            result.text,
+          );
+          return (await vscode.workspace.applyEdit(edit)) ? "applied" : "failed";
         },
       },
     );

@@ -1558,4 +1558,60 @@ describe("PreviewController: canvas clipboard(#148)", () => {
       "貼り付けられませんでした。クリップボードがキャンバスの要素(decktext / deckimage)でないか、対象のフレームが受け付けられない形です。",
     );
   });
+
+  it("pasteImage: 画像のバイト列とフレームの元ソース位置を callback へ渡す(#160)", async () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const onWarning = vi.fn();
+    const pasteImage = vi.fn(async () => "applied" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      pasteImage,
+      onWarning,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    await controller.handleMessageForTest({
+      type: "pasteImage",
+      frameIndex: 0,
+      version: 7,
+      mimeType: "image/png",
+      dataBase64: "iVBORw==",
+    });
+    expect(pasteImage).toHaveBeenCalledExactlyOnceWith({
+      frameIndex: 0,
+      version: 7,
+      frameOffset: 0,
+      document: doc,
+      mimeType: "image/png",
+      data: expect.any(Uint8Array),
+    });
+    const [request] = pasteImage.mock.calls[0] as unknown as [{ data: Uint8Array }];
+    expect([...request.data]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    expect(onWarning).not.toHaveBeenCalled();
+  });
+
+  it("pasteImage: PNG / JPEG 以外は callback を呼ばずに警告し、置けないフレームも警告する", async () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const onWarning = vi.fn();
+    const pasteImage = vi.fn(async () => "notCanvas" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      pasteImage,
+      onWarning,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    const message = { type: "pasteImage", frameIndex: 0, version: 7, dataBase64: "R0lG" };
+    await controller.handleMessageForTest({ ...message, mimeType: "image/gif" });
+    expect(pasteImage).not.toHaveBeenCalled();
+    expect(onWarning).toHaveBeenLastCalledWith("貼り付けられる画像は PNG と JPEG だけです。");
+
+    await controller.handleMessageForTest({ ...message, mimeType: "image/jpeg" });
+    expect(pasteImage).toHaveBeenCalledOnce();
+    expect(onWarning).toHaveBeenLastCalledWith(
+      "画像を置けませんでした。対象のフレームが受け付けられない形です。",
+    );
+  });
 });

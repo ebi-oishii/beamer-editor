@@ -69,6 +69,15 @@ export type WebviewToExtension =
     }
   /** クリップボードのキャンバス要素を、表示中のフレームへ貼り付ける(Cmd/Ctrl+V)。 */
   | { type: "pasteCanvasElements"; frameIndex: number; version: number }
+  /** クリップボードの画像を、表示中のフレームの deckcanvas へ置く(Cmd/Ctrl+V。#160)。 */
+  | {
+      type: "pasteImage";
+      frameIndex: number;
+      version: number;
+      /** クリップボードの画像の MIME(`image/png` など)。受け付けるかはホストが決める。 */
+      mimeType: string;
+      dataBase64: string;
+    }
   /** フロー要素を deckcanvas へ移す(「自由配置にする」)。 */
   | {
       type: "detachToCanvas";
@@ -241,6 +250,23 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
     case "pasteCanvasElements":
       if (isNonNegativeInteger(raw.frameIndex) && isNonNegativeInteger(raw.version))
         return { type: "pasteCanvasElements", frameIndex: raw.frameIndex, version: raw.version };
+      return null;
+    case "pasteImage":
+      if (
+        isNonNegativeInteger(raw.frameIndex) &&
+        isNonNegativeInteger(raw.version) &&
+        typeof raw.mimeType === "string" &&
+        raw.mimeType.length > 0 &&
+        typeof raw.dataBase64 === "string" &&
+        raw.dataBase64.length > 0
+      )
+        return {
+          type: "pasteImage",
+          frameIndex: raw.frameIndex,
+          version: raw.version,
+          mimeType: raw.mimeType,
+          dataBase64: raw.dataBase64,
+        };
       return null;
     case "detachToCanvas": {
       const { sourceSpan, rect } = raw;
