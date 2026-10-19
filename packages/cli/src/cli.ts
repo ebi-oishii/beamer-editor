@@ -262,8 +262,9 @@ function writeError(code: CliErrorCode, message: string, json: boolean): void {
 }
 
 /**
- * TeX が非 0 で終わった E_COMPILE か(compiler の PdfExportError.texFailed)。lint error を添えるのは
- * この失敗だけで、起動の失敗・タイムアウト・log の欠落など環境やツール側の E_COMPILE には添えない。
+ * TeX のエラーで止まった E_COMPILE か(compiler の PdfExportError.texFailed)。lint error を添えるのは
+ * この失敗だけで、起動の失敗・タイムアウト・パッケージ取得の失敗・log の欠落など環境やツール側の
+ * E_COMPILE には添えない。
  */
 function isTexFailure(error: unknown): boolean {
   return (

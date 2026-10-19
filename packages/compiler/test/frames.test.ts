@@ -613,7 +613,9 @@ describe("compileDeckFrames", () => {
     let temporary = "";
     const runner: ProcessRunner = {
       run: async (_command, args) =>
-        args[0] === "--version" ? result() : result({ exitCode: 1, stderr: "bad TeX" }),
+        args[0] === "--version"
+          ? result()
+          : result({ exitCode: 1, stderr: "! Undefined control sequence.\nl.3 \\bad" }),
     };
     await expect(
       compileDeckFrames(

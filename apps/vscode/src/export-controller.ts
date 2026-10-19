@@ -379,7 +379,7 @@ export class ExportController {
     }
     if (error.code === "E_CANCELLED") return;
     const { errors: lintErrors, unchanged } =
-      // TeX が非 0 で終わったときだけ(起動の失敗・タイムアウトなどにデッキ側の原因は添えない)。
+      // TeX のエラーで止まったときだけ(起動の失敗・タイムアウト・パッケージ取得の失敗などにデッキ側の原因は添えない)。
       error.texFailed && compiled !== undefined
         ? compileLintErrors(document, compiled, (text) => this.host.lintOptions(document, text))
         : { errors: [], unchanged: false };

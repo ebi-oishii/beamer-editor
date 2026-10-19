@@ -71,9 +71,10 @@ export type PdfExportErrorCode =
 
 export class PdfExportError extends Error {
   /**
-   * TeX(Tectonic)が非 0 の終了コードで終わった E_COMPILE(ソースのコンパイルエラー)。起動の失敗・
-   * タイムアウト・log の欠落・frame marker の不整合など、環境やツール側の E_COMPILE では false。
-   * 呼び出し側はこれが true のときだけ、デッキ側の原因(lint error)を添える。
+   * TeX のエラーで止まった E_COMPILE(ソースのコンパイルエラー)。起動の失敗・タイムアウト・
+   * TeX パッケージの取得の失敗・Tectonic の panic・log の欠落・frame marker の不整合など、
+   * 環境やツール側の E_COMPILE では false。呼び出し側はこれが true のときだけ、デッキ側の原因
+   * (lint error)を添える。
    */
   public readonly texFailed: boolean;
 
@@ -90,12 +91,31 @@ export class PdfExportError extends Error {
 }
 
 /**
- * Tectonic が終わったのに PDF が得られなかったときの E_COMPILE。非 0 の終了コードなら TeX の
- * コンパイルエラーとして texFailed を立てる(シグナルで止まった・終了 0 で PDF が無いなどは立てない)。
+ * Tectonic が終わったのに PDF が得られなかったときの E_COMPILE。非 0 で終わり、出力に TeX の
+ * エラー行があるときだけ texFailed を立てる(#205)。
  */
 function compileFailure(result: ProcessResult, message: string): PdfExportError {
-  const texFailed = typeof result.exitCode === "number" && result.exitCode !== 0;
+  const texFailed =
+    typeof result.exitCode === "number" && result.exitCode !== 0 && isTexError(result);
   return new PdfExportError("E_COMPILE", message, undefined, { texFailed });
+}
+
+/** TeX のエラー行。Tectonic は TeX が止まると、TeX の端末出力(`! Undefined control sequence.` など)を stderr に写す。 */
+const TEX_ERROR_LINE = /^! /m;
+/**
+ * TeX のエラーでない失敗。TeX パッケージを取得できなかったとき(取得を諦めたファイルは TeX からは
+ * 「ファイルが無い」という `! ` 行に見える)と、Tectonic の panic(初回のバンドルの索引を取得できない
+ * ときもこれで終わる)。
+ */
+const ENVIRONMENT_FAILURE = /failed to download "|^thread '[^']*'.* panicked at /m;
+
+/**
+ * Tectonic の出力が TeX のエラーで止まったことを示すか。非 0 の終了コードだけでは、パッケージ取得の
+ * 失敗・panic・強制終了と区別できない(#205)。
+ */
+function isTexError(result: ProcessResult): boolean {
+  const output = `${result.stdout}\n${result.stderr}`;
+  return TEX_ERROR_LINE.test(output) && !ENVIRONMENT_FAILURE.test(output);
 }
 
 export interface ProcessResult {
