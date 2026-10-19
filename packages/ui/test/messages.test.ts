@@ -211,3 +211,24 @@ describe("parseWebviewToExtension: canvas clipboard(#148)", () => {
     ).toBeNull();
   });
 });
+
+describe("parseWebviewToExtension: pasteImage(#160)", () => {
+  const valid = {
+    type: "pasteImage",
+    frameIndex: 1,
+    version: 3,
+    mimeType: "image/png",
+    dataBase64: "iVBORw0KGgo=",
+  };
+
+  it("frameIndex・version・MIME・base64 のそろった要求を受理する", () => {
+    expect(parseWebviewToExtension(valid)).toEqual(valid);
+  });
+
+  it("MIME や中身が空、負の frameIndex は null", () => {
+    expect(parseWebviewToExtension({ ...valid, mimeType: "" })).toBeNull();
+    expect(parseWebviewToExtension({ ...valid, dataBase64: "" })).toBeNull();
+    expect(parseWebviewToExtension({ ...valid, dataBase64: 1 })).toBeNull();
+    expect(parseWebviewToExtension({ ...valid, frameIndex: -1 })).toBeNull();
+  });
+});

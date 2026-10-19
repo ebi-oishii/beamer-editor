@@ -75,7 +75,7 @@ function firstImage(
 }
 
 /** `assets/` が無ければ空。ディレクトリは createFile が作る。 */
-async function listDirectory(directory: vscode.Uri): Promise<[string, vscode.FileType][]> {
+export async function listDirectory(directory: vscode.Uri): Promise<[string, vscode.FileType][]> {
   try {
     return await vscode.workspace.fs.readDirectory(directory);
   } catch {

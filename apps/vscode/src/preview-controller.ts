@@ -10,6 +10,7 @@ import type { ExtensionToWebview } from "@beamer-editor/ui";
 import { parseWebviewToExtension } from "@beamer-editor/ui";
 import type * as vscode from "vscode";
 import { type RenderOutcome, renderDocument } from "./document-controller";
+import { imagePasteExtension } from "./image-paste";
 import { frameIndexAtSourceOffset } from "./reveal-slide";
 import { resolveJumpOffset } from "./source-navigation";
 
@@ -177,12 +178,22 @@ export interface PreviewControllerOptions {
    * クリップボードのキャンバス要素を、frameOffset(元ソース上の位置)を含むフレームへ貼り付ける
    * (Cmd+V)。要素でなければ "cancelled"。
    */
-  pasteCanvasElements?: (request: {
-    frameIndex: number;
-    version: number;
-    frameOffset: number;
-    document: PreviewDocument;
-  }) => Promise<PasteResult>;
+  pasteCanvasElements?: (request: PasteTarget) => Promise<PasteResult>;
+  /**
+   * クリップボードの画像(data)を文書と同じ場所の `assets/` に保存し、frameOffset を含むフレームの
+   * deckcanvas に置く(Cmd+V。#160)。置けないフレームなら "notCanvas"。
+   */
+  pasteImage?: (
+    request: PasteTarget & { mimeType: string; data: Uint8Array },
+  ) => Promise<PasteResult>;
+}
+
+/** 貼り付け先のフレーム。frameOffset は元ソース上の位置。 */
+export interface PasteTarget {
+  frameIndex: number;
+  version: number;
+  frameOffset: number;
+  document: PreviewDocument;
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -291,6 +302,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly deleteCanvasElement: PreviewControllerOptions["deleteCanvasElement"];
   private readonly copyCanvasElement: PreviewControllerOptions["copyCanvasElement"];
   private readonly pasteCanvasElements: PreviewControllerOptions["pasteCanvasElements"];
+  private readonly pasteImage: PreviewControllerOptions["pasteImage"];
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
@@ -351,6 +363,7 @@ export class PreviewController implements vscode.Disposable {
     this.deleteCanvasElement = options.deleteCanvasElement;
     this.copyCanvasElement = options.copyCanvasElement;
     this.pasteCanvasElements = options.pasteCanvasElements;
+    this.pasteImage = options.pasteImage;
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
@@ -434,7 +447,15 @@ export class PreviewController implements vscode.Disposable {
     } else if (msg.type === "copyCanvasElement") {
       await this.enqueueClipboard(() => this.handleCopy(msg));
     } else if (msg.type === "pasteCanvasElements") {
-      await this.enqueueClipboard(() => this.handlePaste(msg));
+      await this.enqueueClipboard(() =>
+        this.handlePaste(msg, this.pasteCanvasElements, {
+          notPasted:
+            "貼り付けられませんでした。クリップボードがキャンバスの要素(decktext / deckimage)でないか、対象のフレームが受け付けられない形です。",
+          failure: "failed to paste canvas elements.",
+        }),
+      );
+    } else if (msg.type === "pasteImage") {
+      await this.enqueueClipboard(() => this.handleImagePaste(msg));
     } else if (msg.type === "undoRedo") {
       // 注入された処理は同期で呼び出し、同期の例外も非同期の rejection も onError へ回す。
       const report = () => this.onError(`failed to ${msg.kind} the source document.`);
@@ -909,8 +930,35 @@ export class PreviewController implements vscode.Disposable {
     if (request.cut) await this.handleDelete(request);
   }
 
-  /** クリップボードのキャンバス要素を、表示中のフレームへ貼り付ける(Cmd+V。#148)。 */
-  private async handlePaste(request: { frameIndex: number; version: number }): Promise<void> {
+  /** クリップボードの画像を、表示中のフレームの deckcanvas へ置く(Cmd+V。#160)。 */
+  private async handleImagePaste(request: {
+    frameIndex: number;
+    version: number;
+    mimeType: string;
+    dataBase64: string;
+  }): Promise<void> {
+    if (imagePasteExtension(request.mimeType) === null) {
+      this.onWarning("貼り付けられる画像は PNG と JPEG だけです。");
+      return;
+    }
+    const pasteImage = this.pasteImage;
+    const data = Buffer.from(request.dataBase64, "base64");
+    await this.handlePaste(
+      request,
+      pasteImage && ((target) => pasteImage({ ...target, mimeType: request.mimeType, data })),
+      {
+        notPasted: "画像を置けませんでした。対象のフレームが受け付けられない形です。",
+        failure: "failed to paste the image.",
+      },
+    );
+  }
+
+  /** クリップボードのキャンバス要素(#148)や画像(#160)を、表示中のフレームへ貼り付ける(Cmd+V)。 */
+  private async handlePaste(
+    request: { frameIndex: number; version: number },
+    paste: ((target: PasteTarget) => Promise<PasteResult>) | undefined,
+    messages: { notPasted: string; failure: string },
+  ): Promise<void> {
     if (this.editInFlight()) return;
     const latest = this.latest;
     if (
@@ -928,12 +976,7 @@ export class PreviewController implements vscode.Disposable {
     const document = this.document;
     this.editApplyPending = true;
     try {
-      const result = await this.pasteCanvasElements?.({
-        frameIndex,
-        version,
-        frameOffset,
-        document,
-      });
+      const result = await paste?.({ frameIndex, version, frameOffset, document });
       this.editApplyPending = false;
       if (this.disposed) return;
       if (result === "applied") {
@@ -951,9 +994,7 @@ export class PreviewController implements vscode.Disposable {
         return;
       }
       if (result === "notCanvas") {
-        this.onWarning(
-          "貼り付けられませんでした。クリップボードがキャンバスの要素(decktext / deckimage)でないか、対象のフレームが受け付けられない形です。",
-        );
+        this.onWarning(messages.notPasted);
         this.sendDeck();
         return;
       }
@@ -962,7 +1003,7 @@ export class PreviewController implements vscode.Disposable {
       if (this.disposed) return;
     }
     if (!this.disposed) {
-      this.onError("failed to paste canvas elements.");
+      this.onError(messages.failure);
       this.sendDeck();
     }
   }

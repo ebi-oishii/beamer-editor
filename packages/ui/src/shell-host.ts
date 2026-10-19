@@ -103,6 +103,11 @@ export interface ShellHost {
    */
   pasteCanvasElements?(frameIndex: number, version: number): void;
   /**
+   * ui → ホスト: クリップボードの画像を、表示中のフレームの deckcanvas へ置く(Cmd/Ctrl+V。#160)。
+   * 実装しないホストでは、画像があっても pasteCanvasElements へ回す。
+   */
+  pasteImage?(frameIndex: number, version: number, mimeType: string, dataBase64: string): void;
+  /**
    * ui → ホスト: フロー要素(段落・リスト・画像)を同じフレームの deckcanvas へ移す要求
    * (「自由配置にする」)。sourceSpan は展開後ソース、rect はスライド全体を 1 とした
    * 左上座標と幅。実装しないホストではメニューを出さない。
@@ -205,6 +210,9 @@ export function createMessageShellHost(
     },
     pasteCanvasElements(frameIndex, version) {
       transport.post({ type: "pasteCanvasElements", frameIndex, version });
+    },
+    pasteImage(frameIndex, version, mimeType, dataBase64) {
+      transport.post({ type: "pasteImage", frameIndex, version, mimeType, dataBase64 });
     },
     loadNavState() {
       return parseNavState(state?.getState());

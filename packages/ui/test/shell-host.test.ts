@@ -212,4 +212,22 @@ describe("createMessageShellHost: canvas clipboard(#148)", () => {
       { type: "pasteCanvasElements", frameIndex: 1, version: 4 },
     ]);
   });
+
+  it("画像の貼り付け(#160)を transport へ post する", () => {
+    const posted: unknown[] = [];
+    const host = createMessageShellHost({
+      post: (msg) => posted.push(msg),
+      subscribe: () => () => {},
+    });
+    host.pasteImage?.(1, 4, "image/png", "iVBORw0KGgo=");
+    expect(posted).toEqual([
+      {
+        type: "pasteImage",
+        frameIndex: 1,
+        version: 4,
+        mimeType: "image/png",
+        dataBase64: "iVBORw0KGgo=",
+      },
+    ]);
+  });
 });

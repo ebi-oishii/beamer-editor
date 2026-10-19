@@ -26,6 +26,11 @@ const FLOW_IMAGE_WIDTH = "0.8";
 /** deckcanvas に置くときの位置と幅(正規形の小数 3 桁)。 */
 const CANVAS_IMAGE_POSITION = "x=0.100,y=0.100,w=0.400";
 
+/** deckcanvas に置く画像の参照。プレビューへの貼り付け(#160)もこの位置と幅で置く。 */
+export function canvasImageSource(relativePath: string): string {
+  return `\\deckimage[${CANVAS_IMAGE_POSITION}]{${relativePath}}`;
+}
+
 /** MIME に対応する拡張子。対象外なら null。 */
 export function imagePasteExtension(mimeType: string): string | null {
   return IMAGE_EXTENSIONS[mimeType] ?? null;
@@ -61,7 +66,7 @@ export function imagePasteInsertion(
   const target = insertTarget(source, offset);
   if (!target) return null;
   const reference = target.canvas
-    ? `\\deckimage[${CANVAS_IMAGE_POSITION}]{${relativePath}}`
+    ? canvasImageSource(relativePath)
     : `\\includegraphics[width=${FLOW_IMAGE_WIDTH}\\textwidth]{${relativePath}}`;
   // 寄せた先は直前のアイテムの終わりなので、改行とそのアイテムのインデントを付ける。
   if (target.offset === offset) return { text: reference, offset };

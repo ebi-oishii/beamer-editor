@@ -2095,7 +2095,16 @@ describe("canvas clipboard keys(#148)", () => {
       });
       expect(text.classList.contains("canvas-selected")).toBe(true);
     };
-    return { press, select, scale, text };
+    // VS Code の Webview では Cmd/Ctrl+V は paste イベントとして届く(#160)。
+    const paste = (files: { type: string; arrayBuffer(): Promise<ArrayBuffer> }[] = []) => {
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", { value: { files } });
+      act(() => {
+        preview.dispatchEvent(event);
+      });
+      return event;
+    };
+    return { press, select, paste, scale, text };
   }
 
   it("選択中の箱を Delete / Backspace で削除要求し、選択が無ければキーを奪わない", () => {
@@ -2135,10 +2144,12 @@ describe("canvas clipboard keys(#148)", () => {
     const copyCanvasElement = vi.fn();
     const pasteCanvasElements = vi.fn();
     const host = { ...fakeHost(), copyCanvasElement, pasteCanvasElements };
-    const { press, select } = mountSelected(host);
+    const { press, select, paste } = mountSelected(host);
     // 選択が無いときのコピーは奪わない。貼り付けは選択に関係なく表示中フレームへ。
     expect(press({ key: "c", metaKey: true }).defaultPrevented).toBe(false);
-    expect(press({ key: "v", ctrlKey: true }).defaultPrevented).toBe(true);
+    // +V のキーは奪わず、続く paste イベントで貼り付ける。
+    expect(press({ key: "v", ctrlKey: true }).defaultPrevented).toBe(false);
+    expect(paste().defaultPrevented).toBe(true);
     select();
     expect(press({ key: "c", metaKey: true }).defaultPrevented).toBe(true);
     expect(press({ key: "x", ctrlKey: true }).defaultPrevented).toBe(true);
@@ -2165,6 +2176,31 @@ describe("canvas clipboard keys(#148)", () => {
     expect(bare.press({ key: "Delete" }).defaultPrevented).toBe(false);
     expect(bare.press({ key: "c", metaKey: true }).defaultPrevented).toBe(false);
     expect(bare.press({ key: "v", metaKey: true }).defaultPrevented).toBe(false);
+    expect(bare.paste().defaultPrevented).toBe(false);
+  });
+
+  it("クリップボードに画像があれば、表示中フレームへの画像の貼り付けを base64 で送る(#160)", async () => {
+    const pasteImage = vi.fn();
+    const pasteCanvasElements = vi.fn();
+    const { paste } = mountSelected({ ...fakeHost(), pasteImage, pasteCanvasElements });
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const event = paste([
+      { type: "text/plain", arrayBuffer: async () => new ArrayBuffer(0) },
+      { type: "image/png", arrayBuffer: async () => bytes.buffer },
+    ]);
+    expect(event.defaultPrevented).toBe(true);
+    await vi.waitFor(() => {
+      expect(pasteImage).toHaveBeenCalledExactlyOnceWith(0, 5, "image/png", "iVBORw==");
+    });
+    expect(pasteCanvasElements).not.toHaveBeenCalled();
+  });
+
+  it("画像の貼り付けに対応しないホストでは、画像があってもキャンバス要素の貼り付けに回す", () => {
+    const pasteCanvasElements = vi.fn();
+    const { paste } = mountSelected({ ...fakeHost(), pasteCanvasElements });
+    const event = paste([{ type: "image/png", arrayBuffer: async () => new ArrayBuffer(1) }]);
+    expect(event.defaultPrevented).toBe(true);
+    expect(pasteCanvasElements).toHaveBeenCalledExactlyOnceWith(0, 5);
   });
 });
 
