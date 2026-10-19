@@ -343,6 +343,38 @@ describe("parseDeck: styled.slide.tex(%% style 領域)", () => {
     expect(raw).toBeDefined();
   });
 
+  it("deckbackground は全体用と [title] の表紙用を styleBackground として読む", () => {
+    const doc = parseDeck(fixture("styled.slide.tex"));
+    const backgrounds = doc.style.entries.filter((entry) => entry.type === "styleBackground");
+    expect(backgrounds.map(({ slot, path }) => ({ slot, path }))).toEqual([
+      { slot: "all", path: "assets/background.png" },
+      { slot: "title", path: "assets/title-background.png" },
+    ]);
+    const first = backgrounds[0];
+    expect(fixture("styled.slide.tex").slice(first?.span.start, first?.span.end)).toBe(
+      "\\deckbackground{assets/background.png}",
+    );
+  });
+
+  it("deckbackground の title 以外のオプション・引数なし・空パスは style 生ブロックになる", () => {
+    for (const bad of [
+      "\\deckbackground[body]{a.png}",
+      "\\deckbackground[title]",
+      "\\deckbackground[title",
+      "\\deckbackground{}",
+      "\\deckbackground",
+      "\\deckbackgroundx{a.png}",
+    ]) {
+      const doc = parseDeck(
+        fixture("styled.slide.tex").replace("\\deckbackground{assets/background.png}", bad),
+      );
+      expect(
+        doc.style.entries.some((entry) => entry.type === "rawBlock" && entry.tex.includes(bad)),
+        bad,
+      ).toBe(true);
+    }
+  });
+
   it("style 領域が無いデッキでは空になる", () => {
     const doc2 = parseDeck(fixture("basic.slide.tex"));
     expect(doc2.style.entries).toHaveLength(0);

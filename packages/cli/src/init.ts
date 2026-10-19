@@ -1,6 +1,11 @@
 import { lstat, mkdir, open, readdir, readFile, rename, rmdir, unlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { CURRENT_DECK_SOURCE_VERSION } from "@beamer-editor/core";
+import {
+  CURRENT_DECK_SOURCE_VERSION,
+  locateManagedPreamble,
+  managedPreambleBlock,
+  managedPreambleReplacement,
+} from "@beamer-editor/core";
 import { GENERATED_SKILL_FINGERPRINT } from "./generated-skill-fingerprint.ts";
 import {
   PROJECT_INSTRUCTIONS_PATH,
@@ -12,7 +17,7 @@ import {
 
 export class InitError extends Error {
   constructor(
-    readonly code: "E_OUTPUT_EXISTS" | "E_IO",
+    readonly code: "E_OUTPUT_EXISTS" | "E_IO" | "E_INPUT",
     message: string,
   ) {
     super(message);
@@ -76,18 +81,14 @@ async function createMissingParents(path: string, created: string[]): Promise<vo
   }
 }
 
-/** Inline the canonical macros: the generated source compiles independently of the repository. */
-export async function initialDeckSource(): Promise<string> {
-  const preamble = await Promise.all(
-    ["deck-managed-header.tex", "deck-canvas-preamble.tex", "deck-style-preamble.tex"].map((name) =>
-      readFile(new URL(`../../core/resources/${name}`, import.meta.url), "utf8"),
-    ),
-  );
+/**
+ * Inline the canonical macros: the generated source compiles independently of the repository.
+ * The managed block is shared with `--update-preamble` and the L025 fix.
+ */
+export function initialDeckSource(): string {
   return String.raw`\documentclass[aspectratio=169]{beamer}
 %% deck-source-version: ${CURRENT_DECK_SOURCE_VERSION}
-% ---- ツール管理プリアンブル: 編集は macros / style / preamble-extra 領域へ ----
-${preamble.join("\n").trimEnd()}
-% ---- ツール管理ここまで ----
+${managedPreambleBlock()}
 
 %% macros:begin
 %% macros:end
@@ -126,7 +127,7 @@ export async function initDeck(
   const target = resolve(directory);
   if (options.updateSkill) return updateSkill(target);
   const files: Record<string, string> = {
-    "main.slide.tex": await initialDeckSource(),
+    "main.slide.tex": initialDeckSource(),
     ...(await projectInstructionFiles()),
     ...projectSkillFiles(await generatedSkillFiles()),
   };
@@ -186,6 +187,62 @@ export async function initDeck(
       `初期化に失敗しました: ${target}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+/**
+ * Replace a deck's managed preamble (marker lines included) with the block `deck init` writes now.
+ * The version line, user regions, and body stay byte-identical. A deck whose markers were removed
+ * is refused rather than guessed at.
+ */
+export async function updateManagedPreamble(
+  file: string,
+): Promise<{ file: string; changed: boolean }> {
+  const target = resolve(file);
+  const invalid = () => new InitError("E_INPUT", `デッキのファイルを指定してください: ${target}`);
+  let source: string;
+  let mode: number;
+  try {
+    const info = await lstat(target);
+    if (!info.isFile() || info.isSymbolicLink()) throw invalid();
+    mode = info.mode & 0o7777;
+    source = await readFile(target, "utf8");
+  } catch (error) {
+    if (error instanceof InitError) throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") throw invalid();
+    throw new InitError(
+      "E_IO",
+      `デッキを読み込めません: ${target}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const located = locateManagedPreamble(source);
+  if ("problem" in located)
+    throw new InitError(
+      "E_INPUT",
+      `ツール管理プリアンブルの範囲を特定できないため更新しません(${located.problem}): ${target}`,
+    );
+  const fix = managedPreambleReplacement(source, located.span);
+  const updated = source.slice(0, fix.span.start) + fix.replacement + source.slice(fix.span.end);
+  if (updated === source) return { file: target, changed: false };
+  // Stage and rename so an interrupted write never leaves a truncated deck.
+  const staged = `${target}.deck-update-${process.pid}-${Date.now()}`;
+  try {
+    const handle = await open(staged, "wx");
+    try {
+      await handle.chmod(mode);
+      await handle.writeFile(updated);
+    } finally {
+      await handle.close();
+    }
+    await rename(staged, target);
+  } catch (error) {
+    await unlink(staged).catch(() => {});
+    throw new InitError(
+      "E_IO",
+      `プリアンブル更新に失敗しました: ${target}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return { file: target, changed: true };
 }
 
 /**

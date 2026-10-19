@@ -14,6 +14,8 @@ import * as path from "node:path";
 import {
   type DeckDocument,
   extractPreviewStyle,
+  graphicsPathsOf,
+  joinImageSearchPath,
   mergePreviewStyles,
   type PreviewStyle,
   type TemplateReference,
@@ -59,18 +61,38 @@ export function resolveTemplate(
   return null;
 }
 
-/**
- * 画像参照を実ファイルのパスに解決する。拡張子なしの参照は TeX と同じ順で拡張子を試し、
- * 見つかった拡張子付きのパスを返す(Webview はそのパスでしか読めない)。無ければ null。
- */
-export function resolveImagePath(imagePath: string, fs: TemplateFileSystem): string | null {
+function resolveExactImagePath(imagePath: string, fs: TemplateFileSystem): string | null {
   if (/\.[A-Za-z0-9]+$/.test(imagePath)) return fs.isFile(imagePath) ? imagePath : null;
   const extension = IMAGE_EXTENSIONS.find((candidate) => fs.isFile(`${imagePath}${candidate}`));
   return extension === undefined ? null : `${imagePath}${extension}`;
 }
 
-export function imageExists(imagePath: string, fs: TemplateFileSystem): boolean {
-  return resolveImagePath(imagePath, fs) !== null;
+/**
+ * 画像参照を実ファイルのパスに解決する。拡張子なしの参照は TeX と同じ順で拡張子を試し、
+ * 見つかった拡張子付きのパスを返す(Webview はそのパスでしか読めない)。無ければ null。
+ * デッキのディレクトリ基準を先に試し、無ければ `\graphicspath` の探索ディレクトリ
+ * (searchPaths)を順に試す。いずれもデッキ配下に限る(fs が `..` や絶対パスを拒否する)。
+ */
+export function resolveImagePath(
+  imagePath: string,
+  fs: TemplateFileSystem,
+  searchPaths: readonly string[] = [],
+): string | null {
+  const direct = resolveExactImagePath(imagePath, fs);
+  if (direct !== null) return direct;
+  for (const directory of searchPaths) {
+    const found = resolveExactImagePath(joinImageSearchPath(directory, imagePath), fs);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+export function imageExists(
+  imagePath: string,
+  fs: TemplateFileSystem,
+  searchPaths: readonly string[] = [],
+): boolean {
+  return resolveImagePath(imagePath, fs, searchPaths) !== null;
 }
 
 /** 文書のテンプレート参照を全て解決する(見つからないものは null のまま並ぶ)。 */
@@ -86,11 +108,15 @@ export function resolveTemplates(
 
 /** lint(L022 / L023)へ渡す解決結果。 */
 export function templateStatuses(doc: DeckDocument, fs: TemplateFileSystem): TemplateStatus[] {
+  // \graphicspath は TeX ではプリアンブル全体で効くので、.sty 自身と preamble-extra の両方を探索先にする。
+  const extraPaths = graphicsPathsOf(doc.preambleExtra.tex);
   return resolveTemplates(doc, fs).map(({ reference, resolved }) => ({
     reference,
     resolvedPath: resolved?.path ?? null,
     missingImages: resolved
-      ? templateImagePaths(resolved.text).filter((image) => !imageExists(image, fs))
+      ? templateImagePaths(resolved.text).filter(
+          (image) => !imageExists(image, fs, [...graphicsPathsOf(resolved.text), ...extraPaths]),
+        )
       : [],
   }));
 }
@@ -107,15 +133,16 @@ export function baseStyleOf(doc: DeckDocument, fs: TemplateFileSystem): PreviewS
   const merged = mergePreviewStyles(...templates, extractPreviewStyle(doc.preambleExtra.tex));
   // 拡張子省略の参照(TeX では有効)は見つかった実ファイルのパスにして Webview が読めるようにする。
   // 見つからないものは L023 が報告するので、そのまま残す。
+  const searchPaths = merged.imageSearchPaths ?? [];
   if (merged.logo) {
     merged.logo = {
       ...merged.logo,
-      path: resolveImagePath(merged.logo.path, fs) ?? merged.logo.path,
+      path: resolveImagePath(merged.logo.path, fs, searchPaths) ?? merged.logo.path,
     };
   }
   if (merged.background) {
     merged.background = {
-      path: resolveImagePath(merged.background.path, fs) ?? merged.background.path,
+      path: resolveImagePath(merged.background.path, fs, searchPaths) ?? merged.background.path,
     };
   }
   return merged;

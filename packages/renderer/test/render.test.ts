@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { framesOf, parseDeck, XCOLOR_BASE_NAMES } from "@beamer-editor/core";
+import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
+import { MONO_FONT_FALLBACK } from "../src/font-stack.js";
 import { frameTitleText, NAMED_COLORS, renderDeck } from "../src/render.js";
 import { DEFAULT_THEME } from "../src/theme.js";
 
@@ -512,6 +514,27 @@ describe("renderDeck: styled.slide.tex(スタイル語彙)", () => {
     expect(deck2.css).not.toContain("--deck-font-mono");
   });
 
+  it("mono フォントは Windows の Latin 等幅を総称の前に挟む(日本語 Windows でバックスラッシュが ¥ に見えない)", () => {
+    const src = String.raw`\documentclass{beamer}
+%% style:begin
+\deckfont{mono}{JetBrains Mono}
+%% style:end
+\begin{document}
+\begin{frame}{A}x\end{frame}
+\end{document}
+`;
+    const css = renderDeck(parseDeck(src)).css;
+    expect(css).toContain(
+      '--deck-font-mono: "JetBrains Mono", Consolas, "Cascadia Mono", monospace;',
+    );
+  });
+
+  it("等幅の共通末尾は Courier New を含まず、monospace の直前が Windows の Latin 等幅", () => {
+    // Courier New を入れると macOS / Linux で Menlo や distro 既定の等幅の代わりに使われる。
+    expect(MONO_FONT_FALLBACK).not.toContain("Courier New");
+    expect(MONO_FONT_FALLBACK).toMatch(/(?:Consolas|"Cascadia Mono"), monospace$/);
+  });
+
   it("ロゴとフッターが全フレームに入る(ページ番号付き)", () => {
     for (const frame of deck.frames) {
       expect(frame.html).toContain('class="deck-logo"');
@@ -682,8 +705,94 @@ Other
 
   it("\\hfill は前後を横並びにして残りの幅を埋める", () => {
     expect(html("Left \\hfill Right")).toContain(
-      '<span class="hfill-line" style="display:flex;align-items:baseline"><span>Left </span><span class="hfill" style="flex:1 1 auto"></span><span> Right </span></span>',
+      '<span class="hfill-line" style="display:inline-flex;width:100%;align-items:baseline"><span>Left </span><span class="hfill" style="flex:1 1 auto"></span><span> Right </span></span>',
     );
+  });
+
+  it("箇条書きの \\hfill はマーカーと同じ行で本文幅だけを使う", () => {
+    const dom = new JSDOM(
+      html(`\\begin{itemize}
+\\item Name \\hfill 2024
+\\end{itemize}`),
+      {
+        url: "https://preview.test",
+      },
+    );
+    const item = dom.window.document.querySelector("li");
+    const fillLine = item?.querySelector<HTMLElement>(".hfill-line");
+    expect(item?.children).toHaveLength(1);
+    expect(fillLine?.closest("li")).toBe(item);
+    expect(fillLine?.style.display).toBe("inline-flex");
+    expect(fillLine?.style.width).toBe("100%");
+    expect(fillLine?.style.alignItems).toBe("baseline");
+  });
+
+  it("\\hfill の右寄せは明示的な改行をまたがない", () => {
+    const dom = new JSDOM(html("Left \\hfill Right \\\\ Next line"), {
+      url: "https://preview.test",
+    });
+    const paragraph = dom.window.document.querySelector("p");
+    const fillLine = paragraph?.querySelector(".hfill-line");
+    expect(fillLine?.textContent).toBe("Left  Right ");
+    expect(fillLine?.nextElementSibling?.nodeName).toBe("BR");
+    expect(fillLine?.nextSibling?.nodeName).toBe("BR");
+    expect(fillLine?.nextSibling?.nextSibling?.textContent).toBe(" Next line ");
+  });
+
+  it("入れ子の書式内にある改行も \\hfill の箱を閉じる", () => {
+    const dom = new JSDOM(html("Left \\hfill \\textbf{Right \\\\ Next}"), {
+      url: "https://preview.test",
+    });
+    const paragraph = dom.window.document.querySelector("p");
+    const fillLine = paragraph?.querySelector(".hfill-line");
+    expect(fillLine?.textContent).toBe("Left Right ");
+    expect(fillLine?.nextSibling?.nodeName).toBe("BR");
+    expect(fillLine?.nextSibling?.nextSibling?.nodeName).toBe("STRONG");
+    expect(fillLine?.nextSibling?.nextSibling?.textContent).toBe(" Next");
+  });
+
+  it("グループ内の宣言は改行後もグループ内だけで効く", () => {
+    const dom = new JSDOM(html("Left \\hfill {\\small Right \\\\ Next} Tail"), {
+      url: "https://preview.test",
+    });
+    const paragraph = dom.window.document.querySelector("p");
+    const fillLine = paragraph?.querySelector(".hfill-line");
+    const afterBreak = fillLine?.nextSibling?.nextSibling as HTMLElement | null;
+    expect(fillLine?.textContent).toBe("Left  Right ");
+    expect(afterBreak?.querySelector("span")?.style.fontSize).toBe("10pt");
+    expect(afterBreak?.nextSibling?.textContent).toBe(" Tail ");
+  });
+
+  it("色・リンク・入れ子の書式を改行後にも保ち、脚注は外側の行を割らない", () => {
+    const dom = new JSDOM(
+      html(
+        "Left \\hfill \\href{https://e.test}{\\textcolor{red}{\\textbf{Right \\\\ Next}}}\\footnote{note \\\\ continued}",
+      ),
+      { url: "https://preview.test" },
+    );
+    const paragraph = dom.window.document.querySelector("p");
+    const fillLine = paragraph?.querySelector(".hfill-line");
+    const next = fillLine?.nextSibling?.nextSibling as HTMLElement | null;
+    expect(fillLine?.querySelector("a.url strong")?.textContent).toBe("Right ");
+    expect(next?.nodeName).toBe("A");
+    expect(next?.querySelector("strong")?.textContent).toBe(" Next");
+    expect(paragraph?.querySelectorAll("br")).toHaveLength(1);
+    expect(dom.window.document.querySelector(".footnote")?.innerHTML).toContain("<br>");
+  });
+
+  it("改行後も宣言の CSS を引き継ぎ、通常の段落とリストは従来どおり描く", () => {
+    const out = html(`\\small Left \\\\ Next
+
+\\begin{itemize}
+\\item Plain
+\\end{itemize}
+
+Normal`);
+    const dom = new JSDOM(out, { url: "https://preview.test" });
+    const paragraph = dom.window.document.querySelector("p");
+    expect(paragraph?.querySelector("br + span")?.style.fontSize).toBe("10pt");
+    expect(dom.window.document.querySelector("li")?.textContent?.trim()).toBe("Plain");
+    expect(dom.window.document.querySelectorAll("p")).toHaveLength(2);
   });
 
   it("\\hspace / \\vspace の長さを CSS にし、行幅基準は今の行幅に直す", () => {
@@ -707,5 +816,80 @@ Other
     const out = html("\\cite{knuth84, lamport} \\LaTeX{}");
     expect(out).toContain('<span class="cite">[knuth84, lamport]</span>');
     expect(out).toContain('class="katex"');
+  });
+});
+
+describe("renderDeck: 背景画像(\\deckbackground)", () => {
+  const deckSource = (style: string) => `\\documentclass[aspectratio=169]{beamer}
+%% style:begin
+${style}
+%% style:end
+\\title{T}
+\\begin{document}
+\\begin{frame}\\titlepage\\end{frame}
+\\begin{frame}[plain]\\titlepage\\end{frame}
+\\begin{frame}{Body}x\\end{frame}
+\\begin{frame}[fragile]{Raw}
+\\begin{weird}y\\end{weird}
+\\end{frame}
+\\end{document}`;
+  const backgrounds = (deck: ReturnType<typeof renderDeck>) =>
+    deck.frames.map((frame) => /<img class="deck-background" src="([^"]*)"/.exec(frame.html)?.[1]);
+
+  it("表紙(\\titlepage を含むフレーム)は表紙用、それ以外は全体用の背景になる", () => {
+    const deck = renderDeck(
+      parseDeck(deckSource("\\deckbackground{all.png}\n\\deckbackground[title]{title.png}")),
+    );
+    expect(backgrounds(deck).slice(0, 3)).toEqual(["title.png", "title.png", "all.png"]);
+  });
+
+  it("表紙用が無ければ表紙も全体用になり、全体用が無ければ表紙用は表紙だけに出る", () => {
+    expect(backgrounds(renderDeck(parseDeck(deckSource("\\deckbackground{all.png}"))))[0]).toBe(
+      "all.png",
+    );
+    expect(
+      backgrounds(renderDeck(parseDeck(deckSource("\\deckbackground[title]{title.png}")))).slice(
+        0,
+        3,
+      ),
+    ).toEqual(["title.png", "title.png", undefined]);
+  });
+
+  it("土台スタイル(全体用のみ)は表紙にも効き、%% style が上書きする。同じ枠は最後の指定が勝つ", () => {
+    const baseStyle = { colors: {}, fonts: {}, background: { path: "base.png" } };
+    expect(
+      backgrounds(renderDeck(parseDeck(deckSource("")), undefined, { baseStyle })).slice(0, 3),
+    ).toEqual(["base.png", "base.png", "base.png"]);
+    expect(
+      backgrounds(
+        renderDeck(
+          parseDeck(deckSource("\\deckbackground{a.png}\n\\deckbackground{b.png}")),
+          undefined,
+          { baseStyle },
+        ),
+      ).slice(0, 3),
+    ).toEqual(["b.png", "b.png", "b.png"]);
+    expect(
+      backgrounds(
+        renderDeck(parseDeck(deckSource("\\deckbackground[title]{t.png}")), undefined, {
+          baseStyle,
+        }),
+      ).slice(0, 3),
+    ).toEqual(["t.png", "t.png", "base.png"]);
+  });
+
+  it("PDF の背景はここでも出さない", () => {
+    expect(
+      backgrounds(renderDeck(parseDeck(deckSource("\\deckbackground[title]{t.pdf}")))).slice(0, 2),
+    ).toEqual([undefined, undefined]);
+  });
+
+  it("styled.slide.tex は表紙だけ表紙用の背景になる", () => {
+    const deck = renderDeck(parseDeck(fixture("styled.slide.tex")));
+    expect(backgrounds(deck)).toEqual([
+      "assets/title-background.png",
+      "assets/background.png",
+      "assets/background.png",
+    ]);
   });
 });

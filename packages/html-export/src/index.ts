@@ -52,6 +52,20 @@ export interface HtmlExportResult {
   inputPath: string;
   outputPath: string;
   indexPath: string;
+  /**
+   * HTML に出せなかった画像(プレースホルダーに置き換えたもの、PDF の背景のように省いたもの)。
+   * 書き出しは成功扱いなので、呼び出し側が警告する。
+   */
+  placeholders: HtmlPlaceholderImage[];
+}
+/** `unsupported-format` は PNG / JPEG 以外(PDF など)、`missing` は空のパス・参照先なし・ファイルでないもの。 */
+export type HtmlPlaceholderReason = "unsupported-format" | "missing";
+export interface HtmlPlaceholderImage {
+  /** ソースに書かれた参照パス。 */
+  path: string;
+  reason: HtmlPlaceholderReason;
+  /** 画像が現れるフレームの序数(1 始まり、`deck outline` と同じ)。 */
+  frames: number[];
 }
 interface Asset {
   target: string;
@@ -165,13 +179,18 @@ async function collect(
   frames: readonly string[],
   root: string,
   signal?: AbortSignal,
-): Promise<{ frames: string[]; assets: Asset[] }> {
+): Promise<{ frames: string[]; assets: Asset[]; placeholders: HtmlPlaceholderImage[] }> {
   const rootReal = await realpath(root).catch((e) => {
     throw new HtmlExportError("E_INPUT", `デッキのディレクトリを確認できません: ${root}`, e);
   });
   const assets: Asset[] = [],
     map = new Map<string, string | undefined>(),
+    reasons = new Map<string, HtmlPlaceholderReason>(),
     hashes = new Map<string, string>();
+  const placeholder = (raw: string, reason: HtmlPlaceholderReason) => {
+    map.set(raw, undefined);
+    reasons.set(raw, reason);
+  };
   const rewritten = await Promise.all(
     frames.map(async (frame) => {
       const matches = [...frame.matchAll(/<img\b[^>]*\bsrc="([^"]*)"[^>]*>/g)];
@@ -181,7 +200,7 @@ async function collect(
         if (map.has(raw)) continue;
         // 編集途中の `\includegraphics{}` はデッキ全体を止めず、欠落画像と同じ箱にする。
         if (raw.trim() === "") {
-          map.set(raw, undefined);
+          placeholder(raw, "missing");
           continue;
         }
         const path = source(raw, root);
@@ -193,7 +212,7 @@ async function collect(
           throw new HtmlExportError("E_ASSET", `画像を確認できません: ${raw}`, e);
         }
         if (!sourceEntry) {
-          map.set(raw, undefined);
+          placeholder(raw, "missing");
           continue;
         }
         let real: string | undefined;
@@ -206,12 +225,12 @@ async function collect(
           }
         }
         if (!/\.(png|jpe?g)$/i.test(path)) {
-          map.set(raw, undefined);
+          placeholder(raw, "unsupported-format");
           continue;
         }
         real ??= await realpath(path).catch(() => undefined);
         if (!real || !(await stat(real).catch(() => undefined))?.isFile()) {
-          map.set(raw, undefined);
+          placeholder(raw, "missing");
           continue;
         }
         const rel = relative(rootReal, real);
@@ -241,7 +260,23 @@ async function collect(
       });
     }),
   );
-  return { frames: rewritten, assets };
+  // フレームは並行に処理するので、一覧はソース順に数え直して決定的にする。renderer が既に
+  // 箱にした画像(PDF)も、原文のパスを title(ロゴはラベル)に持つので同じ一覧に入れる。
+  const placeholders = new Map<string, HtmlPlaceholderImage>();
+  frames.forEach((frame, index) => {
+    for (const m of frame.matchAll(
+      /<img\b[^>]*\bsrc="([^"]*)"[^>]*>|<div class="deck-logo image-placeholder"[^>]*>PDF ロゴ: ([^<]*)<\/div>|<div class="[^"]*\bimage-placeholder\b[^"]*"[^>]*\btitle="([^"]*)"/g,
+    )) {
+      const boxed = m[2] ?? m[3],
+        raw = decodedAttribute(m[1] ?? boxed ?? ""),
+        reason = boxed === undefined ? reasons.get(raw) : "unsupported-format";
+      if (reason === undefined) continue;
+      const found = placeholders.get(raw) ?? { path: raw, reason, frames: [] };
+      placeholders.set(raw, found);
+      if (found.frames.at(-1) !== index + 1) found.frames.push(index + 1);
+    }
+  });
+  return { frames: rewritten, assets, placeholders: [...placeholders.values()] };
 }
 const VIEWER_JS = `(()=>{const visible=${isVisibleAtStep.toString()};const d=JSON.parse(document.querySelector('#deck-data').textContent);let f=0,s=1,zoom=1;const a=document.querySelector('#app');function fit(){const slide=a.querySelector('.slide-scale .slide'),layout=a.querySelector('.slide-layout');if(!slide||!layout)return;const k=Math.min(1,(a.clientWidth-24)/slide.offsetWidth)*zoom;layout.style.width=slide.offsetWidth*k+'px';layout.style.height=slide.offsetHeight*k+'px';slide.parentElement.style.transform='scale('+k+')';slide.parentElement.style.transformOrigin='top left'}function r(){const x=d.frames[f];a.innerHTML='<main class="slide-scroll"><article class="slide-card active"><div class="slide-layout"><div class="slide-scale">'+x.html+'</div></div></article></main><nav class="html-export-controls"><button id="p">←</button><span>'+(f+1)+' / '+d.frames.length+'　'+s+' / '+x.stepCount+'</span><button id="n">→</button><button id="minus">−</button><button id="reset">0</button><button id="plus">＋</button></nav>';document.querySelectorAll('[data-min]').forEach(e=>e.classList.toggle('covered',!visible({min:e.dataset.min},s)));document.querySelectorAll('[data-overlay]').forEach(e=>e.classList.toggle('covered',!visible({overlay:e.dataset.overlay},s)));document.querySelector('#p').onclick=()=>{if(s>1)s--;else if(f){f--;s=d.frames[f].stepCount}r()};document.querySelector('#n').onclick=()=>{if(s<x.stepCount)s++;else if(f<d.frames.length-1){f++;s=1}r()};document.querySelector('#plus').onclick=()=>{zoom*=1.25;fit()};document.querySelector('#minus').onclick=()=>{zoom/=1.25;fit()};document.querySelector('#reset').onclick=()=>{zoom=1;fit()};fit()}addEventListener('resize',fit);document.addEventListener('keydown',e=>{if(e.key==='ArrowLeft')document.querySelector('#p').click();if(e.key==='ArrowRight')document.querySelector('#n').click()});r()})();`;
 const VIEWER_CSS = `${PREVIEW_CSS}\n.html-export-controls{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);background:#fff;padding:8px;border-radius:6px;box-shadow:0 1px 6px #777}.html-export-controls button{margin:0 4px}`;
@@ -374,9 +409,10 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
     throw new HtmlExportError("E_INPUT", `入力 TeX を読み込めません: ${request.inputPath}`, e);
   }
   let deck: ReturnType<typeof renderDeck>;
+  let baseStyle: Awaited<ReturnType<typeof nodePreviewBaseStyle>>;
   try {
     const expanded = expandDeck(sourceText);
-    const baseStyle = await nodePreviewBaseStyle(expanded.doc, dirname(inputPath));
+    baseStyle = await nodePreviewBaseStyle(expanded.doc, dirname(inputPath));
     deck = renderDeck(expanded.doc, undefined, { baseStyle });
   } catch (e) {
     throw new HtmlExportError("E_INPUT", "入力 TeX を解析できません", e);
@@ -389,6 +425,14 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
   abort(request.signal);
   if (deck.frames.length === 0)
     throw new HtmlExportError("E_INPUT", "書き出すフレームがありません");
+  // PDF の背景は renderer が箱も出さずに省くので、フレーム HTML からは見つからない。
+  const background = baseStyle.background?.path;
+  if (background?.toLowerCase().endsWith(".pdf"))
+    collected.placeholders.push({
+      path: background,
+      reason: "unsupported-format",
+      frames: deck.frames.map((_, i) => i + 1),
+    });
   let staging: string | undefined;
   let backup: string | undefined;
   const lockName = `.${basename(outputPath)}.lock`;
@@ -475,7 +519,13 @@ export async function exportHtml(request: HtmlExportRequest): Promise<HtmlExport
       await rm(backup, { recursive: true, force: true }).catch(() => undefined);
       backup = undefined;
     }
-    return { format: "html", inputPath, outputPath, indexPath: join(outputPath, "index.html") };
+    return {
+      format: "html",
+      inputPath,
+      outputPath,
+      indexPath: join(outputPath, "index.html"),
+      placeholders: collected.placeholders,
+    };
   } catch (e) {
     if (staging) await rm(staging, { recursive: true, force: true }).catch(() => undefined);
     if (backup)

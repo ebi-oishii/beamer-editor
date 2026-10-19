@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { parseDeck } from "../src/parser.js";
 import {
   extractPreviewStyle,
+  graphicsPathsOf,
+  joinImageSearchPath,
   mergePreviewStyles,
   parseLength,
   templateImagePaths,
@@ -148,5 +150,106 @@ describe("parseLength / mergePreviewStyles / templateImagePaths", () => {
         "\\includegraphics[width=1cm]{a.png} % \\includegraphics{no.png}\n\\pgfdeclareimage{x}{b} \\includegraphics{a.png}",
       ),
     ).toEqual(["a.png", "b"]);
+  });
+});
+
+describe("背景・ロゴ抽出の書き方の揺れ(#192)", () => {
+  const bg = (source: string) => extractPreviewStyle(source).background?.path;
+
+  it("コマンド名と引数の間の空白・改行・コメントを許す", () => {
+    expect(bg("\\usebackgroundtemplate {\\includegraphics{a.png}}")).toBe("a.png");
+    expect(bg("\\usebackgroundtemplate\n  {\\includegraphics{a.png}}")).toBe("a.png");
+    expect(bg("\\setbeamertemplate{background}%\n{\\includegraphics{b.png}}")).toBe("b.png");
+    expect(
+      bg("\\setbeamertemplate {background canvas} % 説明\n % 続き\n {\\includegraphics{c.png}}"),
+    ).toBe("c.png");
+    expect(bg("\\usebackgroundtemplate{\\includegraphics [width=\\paperwidth] {d.png}}")).toBe(
+      "d.png",
+    );
+  });
+
+  it("空行(\\par)は越えて引数を探さない", () => {
+    expect(bg("\\usebackgroundtemplate\n\n{\\includegraphics{a.png}}")).toBeUndefined();
+    expect(bg("\\setbeamertemplate{background}\n\n{\\includegraphics{a.png}}")).toBeUndefined();
+    // コメントだけの行は空行ではない。
+    expect(bg("\\usebackgroundtemplate\n%\n{\\includegraphics{a.png}}")).toBe("a.png");
+  });
+
+  it("\\addtobeamertemplate{background} の前・後どちらの画像も背景になる", () => {
+    expect(bg("\\addtobeamertemplate{background}{\\includegraphics{pre.png}}{}")).toBe("pre.png");
+    expect(bg("\\addtobeamertemplate{background canvas}{}{\\includegraphics{post.png}}")).toBe(
+      "post.png",
+    );
+    expect(bg("\\addtobeamertemplate{headline}{}{\\includegraphics{no.png}}")).toBeUndefined();
+  });
+
+  it("背景のコマンドはコマンドの種類をまたいでソース順に最後が勝つ", () => {
+    expect(
+      bg(
+        "\\addtobeamertemplate{background}{}{\\includegraphics{first.png}}\n\\usebackgroundtemplate{\\includegraphics{last.png}}",
+      ),
+    ).toBe("last.png");
+  });
+
+  it("\\newcommand / \\def で単純な文字列に定義された画像パスを展開する", () => {
+    const use = "\\usebackgroundtemplate{\\includegraphics{\\bgimage}}";
+    expect(bg(`\\newcommand{\\bgimage}{images/bg.png}\n${use}`)).toBe("images/bg.png");
+    expect(bg(`\\newcommand\\bgimage{images/bg.png}\n${use}`)).toBe("images/bg.png");
+    expect(bg(`\\renewcommand{\\bgimage}{x.png}\n\\renewcommand{\\bgimage}{y.png}\n${use}`)).toBe(
+      "y.png",
+    );
+    expect(bg(`\\def\\bgimage{images/bg.png}\n${use}`)).toBe("images/bg.png");
+    // 本文がマクロを含む・未定義のときは展開しない。
+    expect(bg(`\\newcommand{\\bgimage}{\\dir/bg.png}\n${use}`)).toBe("\\bgimage");
+    expect(bg(use)).toBe("\\bgimage");
+    // コメントの中の定義は見ない。
+    expect(bg(`% \\newcommand{\\bgimage}{no.png}\n${use}`)).toBe("\\bgimage");
+  });
+
+  it("展開は .sty の画像一覧(L023 用)にも効く", () => {
+    expect(templateImagePaths("\\newcommand{\\img}{a.png}\n\\includegraphics{\\img}")).toEqual([
+      "a.png",
+    ]);
+  });
+});
+
+describe("graphicsPathsOf / imageSearchPaths", () => {
+  it("\\graphicspath の探索ディレクトリを出現順に拾い、コメントの中は見ない", () => {
+    expect(
+      graphicsPathsOf(
+        "% \\graphicspath{{old/}}\n\\graphicspath{ {images/} {figs/} }\n\\graphicspath{{images/}{../shared/}}",
+      ),
+    ).toEqual(["images/", "figs/", "../shared/"]);
+    expect(graphicsPathsOf("\\includegraphics{a.png}")).toEqual([]);
+  });
+
+  it("extractPreviewStyle が探索ディレクトリを載せ、mergePreviewStyles は連結して重複を除く", () => {
+    const a = extractPreviewStyle(
+      "\\graphicspath{{images/}}\n\\usebackgroundtemplate{\\includegraphics{bg.png}}",
+    );
+    expect(a.imageSearchPaths).toEqual(["images/"]);
+    expect(a.background).toEqual({ path: "bg.png" });
+    expect(extractPreviewStyle("\\setsansfont{X}").imageSearchPaths).toBeUndefined();
+    const merged = mergePreviewStyles(a, {
+      colors: {},
+      fonts: {},
+      imageSearchPaths: ["figs/", "images/"],
+    });
+    expect(merged.imageSearchPaths).toEqual(["images/", "figs/"]);
+    expect(mergePreviewStyles(a, { colors: {}, fonts: {} }).imageSearchPaths).toEqual(["images/"]);
+  });
+
+  it("joinImageSearchPath は ./ と末尾の / を整える", () => {
+    expect(joinImageSearchPath("images/", "bg.png")).toBe("images/bg.png");
+    expect(joinImageSearchPath("./images", "bg.png")).toBe("images/bg.png");
+    expect(joinImageSearchPath("./", "bg.png")).toBe("bg.png");
+    expect(joinImageSearchPath("../x/", "bg.png")).toBe("../x/bg.png");
+  });
+});
+
+describe("\\deckbackground を .sty で読む", () => {
+  it("無印は全スライドの背景、[title] は土台では無視する", () => {
+    expect(extractPreviewStyle("\\deckbackground{a.png}").background).toEqual({ path: "a.png" });
+    expect(extractPreviewStyle("\\deckbackground[title]{t.png}").background).toBeUndefined();
   });
 });

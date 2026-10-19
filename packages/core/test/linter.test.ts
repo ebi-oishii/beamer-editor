@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { lintDeck, lintSource, parseDeck } from "../src/index.js";
 import { templateReferencesOf } from "../src/template.js";
@@ -420,6 +421,24 @@ ordinary text
       "\\includegraphics{missing.png}",
     ]);
     expect(lintDeck(parseDeck(source)).some((entry) => entry.code === "L004")).toBe(false);
+  });
+
+  it("fileExists で \\deckbackground(全体・表紙)の画像欠落も L004 になる", () => {
+    const source = deck(
+      "",
+      `%% style:begin
+\\deckbackground{missing-bg.png}
+\\deckbackground[title]{missing-title.png}
+%% style:end`,
+    );
+    const diagnostics = lintDeck(parseDeck(source), { fileExists: () => false }).filter(
+      (entry) => entry.code === "L004",
+    );
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\deckbackground{missing-bg.png}",
+      "\\deckbackground[title]{missing-title.png}",
+    ]);
   });
 
   it("deckimage の形式と注入された寸法プローブを L015 で検査する", () => {
@@ -921,6 +940,26 @@ code
     );
   });
 
+  it("\\deckbackground の不正なオプション・形は L020 になる", () => {
+    const source = deck(
+      "",
+      `%% style:begin
+\\deckbackground[body]{a.png}
+\\deckbackground[title]
+\\deckbackground{}
+\\deckbackground[title]{ok.png}
+%% style:end`,
+    );
+
+    const diagnostics = lintDeck(parseDeck(source)).filter((entry) => entry.code === "L020");
+
+    expect(diagnostics.map((entry) => sourceText(source, entry))).toEqual([
+      "\\deckbackground[body]{a.png}",
+      "\\deckbackground[title]",
+      "\\deckbackground{}",
+    ]);
+  });
+
   it("対応範囲の正常なデッキには診断を返さない", () => {
     const source = deck(`
 \\begin{frame}[label=canvas]{Canvas}
@@ -1160,5 +1199,169 @@ ${commands}
       ),
     ).map((diagnostic) => diagnostic.code);
     expect(codes.filter((code) => code === "L001")).toHaveLength(2);
+  });
+});
+
+describe("lintSource: L024(プレビューに出ない背景指定)", () => {
+  const l024 = (source: string) => lintSource(source).filter((entry) => entry.code === "L024");
+  const BG = "\\usebackgroundtemplate{\\includegraphics{bg.png}}";
+
+  it("プリアンブルの管理領域の外・フレームの間・フレームの中を警告し、コマンドを指す", () => {
+    const outside = deck("", `\\setbeamertemplate{background canvas}{\\includegraphics{bg.png}}`);
+    expect(l024(outside)).toMatchObject([{ severity: "warning" }]);
+    expect(sourceText(outside, l024(outside)[0] as never)).toBe(
+      "\\setbeamertemplate{background canvas}",
+    );
+    expect(l024(outside)[0]?.message).toContain("\\deckbackground[title]");
+
+    const between = deck(`${BG}\n\\begin{frame}{A}x\\end{frame}`);
+    expect(l024(between)).toHaveLength(1);
+    expect(sourceText(between, l024(between)[0] as never)).toBe("\\usebackgroundtemplate");
+
+    const inFrame = deck(
+      `\\begin{frame}{A}\n\\addtobeamertemplate{background}{}{\\includegraphics{bg.png}}\n\\end{frame}`,
+    );
+    expect(l024(inFrame)).toHaveLength(1);
+    expect(sourceText(inFrame, l024(inFrame)[0] as never)).toBe(
+      "\\addtobeamertemplate{background}",
+    );
+  });
+
+  it("preamble-extra と %% style の中、コメントの中、他のテンプレート名では出さない", () => {
+    const inExtra = deck("", `%% preamble-extra:begin\n${BG}\n%% preamble-extra:end`);
+    expect(l024(inExtra)).toEqual([]);
+    const inStyle = deck("", `%% style:begin\n${BG}\n%% style:end`);
+    expect(l024(inStyle)).toEqual([]);
+    // style 領域の中は L020 だけ(二重に報告しない)。
+    expect(lintSource(inStyle).some((entry) => entry.code === "L020")).toBe(true);
+    expect(l024(deck("", `% ${BG}`))).toEqual([]);
+    expect(
+      l024(
+        deck("", "\\setbeamertemplate{footline}{}\\addtobeamertemplate{navigation symbols}{}{}"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("空白・改行を挟んだ書き方も拾う", () => {
+    expect(l024(deck("", "\\setbeamertemplate {background}\n{x}"))).toHaveLength(1);
+  });
+});
+
+describe("lintSource: L024 と ツール管理プリアンブル(deck* マクロ定義の本文だけ除外)", () => {
+  const l024 = (source: string) => lintSource(source).filter((entry) => entry.code === "L024");
+  const resources = [
+    "deck-managed-header.tex",
+    "deck-canvas-preamble.tex",
+    "deck-style-preamble.tex",
+  ]
+    .map((name) => readFileSync(new URL(`../resources/${name}`, import.meta.url), "utf8"))
+    .join("\n");
+  const managed = (inner: string, markers = true) =>
+    deck(
+      "",
+      `${markers ? "% ---- ツール管理プリアンブル: 編集は macros / style / preamble-extra 領域へ ----\n" : ""}${inner}\n${markers ? "% ---- ツール管理ここまで ----" : ""}`,
+    );
+
+  it("deck init 相当の展開(3 リソース)は警告しない。マーカーを消しても同じ", () => {
+    expect(resources).toContain("\\setbeamertemplate{background}");
+    expect(l024(managed(resources))).toEqual([]);
+    expect(l024(managed(resources, false))).toEqual([]);
+  });
+
+  it("マーカーの間へ書いた背景指定は警告する", () => {
+    const source = managed(`${resources}\n\\usebackgroundtemplate{\\includegraphics{bg.png}}`);
+    const found = l024(source);
+    expect(found).toHaveLength(1);
+    expect(sourceText(source, found[0])).toBe("\\usebackgroundtemplate");
+  });
+
+  it("deck* の定義でない(利用者の)マクロの本文にある背景指定は警告する", () => {
+    const source = deck("", "\\newcommand{\\mybg}{\\usebackgroundtemplate{x}}");
+    expect(l024(source)).toHaveLength(1);
+  });
+
+  it("定義の書き方の揺れ(\\renewcommand* / {\\name} / [n][既定] / \\gdef / \\@namedef)でも deck* なら除外する", () => {
+    const bg = "\\setbeamertemplate{background}{x}";
+    for (const definition of [
+      `\\newcommand\\deckA{${bg}}`,
+      `\\renewcommand*{\\deck@b}[2][]{{${bg}}}`,
+      `\\providecommand \\deckC [1][d] {${bg}}`,
+      `\\def\\deckD#1#2{${bg}}`,
+      `\\gdef\\deckE{${bg}}`,
+      `\\edef\\deckF{${bg}}`,
+      `\\xdef\\deckG{${bg}}`,
+      `\\@namedef{deck@h}{${bg}}`,
+    ]) {
+      expect(l024(deck("", definition)), definition).toEqual([]);
+    }
+    // 定義の本文の外(閉じ括弧の後)は警告する。
+    expect(l024(deck("", `\\newcommand\\deckA{x}${"\\usebackgroundtemplate{y}"}`))).toHaveLength(1);
+  });
+});
+
+describe("L004: TeX なら拾うファイルの提案", () => {
+  const frame = (path: string) => `\\begin{frame}{A}\n\\includegraphics{${path}}\n\\end{frame}`;
+  const probe = (...existing: string[]) => ({
+    fileExists: (path: string) => existing.includes(path),
+  });
+  const l004 = (source: string, ...existing: string[]) =>
+    lintSource(source, probe(...existing)).filter((entry) => entry.code === "L004");
+  const PREFIX = "画像の参照先ファイルが存在しません";
+
+  it("拡張子の省略は TeX の順(.pdf .png .jpg .jpeg)で最初の実在を提案し、パスだけを置換範囲にする", () => {
+    const source = deck(frame("assets/fig"));
+    const [found] = l004(source, "assets/fig.jpg", "assets/fig.png");
+    expect(found?.severity).toBe("error");
+    expect(found?.message).toBe(
+      `${PREFIX}。デッキのディレクトリ基準で拡張子まで書いてください: assets/fig.png`,
+    );
+    expect(found?.fix?.replacement).toBe("assets/fig.png");
+    expect(sourceText(source, { span: found?.fix?.span ?? { start: 0, end: 0 } })).toBe(
+      "assets/fig",
+    );
+  });
+
+  it("\\graphicspath(preamble-extra)の下の実在を提案する。デッキ直下が先", () => {
+    const extra =
+      "%% preamble-extra:begin\n\\graphicspath{{images/}{./figs}}\n%% preamble-extra:end";
+    const source = deck(frame("logo"), extra);
+    expect(l004(source, "figs/logo.png", "images/logo.png")[0]?.fix?.replacement).toBe(
+      "images/logo.png",
+    );
+    expect(l004(source, "figs/logo.png", "logo.jpg")[0]?.fix?.replacement).toBe("logo.jpg");
+    // 拡張子つきで \graphicspath の下にだけある場合。
+    const withExt = deck(frame("logo.png"), extra);
+    expect(l004(withExt, "figs/logo.png")[0]?.fix?.replacement).toBe("figs/logo.png");
+  });
+
+  it("見つからなければ従来のメッセージのまま、fix も付けない", () => {
+    const found = l004(deck(frame("assets/none")), "other.png");
+    expect(found).toHaveLength(1);
+    expect(found[0]?.message).toBe(PREFIX);
+    expect(found[0]?.fix).toBeUndefined();
+  });
+
+  it("%% style の \\deckbackground / \\decklogo でもパスだけを指す", () => {
+    const source = deck(
+      "",
+      `%% style:begin
+\\deckbackground[title]{ bg/title }
+\\decklogo[x=0,y=0,w=0.1]{logo}
+%% style:end`,
+    );
+    const found = l004(source, "bg/title.png", "logo.png");
+    expect(found).toHaveLength(2);
+    expect(found.map((entry) => source.slice(entry.fix?.span.start, entry.fix?.span.end))).toEqual([
+      "bg/title",
+      "logo",
+    ]);
+    expect(found.map((entry) => entry.fix?.replacement)).toEqual(["bg/title.png", "logo.png"]);
+  });
+
+  it("lintDeck(source なし)でもメッセージには提案が入り、fix は付かない", () => {
+    const source = deck(frame("fig"));
+    const [found] = lintDeck(parseDeck(source), probe("fig.png")).filter((e) => e.code === "L004");
+    expect(found?.message).toContain("fig.png");
+    expect(found?.fix).toBeUndefined();
   });
 });
