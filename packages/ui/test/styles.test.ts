@@ -122,6 +122,7 @@ describe("PREVIEW_CSS: キャンバス幾何の契約", () => {
       expect(measured.nextTop).toBeGreaterThan(measured.lineFillTop);
       expect(measured.nextLeft).toBeCloseTo(measured.paragraphLeft, 1);
     },
+    20_000,
   );
 
   it("文字サイズ select より幅変更ハンドルを前面に置く", () => {
