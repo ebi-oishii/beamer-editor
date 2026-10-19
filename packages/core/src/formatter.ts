@@ -8,6 +8,7 @@
 
 import type {
   BlockNode,
+  CanvasFigureNode,
   CanvasImageNode,
   CanvasTextNode,
   DeckDocument,
@@ -33,7 +34,7 @@ function canvasTextOptions(item: CanvasTextNode): string {
   return `[x=${fixed(x)},y=${fixed(y)},w=${fixed(width)},size=${item.invalidSize?.value ?? item.size}]`;
 }
 
-function canvasImageOptions(item: CanvasImageNode): string {
+function canvasImageOptions(item: CanvasImageNode | CanvasFigureNode): string {
   const { x, y, width } = item.position;
   return `[x=${fixed(x)},y=${fixed(y)},w=${fixed(width)}]`;
 }
@@ -44,7 +45,7 @@ function collectBlockReplacements(block: BlockNode, replacements: Replacement[])
       for (const item of block.items) {
         if (item.type === "canvasText") {
           replacements.push({ span: item.position.span, text: canvasTextOptions(item) });
-        } else if (item.type === "canvasImage") {
+        } else if (item.type === "canvasImage" || item.type === "canvasFigure") {
           replacements.push({ span: item.position.span, text: canvasImageOptions(item) });
         }
       }

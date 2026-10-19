@@ -20,6 +20,12 @@ const styleBeforeBackground = readFileSync(
   "utf8",
 );
 
+/** `deckfigure` を足す前(#191 の前)の deck-canvas-preamble.tex。 */
+const canvasBeforeFigure = readFileSync(
+  new URL("./resources/deck-canvas-preamble.before-figure.tex", import.meta.url),
+  "utf8",
+);
+
 /** `deck init` が書く形のデッキ。管理プリアンブルの中身と style 領域を差し替えられる。 */
 function initDeck(managed: string, style: string): string {
   return `\\documentclass[aspectratio=169]{beamer}
@@ -48,7 +54,7 @@ ${style}
 `;
 }
 
-/** 古い `deck init` が書いた管理プリアンブル(header / canvas は変わっていない)。 */
+/** 古い `deck init` が書いた管理プリアンブル(header / canvas は現行のまま)。 */
 const oldManaged = [
   MANAGED_PREAMBLE_BEGIN,
   [resource("deck-managed-header.tex"), resource("deck-canvas-preamble.tex"), styleBeforeBackground]
@@ -165,6 +171,49 @@ describe("lintSource: L025(管理プリアンブルが使っているマクロ�
     expect(found).toHaveLength(2);
     expect(found[0]?.fix).toBeUndefined();
     expect(found[0]?.message).toContain("自動では直せません");
+  });
+});
+
+describe("lintSource: L025 と deckfigure(#191)", () => {
+  /** deckfigure を足す前の `deck init` が書いた管理プリアンブル(header / style は現行のまま)。 */
+  const managedBeforeFigure = [
+    MANAGED_PREAMBLE_BEGIN,
+    [resource("deck-managed-header.tex"), canvasBeforeFigure, resource("deck-style-preamble.tex")]
+      .join("\n")
+      .trimEnd(),
+    MANAGED_PREAMBLE_END,
+  ].join("\n");
+  const figure = [
+    "\\begin{deckfigure}[x=0.100,y=0.100,w=0.300]",
+    "      \\begin{tikzpicture}\\draw (0,0) -- (1,1);\\end{tikzpicture}",
+    "    \\end{deckfigure}",
+  ].join("\n");
+  const withFigure = (managed: string) =>
+    initDeck(managed, "").replace(
+      "\\begin{frame}[label=title]\n  \\titlepage\n\\end{frame}",
+      `\\begin{frame}[label=fig]\n  \\begin{deckcanvas}\n    ${figure}\n  \\end{deckcanvas}\n\\end{frame}`,
+    );
+
+  it("deckfigure を定義していない管理プリアンブルには error と差し替えの fix を出し、fix で消える", () => {
+    const source = withFigure(managedBeforeFigure);
+    const found = l025(source);
+    expect(found.map((entry) => source.slice(entry.span.start, entry.span.end))).toEqual([figure]);
+    const fix = found[0]?.fix;
+    if (fix === undefined) throw new Error("fix expected");
+    const fixed = apply(source, fix);
+    expect(fixed).toBe(withFigure(managedPreambleBlock()));
+    expect(l025(fixed)).toEqual([]);
+  });
+
+  it("現行の管理プリアンブルと \\input 形式には出さない", () => {
+    expect(managedPreambleBlock()).toContain("\\newenvironment{deckfigure}");
+    expect(l025(withFigure(managedPreambleBlock()))).toEqual([]);
+    const input = [
+      "% ---- ツール管理プリアンブル ----",
+      "\\input{deck-canvas-preamble}",
+      MANAGED_PREAMBLE_END,
+    ].join("\n");
+    expect(l025(withFigure(input))).toEqual([]);
   });
 });
 

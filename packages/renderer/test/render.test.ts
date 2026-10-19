@@ -352,6 +352,41 @@ ${tikz}
     expect(pdf.rawBlocks).toEqual([]);
   });
 
+  it("deckfigure は位置付きの箱にし、中身を部分コンパイルの一覧に載せ、figure の drag descriptor を持つ(#191)", () => {
+    const tikz = "\\begin{tikzpicture}\n\\draw (0,0) -- (1,1);\n\\end{tikzpicture}";
+    const source = `\\documentclass[aspectratio=169]{beamer}
+\\begin{document}
+\\begin{frame}[label=fig]{T}
+\\begin{deckcanvas}
+\\begin{deckfigure}[x=0.100,y=0.200,w=0.300]
+${tikz}
+\\end{deckfigure}
+\\end{deckcanvas}
+\\end{frame}
+\\end{document}
+`;
+    const deck = renderDeck(parseDeck(source));
+    const frame = deck.frames[0];
+    const html = frame?.html ?? "";
+    const key = /data-raw-key="([0-9a-f]{16})"/.exec(html)?.[1];
+    expect(deck.rawBlocks).toEqual([{ key, tex: tikz, environment: "tikzpicture" }]);
+    expect(html).toContain(
+      'class="canvas-item canvas-figure placeholder" data-canvas-element-id="canvas-figure-0" data-canvas-element-kind="figure"',
+    );
+    expect(html).toContain("left:10.00%;top:20.00%;width:30.00%");
+    expect(frame?.canvasElements).toEqual([
+      {
+        id: "canvas-figure-0",
+        kind: "figure",
+        position: { x: 0.1, y: 0.2, width: 0.3 },
+        sourceSpan: {
+          start: source.indexOf("[x=0.100"),
+          end: source.indexOf("\n", source.indexOf("[x=0.100")),
+        },
+      },
+    ]);
+  });
+
   it("\\item の中の図(命令で包んだ環境だけの段落)も、ブロックの段落と同じ判定で箱にする", () => {
     const out = html(
       "\\begin{itemize}\n\\item \\resizebox{0.5\\textwidth}{!}{\\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture}}\n\\item text \\myemph{x}\n\\end{itemize}",

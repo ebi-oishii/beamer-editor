@@ -712,3 +712,62 @@ describe("キャンバスフレームの label(L011)", () => {
     expect(after).toEqual(before);
   });
 });
+
+describe("表・生 LaTeX の環境を deckfigure へ移す(#191)", () => {
+  const placement = { x: 0.1, y: 0.2, width: 0.3 };
+  const tikz = "\\begin{tikzpicture}\n    \\draw (0,0) -- (1,1);\n  \\end{tikzpicture}";
+
+  it("TikZ は原文のまま deckfigure で囲んで deckcanvas へ移す", () => {
+    const source = deck(`\\begin{frame}[label=f]{F}\n  ${tikz}\n\\end{frame}`);
+    const result = apply(
+      source,
+      must(detachBlockToCanvas(source, spanOf(source, tikz), placement)),
+    );
+    expect(result).toBe(
+      deck(`\\begin{frame}[label=f]{F}
+  \\begin{deckcanvas}
+    \\begin{deckfigure}[x=0.100,y=0.200,w=0.300]
+      \\begin{tikzpicture}
+        \\draw (0,0) -- (1,1);
+      \\end{tikzpicture}
+    \\end{deckfigure}
+  \\end{deckcanvas}
+\\end{frame}`),
+    );
+    expect(lintSource(result).filter((entry) => entry.code === "L014")).toEqual([]);
+  });
+
+  it("表と center の中の TikZ も移す。箱は中身の幅に縮むので \\centering は付けない", () => {
+    const table = "\\begin{tabular}{lc}\n    a & b \\\\\n  \\end{tabular}";
+    const source = deck(
+      `\\begin{frame}[label=f]{F}\n  ${table}\n  \\begin{center}\n  ${tikz}\n  \\end{center}\n\\end{frame}`,
+    );
+    expect(
+      apply(source, must(detachBlockToCanvas(source, spanOf(source, table), placement))),
+    ).toContain(
+      "    \\begin{deckfigure}[x=0.100,y=0.200,w=0.300]\n      \\begin{tabular}{lc}\n        a & b \\\\\n      \\end{tabular}\n    \\end{deckfigure}",
+    );
+    const centered = apply(
+      source,
+      must(detachBlockToCanvas(source, spanOf(source, tikz), placement)),
+    );
+    expect(centered).toContain(
+      "\\begin{deckfigure}[x=0.100,y=0.200,w=0.300]\n      \\begin{tikzpicture}",
+    );
+    expect(centered).not.toContain("\\centering");
+  });
+
+  it("verbatim 系の環境とキャンバスの環境は箱に入れられないので対象外", () => {
+    const verbatim = "\\begin{verbatim}\nx\n\\end{verbatim}";
+    const source = deck(
+      `\\begin{frame}[fragile,label=f]{F}\n${verbatim}\n\\begin{decktext}[x=0,y=0,w=1]stray\\end{decktext}\n\\end{frame}`,
+    );
+    const frame = parseDeck(source).body.find((element) => element.type === "frame");
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    expect([...detachStatusesOf(frame).values()]).toEqual([
+      { eligible: false, reason: "unsupported-kind" },
+      { eligible: false, reason: "unsupported-kind" },
+    ]);
+    expect(detachBlockToCanvas(source, spanOf(source, verbatim), placement)).toBeNull();
+  });
+});
