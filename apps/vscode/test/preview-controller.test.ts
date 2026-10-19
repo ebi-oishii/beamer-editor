@@ -1559,3 +1559,65 @@ describe("PreviewController: canvas clipboard(#148)", () => {
     );
   });
 });
+
+describe("canvas text edits (#217)", () => {
+  const textRender = (_text: string, version: number): RenderOutcome => {
+    const outcome = canvasRender(_text, version);
+    const frame = outcome.deck.frames[0];
+    if (frame?.canvasElements?.[1]) frame.canvasElements[1].textBody = "old";
+    return outcome;
+  };
+  const edit = (text: string, overrides: Record<string, unknown> = {}) => ({
+    type: "editCanvasText",
+    frameIndex: 0,
+    elementId: "canvas-text-0",
+    version: 7,
+    text,
+    ...overrides,
+  });
+
+  it("今の版の editable な文字要素だけ、書き換えた中身を callback へ渡す", async () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const editCanvasText = vi.fn(async () => "applied" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: textRender,
+      editCanvasText,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    // 画像・古い版・中身が変わらない書き換えは callback へ渡さない。
+    await controller.handleMessageForTest(edit("new", { elementId: "canvas-image-0" }));
+    await controller.handleMessageForTest(edit("new", { version: 6 }));
+    await controller.handleMessageForTest(edit("old"));
+    expect(editCanvasText).not.toHaveBeenCalled();
+    await controller.handleMessageForTest(edit("new"));
+    expect(editCanvasText).toHaveBeenCalledExactlyOnceWith({
+      frameIndex: 0,
+      elementId: "canvas-text-0",
+      version: 7,
+      text: "new",
+      sourceSpan: { start: 30, end: 45 },
+      document: doc,
+      expectedOptions: doc.getText().slice(30, 45),
+    });
+  });
+
+  it("書き換えられなかったら、もう一度書き換えるよう知らせて描き直す", async () => {
+    const { panel, posted } = makePanel();
+    const { events } = makeEvents();
+    const onWarning = vi.fn();
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      render: textRender,
+      editCanvasText: async () => "cancelled",
+      onWarning,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    const before = posted.length;
+    await controller.handleMessageForTest(edit("new"));
+    expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+      "Canvas text was not updated. Double-click it and edit it again.",
+    );
+    expect(posted.length).toBe(before + 1);
+  });
+});

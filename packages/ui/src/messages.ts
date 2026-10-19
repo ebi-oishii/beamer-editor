@@ -43,6 +43,14 @@ export type WebviewToExtension =
       version: number;
       width: number;
     }
+  /** decktext の中身をプレビューで書き換えた結果(#217)。text は元ソースの中身の LaTeX。 */
+  | {
+      type: "editCanvasText";
+      frameIndex: number;
+      elementId: string;
+      version: number;
+      text: string;
+    }
   | { type: "ready" }
   /** version はプレビューが表示中の deck の document version(古い版からのジャンプ検出に使う)。 */
   | { type: "jumpToSource"; frameIndex: number; version: number }
@@ -199,6 +207,22 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
           elementId: raw.elementId,
           version: raw.version,
           width: raw.width,
+        };
+      return null;
+    case "editCanvasText":
+      if (
+        isNonNegativeInteger(raw.frameIndex) &&
+        typeof raw.elementId === "string" &&
+        raw.elementId.length > 0 &&
+        isNonNegativeInteger(raw.version) &&
+        typeof raw.text === "string"
+      )
+        return {
+          type: "editCanvasText",
+          frameIndex: raw.frameIndex,
+          elementId: raw.elementId,
+          version: raw.version,
+          text: raw.text,
         };
       return null;
     case "moveCanvasElement":

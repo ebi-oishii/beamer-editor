@@ -62,6 +62,8 @@ export interface RenderedCanvasElement {
   /** 展開後ソースの `[...]` 範囲。host が strict map を通して editable 化する。 */
   sourceSpan: SourceSpan;
   editable?: boolean;
+  /** 元ソースの decktext の中身(プレビューでの書き換え用。#217)。host が editable な文字要素にだけ付ける。 */
+  textBody?: string;
 }
 
 export interface RenderedDeck {

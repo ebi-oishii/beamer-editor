@@ -213,3 +213,23 @@ describe("createMessageShellHost: canvas clipboard(#148)", () => {
     ]);
   });
 });
+
+describe("createMessageShellHost: editCanvasText(#217)", () => {
+  it("書き換えた中身を transport へ post する", () => {
+    const posted: unknown[] = [];
+    const host = createMessageShellHost({
+      post: (msg) => posted.push(msg),
+      subscribe: () => () => {},
+    });
+    host.editCanvasText?.(1, "canvas-text-0", 4, "new text");
+    expect(posted).toEqual([
+      {
+        type: "editCanvasText",
+        frameIndex: 1,
+        elementId: "canvas-text-0",
+        version: 4,
+        text: "new text",
+      },
+    ]);
+  });
+});

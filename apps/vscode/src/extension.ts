@@ -10,6 +10,7 @@ import {
   canvasFontSizeReplacement,
   canvasObjectSource,
   canvasPositionReplacement,
+  canvasTextBodyReplacement,
   canvasWidthReplacement,
   detachBlockToCanvas,
   fragmentHash,
@@ -893,6 +894,18 @@ export function activate(context: vscode.ExtensionContext): TestApi {
             replacement,
           );
           return (await vscode.workspace.applyEdit(edit)) ? "applied" : "failed";
+        },
+        editCanvasText: async (move) => {
+          const target = liveDocument(move.document, move.version);
+          if (!target) return "cancelled";
+          const text = target.getText();
+          if (text.slice(move.sourceSpan.start, move.sourceSpan.end) !== move.expectedOptions)
+            return "cancelled";
+          const replacement = canvasTextBodyReplacement(text, move.sourceSpan.end, move.text);
+          if (replacement === null) return "failed";
+          if (text.slice(replacement.span.start, replacement.span.end) === replacement.text)
+            return "unchanged";
+          return (await applyReplacement(target, replacement)) ? "applied" : "failed";
         },
         resizeCanvasElement: async (move) => {
           const target = vscode.workspace.textDocuments.find(

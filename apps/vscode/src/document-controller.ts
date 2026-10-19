@@ -4,6 +4,7 @@
  */
 
 import {
+  canvasTextBody,
   type DeckDocument,
   type ExpandDiagnostic,
   type ExpansionMap,
@@ -50,7 +51,15 @@ export function renderDocument(
         ...frame,
         canvasElements: (frame.canvasElements ?? []).map((element) => {
           const sourceSpan = mapExpandedRangeToSourceExact(expanded.map, element.sourceSpan);
-          return sourceSpan === null ? element : { ...element, sourceSpan, editable: true };
+          if (sourceSpan === null) return element;
+          // 文字要素は、プレビューで書き換えるための元ソースの中身を添える(#217)。
+          const body = element.kind === "text" ? canvasTextBody(text, sourceSpan.end) : null;
+          return {
+            ...element,
+            sourceSpan,
+            editable: true,
+            ...(body === null ? {} : { textBody: body.text }),
+          };
         }),
       })),
     },

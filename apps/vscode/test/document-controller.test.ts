@@ -45,4 +45,21 @@ describe("renderDocument", () => {
     expect(outcome.deck.frames).toHaveLength(1);
     expect(outcome.expandDiagnostics).toEqual([]);
   });
+
+  it("編集できる文字要素には、元ソースの decktext の中身を添える(#217)", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("../../../fixtures/canvas.slide.tex", import.meta.url)),
+      "utf8",
+    );
+    const elements = renderDocument(source, 1).deck.frames.flatMap(
+      (frame) => frame.canvasElements ?? [],
+    );
+    const text = elements.find((element) => element.kind === "text" && element.editable);
+    expect(text?.textBody).toBe(
+      "Accuracy improved by \\textbf{8.4 points} over the baseline, while\nlatency stayed within budget.",
+    );
+    expect(elements.filter((element) => element.kind === "image").map((e) => e.textBody)).toEqual(
+      elements.filter((element) => element.kind === "image").map(() => undefined),
+    );
+  });
 });
