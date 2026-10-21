@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   imagePasteExtension,
   imagePasteInsertion,
+  isLoneWebUrl,
   nextImagePasteFileName,
 } from "../src/image-paste";
 
@@ -26,6 +27,17 @@ describe("imagePasteExtension", () => {
     expect(imagePasteExtension("image/jpeg")).toBe("jpg");
     expect(imagePasteExtension("image/gif")).toBeNull();
     expect(imagePasteExtension("image/svg+xml")).toBeNull();
+  });
+});
+
+describe("isLoneWebUrl", () => {
+  it("http(s) の URL 1 つだけ(前後の空白は可)を URL とみなす(#179)", () => {
+    expect(isLoneWebUrl("https://example.com/a.png")).toBe(true);
+    expect(isLoneWebUrl(" http://127.0.0.1:8777/photo.png?x=1\n")).toBe(true);
+    expect(isLoneWebUrl("")).toBe(false);
+    expect(isLoneWebUrl("caption https://example.com/a.png")).toBe(false);
+    expect(isLoneWebUrl("https://example.com/a.png\nhttps://example.com/b.png")).toBe(false);
+    expect(isLoneWebUrl("file:///Users/me/a.png")).toBe(false);
   });
 });
 
