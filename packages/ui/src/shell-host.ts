@@ -79,6 +79,11 @@ export interface ShellHost {
     size: CanvasFontSize,
   ): void;
   resizeCanvasElement?(frameIndex: number, elementId: string, version: number, width: number): void;
+  /**
+   * ui → ホスト: decktext の中身をプレビューで書き換えた(#217)。text は書き換えた後の中身の
+   * LaTeX(textBody を編集したもの)。実装しないホストでは書き換えを始めない。
+   */
+  editCanvasText?(frameIndex: number, elementId: string, version: number, text: string): void;
   moveCanvasElement?(
     frameIndex: number,
     elementId: string,
@@ -187,6 +192,9 @@ export function createMessageShellHost(
     },
     resizeCanvasElement(frameIndex, elementId, version, width) {
       transport.post({ type: "resizeCanvasElement", frameIndex, elementId, version, width });
+    },
+    editCanvasText(frameIndex, elementId, version, text) {
+      transport.post({ type: "editCanvasText", frameIndex, elementId, version, text });
     },
     moveCanvasElement(frameIndex, elementId, version, x, y) {
       transport.post({ type: "moveCanvasElement", frameIndex, elementId, version, x, y });

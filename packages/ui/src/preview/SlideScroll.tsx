@@ -72,6 +72,7 @@ function SlideCard({
   cardRef,
   onSetCanvasFontSize,
   onResizeCanvasElement,
+  onEditCanvasText,
   onMoveCanvasElement,
   onDetachToCanvas,
   selectedElementId,
@@ -94,6 +95,7 @@ function SlideCard({
   onResizeCanvasElement?:
     | ((frameIndex: number, elementId: string, width: number) => void)
     | undefined;
+  onEditCanvasText?: ((frameIndex: number, elementId: string, text: string) => void) | undefined;
   onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
   onDetachToCanvas: ((frameIndex: number, request: DetachRequest) => void) | undefined;
   selectedElementId: string | null;
@@ -147,6 +149,11 @@ function SlideCard({
               ? (elementId, width) => onResizeCanvasElement(index, elementId, width)
               : undefined
           }
+          onEditCanvasText={
+            onEditCanvasText
+              ? (elementId, text) => onEditCanvasText(index, elementId, text)
+              : undefined
+          }
           onMoveCanvasElement={(elementId, x, y) => onMoveCanvasElement(index, elementId, x, y)}
           onDetachToCanvas={
             onDetachToCanvas ? (request) => onDetachToCanvas(index, request) : undefined
@@ -188,6 +195,7 @@ export function SlideScroll({
   onScrollActive,
   onSetCanvasFontSize,
   onResizeCanvasElement,
+  onEditCanvasText,
   onMoveCanvasElement,
   onDetachToCanvas,
   selection,
@@ -215,6 +223,7 @@ export function SlideScroll({
   onResizeCanvasElement?:
     | ((frameIndex: number, elementId: string, width: number) => void)
     | undefined;
+  onEditCanvasText?: ((frameIndex: number, elementId: string, text: string) => void) | undefined;
   onMoveCanvasElement: (frameIndex: number, elementId: string, x: number, y: number) => void;
   /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
   onDetachToCanvas?: ((frameIndex: number, request: DetachRequest) => void) | undefined;
@@ -482,6 +491,7 @@ export function SlideScroll({
           }}
           onSetCanvasFontSize={onSetCanvasFontSize}
           onResizeCanvasElement={onResizeCanvasElement}
+          onEditCanvasText={onEditCanvasText}
           onMoveCanvasElement={onMoveCanvasElement}
           onDetachToCanvas={onDetachToCanvas}
           selectedElementId={selection?.frameIndex === i ? selection.elementId : null}

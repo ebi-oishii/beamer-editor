@@ -171,3 +171,97 @@ export function canvasFontSizeReplacement(options: string, size: CanvasFontSize)
   parts[index] = `${match[1]}${size}${match[3]}`;
   return `[${parts.join(",")}]`;
 }
+
+/** decktext の中身(`[...]` の直後から `\end{decktext}` の直前まで)と、編集用の文字列。 */
+export interface CanvasTextBody {
+  /** 元ソース上の中身の範囲。 */
+  span: SourceSpan;
+  /** 前後の空白と、行頭の字下げを除いた文字列(改行は LF)。 */
+  text: string;
+}
+
+const DECKTEXT_END = "\\end{decktext}";
+
+/** index が行コメント(エスケープされていない `%` の後ろ)の中にあるか。 */
+function inLineComment(source: string, index: number): boolean {
+  const lineStart = source.lastIndexOf("\n", index - 1) + 1;
+  for (let cursor = lineStart; cursor < index; cursor++) {
+    if (source[cursor] === "\\") cursor++;
+    else if (source[cursor] === "%") return true;
+  }
+  return false;
+}
+
+/**
+ * 中身の書式。先頭と末尾の空白(改行と `\end{decktext}` の前の字下げ)はそのまま残し、
+ * 2 行目以降の字下げは中身の最初の行に合わせる。
+ */
+function bodyLayout(raw: string) {
+  const eol = raw.includes("\r\n") ? "\r\n" : "\n";
+  const body = raw.replaceAll("\r\n", "\n");
+  const leading = /^\s*/.exec(body)?.[0] ?? "";
+  const rest = body.slice(leading.length);
+  const trailing = /\s*$/.exec(rest)?.[0] ?? "";
+  const lines = rest.slice(0, rest.length - trailing.length).split("\n");
+  const indent = leading.includes("\n")
+    ? leading.slice(leading.lastIndexOf("\n") + 1)
+    : commonIndent(lines.slice(1));
+  return { eol, leading, trailing, lines, indent };
+}
+
+/** 空行を除く行に共通する行頭の空白。 */
+function commonIndent(lines: string[]): string {
+  let common: string | undefined;
+  for (const line of lines) {
+    if (line.trim() === "") continue;
+    const indent = /^[ \t]*/.exec(line)?.[0] ?? "";
+    if (common === undefined) {
+      common = indent;
+      continue;
+    }
+    let length = 0;
+    while (length < common.length && common[length] === indent[length]) length++;
+    common = common.slice(0, length);
+  }
+  return common ?? "";
+}
+
+/**
+ * `optionsEnd`(decktext の `[...]` の直後)から始まる中身を返す。対応する `\end{decktext}` が
+ * 無ければ null。プレビューでの書き換えは、この text を編集して canvasTextBodyReplacement で戻す。
+ */
+export function canvasTextBody(source: string, optionsEnd: number): CanvasTextBody | null {
+  let end = source.indexOf(DECKTEXT_END, optionsEnd);
+  while (end !== -1 && inLineComment(source, end)) end = source.indexOf(DECKTEXT_END, end + 1);
+  if (end === -1) return null;
+  const { lines, indent } = bodyLayout(source.slice(optionsEnd, end));
+  const text = lines
+    .map((line, index) =>
+      index === 0 ? line : line.startsWith(indent) ? line.slice(indent.length) : line.trimStart(),
+    )
+    .join("\n");
+  return { span: { start: optionsEnd, end }, text };
+}
+
+/**
+ * decktext の中身を text に置き換える置換。元の中身の前後の改行・字下げ・改行コードに合わせて
+ * 2 行目以降を字下げする。中身が見つからなければ null。
+ */
+export function canvasTextBodyReplacement(
+  source: string,
+  optionsEnd: number,
+  text: string,
+): { span: SourceSpan; text: string } | null {
+  const body = canvasTextBody(source, optionsEnd);
+  if (body === null) return null;
+  const { eol, leading, trailing, indent } = bodyLayout(
+    source.slice(body.span.start, body.span.end),
+  );
+  const content = text
+    .replaceAll("\r\n", "\n")
+    .trim()
+    .split("\n")
+    .map((line, index) => (index === 0 ? line : line.trim() === "" ? "" : indent + line))
+    .join("\n");
+  return { span: body.span, text: `${leading}${content}${trailing}`.replaceAll("\n", eol) };
+}

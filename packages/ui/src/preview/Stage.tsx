@@ -82,6 +82,7 @@ export function Stage({
   version,
   onSetCanvasFontSize,
   onResizeCanvasElement,
+  onEditCanvasText,
   onMoveCanvasElement,
   onDetachToCanvas,
   selectedElementId,
@@ -94,6 +95,8 @@ export function Stage({
   version: number;
   onSetCanvasFontSize?: ((elementId: string, size: CanvasFontSize) => void) | undefined;
   onResizeCanvasElement?: ((elementId: string, width: number) => void) | undefined;
+  /** 未指定ならダブルクリックで decktext の書き換えを始めない(ホストが未対応)。 */
+  onEditCanvasText?: ((elementId: string, text: string) => void) | undefined;
   onMoveCanvasElement: (elementId: string, x: number, y: number) => void;
   /** 未指定ならフロー要素の右クリックメニューを出さない(ホストが未対応)。 */
   onDetachToCanvas?: ((request: DetachRequest) => void) | undefined;
@@ -240,6 +243,94 @@ export function Stage({
     canvas.append(select);
     return () => select.remove();
   }, [frame, selected, onSetCanvasFontSize]);
+
+  // decktext の中身をその場で書き換える(#217)。ダブルクリックで、箱と同じ位置・幅・文字サイズの
+  // 入力欄に元ソースの中身(LaTeX)を出す。Cmd/Ctrl+Enter か入力欄の外で確定し、Escape で取り消す。
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const onEditCanvasTextRef = useRef(onEditCanvasText);
+  onEditCanvasTextRef.current = onEditCanvasText;
+  // 版が変わると要素の ID が振り直されるので、書きかけの入力欄は閉じる。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version identifies a replacement deck.
+  useEffect(() => setEditingId(null), [version]);
+  useEffect(() => {
+    const scale = scaleRef.current;
+    if (!scale || !onEditCanvasText) return;
+    const onDoubleClick = (event: MouseEvent) => {
+      const id = (event.target as HTMLElement).closest<HTMLElement>("[data-canvas-element-id]")
+        ?.dataset.canvasElementId;
+      const descriptor = frame.canvasElements?.find(
+        (item) => item.id === id && item.editable && item.textBody !== undefined,
+      );
+      if (!descriptor) return;
+      // スライドのダブルクリック(ソースへ移動)より優先する。
+      event.stopPropagation();
+      event.preventDefault();
+      setEditingId(descriptor.id);
+    };
+    scale.addEventListener("dblclick", onDoubleClick);
+    return () => scale.removeEventListener("dblclick", onDoubleClick);
+  }, [frame, onEditCanvasText]);
+  useEffect(() => {
+    const descriptor = frame.canvasElements?.find(
+      (item) => item.id === editingId && item.editable && item.textBody !== undefined,
+    );
+    const element = scaleRef.current?.querySelector<HTMLElement>(
+      `[data-canvas-element-id="${editingId}"]`,
+    );
+    const canvas = element?.closest<HTMLElement>(".canvas");
+    const original = descriptor?.textBody;
+    if (!descriptor || !element || !canvas || original === undefined) return;
+    const editor = document.createElement("textarea");
+    editor.className = "canvas-text-editor";
+    editor.setAttribute(
+      "aria-label",
+      "テキストの中身(LaTeX)。Cmd/Ctrl+Enter で確定、Escape で取り消し",
+    );
+    editor.spellcheck = false;
+    editor.value = original;
+    editor.style.left = element.style.left;
+    editor.style.top = element.style.top;
+    editor.style.width = element.style.width;
+    editor.style.fontSize = element.style.fontSize;
+    const minHeight = element.offsetHeight;
+    const fit = () => {
+      editor.style.height = "auto";
+      editor.style.height = `${Math.max(minHeight, editor.scrollHeight)}px`;
+    };
+    let closed = false;
+    const close = (commit: boolean) => {
+      if (closed) return;
+      closed = true;
+      setEditingId(null);
+      if (commit && editor.value !== original)
+        onEditCanvasTextRef.current?.(descriptor.id, editor.value);
+    };
+    for (const type of ["pointerdown", "click", "dblclick"])
+      editor.addEventListener(type, (event) => event.stopPropagation());
+    editor.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" || (event.key === "Enter" && (event.metaKey || event.ctrlKey))) {
+        event.preventDefault();
+        event.stopPropagation();
+        close(event.key === "Enter");
+        return;
+      }
+      // 修飾キー付きの操作(Cmd+Z・Cmd+C など)は VS Code に渡す。それ以外は入力欄の中だけで扱い、
+      // プレビューの操作(矢印でのフレーム移動・Enter でのスライド選択)に渡さない。
+      if (!event.metaKey && !event.ctrlKey) event.stopPropagation();
+    });
+    editor.addEventListener("input", fit);
+    editor.addEventListener("blur", () => close(true));
+    element.style.visibility = "hidden";
+    canvas.append(editor);
+    fit();
+    editor.focus();
+    editor.setSelectionRange(original.length, original.length);
+    return () => {
+      closed = true;
+      editor.remove();
+      element.style.visibility = "";
+    };
+  }, [frame, editingId]);
 
   // メニュー外の pointerdown / Escape で閉じる。
   useEffect(() => {

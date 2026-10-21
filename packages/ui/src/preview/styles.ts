@@ -335,6 +335,22 @@ export const PREVIEW_CSS = `
   border-top: 0.5pt solid #000;
 }
 
+/* decktext の中身の書き換え(#217)。箱と同じ位置・幅・文字サイズで重ね、元の箱は隠す。 */
+.slide .canvas-text-editor {
+  position: absolute;
+  z-index: 11;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 1px dashed var(--vscode-focusBorder, #007acc);
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
+  background: var(--deck-background, #fff);
+}
 .canvas-font-size {
   position: absolute;
   transform: translateY(-100%);
