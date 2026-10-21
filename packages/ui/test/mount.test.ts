@@ -1063,7 +1063,7 @@ describe("mountPreview", () => {
     expect(Number.parseFloat(layout.style.height)).toBeCloseTo(341.4267 * 3, 4);
   });
 
-  it("本文がはみ出したフレームだけに辺の破線とバッジを出し、測り直して収まれば消す(#193)", () => {
+  it("通常フレームでは両方向を示し、allowframebreaks では縦だけを示さない(#193)", () => {
     const observers: { callback: ResizeObserverCallback; targets: Element[] }[] = [];
     class ResizeObserverMock {
       private readonly targets: Element[] = [];
@@ -1111,9 +1111,10 @@ describe("mountPreview", () => {
     });
     act(() => host.push(DECK));
     const cards = container.querySelectorAll<HTMLElement>(".slide-card");
-    const [first, second] = cards;
+    let [first, second] = cards;
     if (!first || !second) throw new Error("slide cards missing");
     const remeasureFirst = () => {
+      if (!first) throw new Error("first slide card missing");
       const body = first.querySelector(".slide-body");
       const observer = [...observers]
         .reverse()
@@ -1147,6 +1148,38 @@ describe("mountPreview", () => {
       remeasureFirst();
       expect(first.querySelector(".slide-overflow-edge, .slide-overflow-badge")).toBeNull();
       expect(first.getAttribute("aria-label")).not.toContain("超えています");
+
+      // PDF では allowframebreaks の縦超過は次ページへ送られる。プレビューは 1 枚のままでも、
+      // PDF で内容が欠けるという誤警告や下端の印は出さない。
+      act(() =>
+        host.push({
+          ...DECK,
+          frames: DECK.frames.map((frame, index) =>
+            index === 0 ? { ...frame, allowFrameBreaks: true } : frame,
+          ),
+        }),
+      );
+      [first, second] = container.querySelectorAll<HTMLElement>(".slide-card");
+      if (!first || !second) throw new Error("updated slide cards missing");
+      expect(first.querySelector(".slide-overflow-edge, .slide-overflow-badge")).toBeNull();
+
+      firstBody.height = 400;
+      firstBody.width = 607;
+      remeasureFirst();
+      expect(first.querySelector(".slide-overflow-edge, .slide-overflow-badge")).toBeNull();
+      expect(first.getAttribute("aria-label")).not.toContain("PDF では Overfull");
+
+      // 横超過は allowframebreaks でも次ページに送れないので、通常どおり警告を維持する。
+      firstBody.width = 700;
+      remeasureFirst();
+      expect(first.querySelector(".slide-overflow-edge")?.className).toBe(
+        "slide-overflow-edge right",
+      );
+      const allowFrameBreaksBadge = first.querySelector<HTMLElement>(".slide-overflow-badge");
+      expect(allowFrameBreaksBadge?.textContent).toBe("はみ出し");
+      expect(allowFrameBreaksBadge?.title).toContain("右端");
+      expect(allowFrameBreaksBadge?.title).toContain("Overfull \\hbox");
+      expect(first.getAttribute("aria-label")).toContain("右端を超えています");
     } finally {
       act(() => unmount());
     }

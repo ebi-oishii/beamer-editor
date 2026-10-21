@@ -273,7 +273,6 @@ export function Stage({
   // 本文のはみ出しを測る(#193)。html の差し替え直後に描画前に測り、その後は本文と
   // その直下の要素の寸法変化(画像の読み込み等)とフォントの読み込み完了で測り直す。
   // step は依存に入れない。step が変えるのは .covered(visibility: hidden)だけで寸法は変わらない。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: frame の html 差し替えで DOM が作り直されるので frame を依存に含める
   useLayoutEffect(() => {
     const report = (next: SlideOverflow | null) => {
       if (sameOverflow(lastOverflowRef.current, next)) return;
@@ -292,7 +291,18 @@ export function Stage({
       if (disposed) return;
       const measurement = measureFlowExtent(slide);
       // レイアウトが無い(非表示の Webview など)ときは直前の判定を保つ。
-      if (measurement) report(detectOverflow(measurement));
+      if (measurement) {
+        const next = detectOverflow(measurement);
+        // allowframebreaks の縦超過は PDF では次ページへ送られる。プレビューは自動改ページを
+        // 再現せず 1 枚に描くが、PDF で欠けるという警告にはしない。横超過は別問題なので残す。
+        report(
+          next?.bottom && frame.allowFrameBreaks
+            ? next.right
+              ? { ...next, bottom: false }
+              : null
+            : next,
+        );
+      }
     };
     measure();
     slide.ownerDocument.fonts?.ready.then(measure, () => {});

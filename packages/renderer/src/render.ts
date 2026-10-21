@@ -47,6 +47,8 @@ export interface RenderedFrame {
   /** オーバーレイの総ステップ数(1 なら段階表示なし)。 */
   stepCount: number;
   isRaw: boolean;
+  /** `allowframebreaks` は PDF では縦に自動改ページする。 */
+  allowFrameBreaks?: boolean;
   /** deckcanvas 直下の画像・テキスト。ID はこの描画 version の frame 内だけで有効。 */
   canvasElements?: RenderedCanvasElement[];
 }
@@ -801,6 +803,7 @@ export function renderDeck(
         sourceSpan: frame.span,
         stepCount: 1,
         isRaw: true,
+        allowFrameBreaks: false,
         canvasElements: [],
       };
     }
@@ -814,6 +817,7 @@ export function renderDeck(
       sourceSpan: frame.span,
       stepCount,
       isRaw: false,
+      allowFrameBreaks: frame.options.allowframebreaks,
       canvasElements,
     };
   });
