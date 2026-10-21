@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { framesOf, parseDeck } from "@beamer-editor/core";
+import { extractPreviewStyle, framesOf, mergePreviewStyles, parseDeck } from "@beamer-editor/core";
 import { describe, expect, it } from "vitest";
 import { MONO_FONT_FALLBACK } from "../src/font-stack.js";
 import { frameTitleText, renderDeck } from "../src/render.js";
@@ -487,6 +487,100 @@ describe("renderDeck: テンプレート由来の土台スタイル", () => {
     const html = deck.frames[0]?.html ?? "";
     expect(html).not.toContain("deck-background");
     expect(html).toContain("width:10.00%");
+  });
+});
+
+describe("renderDeck: ブロックの配色と形(土台スタイルの blocks)", () => {
+  const doc = parseDeck(fixture("basic.slide.tex"));
+  const blocksHtml = (html: string) => html.match(/<div class="beamer-block[^"]*"/g) ?? [];
+
+  it("blocks が無ければ HTML も CSS も土台なしと同じ", () => {
+    const plain = renderDeck(doc);
+    const withBase = renderDeck(doc, undefined, { baseStyle: { colors: {}, fonts: {} } });
+    expect(withBase.css).toBe(plain.css);
+    expect(withBase.frames.map((f) => f.html)).toEqual(plain.frames.map((f) => f.html));
+    expect(plain.css).not.toContain("--deck-block");
+    expect(plain.frames.map((f) => f.html).join("")).not.toMatch(/block-(title|body)-filled/);
+  });
+
+  it("書かれた色だけを CSS 変数にし、bg のある部位に帯・箱、角丸・影のクラスを付ける", () => {
+    const deck = renderDeck(doc, undefined, {
+      baseStyle: {
+        colors: {},
+        fonts: {},
+        blocks: {
+          colors: {
+            normal: { titleFg: "FFFFFF", titleBg: "0000BF", bodyBg: "F0F0FF" },
+            alerted: { bodyFg: "000000", bodyBg: "FFF0F0" },
+            example: { titleFg: "123456" },
+          },
+          shape: { rounded: true, shadow: true },
+        },
+      },
+    });
+    expect(deck.css).toContain("--deck-block-title-fg: #FFFFFF;");
+    expect(deck.css).toContain("--deck-block-title-bg: #0000BF;");
+    expect(deck.css).toContain("--deck-block-body-bg: #F0F0FF;");
+    expect(deck.css).toContain("--deck-block-alerted-body-fg: #000000;");
+    expect(deck.css).toContain("--deck-block-alerted-body-bg: #FFF0F0;");
+    expect(deck.css).toContain("--deck-block-example-title-fg: #123456;");
+    // alerted / example は block title / block body を継がない(Beamer 既定)。
+    expect(deck.css).not.toContain("--deck-block-alerted-title-bg");
+    expect(deck.css).not.toContain("--deck-block-example-body-bg");
+    expect(blocksHtml(deck.frames.map((f) => f.html).join(""))).toEqual([
+      '<div class="beamer-block block-title-filled block-body-filled block-rounded block-shadow"',
+      '<div class="beamer-block alert block-body-filled block-rounded block-shadow"',
+      // 帯も箱も無い種類には角丸・影も付けない。
+      '<div class="beamer-block example"',
+    ]);
+  });
+
+  it("角形(既定)なら帯・箱だけ、形だけの指定ではクラスを付けない", () => {
+    const square = renderDeck(doc, undefined, {
+      baseStyle: { colors: {}, fonts: {}, blocks: { colors: { normal: { titleBg: "0000BF" } } } },
+    });
+    expect(blocksHtml(square.frames.map((f) => f.html).join(""))[0]).toBe(
+      '<div class="beamer-block block-title-filled"',
+    );
+    const shapeOnly = renderDeck(doc, undefined, {
+      baseStyle: {
+        colors: {},
+        fonts: {},
+        blocks: { colors: {}, shape: { rounded: true, shadow: true } },
+      },
+    });
+    expect(shapeOnly.frames.map((f) => f.html)).toEqual(renderDeck(doc).frames.map((f) => f.html));
+    expect(shapeOnly.css).toBe(renderDeck(doc).css);
+  });
+
+  it("解釈不能な背景色と一緒の白い fg は HTML/CSS へ出さず、既定表示を使う", () => {
+    const source = String.raw`\documentclass{beamer}
+\begin{document}
+\begin{frame}{A}\begin{block}{Readable}text\end{block}\end{frame}
+\end{document}`;
+    for (const background of ["structure.fg!75!black", "cmykbg", "NavyBlue"]) {
+      const definition = background === "cmykbg" ? "\\definecolor{cmykbg}{cmyk}{0,1,1,0}\n" : "";
+      const baseStyle = extractPreviewStyle(
+        `${definition}\\setbeamercolor{block title}{use=structure,fg=white,bg=${background}}`,
+      );
+      const deck = renderDeck(parseDeck(source), undefined, { baseStyle });
+      expect(deck.css, background).not.toContain("--deck-block-title");
+      expect(deck.frames[0]?.html, background).not.toContain("block-title-filled");
+    }
+  });
+
+  it("抽出元をまたぐ未対応 bg でも HTML/CSS は先行する白い fg と帯を出さない", () => {
+    const source = String.raw`\documentclass{beamer}
+\begin{document}
+\begin{frame}{A}\begin{block}{Readable}text\end{block}\end{frame}
+\end{document}`;
+    const baseStyle = mergePreviewStyles(
+      extractPreviewStyle("\\setbeamercolor{block title}{fg=white,bg=blue}"),
+      extractPreviewStyle("\\setbeamercolor{block title}{fg=white,bg=NavyBlue}"),
+    );
+    const deck = renderDeck(parseDeck(source), undefined, { baseStyle });
+    expect(deck.css).not.toContain("--deck-block-title");
+    expect(deck.frames[0]?.html).not.toContain("block-title-filled");
   });
 });
 

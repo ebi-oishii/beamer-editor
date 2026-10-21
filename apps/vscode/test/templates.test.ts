@@ -134,6 +134,49 @@ describe("baseStyleOf", () => {
     const doc = parseDeck(deckWithExtra("\\setbeamercolor{alerted text}{fg=red}"));
     expect(baseStyleOf(doc, fakeFs({})).colors).toEqual({ alert: "FF0000" });
   });
+
+  it("ブロックの配色と形もテンプレート → preamble-extra の順に重ねる", () => {
+    const doc = parseDeck(
+      deckWithExtra(
+        "\\usetheme{corporate}\n\\setbeamercolor{block title}{bg=red!75!black}\n\\setbeamertemplate{blocks}[default]",
+      ),
+    );
+    const fs = fakeFs({
+      "templates/corporate/beamerthemecorporate.sty":
+        "\\useinnertheme[shadow]{rounded}\n\\setbeamercolor{block title}{bg=blue,fg=white}",
+    });
+    expect(baseStyleOf(doc, fs).blocks).toEqual({
+      colors: { normal: { titleBg: "BF0000", titleFg: "FFFFFF" } },
+      shape: { rounded: false, shadow: false },
+    });
+  });
+
+  it("後のテンプレートまたは preamble-extra の未対応 block bg は先行する白い fg を消す", () => {
+    const templates = fakeFs({
+      "beamerthemefirst.sty": "\\setbeamercolor{block title}{fg=white,bg=blue}",
+      "beamerthemelast.sty": "\\setbeamercolor{block title}{fg=white,bg=NavyBlue}",
+    });
+    const multiple = baseStyleOf(
+      parseDeck(deckWithExtra("\\usetheme{first}\\usetheme{last}")),
+      templates,
+    );
+    expect(multiple.blocks).toEqual({
+      colors: {},
+      cleared: { normal: { titleFg: true, titleBg: true } },
+    });
+    const extra = baseStyleOf(
+      parseDeck(
+        deckWithExtra(
+          "\\usetheme{first}\\setbeamercolor{block title}{fg=white,bg=structure.fg!75!black}",
+        ),
+      ),
+      templates,
+    );
+    expect(extra.blocks).toEqual({
+      colors: {},
+      cleared: { normal: { titleFg: true, titleBg: true } },
+    });
+  });
 });
 
 describe("\\graphicspath と画像パスのマクロ(#192)", () => {
