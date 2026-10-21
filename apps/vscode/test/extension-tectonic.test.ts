@@ -47,6 +47,8 @@ vi.mock("vscode", () => {
       createTextEditorDecorationType: disposable,
       createOutputChannel: disposable,
       registerTreeDataProvider: disposable,
+      registerWebviewPanelSerializer: disposable,
+      tabGroups: { all: [] },
       onDidChangeActiveTextEditor: disposable,
       onDidChangeTextEditorSelection: disposable,
       createWebviewPanel: () => ({

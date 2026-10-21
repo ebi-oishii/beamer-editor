@@ -15,6 +15,7 @@ import {
   type WebviewToExtension,
 } from "@beamer-editor/ui";
 import * as pdfjs from "pdfjs-dist";
+import { withPreviewRestoreState } from "./preview-restore";
 import { rasterScaleFor } from "./raster-scale";
 // KaTeX の数式 CSS とフォント。esbuild が media/webview.css + フォントへ抽出する。
 import "katex/dist/katex.min.css";
@@ -41,12 +42,24 @@ const transport: MessageTransport = {
   },
 };
 
-// ナビ状態(現在フレーム・step・zoom)だけを getState / setState で保存する(移植計画 VS-7)。
-const host = createMessageShellHost(transport, {
-  getState: () => api.getState(),
-  setState: (state) => api.setState(state),
-});
 const container = document.getElementById("app");
+
+// ナビ状態(現在フレーム・step・zoom)を getState / setState で保存する(移植計画 VS-7)。
+// 拡張が #app に入れた元ソースも一緒に残し、VS Code の再読み込みで拡張がパネルをつなぎ直せるようにする(#199)。
+const stateStore = {
+  getState: () => api.getState(),
+  setState: (state: unknown) => api.setState(state),
+};
+const sourceUri = container?.dataset.sourceUri;
+const host = createMessageShellHost(
+  transport,
+  sourceUri
+    ? withPreviewRestoreState(stateStore, {
+        uri: sourceUri,
+        automatic: container?.dataset.automatic === "true",
+      })
+    : stateStore,
+);
 
 // 生ブロックの部分コンパイル画像(#81): PDF を pdf.js で 3 倍解像度に描いて data URL にする。
 // worker の URI は拡張側が #app の data-pdf-worker に入れる(別オリジンなので pdf.js が blob 経由で起動する)。
