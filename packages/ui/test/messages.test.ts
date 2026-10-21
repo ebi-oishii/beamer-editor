@@ -211,3 +211,17 @@ describe("parseWebviewToExtension: canvas clipboard(#148)", () => {
     ).toBeNull();
   });
 });
+
+describe("parseWebviewToExtension: slide clipboard(#174)", () => {
+  it("copySlide / pasteSlides を受理し、負や小数の番号は null", () => {
+    for (const type of ["copySlide", "pasteSlides"] as const) {
+      expect(parseWebviewToExtension({ type, frameIndex: 2, version: 3 })).toEqual({
+        type,
+        frameIndex: 2,
+        version: 3,
+      });
+      expect(parseWebviewToExtension({ type, frameIndex: -1, version: 3 })).toBeNull();
+      expect(parseWebviewToExtension({ type, frameIndex: 0, version: 1.5 })).toBeNull();
+    }
+  });
+});

@@ -183,6 +183,23 @@ export interface PreviewControllerOptions {
     frameOffset: number;
     document: PreviewDocument;
   }) => Promise<PasteResult>;
+  /** frameOffset(元ソース上の開始位置)のスライドのソースをクリップボードへ写す(#174)。写せたら true。 */
+  copySlide?: (request: {
+    frameIndex: number;
+    version: number;
+    frameOffset: number;
+    document: PreviewDocument;
+  }) => Promise<boolean>;
+  /**
+   * クリップボードのスライドを frameOffset のスライドの後ろへ挿入する(#174)。newFrameStart は
+   * 貼り付けた先頭スライドの開始位置。クリップボードがスライドでなければ null。
+   */
+  pasteSlides?: (request: {
+    frameIndex: number;
+    version: number;
+    frameOffset: number;
+    document: PreviewDocument;
+  }) => Promise<{ applied: boolean; newFrameStart?: number } | null>;
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -291,6 +308,8 @@ export class PreviewController implements vscode.Disposable {
   private readonly deleteCanvasElement: PreviewControllerOptions["deleteCanvasElement"];
   private readonly copyCanvasElement: PreviewControllerOptions["copyCanvasElement"];
   private readonly pasteCanvasElements: PreviewControllerOptions["pasteCanvasElements"];
+  private readonly copySlide: PreviewControllerOptions["copySlide"];
+  private readonly pasteSlides: PreviewControllerOptions["pasteSlides"];
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
@@ -351,6 +370,8 @@ export class PreviewController implements vscode.Disposable {
     this.deleteCanvasElement = options.deleteCanvasElement;
     this.copyCanvasElement = options.copyCanvasElement;
     this.pasteCanvasElements = options.pasteCanvasElements;
+    this.copySlide = options.copySlide;
+    this.pasteSlides = options.pasteSlides;
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
@@ -435,6 +456,10 @@ export class PreviewController implements vscode.Disposable {
       await this.enqueueClipboard(() => this.handleCopy(msg));
     } else if (msg.type === "pasteCanvasElements") {
       await this.enqueueClipboard(() => this.handlePaste(msg));
+    } else if (msg.type === "copySlide") {
+      await this.enqueueClipboard(() => this.handleCopySlide(msg));
+    } else if (msg.type === "pasteSlides") {
+      await this.enqueueClipboard(() => this.handlePasteSlides(msg));
     } else if (msg.type === "undoRedo") {
       // 注入された処理は同期で呼び出し、同期の例外も非同期の rejection も onError へ回す。
       const report = () => this.onError(`failed to ${msg.kind} the source document.`);
@@ -727,22 +752,7 @@ export class PreviewController implements vscode.Disposable {
         return;
       }
       if (result?.applied && result.newFrameStart !== undefined) {
-        this.pendingMovedSlide = {
-          document,
-          uri: document.uri.toString(),
-          version: request.version,
-          newFrameStart: result.newFrameStart,
-        };
-        this.revealMovedSlide();
-        if (
-          !this.disposed &&
-          this.pendingMovedSlide &&
-          (!this.latest ||
-            this.latestDocument !== document ||
-            this.latest.version !== document.version)
-        ) {
-          this.sendDeck();
-        }
+        this.revealSlideAfterEdit(document, request.version, result.newFrameStart);
       } else {
         this.pendingMovedSlide = undefined;
         this.sendDeck();
@@ -751,6 +761,96 @@ export class PreviewController implements vscode.Disposable {
       this.pendingMovedSlide = undefined;
       if (!this.disposed) {
         this.onError("failed to move the slide.");
+        this.sendDeck();
+      }
+    } finally {
+      this.slideEditPending = false;
+    }
+  }
+
+  /** スライドの移動・貼り付け後、newFrameStart から始まるスライドを新しい版の描画で表示させる。 */
+  private revealSlideAfterEdit(
+    document: PreviewDocument,
+    version: number,
+    newFrameStart: number,
+  ): void {
+    this.pendingMovedSlide = { document, uri: document.uri.toString(), version, newFrameStart };
+    this.revealMovedSlide();
+    if (
+      !this.disposed &&
+      this.pendingMovedSlide &&
+      (!this.latest || this.latestDocument !== document || this.latest.version !== document.version)
+    ) {
+      this.sendDeck();
+    }
+  }
+
+  /** 選択中のスライドのソースをクリップボードへ写す(Cmd+C。#174)。 */
+  private async handleCopySlide(request: { frameIndex: number; version: number }): Promise<void> {
+    const latest = this.latest;
+    if (
+      !latest ||
+      this.latestDocument !== this.document ||
+      request.version !== this.document.version ||
+      latest.version !== this.document.version
+    ) {
+      this.sendDeck();
+      return;
+    }
+    const frameOffset = resolveJumpOffset(latest, request.frameIndex);
+    if (frameOffset === null) return;
+    const { frameIndex, version } = request;
+    let copied = false;
+    try {
+      copied =
+        (await this.copySlide?.({ frameIndex, version, frameOffset, document: this.document })) ===
+        true;
+    } catch {
+      copied = false;
+    }
+    if (this.disposed || copied) return;
+    this.onWarning("スライドをコピーできませんでした。選び直してください。");
+    this.sendDeck();
+  }
+
+  /**
+   * 選択中のスライドへの貼り付け(Cmd+V。#174)。クリップボードがスライドならその後ろへ挿入して
+   * 貼り付けたスライドを表示し、そうでなければキャンバス要素としてそのフレームへ貼り付ける。
+   */
+  private async handlePasteSlides(request: { frameIndex: number; version: number }): Promise<void> {
+    if (this.editInFlight()) return;
+    const latest = this.latest;
+    if (
+      !latest ||
+      this.latestDocument !== this.document ||
+      request.version !== this.document.version ||
+      latest.version !== this.document.version
+    ) {
+      this.sendDeck();
+      return;
+    }
+    const frameOffset = resolveJumpOffset(latest, request.frameIndex);
+    if (frameOffset === null) return;
+    const { frameIndex, version } = request;
+    const document = this.document;
+    this.slideEditPending = true;
+    try {
+      const result = await this.pasteSlides?.({ frameIndex, version, frameOffset, document });
+      this.slideEditPending = false;
+      if (this.disposed) return;
+      if (result === null) {
+        await this.handlePaste(
+          { frameIndex, version },
+          "貼り付けられませんでした。クリップボードがスライド(\\begin{frame}…\\end{frame})かキャンバスの要素(decktext / deckimage)でないか、対象のフレームが受け付けられない形です。",
+        );
+      } else if (result?.applied && result.newFrameStart !== undefined) {
+        this.revealSlideAfterEdit(document, version, result.newFrameStart);
+      } else {
+        this.sendDeck();
+      }
+    } catch {
+      if (!this.disposed) {
+        this.onError("failed to paste slides.");
         this.sendDeck();
       }
     } finally {
@@ -910,7 +1010,10 @@ export class PreviewController implements vscode.Disposable {
   }
 
   /** クリップボードのキャンバス要素を、表示中のフレームへ貼り付ける(Cmd+V。#148)。 */
-  private async handlePaste(request: { frameIndex: number; version: number }): Promise<void> {
+  private async handlePaste(
+    request: { frameIndex: number; version: number },
+    notCanvasMessage = "貼り付けられませんでした。クリップボードがキャンバスの要素(decktext / deckimage)でないか、対象のフレームが受け付けられない形です。",
+  ): Promise<void> {
     if (this.editInFlight()) return;
     const latest = this.latest;
     if (
@@ -951,9 +1054,7 @@ export class PreviewController implements vscode.Disposable {
         return;
       }
       if (result === "notCanvas") {
-        this.onWarning(
-          "貼り付けられませんでした。クリップボードがキャンバスの要素(decktext / deckimage)でないか、対象のフレームが受け付けられない形です。",
-        );
+        this.onWarning(notCanvasMessage);
         this.sendDeck();
         return;
       }

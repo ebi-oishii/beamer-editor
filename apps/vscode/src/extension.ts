@@ -20,6 +20,7 @@ import {
   parseDeck,
   pasteCanvasObjects,
   removeCanvasObject,
+  slideSource,
 } from "@beamer-editor/core";
 import { MAX_RAW_PDF_BYTES } from "@beamer-editor/ui";
 import * as vscode from "vscode";
@@ -1020,6 +1021,22 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           const result = pasteCanvasObjects(target.getText(), request.frameOffset, clipboard);
           if (result === null) return "notCanvas";
           return (await applyReplacement(target, result)) ? "applied" : "failed";
+        },
+        // プレビューで選択したスライドのコピー・貼り付け(#174)。
+        copySlide: async (request) => {
+          const target = liveDocument(request.document, request.version);
+          if (!target) return false;
+          const result = slideSource(target.getText(), request.frameOffset);
+          if (!result.ok) return false;
+          await vscode.env.clipboard.writeText(result.text);
+          return true;
+        },
+        pasteSlides: async (request) => {
+          const clipboard = await vscode.env.clipboard.readText();
+          // クリップボードを読む間に文書が進んでいたら書かない。
+          const target = liveDocument(request.document, request.version);
+          if (!target) return { applied: false };
+          return slideEdits.pasteAt(target, request.version, request.frameOffset, clipboard);
         },
       },
     );

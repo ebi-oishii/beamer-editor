@@ -2,6 +2,7 @@ import {
   editSlide,
   framesOf,
   parseDeck,
+  pasteSlides,
   type SlideEditAction,
   type SlideSourceEdit,
 } from "@beamer-editor/core";
@@ -37,7 +38,6 @@ export class SlideEditController<Document extends SlideOutlineDocument> {
     return this.run(action, document, entry?.start);
   }
 
-  /** 照合済みの document に 1 回の WorkspaceEdit を適用する。重なる編集は拒否する。 */
   private async run(action: SlideEditAction, document: Document, start?: number): Promise<boolean> {
     if (this.pending.has(document)) return false;
     const version = document.version;
@@ -56,11 +56,20 @@ export class SlideEditController<Document extends SlideOutlineDocument> {
       );
       return false;
     }
-    if (document.version !== version) return false;
+    return this.submit(document, version, result.edits);
+  }
+
+  /** 照合済みの document に 1 回の WorkspaceEdit を適用する。重なる編集は拒否する。 */
+  private async submit(
+    document: Document,
+    version: number,
+    edits: readonly SlideSourceEdit[],
+  ): Promise<boolean> {
+    if (this.pending.has(document) || document.version !== version) return false;
     this.pending.add(document);
     try {
       // No await between the last version check and WorkspaceEdit submission.
-      const applied = await this.host.apply(document, result.edits);
+      const applied = await this.host.apply(document, edits);
       if (!applied)
         this.host.warn("スライドを変更できませんでした。文書の状態を確認してください。");
       if (applied) this.host.changed(document);
@@ -118,6 +127,29 @@ export class SlideEditController<Document extends SlideOutlineDocument> {
     return {
       applied: await this.run(action, document, start),
       newFrameStart: nextFrame.span.start,
+    };
+  }
+
+  /**
+   * Webview からの貼り付け(#174)。executeAt と同じ照合のうえ、クリップボードのスライドを
+   * start の frame の後ろへ一回の WorkspaceEdit で挿入する。クリップボードがスライドでなければ null。
+   */
+  async pasteAt(
+    document: Document,
+    version: number,
+    start: number,
+    clipboard: string,
+  ): Promise<{ applied: boolean; newFrameStart?: number } | null> {
+    if (!this.canMoveAt(document, version, start)) return { applied: false };
+    const result = pasteSlides(document.getText(), start, clipboard);
+    if (result === null) return null;
+    if (!result.ok) {
+      this.host.warn(result.reason);
+      return { applied: false };
+    }
+    return {
+      applied: await this.submit(document, version, result.edits),
+      newFrameStart: result.firstFrameStart,
     };
   }
 }

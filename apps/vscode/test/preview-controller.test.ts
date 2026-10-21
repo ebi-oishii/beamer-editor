@@ -1559,3 +1559,117 @@ describe("PreviewController: canvas clipboard(#148)", () => {
     );
   });
 });
+
+describe("PreviewController: slide clipboard(#174)", () => {
+  const twoFrameRender = (_text: string, version: number): RenderOutcome => ({
+    deck: {
+      title: "t",
+      css: "",
+      frames: [
+        {
+          index: 1,
+          label: null,
+          titleText: "one",
+          html: "",
+          stepCount: 1,
+          isRaw: false,
+          sourceSpan: { start: 0, end: 20 },
+        },
+        {
+          index: 2,
+          label: null,
+          titleText: "two",
+          html: "",
+          stepCount: 1,
+          isRaw: false,
+          sourceSpan: { start: 20, end: 40 },
+        },
+      ],
+    },
+    version,
+    expansionMap: [
+      { expandedStart: 0, expandedEnd: 100, sourceStart: 0, sourceEnd: 100, exact: true },
+    ],
+    expandDiagnostics: [],
+  });
+
+  it("copySlide: フレームの元ソース位置を添えて写し、写せなければ警告する。古い版では呼ばない", async () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const onWarning = vi.fn();
+    const copySlide = vi.fn(async () => true);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: twoFrameRender,
+      copySlide,
+      onWarning,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    await controller.handleMessageForTest({ type: "copySlide", frameIndex: 1, version: 7 });
+    expect(copySlide).toHaveBeenCalledExactlyOnceWith({
+      frameIndex: 1,
+      version: 7,
+      frameOffset: 20,
+      document: doc,
+    });
+    expect(onWarning).not.toHaveBeenCalled();
+    await controller.handleMessageForTest({ type: "copySlide", frameIndex: 1, version: 6 });
+    expect(copySlide).toHaveBeenCalledOnce();
+    copySlide.mockResolvedValueOnce(false);
+    await controller.handleMessageForTest({ type: "copySlide", frameIndex: 0, version: 7 });
+    expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+      "スライドをコピーできませんでした。選び直してください。",
+    );
+  });
+
+  it("pasteSlides: 貼り付けたら新しい版の描画で、貼り付けた先頭のスライドを表示させる", async () => {
+    const { panel, posted } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const pasteSlides = vi.fn(async () => {
+      doc.edit(doc.getText());
+      return { applied: true, newFrameStart: 20 };
+    });
+    const pasteCanvasElements = vi.fn(async () => "applied" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: twoFrameRender,
+      pasteSlides,
+      pasteCanvasElements,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    await controller.handleMessageForTest({ type: "pasteSlides", frameIndex: 0, version: 7 });
+    expect(pasteSlides).toHaveBeenCalledExactlyOnceWith({
+      frameIndex: 0,
+      version: 7,
+      frameOffset: 0,
+      document: doc,
+    });
+    expect(pasteCanvasElements).not.toHaveBeenCalled();
+    expect(posted.at(-1)).toEqual({ type: "activeFrameChanged", frameIndex: 1, version: 8 });
+  });
+
+  it("pasteSlides: クリップボードがスライドでなければ、そのフレームへキャンバス要素として貼り付ける", async () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    const onWarning = vi.fn();
+    const pasteCanvasElements = vi.fn(async () => "notCanvas" as const);
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: twoFrameRender,
+      pasteSlides: async () => null,
+      pasteCanvasElements,
+      onWarning,
+    });
+    await controller.handleMessageForTest({ type: "ready" });
+    await controller.handleMessageForTest({ type: "pasteSlides", frameIndex: 1, version: 7 });
+    expect(pasteCanvasElements).toHaveBeenCalledExactlyOnceWith({
+      frameIndex: 1,
+      version: 7,
+      frameOffset: 20,
+      document: doc,
+    });
+    expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+      "貼り付けられませんでした。クリップボードがスライド(\\begin{frame}…\\end{frame})かキャンバスの要素(decktext / deckimage)でないか、対象のフレームが受け付けられない形です。",
+    );
+  });
+});

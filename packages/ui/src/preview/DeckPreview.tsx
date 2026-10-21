@@ -74,11 +74,27 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     selectionRef.current = next;
     setSelection(next);
   }, []);
+  // 選択中のスライド(#174。PowerPoint のスライド選択)。要素の選択とはどちらか一方だけを持ち、
+  // スライドの要素の無い所かタイトル行を押すと選ばれる。Cmd/Ctrl+C / V の対象。
+  const [selectedSlide, setSelectedSlide] = useState<number | null>(null);
+  const selectedSlideRef = useRef(selectedSlide);
+  const selectSlide = useCallback((next: number | null) => {
+    selectedSlideRef.current = next;
+    setSelectedSlide(next);
+  }, []);
+  // 選べるのは、ホストがコピーでき、元ソースに明示されたフレームだけ。
+  const slideSelectable = (index: number) =>
+    host.copySlide !== undefined && editableFrameIndexes.includes(index);
+  // スライドを貼り付けた要求の版と、それを反映した版。反映した版の表示要求(貼り付けた
+  // スライドへの移動)で、選択も貼り付けたスライドへ移す。
+  const slidePasteRequestVersion = useRef<number | undefined>();
+  const slidePasteVersion = useRef<number | undefined>();
   const handleSelectionChange = useCallback(
     (frameIndex: number, elementId: string | null) => {
       select(elementId === null ? null : { frameIndex, elementId });
+      if (elementId !== null) selectSlide(null);
     },
-    [select],
+    [select, selectSlide],
   );
   // 矢印キーや見出しのクリックで別のフレームへ移ったら、前のフレームの選択を外す
   // (画面外の要素を Delete / Cmd+X の対象に残さない)。スクロールで上端のフレームが
@@ -99,6 +115,14 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     () =>
       host.subscribe((next, nextVersion, editable) => {
         select(null);
+        // スライドの選択は番号のまま保つ(現在フレームと同じ)。明示フレームでなくなったら外す。
+        const slide = selectedSlideRef.current;
+        if (slide !== null && !(editable ?? []).includes(slide)) selectSlide(null);
+        const pasteRequested = slidePasteRequestVersion.current;
+        slidePasteVersion.current =
+          pasteRequested !== undefined && nextVersion > pasteRequested ? nextVersion : undefined;
+        if (pasteRequested !== undefined && nextVersion >= pasteRequested)
+          slidePasteRequestVersion.current = undefined;
         versionRef.current = nextVersion;
         const requestedVersion = reorderFocusRequestVersion.current;
         if (requestedVersion !== undefined) {
@@ -109,7 +133,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         setVersion(nextVersion);
         setEditableFrameIndexes(editable ?? []);
       }),
-    [host, select],
+    [host, select, selectSlide],
   );
 
   // ソース側(CodeLens・コマンド・カーソル追従)からの表示要求。表示中の版と違えば無視する
@@ -120,13 +144,17 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         if (requestVersion !== versionRef.current) return;
         dispatch({ type: "goto", index: frameIndex });
         requestReveal(frameIndex);
+        if (slidePasteVersion.current === requestVersion) {
+          slidePasteVersion.current = undefined;
+          selectSlide(frameIndex);
+        }
         if (reorderFocusVersion.current === requestVersion) {
           reorderFocusRequestVersion.current = undefined;
           reorderFocusVersion.current = undefined;
           setReorderFocusFrame(frameIndex);
         }
       }),
-    [host, requestReveal],
+    [host, requestReveal, selectSlide],
   );
 
   // deck が変わったら位置を保ったまま読み込み直す（編集中は現在フレームを維持）。
@@ -283,6 +311,19 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
             );
             return;
           }
+          // 選択中のスライドの Cmd/Ctrl+C(コピー)と、その後ろへの +V(貼り付け)。#174
+          const slide = selectedSlideRef.current;
+          if (key === "c" && slide !== null && !copyingText && hostRef.current.copySlide) {
+            event.preventDefault();
+            hostRef.current.copySlide(slide, versionRef.current);
+            return;
+          }
+          if (key === "v" && slide !== null && hostRef.current.pasteSlides) {
+            event.preventDefault();
+            slidePasteRequestVersion.current = versionRef.current;
+            hostRef.current.pasteSlides(slide, versionRef.current);
+            return;
+          }
           if (key === "v" && hostRef.current.pasteCanvasElements) {
             event.preventDefault();
             hostRef.current.pasteCanvasElements(currentRef.current, versionRef.current);
@@ -351,9 +392,15 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         zoom={zoom}
         version={version}
         reveal={reveal}
-        onSelect={(i) => {
+        onSelect={(i, target) => {
           // 別フレームの箱を押したときは、選択が先にそのフレームへ移っているので外れない。
           leaveSelectionFor(i);
+          if (target === "slide" && slideSelectable(i)) {
+            select(null);
+            selectSlide(i);
+          } else {
+            selectSlide(null);
+          }
           dispatch({ type: "goto", index: i });
         }}
         onJump={(i) => host.jumpToSource(i, version)}
@@ -392,6 +439,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
             : undefined
         }
         selection={selection}
+        selectedSlide={selectedSlide}
         onSelectionChange={handleSelectionChange}
         onFitScaleChange={handleFitScaleChange}
       />

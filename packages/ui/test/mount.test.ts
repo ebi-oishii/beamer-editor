@@ -2393,3 +2393,225 @@ describe("canvas selection across frames(#148)", () => {
     expect(deleteCanvasElement).toHaveBeenCalledExactlyOnceWith(1, "canvas-text-0", 5);
   });
 });
+
+describe("slide selection and clipboard keys(#174)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+  });
+
+  const frameWithText = (index: number, start: number) => ({
+    index,
+    label: `f${index}`,
+    titleText: `frame ${index}`,
+    html: `<div class="slide"><div class="slide-body"><div class="canvas">
+      <div class="canvas-item canvas-text" data-canvas-element-id="canvas-text-0" data-canvas-element-kind="text" style="left:10%;top:20%;width:40%">text ${index}</div>
+    </div></div></div>`,
+    stepCount: 1,
+    isRaw: false,
+    sourceSpan: { start: start - 10, end: start + 90 },
+    canvasElements: [
+      {
+        id: "canvas-text-0",
+        kind: "text" as const,
+        position: { x: 0.1, y: 0.2, width: 0.4 },
+        sourceSpan: { start, end: start + 20 },
+        editable: true,
+      },
+    ],
+  });
+  const deckOf = (count: number): RenderedDeck => ({
+    title: "slides",
+    css: "",
+    frames: Array.from({ length: count }, (_, i) => frameWithText(i + 1, 10 + i * 100)),
+  });
+
+  /** 2 フレームを描き、スライド・箱・見出しを押す操作とキー入力を返す。 */
+  function mountSlides(host: ReturnType<typeof fakeHost>, editable: number[] | undefined = [0, 1]) {
+    const container = document.createElement("div");
+    document.body.append(container);
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(deckOf(2), 5, editable);
+    });
+    const preview = container.querySelector<HTMLElement>(".beamer-preview");
+    if (!preview) throw new Error("preview missing");
+    const scaleOf = (i: number) => {
+      const scale = preview.querySelectorAll<HTMLElement>(".slide-scale")[i];
+      if (!scale) throw new Error("scale missing");
+      return scale;
+    };
+    const textOf = (i: number) => {
+      const text = scaleOf(i).querySelector<HTMLElement>(
+        '[data-canvas-element-id="canvas-text-0"]',
+      );
+      if (!text) throw new Error("text missing");
+      Object.defineProperties(text, {
+        setPointerCapture: { configurable: true, value: vi.fn() },
+        hasPointerCapture: { configurable: true, value: () => true },
+        releasePointerCapture: { configurable: true, value: vi.fn() },
+      });
+      vi.spyOn(text, "getBoundingClientRect").mockReturnValue(domRect(140, 90, 160, 40));
+      return text;
+    };
+    // 実ブラウザと同じく pointerdown / pointerup の後に click が届く。
+    const clickBackground = (i: number) => {
+      firePointer(scaleOf(i), "pointerdown", 5, 5);
+      firePointer(scaleOf(i), "pointerup", 5, 5);
+      act(() => {
+        scaleOf(i).click();
+      });
+    };
+    const clickText = (i: number) => {
+      const text = textOf(i);
+      firePointer(text, "pointerdown", 150, 100);
+      firePointer(scaleOf(i), "pointerup", 150, 100);
+      act(() => {
+        text.click();
+      });
+    };
+    const clickCaption = (i: number) => {
+      act(() => {
+        preview.querySelectorAll<HTMLElement>(".slide-caption")[i]?.click();
+      });
+    };
+    const press = (init: KeyboardEventInit) => {
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+      act(() => {
+        preview.dispatchEvent(event);
+      });
+      return event;
+    };
+    const selected = () =>
+      [...preview.querySelectorAll(".slide-card")].flatMap((card, i) =>
+        card.classList.contains("selected") ? [i] : [],
+      );
+    return { preview, clickBackground, clickText, clickCaption, press, selected };
+  }
+
+  it("スライドの背景を押すと選択され、Cmd/Ctrl+C はスライドのコピー、+V はその後ろへの貼り付けになる", () => {
+    const copySlide = vi.fn();
+    const pasteSlides = vi.fn();
+    const pasteCanvasElements = vi.fn();
+    const ui = mountSlides({ ...fakeHost(), copySlide, pasteSlides, pasteCanvasElements });
+    ui.clickBackground(1);
+    expect(ui.selected()).toEqual([1]);
+    expect(ui.press({ key: "c", metaKey: true }).defaultPrevented).toBe(true);
+    expect(ui.press({ key: "v", ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(copySlide).toHaveBeenCalledExactlyOnceWith(1, 5);
+    expect(pasteSlides).toHaveBeenCalledExactlyOnceWith(1, 5);
+    expect(pasteCanvasElements).not.toHaveBeenCalled();
+    // 切り取りは扱わない。
+    expect(ui.press({ key: "x", metaKey: true }).defaultPrevented).toBe(false);
+  });
+
+  it("箱を押すと選択は箱へ移り、キーは箱のコピーと表示中フレームへの貼り付けに戻る", () => {
+    const copySlide = vi.fn();
+    const copyCanvasElement = vi.fn();
+    const pasteCanvasElements = vi.fn();
+    const ui = mountSlides({ ...fakeHost(), copySlide, copyCanvasElement, pasteCanvasElements });
+    ui.clickBackground(0);
+    ui.clickText(0);
+    expect(ui.selected()).toEqual([]);
+    ui.press({ key: "c", metaKey: true });
+    ui.press({ key: "v", metaKey: true });
+    expect(copySlide).not.toHaveBeenCalled();
+    expect(copyCanvasElement).toHaveBeenCalledExactlyOnceWith(0, "canvas-text-0", 5, false);
+    expect(pasteCanvasElements).toHaveBeenCalledExactlyOnceWith(0, 5);
+  });
+
+  it("見出しを押すと、同じフレームの箱を選んでいてもスライドの選択になる", () => {
+    const copySlide = vi.fn();
+    const copyCanvasElement = vi.fn();
+    const ui = mountSlides({ ...fakeHost(), copySlide, copyCanvasElement });
+    ui.clickText(0);
+    ui.clickCaption(0);
+    expect(ui.selected()).toEqual([0]);
+    expect(ui.preview.querySelector(".canvas-selected")).toBeNull();
+    ui.press({ key: "c", metaKey: true });
+    expect(copySlide).toHaveBeenCalledExactlyOnceWith(0, 5);
+    expect(copyCanvasElement).not.toHaveBeenCalled();
+  });
+
+  it("本文をドラッグ選択しているときの Cmd/Ctrl+C は、文字コピーに譲る", () => {
+    const copySlide = vi.fn();
+    const ui = mountSlides({ ...fakeHost(), copySlide });
+    ui.clickBackground(0);
+    const getSelection = vi
+      .spyOn(document, "getSelection")
+      .mockReturnValue({ isCollapsed: false } as Selection);
+    expect(ui.press({ key: "c", metaKey: true }).defaultPrevented).toBe(false);
+    getSelection.mockRestore();
+    expect(copySlide).not.toHaveBeenCalled();
+  });
+
+  it("ホストがコピーできないときと、元ソースに明示されていないフレームは選択しない", () => {
+    const bare = mountSlides(fakeHost());
+    bare.clickBackground(0);
+    expect(bare.selected()).toEqual([]);
+    document.body.innerHTML = "";
+    const virtual = mountSlides({ ...fakeHost(), copySlide: vi.fn() }, [0]);
+    virtual.clickBackground(1);
+    expect(virtual.selected()).toEqual([]);
+    expect(virtual.press({ key: "c", metaKey: true }).defaultPrevented).toBe(false);
+  });
+
+  it("deck が更新されても選択は番号のまま残り、明示フレームでなくなったら外れる", () => {
+    const host = { ...fakeHost(), copySlide: vi.fn() };
+    const ui = mountSlides(host);
+    ui.clickBackground(1);
+    act(() => host.push(deckOf(2), 6, [0, 1]));
+    expect(ui.selected()).toEqual([1]);
+    act(() => host.push(deckOf(2), 7, [0]));
+    expect(ui.selected()).toEqual([]);
+  });
+
+  it("要素の右クリックメニューで項目を選んでも、スライドは選択しない", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const detachToCanvas = vi.fn();
+    const host = { ...fakeHost(), detachToCanvas, copySlide: vi.fn() };
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK, 1, [0, 1]);
+    });
+    const slide = container.querySelector<HTMLElement>(".slide-scale .slide");
+    const innerText = container
+      .querySelectorAll<HTMLElement>(".slide-scale ul")[1]
+      ?.querySelector("span");
+    if (!slide || !innerText) throw new Error("flow fixture missing");
+    vi.spyOn(slide, "getBoundingClientRect").mockReturnValue(domRect(0, 0, 600, 300));
+    act(() => {
+      innerText.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 100,
+          clientY: 130,
+        }),
+      );
+    });
+    act(() => {
+      container.querySelector<HTMLButtonElement>(".context-menu button")?.click();
+    });
+    expect(detachToCanvas).toHaveBeenCalledOnce();
+    expect(container.querySelector(".slide-card.selected")).toBeNull();
+  });
+
+  it("貼り付けを反映した版の表示要求で、貼り付けたスライドが選択される", () => {
+    const host = { ...fakeHost(), copySlide: vi.fn(), pasteSlides: vi.fn() };
+    const ui = mountSlides(host);
+    ui.clickBackground(0);
+    ui.press({ key: "v", metaKey: true });
+    act(() => host.push(deckOf(3), 6, [0, 1, 2]));
+    act(() => host.reveal(1, 6));
+    expect(ui.selected()).toEqual([1]);
+    // 貼り付けと関係のない表示要求(カーソル追従など)では選択を動かさない。
+    act(() => host.reveal(2, 6));
+    expect(ui.selected()).toEqual([1]);
+  });
+});

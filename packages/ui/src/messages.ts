@@ -69,6 +69,13 @@ export type WebviewToExtension =
     }
   /** クリップボードのキャンバス要素を、表示中のフレームへ貼り付ける(Cmd/Ctrl+V)。 */
   | { type: "pasteCanvasElements"; frameIndex: number; version: number }
+  /** 選択中のスライドのソースをクリップボードへ写す(Cmd/Ctrl+C。#174)。 */
+  | { type: "copySlide"; frameIndex: number; version: number }
+  /**
+   * 選択中のスライドへの貼り付け(Cmd/Ctrl+V。#174)。クリップボードがフレームならその後ろへ
+   * 挿入し、そうでなければキャンバス要素としてそのフレームへ貼り付ける。
+   */
+  | { type: "pasteSlides"; frameIndex: number; version: number }
   /** フロー要素を deckcanvas へ移す(「自由配置にする」)。 */
   | {
       type: "detachToCanvas";
@@ -239,8 +246,10 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
       }
       return null;
     case "pasteCanvasElements":
+    case "copySlide":
+    case "pasteSlides":
       if (isNonNegativeInteger(raw.frameIndex) && isNonNegativeInteger(raw.version))
-        return { type: "pasteCanvasElements", frameIndex: raw.frameIndex, version: raw.version };
+        return { type: raw.type, frameIndex: raw.frameIndex, version: raw.version };
       return null;
     case "detachToCanvas": {
       const { sourceSpan, rect } = raw;
