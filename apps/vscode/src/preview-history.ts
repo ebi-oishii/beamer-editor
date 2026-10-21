@@ -20,7 +20,7 @@ export interface PreviewHistoryHost<Target extends { panel: unknown }> {
   onError(error: unknown, kind: HistoryKind): void;
 }
 
-export class PreviewHistory<Target extends { panel: unknown }> {
+export class PreviewHistory<Target extends { panel: unknown; isCurrent?: () => boolean }> {
   private queue: Promise<void> = Promise.resolve();
 
   constructor(private readonly host: PreviewHistoryHost<Target>) {}
@@ -28,13 +28,15 @@ export class PreviewHistory<Target extends { panel: unknown }> {
   /** 要求を列の末尾に足す。返る Promise はその要求の完了を表し、失敗しても reject しない。 */
   request(kind: HistoryKind, target: Target): Promise<void> {
     const operation = this.queue.then(async () => {
+      if (target.isCurrent && !target.isCurrent()) return;
       try {
         await this.host.apply(kind, target);
       } catch (error) {
         this.host.onError(error, kind);
       }
       try {
-        if (this.host.isOpen(target.panel)) this.host.reveal(target.panel);
+        if ((!target.isCurrent || target.isCurrent()) && this.host.isOpen(target.panel))
+          this.host.reveal(target.panel);
       } catch (error) {
         this.host.onError(error, kind);
       }

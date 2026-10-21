@@ -36,7 +36,12 @@ export interface RasterImage {
 export interface ShellHost {
   /** ホストからの deck 更新を購読する。unsubscribe を返す。 */
   subscribe(
-    listener: (deck: RenderedDeck, version: number, editableFrameIndexes?: number[]) => void,
+    listener: (
+      deck: RenderedDeck,
+      version: number,
+      editableFrameIndexes?: number[],
+      sourceConnected?: boolean,
+    ) => void,
   ): () => void;
   /**
    * ホスト → ui: 指定フレームを表示する要求(ソース側の CodeLens・コマンド・カーソル追従)。
@@ -147,64 +152,88 @@ export function createMessageShellHost(
   // 非同期処理の完了順が入れ替わっても古いプレビューへ戻らないよう、
   // 現在値より古い document version の deckUpdated は捨てる(移植計画 §6)。
   let lastVersion = Number.NEGATIVE_INFINITY;
+  let generation: number | undefined;
+  const post = (message: WebviewToExtension) =>
+    transport.post(
+      generation === undefined ? message : ({ ...message, generation } as WebviewToExtension),
+    );
+  const isCurrentGeneration = (message: ExtensionToWebview) =>
+    message.generation === undefined ||
+    generation === undefined ||
+    message.generation === generation;
   return {
     subscribe(listener) {
       return transport.subscribe((msg) => {
         if (msg.type === "deckUpdated") {
+          if (
+            msg.generation !== undefined &&
+            generation !== undefined &&
+            msg.generation < generation
+          )
+            return;
+          if (msg.generation !== undefined && msg.generation !== generation) {
+            generation = msg.generation;
+            lastVersion = Number.NEGATIVE_INFINITY;
+          }
           if (msg.version < lastVersion) return;
           lastVersion = msg.version;
-          listener(msg.deck, msg.version, msg.editableFrameIndexes);
+          if (msg.sourceConnected === undefined)
+            listener(msg.deck, msg.version, msg.editableFrameIndexes);
+          else listener(msg.deck, msg.version, msg.editableFrameIndexes, msg.sourceConnected);
         }
       });
     },
     onRevealFrame(listener) {
       return transport.subscribe((msg) => {
+        if (!isCurrentGeneration(msg)) return;
         if (msg.type === "activeFrameChanged") listener(msg.frameIndex, msg.version);
       });
     },
     onRawBlockImage(listener) {
       return transport.subscribe((msg) => {
+        if (!isCurrentGeneration(msg)) return;
         if (msg.type === "rawBlockReady") listener(msg.key, { pdfBase64: msg.pdfBase64 });
         else if (msg.type === "rawBlockFailed") listener(msg.key, { error: msg.message });
       });
     },
     onRawImagesCleared(listener) {
       return transport.subscribe((msg) => {
+        if (!isCurrentGeneration(msg)) return;
         if (msg.type === "rawImagesCleared") listener();
       });
     },
     jumpToSource(frameIndex, version) {
-      transport.post({ type: "jumpToSource", frameIndex, version });
+      post({ type: "jumpToSource", frameIndex, version });
     },
     notifyActiveFrame(frameIndex) {
-      transport.post({ type: "activeFrameChanged", frameIndex });
+      post({ type: "activeFrameChanged", frameIndex });
     },
     undoRedo(kind) {
-      transport.post({ type: "undoRedo", kind });
+      post({ type: "undoRedo", kind });
     },
     setCanvasFontSize(frameIndex, elementId, version, size) {
-      transport.post({ type: "setCanvasFontSize", frameIndex, elementId, version, size });
+      post({ type: "setCanvasFontSize", frameIndex, elementId, version, size });
     },
     resizeCanvasElement(frameIndex, elementId, version, width) {
-      transport.post({ type: "resizeCanvasElement", frameIndex, elementId, version, width });
+      post({ type: "resizeCanvasElement", frameIndex, elementId, version, width });
     },
     moveCanvasElement(frameIndex, elementId, version, x, y) {
-      transport.post({ type: "moveCanvasElement", frameIndex, elementId, version, x, y });
+      post({ type: "moveCanvasElement", frameIndex, elementId, version, x, y });
     },
     editSlide(action, frameIndex, version) {
-      transport.post({ type: "editSlide", action, frameIndex, version });
+      post({ type: "editSlide", action, frameIndex, version });
     },
     detachToCanvas(frameIndex, version, sourceSpan, rect) {
-      transport.post({ type: "detachToCanvas", frameIndex, version, sourceSpan, rect });
+      post({ type: "detachToCanvas", frameIndex, version, sourceSpan, rect });
     },
     deleteCanvasElement(frameIndex, elementId, version) {
-      transport.post({ type: "deleteCanvasElement", frameIndex, elementId, version });
+      post({ type: "deleteCanvasElement", frameIndex, elementId, version });
     },
     copyCanvasElement(frameIndex, elementId, version, cut) {
-      transport.post({ type: "copyCanvasElement", frameIndex, elementId, version, cut });
+      post({ type: "copyCanvasElement", frameIndex, elementId, version, cut });
     },
     pasteCanvasElements(frameIndex, version) {
-      transport.post({ type: "pasteCanvasElements", frameIndex, version });
+      post({ type: "pasteCanvasElements", frameIndex, version });
     },
     loadNavState() {
       return parseNavState(state?.getState());

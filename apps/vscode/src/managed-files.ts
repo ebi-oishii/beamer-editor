@@ -80,6 +80,13 @@ export class AutoPreviewDismissals {
     this.dismissedUris.delete(uri.toString());
   }
 
+  /** source tab が 1 つも残っていない URI の抑制を解く(最後の tab を閉じる = その文書を閉じる)。 */
+  retainOnly(openUris: ReadonlySet<string>): void {
+    for (const uri of [...this.dismissedUris]) {
+      if (!openUris.has(uri)) this.dismissedUris.delete(uri);
+    }
+  }
+
   clearAll(): void {
     this.dismissedUris.clear();
   }
@@ -114,18 +121,29 @@ export class ManagedPreviewLifecycle<TController, TDocument> {
     this.registry.add(uri, { controller, document, automatic });
   }
 
-  panelDisposed(uri: { toString(): string }, controller: TController): boolean {
+  panelDisposed(
+    uri: { toString(): string },
+    controller: TController,
+    sourceIsOpen = true,
+  ): boolean {
     const owner = this.registry.get(uri);
     if (owner?.controller !== controller) return false;
     this.registry.delete(uri);
-    this.dismissals.dismiss(uri, true);
+    this.dismissals.dismiss(uri, sourceIsOpen);
     return true;
   }
 
-  sourceClosed(uri: { toString(): string }): TController | undefined {
+  /**
+   * source tab の現在の URI 集合を受け取り、tab が無くなった URI の dismissal を解く。
+   * ownership は消さない(panel を同じ group に残して再接続する)。
+   */
+  sourceTabsChanged(openUris: ReadonlySet<string>): void {
+    this.dismissals.retainOnly(openUris);
+  }
+
+  sourceOpened(uri: { toString(): string }, document: TDocument): TController | undefined {
     const owner = this.registry.get(uri);
-    if (owner) this.registry.delete(uri);
-    this.dismissals.clear(uri);
+    if (owner) owner.document = document;
     return owner?.controller;
   }
 

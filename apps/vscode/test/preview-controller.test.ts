@@ -275,6 +275,64 @@ describe("PreviewController", () => {
     expect(message.activeFrame).toBe(0);
   });
 
+  it("keeps its panel while detached and rerenders a reopened document in a new generation", () => {
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    const first = makeDoc();
+    const controller = new PreviewController(panel, ASSETS, first, events, vi.fn());
+    fire({ type: "ready" });
+    controller.detachDocument();
+    const detached = posted.at(-1) as {
+      type: string;
+      sourceConnected?: boolean;
+      generation?: number;
+    };
+    expect(detached).toMatchObject({ type: "deckUpdated", sourceConnected: false, generation: 1 });
+    expect(panel.dispose).not.toHaveBeenCalled();
+
+    const reopened = makeDoc();
+    reopened.text = "\\begin{document}\\begin{frame}{Reopened}B\\end{frame}\\end{document}";
+    controller.attachDocument(reopened);
+    expect(posted.at(-1)).toMatchObject({
+      type: "deckUpdated",
+      sourceConnected: true,
+      generation: 2,
+    });
+  });
+
+  it("calls onAttached only when a reopened document is actually attached", () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const first = makeDoc();
+    const onAttached = vi.fn();
+    const controller = new PreviewController(panel, ASSETS, first, events, vi.fn(), { onAttached });
+
+    // 接続中の同じ文書は何もしない。
+    controller.attachDocument(first);
+    expect(onAttached).not.toHaveBeenCalled();
+
+    controller.detachDocument();
+    const reopened = makeDoc();
+    controller.attachDocument(reopened);
+    expect(onAttached).toHaveBeenCalledExactlyOnceWith(reopened);
+
+    controller.attachDocument(reopened);
+    expect(onAttached).toHaveBeenCalledOnce();
+  });
+
+  it("moves the panel to another column without taking focus by default", () => {
+    const { panel } = makePanel();
+    const { events } = makeEvents();
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn());
+
+    controller.moveTo(3);
+    expect(panel.reveal).toHaveBeenCalledWith(3, true);
+
+    controller.close();
+    controller.moveTo(2);
+    expect(panel.reveal).toHaveBeenCalledOnce();
+  });
+
   it("ready では onWebviewReady を描画より先に呼ぶ", () => {
     const { panel, fire } = makePanel();
     const { events } = makeEvents();
@@ -292,7 +350,7 @@ describe("PreviewController", () => {
     const { events } = makeEvents();
     const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn());
     controller.postRawImagesCleared();
-    expect(posted).toEqual([{ type: "rawImagesCleared" }]);
+    expect(posted).toEqual([{ type: "rawImagesCleared", generation: 0 }]);
   });
 
   it("Webview HTML に CSP(default-src 'none' + nonce)とアセット参照が入る", () => {
@@ -359,19 +417,21 @@ describe("PreviewController", () => {
     const { panel, posted, fire } = makePanel();
     const { events, change } = makeEvents();
     const original = makeDoc();
-    new PreviewController(panel, ASSETS, original, events, vi.fn());
+    const controller = new PreviewController(panel, ASSETS, original, events, vi.fn());
     fire({ type: "ready" });
 
     // タブを閉じて開き直すと、同じ uri の新しい TextDocument から変更イベントが届く。
     const reopened = makeDoc();
     reopened.version = 1;
     reopened.edit("\\begin{document}\\begin{frame}{Hi}REOPENED\\end{frame}\\end{document}");
+    controller.detachDocument();
+    controller.attachDocument(reopened);
     change(reopened);
     vi.advanceTimersByTime(RENDER_DEBOUNCE_MS);
 
-    expect(posted).toHaveLength(2);
+    expect(posted).toHaveLength(4);
     // 凍結した旧インスタンス(version 7)ではなく、新インスタンスの内容が描画される。
-    expect((posted[1] as DeckMessage).version).toBe(2);
+    expect((posted.at(-1) as DeckMessage).version).toBe(2);
   });
 
   it("別ファイルの変更ではプレビューを再計算しない", () => {
@@ -480,6 +540,57 @@ describe("PreviewController", () => {
 
     expect(navigate).not.toHaveBeenCalled();
     expect(posted).toHaveLength(1);
+  });
+
+  it("jumpToSource: 切断中の移動失敗は一度だけ host error にし、閲覧専用のまま残す", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const onError = vi.fn();
+    const navigateDetached = vi.fn(async () => {
+      throw new Error("open failed");
+    });
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      onError,
+      navigateDetached,
+    });
+    controller.detachDocument();
+    fire({ type: "jumpToSource", frameIndex: 0, version: 7, generation: controller.generation });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(navigateDetached).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledExactlyOnceWith("failed to open the detached preview source.");
+    expect(controller.isAttached).toBe(false);
+  });
+
+  it("jumpToSource: 切断中の連続クリックは開く処理が終わるまで重複させない", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    let finish: (() => void) | undefined;
+    const navigateDetached = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const controller = new PreviewController(panel, ASSETS, makeDoc(), events, vi.fn(), {
+      navigateDetached,
+    });
+    controller.detachDocument();
+    const request = {
+      type: "jumpToSource",
+      frameIndex: 0,
+      version: 7,
+      generation: controller.generation,
+    };
+    fire(request);
+    fire(request);
+    expect(navigateDetached).toHaveBeenCalledOnce();
+    finish?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    fire(request);
+    expect(navigateDetached).toHaveBeenCalledTimes(2);
   });
 
   it("moveCanvasElement: 最新・editable な画像だけを一度 callback へ渡す", async () => {
@@ -707,7 +818,35 @@ describe("PreviewController", () => {
     fire({ type: "undoRedo", kind: "undo" });
     fire({ type: "undoRedo", kind: "redo" });
     fire({ type: "undoRedo", kind: "reset" });
-    expect(undoRedo.mock.calls).toEqual([["undo"], ["redo"]]);
+    expect(undoRedo.mock.calls.map(([kind]) => kind)).toEqual(["undo", "redo"]);
+  });
+
+  it("detach/reconnect 後は待機中 clipboard 操作の完了を新しい接続へ反映しない", async () => {
+    const { panel, fire } = makePanel();
+    const { events } = makeEvents();
+    const doc = makeDoc();
+    let finish: ((value: boolean) => void) | undefined;
+    const pending = new Promise<boolean>((resolve) => (finish = resolve));
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+      render: canvasRender,
+      copyCanvasElement: () => pending,
+      deleteCanvasElement: vi.fn(async () => "applied" as const),
+    });
+    fire({ type: "ready" });
+    fire({
+      type: "copyCanvasElement",
+      frameIndex: 0,
+      elementId: "canvas-image-0",
+      version: 7,
+      cut: true,
+    });
+    await Promise.resolve();
+    controller.detachDocument();
+    controller.attachDocument(makeDoc());
+    finish?.(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(controller.latestOutcome?.version).toBe(7);
   });
 
   it("undoRedo が失敗しても未処理の rejection にせず onError で通知する", async () => {
@@ -1028,13 +1167,15 @@ describe("PreviewController", () => {
     const { events, change } = makeEvents();
     const doc = makeDoc();
     const callback = vi.fn();
-    new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
       render: canvasRender,
       moveCanvasElement: callback,
     });
     fire({ type: "ready" });
     const replacement = { ...makeDoc(), getText: () => "different same-version text" };
     change(replacement);
+    controller.detachDocument();
+    controller.attachDocument(replacement);
     fire({
       type: "moveCanvasElement",
       frameIndex: 0,
@@ -1042,9 +1183,10 @@ describe("PreviewController", () => {
       version: 7,
       x: 1,
       y: 1,
+      generation: 2,
     });
-    expect(callback).not.toHaveBeenCalled();
-    expect(posted).toHaveLength(2);
+    expect(callback).toHaveBeenCalledOnce();
+    expect(posted).toHaveLength(3);
   });
 
   it("resolveResource 指定時は送信する deck の <img src> だけを書き換える", () => {
