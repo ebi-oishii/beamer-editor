@@ -4,11 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  buildFragmentDocument,
-  fragmentDependencies,
-  fragmentGraphicsPaths,
-} from "../src/fragment.js";
+import { buildFragmentDocument, fragmentDependencies } from "../src/fragment.js";
 import { compileFragment, type ProcessRunner } from "../src/index.js";
 
 describe("buildFragmentDocument", () => {
@@ -115,24 +111,25 @@ describe("fragmentDependencies", () => {
   });
 });
 
-describe("fragmentGraphicsPaths", () => {
-  it("\\graphicspath の探索ディレクトリを出現順に拾い、コメントの中は見ない", () => {
-    expect(
-      fragmentGraphicsPaths(
-        "% \\graphicspath{{old/}}\n\\graphicspath{ {images/} {figs/} }\n\\graphicspath{{images/}{../shared/}}",
-      ),
-    ).toEqual(["images/", "figs/", "../shared/"]);
-    expect(fragmentGraphicsPaths("\\includegraphics{a.png}")).toEqual([]);
-  });
-});
-
 describe("compileFragment", () => {
   const FAKE_PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37]); // %PDF-1.7
 
-  function runner(calls: { command: string; args: string[]; cwd: string }[]): ProcessRunner {
+  function runner(
+    calls: {
+      command: string;
+      args: string[];
+      cwd: string;
+      restartTimeoutOn?: (line: string) => boolean;
+    }[],
+  ): ProcessRunner {
     return {
       async run(command, args, options) {
-        calls.push({ command, args, cwd: options.cwd });
+        calls.push({
+          command,
+          args,
+          cwd: options.cwd,
+          ...(options.restartTimeoutOn ? { restartTimeoutOn: options.restartTimeoutOn } : {}),
+        });
         if (args[0] === "--version")
           return { exitCode: 0, stdout: "tectonic 0.16.9\n", stderr: "" };
         const outdir = args[args.indexOf("--outdir") + 1] as string;
@@ -143,7 +140,7 @@ describe("compileFragment", () => {
   }
 
   it("一時ディレクトリに fragment.tex を書いてコンパイルし、PDF のバイト列を返して片づける", async () => {
-    const calls: { command: string; args: string[]; cwd: string }[] = [];
+    const calls: Parameters<typeof runner>[0] = [];
     const temps: string[] = [];
     const makeTemp = async (prefix: string) => {
       const dir = await mkdtemp(join(tmpdir(), prefix));
@@ -159,6 +156,8 @@ describe("compileFragment", () => {
     expect(calls.map((call) => call.args[0])).toEqual(["--version", "-X"]);
     const compile = calls[1];
     expect(compile?.cwd).toBe("/deck");
+    expect(compile?.restartTimeoutOn?.("note: downloading standalone.cls")).toBe(true);
+    expect(calls[0]?.restartTimeoutOn).toBeUndefined();
     expect(compile?.args.slice(1, 4)).toEqual(["compile", "--outdir", temps[0]]);
     expect(compile?.args[4]).toBe(join(temps[0] as string, "fragment.tex"));
     await expect(readFile(join(temps[0] as string, "fragment.tex"))).rejects.toMatchObject({
@@ -174,8 +173,29 @@ describe("compileFragment", () => {
           : { exitCode: 1, stdout: "", stderr: "! Undefined control sequence.\nl.3 \\bad" },
     };
     await expect(compileFragment({ document: "\\bad" }, { runner: failing })).rejects.toMatchObject(
-      { code: "E_COMPILE", message: expect.stringContaining("Undefined control sequence") },
+      {
+        code: "E_COMPILE",
+        texFailed: true,
+        message: expect.stringContaining("Undefined control sequence"),
+      },
     );
+  });
+
+  it("Tectonic の panic は TeX のエラーとして扱わない(#205)", async () => {
+    const panicking: ProcessRunner = {
+      run: async (_command, args) =>
+        args[0] === "--version"
+          ? { exitCode: 0, stdout: "tectonic 0.16.9", stderr: "" }
+          : {
+              exitCode: 101,
+              stdout: "",
+              stderr:
+                "thread 'main' (64083727) panicked at src/config.rs:154:18:\ncalled `Result::unwrap()` on an `Err` value\n",
+            },
+    };
+    await expect(
+      compileFragment({ document: "\\bad" }, { runner: panicking }),
+    ).rejects.toMatchObject({ code: "E_COMPILE", texFailed: false });
   });
 
   it("生成 PDF が上限を超えたら読み込まずに E_COMPILE にする", async () => {

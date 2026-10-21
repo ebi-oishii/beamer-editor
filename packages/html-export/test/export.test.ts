@@ -155,6 +155,41 @@ describe("exportHtml", () => {
     await expect(readdir(join(result.outputPath, "assets"))).rejects.toMatchObject({
       code: "ENOENT",
     });
+    expect(result.placeholders).toEqual([
+      { path: "assets/chart.pdf", reason: "unsupported-format", frames: [1] },
+    ]);
+  });
+
+  it("lists placeholder images once each, in source order, with their frame ordinals", async () => {
+    const { dir, input } = await fixture(
+      deck(`\\begin{frame}\\includegraphics{assets/ok.png}\\end{frame}
+\\begin{frame}
+\\includegraphics{assets/missing.png}
+\\begin{deckcanvas}
+\\deckimage[x=0.1,y=0.1,w=0.3]{assets/chart.pdf}
+\\deckimage[x=0.5,y=0.1,w=0.3]{assets/chart.pdf}
+\\end{deckcanvas}
+\\end{frame}
+\\begin{frame}\\includegraphics{}\\includegraphics{assets/chart.pdf}\\end{frame}`),
+    );
+    await mkdir(join(dir, "assets"));
+    await writeFile(join(dir, "assets", "ok.png"), "image");
+    await writeFile(join(dir, "assets", "chart.pdf"), "%PDF-1.7");
+    const result = await exportHtml({ inputPath: input });
+    expect(result.placeholders).toEqual([
+      { path: "assets/missing.png", reason: "missing", frames: [2] },
+      { path: "assets/chart.pdf", reason: "unsupported-format", frames: [2, 3] },
+      { path: "", reason: "missing", frames: [3] },
+    ]);
+  });
+
+  it("reports no placeholders when every local image is copied", async () => {
+    const { dir, input } = await fixture(
+      deck("\\begin{frame}\\includegraphics{assets/ok.jpg}\\end{frame}"),
+    );
+    await mkdir(join(dir, "assets"));
+    await writeFile(join(dir, "assets", "ok.jpg"), "image");
+    expect((await exportHtml({ inputPath: input })).placeholders).toEqual([]);
   });
 
   it("falls back for missing rasters and rejects symlinks escaping the deck", async () => {
@@ -274,6 +309,68 @@ describe("exportHtml", () => {
     expect(css).toContain("FF0000");
     expect(html).not.toContain("templates/corp/assets/");
     expect(await readdir(join(result.outputPath, "assets"))).toHaveLength(2);
+    expect(result.placeholders).toEqual([]);
+  });
+
+  it("lists template PDF logos and backgrounds that HTML cannot show", async () => {
+    const { dir, input } = await fixture(`\\documentclass{beamer}
+%% preamble-extra:begin
+\\logo{\\includegraphics{assets/logo.pdf}}
+\\usebackgroundtemplate{\\includegraphics{assets/background}}
+%% preamble-extra:end
+\\begin{document}
+\\begin{frame}{One}x\\end{frame}
+\\begin{frame}{Two}y\\end{frame}
+\\end{document}`);
+    await mkdir(join(dir, "assets"));
+    await writeFile(join(dir, "assets", "logo.pdf"), "%PDF-1.7");
+    await writeFile(join(dir, "assets", "background.pdf"), "%PDF-1.7");
+    const result = await exportHtml({ inputPath: input });
+    expect(result.placeholders).toEqual([
+      { path: "assets/logo.pdf", reason: "unsupported-format", frames: [1, 2] },
+      { path: "assets/background.pdf", reason: "unsupported-format", frames: [1, 2] },
+    ]);
+  });
+
+  it("copies deckbackground images and graphicspath-resolved template backgrounds", async () => {
+    const { dir, input } = await fixture(`\\documentclass{beamer}
+%% style:begin
+\\deckbackground{assets/all.png}
+\\deckbackground[title]{assets/title.png}
+%% style:end
+%% preamble-extra:begin
+\\graphicspath{{images/}}
+%% preamble-extra:end
+\\begin{document}
+\\begin{frame}\\titlepage\\end{frame}
+\\begin{frame}{Body}x\\end{frame}
+\\end{document}`);
+    await mkdir(join(dir, "assets"), { recursive: true });
+    await writeFile(join(dir, "assets", "all.png"), "all");
+    await writeFile(join(dir, "assets", "title.png"), "title");
+    const result = await exportHtml({ inputPath: input });
+    const html = await readFile(result.indexPath, "utf8");
+    expect(html).not.toContain("assets/all.png");
+    expect(html.match(/deck-background/g)).toHaveLength(2);
+    expect(await readdir(join(result.outputPath, "assets"))).toHaveLength(2);
+  });
+
+  it("resolves a graphicspath background relative to the deck directory", async () => {
+    const { dir, input } = await fixture(`\\documentclass{beamer}
+%% preamble-extra:begin
+\\graphicspath{{images/}}
+\\usebackgroundtemplate{\\includegraphics{bg.png}}
+%% preamble-extra:end
+\\begin{document}
+\\begin{frame}{Body}x\\end{frame}
+\\end{document}`);
+    await mkdir(join(dir, "images"), { recursive: true });
+    await writeFile(join(dir, "images", "bg.png"), "bg");
+    const result = await exportHtml({ inputPath: input });
+    const html = await readFile(result.indexPath, "utf8");
+    expect(html).toContain("deck-background");
+    expect(html).not.toContain("image-placeholder");
+    expect(await readdir(join(result.outputPath, "assets"))).toHaveLength(1);
   });
 
   it("escapes embedded JSON and emits shared overlay predicate data", async () => {

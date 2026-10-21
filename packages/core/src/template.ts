@@ -67,8 +67,12 @@ export const BEAMER_BUILTIN_THEMES: ReadonlySet<string> = new Set([
   "Warsaw",
 ]);
 
-/** 行内の `%` コメントを落とす(`\%` は残す)。オフセットを保つため同じ長さの空白に置き換える。 */
-function blankComments(text: string): string {
+/**
+ * 行内の `%` コメントを落とす(`\%` は残す)。オフセットを保つため同じ長さの空白に置き換える。
+ * TeX と同じく、コメントは行末の改行も読み捨てる(コメントだけの行は空行ではない)ので、
+ * 改行も空白にする。
+ */
+export function blankComments(text: string): string {
   let out = "";
   let i = 0;
   while (i < text.length) {
@@ -80,6 +84,10 @@ function blankComments(text: string): string {
     }
     if (ch === "%") {
       while (i < text.length && text[i] !== "\n") {
+        out += " ";
+        i++;
+      }
+      if (i < text.length) {
         out += " ";
         i++;
       }
@@ -177,8 +185,13 @@ export interface PreviewStyle {
   colors: Partial<Record<StyleColorRole, string>>;
   fonts: { main?: string; mono?: string };
   logo?: PreviewLogo;
-  /** 全スライドの背景画像(`\usebackgroundtemplate` / `background canvas`)。 */
+  /** 全スライドの背景画像(`\usebackgroundtemplate` / `background canvas` / `addtobeamertemplate`)。 */
   background?: { path: string };
+  /**
+   * `\graphicspath` の探索ディレクトリ(出現順、重複なし)。ホストは画像を、デッキのディレクトリ基準で
+   * 先に探し、無ければここを順に探す。
+   */
+  imageSearchPaths?: string[];
   footer?: string;
 }
 
@@ -271,7 +284,7 @@ function widthOption(options: string | undefined): LengthSpec | null {
 
 /** `\includegraphics[opts]{path}` を全て返す。 */
 function includeGraphics(text: string): { path: string; options: string | undefined }[] {
-  return [...text.matchAll(/\\includegraphics\*?(?:\[([^\]]*)\])?\{([^}]+)\}/g)].map((m) => ({
+  return [...text.matchAll(/\\includegraphics\*?\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}/g)].map((m) => ({
     path: (m[2] as string).trim(),
     options: m[1],
   }));
@@ -293,15 +306,34 @@ function balancedGroup(text: string, open: number): { body: string; next: number
   return null;
 }
 
-/** `\command{arg1}{arg2}...` の連続する `{}` 引数を読む(オプション `[...]` は 1 つまで読み飛ばす)。 */
+/**
+ * `from` から空白を読み飛ばす。ただし空行(= \par)は越えない(TeX は long でないマクロの
+ * 引数探索を \par で打ち切る)。越えるなら null。コメントは blankComments で空白になっている。
+ */
+function skipArgumentSpace(text: string, from: number): number | null {
+  let cursor = from;
+  let newlines = 0;
+  while (cursor < text.length && /\s/.test(text[cursor] as string)) {
+    if (text[cursor] === "\n" && ++newlines >= 2) return null;
+    cursor++;
+  }
+  return cursor;
+}
+
+/**
+ * `\command{arg1}{arg2}...` の連続する `{}` 引数を読む(オプション `[...]` は 1 つまで読み飛ばす)。
+ * コマンド名と引数、引数どうしの間の空白・改行は許す(空行は越えない)。index はコマンドの位置。
+ */
 function* commandGroups(
   text: string,
   command: string,
   count: number,
-): Generator<{ options: string | undefined; groups: string[] }> {
-  const pattern = new RegExp(`\\\\${command}\\*?(?=[\\[{])`, "g");
+): Generator<{ index: number; options: string | undefined; groups: string[] }> {
+  const pattern = new RegExp(`\\\\${command}\\*?(?=\\s*[\\[{])`, "g");
   for (const match of text.matchAll(pattern)) {
-    let cursor = (match.index ?? 0) + match[0].length;
+    const index = match.index ?? 0;
+    let cursor = skipArgumentSpace(text, index + match[0].length);
+    if (cursor === null) continue;
     let options: string | undefined;
     if (text[cursor] === "[") {
       const close = text.indexOf("]", cursor);
@@ -311,13 +343,68 @@ function* commandGroups(
     }
     const groups: string[] = [];
     for (let i = 0; i < count; i++) {
-      const group = balancedGroup(text, cursor);
+      const open = skipArgumentSpace(text, cursor);
+      if (open === null) break;
+      const group = balancedGroup(text, open);
       if (!group) break;
       groups.push(group.body);
       cursor = group.next;
     }
-    if (groups.length === count) yield { options, groups };
+    if (groups.length === count) yield { index, options, groups };
   }
+}
+
+const GRAPHICS_PATH = /\\graphicspath\s*\{((?:\s*\{[^{}]*\}\s*)+)\}/g;
+
+/**
+ * `\graphicspath{{images/}{figs/}}` の探索ディレクトリ(出現順、重複なし)。
+ * `\includegraphics{foo}` の実体はこの下にもあり得る。ホストは画像を解決するとき、
+ * デッキのディレクトリ基準を先に、次にここを順に探す。コメントの中は見ない。
+ */
+export function graphicsPathsOf(tex: string): string[] {
+  const found = new Set<string>();
+  for (const match of blankComments(tex).matchAll(GRAPHICS_PATH)) {
+    for (const entry of (match[1] ?? "").matchAll(/\{([^{}]*)\}/g)) {
+      const directory = (entry[1] ?? "").trim();
+      if (directory !== "" && !/[\\\n%]/.test(directory)) found.add(directory);
+    }
+  }
+  return [...found];
+}
+
+/**
+ * `\graphicspath` の探索ディレクトリ 1 つと画像パスを、デッキのディレクトリ基準の相対パスにつなぐ。
+ * `./` と末尾の `/` は整える(`..` や絶対パスはそのまま残すので、ホストの「デッキ配下に限る」検査が弾く)。
+ */
+export function joinImageSearchPath(directory: string, imagePath: string): string {
+  const base = directory.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+  return base === "" || base === "." ? imagePath : `${base}/${imagePath}`;
+}
+
+/**
+ * 画像パスが `\name` だけで、同じ text に `\newcommand{\name}{path}` / `\newcommand\name{path}` /
+ * `\renewcommand` / `\providecommand` / `\def\name{path}` があれば、その本文に置き換える
+ * (最後の定義を採る)。本文が素の文字列(`\` `{` `}` `#` を含まない)の単純な場合だけで、
+ * それ以外は元のパスのまま返す。
+ */
+function expandMacroPath(imagePath: string, text: string): string {
+  const name = /^\\([A-Za-z@]+)$/.exec(imagePath)?.[1];
+  if (name === undefined) return imagePath;
+  const body = "\\{([^{}\\\\#]*)\\}";
+  const patterns = [
+    new RegExp(`\\\\(?:re|provide)?newcommand\\*?\\s*\\{\\s*\\\\${name}\\s*\\}\\s*${body}`, "g"),
+    new RegExp(`\\\\(?:re|provide)?newcommand\\*?\\s*\\\\${name}(?![A-Za-z@])\\s*${body}`, "g"),
+    new RegExp(`\\\\def\\s*\\\\${name}(?![A-Za-z@])\\s*${body}`, "g"),
+  ];
+  let found: { index: number; value: string } | null = null;
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const index = match.index ?? 0;
+      const value = (match[1] ?? "").trim();
+      if (value !== "" && (found === null || index > found.index)) found = { index, value };
+    }
+  }
+  return found?.value ?? imagePath;
 }
 
 /**
@@ -381,9 +468,12 @@ export function extractPreviewStyle(source: string): PreviewStyle {
   }
   const imageIn = (body: string): { path: string; width: LengthSpec | null } | null => {
     const direct = includeGraphics(body)[0];
-    if (direct) return { path: direct.path, width: widthOption(direct.options) };
+    if (direct) {
+      return { path: expandMacroPath(direct.path, text), width: widthOption(direct.options) };
+    }
     const use = /\\pgfuseimage\{([^}]+)\}/.exec(body);
-    return use ? (declaredImages.get((use[1] as string).trim()) ?? null) : null;
+    const declared = use ? declaredImages.get((use[1] as string).trim()) : undefined;
+    return declared ? { ...declared, path: expandMacroPath(declared.path, text) } : null;
   };
 
   // ロゴ(既定テーマは右下に置く)
@@ -392,18 +482,30 @@ export function extractPreviewStyle(source: string): PreviewStyle {
     if (image) style.logo = { path: image.path, placement: { kind: "corner", width: image.width } };
   }
 
-  // 背景画像
-  for (const { groups } of commandGroups(text, "usebackgroundtemplate", 1)) {
+  // 背景画像。TeX では後の指定が勝つので、コマンドの種類をまたいでソース順に並べて最後を採る。
+  const backgrounds: { index: number; path: string }[] = [];
+  for (const { index, groups } of commandGroups(text, "usebackgroundtemplate", 1)) {
     const image = imageIn(groups[0] as string);
-    if (image) style.background = { path: image.path };
+    if (image) backgrounds.push({ index, path: image.path });
   }
-  for (const { groups } of commandGroups(text, "setbeamertemplate", 2)) {
+  for (const { index, groups } of commandGroups(text, "setbeamertemplate", 2)) {
     const [key, body] = groups as [string, string];
     const name = key.trim();
     if (name !== "background canvas" && name !== "background") continue;
     const image = imageIn(body);
-    if (image) style.background = { path: image.path };
+    if (image) backgrounds.push({ index, path: image.path });
   }
+  // \addtobeamertemplate{background}{前}{後}: 前後どちらかに画像があれば背景とみなす(後を優先)。
+  for (const { index, groups } of commandGroups(text, "addtobeamertemplate", 3)) {
+    const [key, pre, post] = groups as [string, string, string];
+    const name = key.trim();
+    if (name !== "background canvas" && name !== "background") continue;
+    const image = imageIn(post) ?? imageIn(pre);
+    if (image) backgrounds.push({ index, path: image.path });
+  }
+  backgrounds.sort((a, b) => a.index - b.index);
+  const lastBackground = backgrounds.at(-1);
+  if (lastBackground) style.background = { path: lastBackground.path };
 
   // ツールの語彙が .sty に書かれている場合(theme-design.md §2)
   for (const { groups } of commandGroups(text, "deckcolor", 2)) {
@@ -433,9 +535,15 @@ export function extractPreviewStyle(source: string): PreviewStyle {
       placement: { kind: "canvas", ...position },
     };
   }
+  for (const { options, groups } of commandGroups(text, "deckbackground", 1)) {
+    // [title](表紙だけの背景)は土台スタイルでは扱わない(全スライドの背景だけを持つ)。
+    if ((options ?? "").trim() === "") style.background = { path: (groups[0] as string).trim() };
+  }
   for (const { groups } of commandGroups(text, "deckfooter", 1)) {
     style.footer = (groups[0] as string).trim();
   }
+  const searchPaths = graphicsPathsOf(source);
+  if (searchPaths.length > 0) style.imageSearchPaths = searchPaths;
   return style;
 }
 
@@ -455,6 +563,13 @@ export function mergePreviewStyles(...styles: PreviewStyle[]): PreviewStyle {
     Object.assign(merged.fonts, style.fonts);
     if (style.logo) merged.logo = style.logo;
     if (style.background) merged.background = style.background;
+    // \graphicspath は TeX でもプリアンブル全体で積み上がる(どの画像にも効く)ので、
+    // 供給元を区別せず、ソース順に連結して重複を除く。
+    if (style.imageSearchPaths) {
+      merged.imageSearchPaths = [
+        ...new Set([...(merged.imageSearchPaths ?? []), ...style.imageSearchPaths]),
+      ];
+    }
     if (style.footer !== undefined) merged.footer = style.footer;
   }
   return merged;
@@ -464,9 +579,9 @@ export function mergePreviewStyles(...styles: PreviewStyle[]): PreviewStyle {
 export function templateImagePaths(source: string): string[] {
   const text = blankComments(source);
   const paths = new Set<string>();
-  for (const image of includeGraphics(text)) paths.add(image.path);
+  for (const image of includeGraphics(text)) paths.add(expandMacroPath(image.path, text));
   for (const { groups } of commandGroups(text, "pgfdeclareimage", 2)) {
-    paths.add((groups[1] as string).trim());
+    paths.add(expandMacroPath((groups[1] as string).trim(), text));
   }
   return [...paths];
 }

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { framesOf, parseDeck } from "@beamer-editor/core";
 import { describe, expect, it } from "vitest";
+import { MONO_FONT_FALLBACK } from "../src/font-stack.js";
 import { frameTitleText, renderDeck } from "../src/render.js";
 import { DEFAULT_THEME } from "../src/theme.js";
 
@@ -520,6 +521,27 @@ describe("renderDeck: styled.slide.tex(スタイル語彙)", () => {
     expect(deck2.css).not.toContain("--deck-font-mono");
   });
 
+  it("mono フォントは Windows の Latin 等幅を総称の前に挟む(日本語 Windows でバックスラッシュが ¥ に見えない)", () => {
+    const src = String.raw`\documentclass{beamer}
+%% style:begin
+\deckfont{mono}{JetBrains Mono}
+%% style:end
+\begin{document}
+\begin{frame}{A}x\end{frame}
+\end{document}
+`;
+    const css = renderDeck(parseDeck(src)).css;
+    expect(css).toContain(
+      '--deck-font-mono: "JetBrains Mono", Consolas, "Cascadia Mono", monospace;',
+    );
+  });
+
+  it("等幅の共通末尾は Courier New を含まず、monospace の直前が Windows の Latin 等幅", () => {
+    // Courier New を入れると macOS / Linux で Menlo や distro 既定の等幅の代わりに使われる。
+    expect(MONO_FONT_FALLBACK).not.toContain("Courier New");
+    expect(MONO_FONT_FALLBACK).toMatch(/(?:Consolas|"Cascadia Mono"), monospace$/);
+  });
+
   it("ロゴとフッターが全フレームに入る(ページ番号付き)", () => {
     for (const frame of deck.frames) {
       expect(frame.html).toContain('class="deck-logo"');
@@ -565,4 +587,79 @@ it("renders trailing comments in canvas align without swallowing the closing env
     ).frames[0]?.html ?? "";
   expect(html).toContain('class="katex"');
   expect(html).not.toContain("katex-error");
+});
+
+describe("renderDeck: 背景画像(\\deckbackground)", () => {
+  const deckSource = (style: string) => `\\documentclass[aspectratio=169]{beamer}
+%% style:begin
+${style}
+%% style:end
+\\title{T}
+\\begin{document}
+\\begin{frame}\\titlepage\\end{frame}
+\\begin{frame}[plain]\\titlepage\\end{frame}
+\\begin{frame}{Body}x\\end{frame}
+\\begin{frame}[fragile]{Raw}
+\\begin{weird}y\\end{weird}
+\\end{frame}
+\\end{document}`;
+  const backgrounds = (deck: ReturnType<typeof renderDeck>) =>
+    deck.frames.map((frame) => /<img class="deck-background" src="([^"]*)"/.exec(frame.html)?.[1]);
+
+  it("表紙(\\titlepage を含むフレーム)は表紙用、それ以外は全体用の背景になる", () => {
+    const deck = renderDeck(
+      parseDeck(deckSource("\\deckbackground{all.png}\n\\deckbackground[title]{title.png}")),
+    );
+    expect(backgrounds(deck).slice(0, 3)).toEqual(["title.png", "title.png", "all.png"]);
+  });
+
+  it("表紙用が無ければ表紙も全体用になり、全体用が無ければ表紙用は表紙だけに出る", () => {
+    expect(backgrounds(renderDeck(parseDeck(deckSource("\\deckbackground{all.png}"))))[0]).toBe(
+      "all.png",
+    );
+    expect(
+      backgrounds(renderDeck(parseDeck(deckSource("\\deckbackground[title]{title.png}")))).slice(
+        0,
+        3,
+      ),
+    ).toEqual(["title.png", "title.png", undefined]);
+  });
+
+  it("土台スタイル(全体用のみ)は表紙にも効き、%% style が上書きする。同じ枠は最後の指定が勝つ", () => {
+    const baseStyle = { colors: {}, fonts: {}, background: { path: "base.png" } };
+    expect(
+      backgrounds(renderDeck(parseDeck(deckSource("")), undefined, { baseStyle })).slice(0, 3),
+    ).toEqual(["base.png", "base.png", "base.png"]);
+    expect(
+      backgrounds(
+        renderDeck(
+          parseDeck(deckSource("\\deckbackground{a.png}\n\\deckbackground{b.png}")),
+          undefined,
+          { baseStyle },
+        ),
+      ).slice(0, 3),
+    ).toEqual(["b.png", "b.png", "b.png"]);
+    expect(
+      backgrounds(
+        renderDeck(parseDeck(deckSource("\\deckbackground[title]{t.png}")), undefined, {
+          baseStyle,
+        }),
+      ).slice(0, 3),
+    ).toEqual(["t.png", "t.png", "base.png"]);
+  });
+
+  it("PDF の背景はここでも出さない", () => {
+    expect(
+      backgrounds(renderDeck(parseDeck(deckSource("\\deckbackground[title]{t.pdf}")))).slice(0, 2),
+    ).toEqual([undefined, undefined]);
+  });
+
+  it("styled.slide.tex は表紙だけ表紙用の背景になる", () => {
+    const deck = renderDeck(parseDeck(fixture("styled.slide.tex")));
+    expect(backgrounds(deck)).toEqual([
+      "assets/title-background.png",
+      "assets/background.png",
+      "assets/background.png",
+    ]);
+  });
 });

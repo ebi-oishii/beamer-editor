@@ -47,7 +47,7 @@ pnpm --dir apps/vscode build  # VS Code 拡張のバンドル(開発は F5)
 
 ### HTML スナップショット
 
-`deck export talk.slide.tex --format html` は `talk-html/index.html` に、現在のプレビュー相当の静的な HTML を書き出します。`file:` で直接開けますが、正式な TeX 出力ではありません。PDF 画像と raw TeX はプレビューと同じプレースホルダーになり、外部 URL の画像は閲覧時にネットワークを必要とします。正式な組版には PDF 書き出しを使ってください。
+`deck export talk.slide.tex --format html` は `talk-html/index.html` に、現在のプレビュー相当の静的な HTML を書き出します。`file:` で直接開けますが、正式な TeX 出力ではありません。PDF 画像と raw TeX はプレビューと同じプレースホルダーになり、外部 URL の画像は閲覧時にネットワークを必要とします。複製するのはデッキ配下の PNG / JPEG だけで、それ以外の形式(PDF など)や見つからない画像をプレースホルダーにした場合(PDF の背景は描きません)は、該当する画像とフレーム番号を stderr に警告して終了コード 1 で終えます(`--json` では `placeholders` に列挙します)。正式な組版には PDF 書き出しを使ってください。
 
 ```bash
 pnpm --dir packages/cli deck export talk.slide.tex --format pdf
@@ -69,11 +69,20 @@ pnpm --dir packages/cli deck check talk.slide.tex --tectonic /path/to/tectonic -
 
 診断なし（または情報のみ）は終了コード 0、警告は 1、lint エラーは 2、Tectonic・入出力・
 使用法などの操作失敗は 3 で終了する。`--json` の操作失敗は stderr に出力される。
+TeX のコンパイルエラー(Tectonic が TeX のエラーで止まった `E_COMPILE`)で、デッキに lint エラーがあれば、
+原因の手がかりとしてそれも添え(テキストではメッセージの後、`--json` では `error.diagnostics`)、失敗の原因は
+デッキ側にあるかもしれないので終了コードを 3 ではなく 2 にする。`deck snapshot` と
+`deck export --format pdf` も同じ。Tectonic の起動の失敗・タイムアウト・TeX パッケージの取得の失敗・Tectonic の panic・TeX のエラー行が無い非 0 終了など
+TeX のエラーでない `E_COMPILE` には添えず、3 のまま。終了コード 2 では通常 stdout に結果が出るが、この場合だけは
+stdout が空で、エラーは stderr に出る(`--json` のときは `error.code` が `E_COMPILE`、lint エラーが
+`error.diagnostics` の JSON)。`--json` では、stdout が空で stderr の JSON に `error` があるかで見分ける。
 
 ### デッキ編集スキルの生成
 
-`pnpm build:skills` は仕様・AIプロトコル・実装のCLIヘルプから `skills/beamer-deck/` と、リポジトリ用の `.claude/skills/beamer-deck/`(Claude Code)・`.agents/skills/beamer-deck/`(Codex)を生成します。あわせて、`deck init` がデッキプロジェクトへ置くプロジェクト指示 `skills/deck-project/AGENTS.md` も生成します。生成物は直接編集せず、元文書を更新して再生成します。`pnpm check:skills` は更新漏れを検出し、CIでも実行します。生成 SKILL の metadata には CLI 版と4生成物の SHA-256 fingerprint を記録します。`deck lint` / `deck check` は入力デッキからホームディレクトリまたはGitリポジトリ境界までにある最寄りの `.claude/skills/beamer-deck/` と `.agents/skills/beamer-deck/` を探し、それぞれの記録値と4生成物の内容ハッシュの両方をCLIの期待値と照合して、どちらかがずれていればL010で警告します。ホームディレクトリの候補は読まず、スキル未同梱の既存デッキは警告しません。L010 のメッセージには、スキルを見つけたプロジェクトディレクトリ(`.claude/` を含むディレクトリ)を入れた実行可能な `deck init <directory> --update-skill` が表示されます。このリポジトリでもルートを指定して実行でき、`pnpm build:skills` と同じ内容に更新されます。
+AI による通常のスライド作成・編集は、正本の `.tex` の作成・更新と必要な検証・報告で完了します。通常フローと canvas は依頼の意図と内容に応じて選び、既存フレームを触っただけで変換せず適切な構造を保ちます。HTML・PDF は、その形式の出力を明示的に依頼した場合だけ書き出します。`deck check` による実コンパイル検証や、必要な `deck snapshot` の画像確認は書き出しとは別に行います。
+
+`pnpm build:skills` は仕様・AIプロトコル・実装のCLIヘルプから `skills/beamer-deck/` と、リポジトリ用の `.claude/skills/beamer-deck/`(Claude Code)・`.agents/skills/beamer-deck/`(Codex)を生成します。あわせて、`deck init` がデッキプロジェクトへ置くプロジェクト指示 `skills/deck-project/AGENTS.md` も生成します。`packages/core/resources` のツール管理プリアンブルを core へ埋め込む `packages/core/src/generated-managed-preamble.ts`(`deck init`・`--update-preamble`・L025 の Quick Fix が使う)も同じ生成物です。生成物は直接編集せず、元文書を更新して再生成します。`pnpm check:skills` は更新漏れを検出し、CIでも実行します。生成 SKILL の metadata には CLI 版と4生成物の SHA-256 fingerprint を記録します。`deck lint` / `deck check` は入力デッキからホームディレクトリまたはGitリポジトリ境界までにある最寄りの `.claude/skills/beamer-deck/` と `.agents/skills/beamer-deck/` を探し、それぞれの記録値と4生成物の内容ハッシュの両方をCLIの期待値と照合して、どちらかがずれていればL010で警告します。ホームディレクトリの候補は読まず、スキル未同梱の既存デッキは警告しません。L010 のメッセージには、スキルを見つけたプロジェクトディレクトリ(`.claude/` を含むディレクトリ)を入れた実行可能な `deck init <directory> --update-skill` が表示されます。このリポジトリでもルートを指定して実行でき、`pnpm build:skills` と同じ内容に更新されます。
 
 ### 新規デッキ
 
-`pnpm --dir /path/to/beamer-editor --filter @beamer-editor/cli deck init /path/to/my-talk` で `main.slide.tex`、空の `assets/`、`.claude/skills/beamer-deck/`、`.agents/skills/beamer-deck/`、常に読まれるエージェント向け指示 `AGENTS.md` と、それを import する `CLAUDE.md` を生成します。CLI はまだ単独配布されていません。この起動方法では `packages/cli` が作業ディレクトリになるため、生成プロジェクトの入力・出力先は絶対パスで指定し、出力先を省略しないでください。新規生成は新規または空のディレクトリだけを受け付け、既存データは上書きしません。`deck init /absolute/path/to/project --update-skill` は既存ディレクトリの `.claude/skills/beamer-deck/` と `.agents/skills/beamer-deck/` を作成・更新し、L010 の fingerprint ずれを解消します。`AGENTS.md` / `CLAUDE.md` は存在しないときだけ作成し、既存のものは上書きしません。デッキのファイル名や位置は問わず(`main.slide.tex` は不要)、デッキやassetsには触れません。存在しないパスやディレクトリ以外は `E_OUTPUT_EXISTS` で拒否します。`--json` で生成ファイル一覧を取得できます。プリアンブルはデッキへ埋め込むためリポジトリのfixtureに依存せず、PDF出力にはTectonicが必要です。初期本文は英語です。日本語を使う場合は `deck fonts fetch` でフォントを用意し、style領域へ `\deckfont{main}{Noto Sans CJK JP}` を指定します。
+`pnpm --dir /path/to/beamer-editor --filter @beamer-editor/cli deck init /path/to/my-talk` で `main.slide.tex`、空の `assets/`、`.claude/skills/beamer-deck/`、`.agents/skills/beamer-deck/`、常に読まれるエージェント向け指示 `AGENTS.md` と、それを import する `CLAUDE.md` を生成します。CLI はまだ単独配布されていません。この起動方法では `packages/cli` が作業ディレクトリになるため、生成プロジェクトの入力・出力先は絶対パスで指定し、出力先を省略しないでください。新規生成は新規または空のディレクトリだけを受け付け、既存データは上書きしません。`deck init /absolute/path/to/project --update-skill` は既存ディレクトリの `.claude/skills/beamer-deck/` と `.agents/skills/beamer-deck/` を作成・更新し、L010 の fingerprint ずれを解消します。`AGENTS.md` / `CLAUDE.md` は存在しないときだけ作成し、既存のものは上書きしません。デッキのファイル名や位置は問わず(`main.slide.tex` は不要)、デッキやassetsには触れません。存在しないパスやディレクトリ以外は `E_OUTPUT_EXISTS` で拒否します。`--json` で生成ファイル一覧を取得できます。`deck init /absolute/path/to/main.slide.tex --update-preamble` は、デッキの `% ---- ツール管理プリアンブル` 〜 `% ---- ツール管理ここまで ----` の間だけを新規生成と同じ現行の内容に差し替え、版の行・ユーザー領域・本文には触れません。古いデッキで後から足したマクロ(`\deckbackground`)を使うと出る L025 を解消します。管理プリアンブルの範囲を特定できない(印が無い・終了印が最初のユーザー領域の印(コメントの中のものも数える)か `\begin{document}` より後ろにある・終了印が開始印より前にある・開始印が複数ある)デッキは、書き換えずに理由を添えて `E_INPUT` で失敗します。プリアンブルはデッキへ埋め込むためリポジトリのfixtureに依存せず、PDF出力にはTectonicが必要です。初期本文は英語の通常フロー `itemize` のままで、canvas には変換しません。日本語を使う場合は `deck fonts fetch` でフォントを用意し、style領域へ `\deckfont{main}{Noto Sans CJK JP}` を指定します。

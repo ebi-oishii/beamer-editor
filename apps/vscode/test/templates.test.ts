@@ -135,3 +135,59 @@ describe("baseStyleOf", () => {
     expect(baseStyleOf(doc, fakeFs({})).colors).toEqual({ alert: "FF0000" });
   });
 });
+
+describe("\\graphicspath と画像パスのマクロ(#192)", () => {
+  const STY = `\\graphicspath{{templates/corp/assets/}}
+\\newcommand{\\bgimage}{background}
+\\usebackgroundtemplate{\\includegraphics[width=\\paperwidth]{\\bgimage}}
+\\logo{\\includegraphics{logo.png}}
+`;
+
+  it("デッキ基準を先に、無ければ graphicspath の探索ディレクトリを順に試す", () => {
+    const fs = fakeFs({ "images/bg.png": "", "bg.png": "", "other/bg.png": "", "x/only.jpg": "" });
+    expect(resolveImagePath("bg.png", fs, ["images/"])).toBe("bg.png");
+    expect(resolveImagePath("bg.png", fakeFs({ "images/bg.png": "" }), ["figs/", "images/"])).toBe(
+      "images/bg.png",
+    );
+    expect(resolveImagePath("only", fs, ["./x"])).toBe("x/only.jpg");
+    expect(resolveImagePath("missing.png", fs, ["images/"])).toBeNull();
+    expect(imageExists("bg.png", fakeFs({ "images/bg.png": "" }), ["images/"])).toBe(true);
+    // 探索ディレクトリでもデッキ配下の外は見えない(実 fs が .. を拒否する)。
+    expect(resolveImagePath("bg.png", fakeFs({}), ["../outside/"])).toBeNull();
+  });
+
+  it("baseStyleOf は graphicspath とマクロを辿って実ファイルのパスにする", () => {
+    const doc = parseDeck(deckWithExtra("\\usetheme{corp}"));
+    const style = baseStyleOf(
+      doc,
+      fakeFs({
+        "beamerthemecorp.sty": STY,
+        "templates/corp/assets/background.png": "",
+        "templates/corp/assets/logo.png": "",
+      }),
+    );
+    expect(style.background).toEqual({ path: "templates/corp/assets/background.png" });
+    expect(style.logo?.path).toBe("templates/corp/assets/logo.png");
+  });
+
+  it("preamble-extra 自身の graphicspath + 背景も解決する", () => {
+    const doc = parseDeck(
+      deckWithExtra("\\graphicspath{{images/}}\n\\usebackgroundtemplate\n{\\includegraphics{bg}}"),
+    );
+    expect(baseStyleOf(doc, fakeFs({ "images/bg.jpg": "" })).background).toEqual({
+      path: "images/bg.jpg",
+    });
+  });
+
+  it("templateStatuses は .sty の graphicspath を考慮して L023 の誤検出を避ける", () => {
+    const doc = parseDeck(deckWithExtra("\\usetheme{corp}"));
+    const present = fakeFs({
+      "beamerthemecorp.sty": STY,
+      "templates/corp/assets/background.png": "",
+      "templates/corp/assets/logo.png": "",
+    });
+    expect(templateStatuses(doc, present)[0]?.missingImages).toEqual([]);
+    const lacking = fakeFs({ "beamerthemecorp.sty": STY, "templates/corp/assets/logo.png": "" });
+    expect(templateStatuses(doc, lacking)[0]?.missingImages).toEqual(["background"]);
+  });
+});
