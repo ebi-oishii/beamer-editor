@@ -44,8 +44,11 @@ export type WebviewToExtension =
       width: number;
     }
   | { type: "ready" }
-  /** version はプレビューが表示中の deck の document version(古い版からのジャンプ検出に使う)。 */
-  | { type: "jumpToSource"; frameIndex: number; version: number }
+  /**
+   * version はプレビューが表示中の deck の document version(古い版からのジャンプ検出に使う)。
+   * sourceOffset はダブルクリックした要素の展開後ソース上の開始位置(#186)。無ければフレーム先頭へ。
+   */
+  | { type: "jumpToSource"; frameIndex: number; version: number; sourceOffset?: number }
   | { type: "activeFrameChanged"; frameIndex: number }
   /** Webview にフォーカスがあるときの Cmd/Ctrl+Z(undo)/ Shift+Cmd+Z・Ctrl+Y(redo)。ソース文書に対して実行する(#103)。 */
   | { type: "undoRedo"; kind: "undo" | "redo" }
@@ -155,8 +158,17 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
     case "ready":
       return { type: "ready" };
     case "jumpToSource":
-      if (typeof raw.frameIndex === "number" && typeof raw.version === "number") {
-        return { type: "jumpToSource", frameIndex: raw.frameIndex, version: raw.version };
+      if (
+        typeof raw.frameIndex === "number" &&
+        typeof raw.version === "number" &&
+        (raw.sourceOffset === undefined || isNonNegativeInteger(raw.sourceOffset))
+      ) {
+        return {
+          type: "jumpToSource",
+          frameIndex: raw.frameIndex,
+          version: raw.version,
+          ...(raw.sourceOffset === undefined ? {} : { sourceOffset: raw.sourceOffset }),
+        };
       }
       return null;
     case "activeFrameChanged":

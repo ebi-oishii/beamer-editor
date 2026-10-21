@@ -481,6 +481,14 @@ class FrameRenderer {
     return status.eligible ? attrs : `${attrs} data-detach-blocked="${status.reason}"`;
   }
 
+  /**
+   * プレビューのダブルクリックで、その要素のソース位置へジャンプするための属性(#186)。フロー要素は
+   * flowBlockAttrs が同じ属性を付ける。値は展開後ソースの offset で、host が元ソースへ戻す。
+   */
+  private sourceStartAttr(start: number): string {
+    return ` data-source-start="${start}"`;
+  }
+
   private renderBlock(block: BlockNode): string {
     switch (block.type) {
       case "paragraph":
@@ -494,7 +502,7 @@ class FrameRenderer {
         const items = block.items
           .map(
             (item) =>
-              `<li${this.overlayAttrs(item.overlay)}>${this.renderListItemChildren(item.children)}</li>`,
+              `<li${this.sourceStartAttr(item.span.start)}${this.overlayAttrs(item.overlay)}>${this.renderListItemChildren(item.children)}</li>`,
           )
           .join("");
         return `<${tag}${flow}>${items}</${tag}>`;
@@ -674,10 +682,10 @@ class FrameRenderer {
       const posStyle = (x: number, y: number, w: number) =>
         `left:${(x * 100).toFixed(2)}%;top:${(y * 100).toFixed(2)}%;width:${(w * 100).toFixed(2)}%`;
       if (item.type === "canvasText") {
-        const attrs = describe("text", item.position, item.size, item.invalidSize?.value);
+        const attrs = `${describe("text", item.position, item.size, item.invalidSize?.value)}${this.sourceStartAttr(item.span.start)}`;
         html += `<div class="canvas-item canvas-text"${attrs} style="${posStyle(item.position.x, item.position.y, item.position.width)};font-size:${this.theme.fontSizesPt[item.size]}pt">${this.renderBlocks(item.children)}</div>`;
       } else if (item.type === "canvasImage") {
-        const attrs = describe("image", item.position);
+        const attrs = `${describe("image", item.position)}${this.sourceStartAttr(item.span.start)}`;
         if (item.path.toLowerCase().endsWith(".pdf")) {
           html += placeholderHtml(
             "canvas-item image-placeholder",
@@ -695,7 +703,7 @@ class FrameRenderer {
           environmentOf(item.tex) ?? "生 LaTeX",
           item.tex,
           "width:30%;aspect-ratio:4 / 3",
-          this.rawKeyAttr(item.tex, environmentOf(item.tex)),
+          `${this.sourceStartAttr(item.span.start)}${this.rawKeyAttr(item.tex, environmentOf(item.tex))}`,
         );
       }
     }
