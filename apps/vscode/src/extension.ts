@@ -24,6 +24,7 @@ import {
 import { MAX_RAW_PDF_BYTES } from "@beamer-editor/ui";
 import * as vscode from "vscode";
 import { canvasHoverAt } from "./canvas-hover";
+import { type DeckCompletion, deckCompletionsAt } from "./deck-completion";
 import { LintController } from "./diagnostics";
 import { renderDocument } from "./document-controller";
 import {
@@ -178,6 +179,40 @@ export interface TestApi {
   _previewControllerForTest(): PreviewController | undefined;
   _slideItemsForTest(): unknown[];
   _imagePasteProviderForTest(): ImagePasteEditProvider;
+}
+
+function deckCompletionKind(kind: DeckCompletion["kind"]): vscode.CompletionItemKind {
+  switch (kind) {
+    case "environment":
+      return vscode.CompletionItemKind.Module;
+    case "command":
+      return vscode.CompletionItemKind.Function;
+    case "option":
+      return vscode.CompletionItemKind.Property;
+    case "value":
+      return vscode.CompletionItemKind.EnumMember;
+  }
+}
+
+/** deck 語彙の補完候補(#149)を VS Code の CompletionItem にする。 */
+function deckCompletionItem(
+  document: vscode.TextDocument,
+  completion: DeckCompletion,
+  index: number,
+): vscode.CompletionItem {
+  const item = new vscode.CompletionItem(completion.label, deckCompletionKind(completion.kind));
+  // 既定の名前順だと x / y / w や文字サイズの大小の順が崩れるので、返した順に並べる。
+  item.sortText = String(index).padStart(3, "0");
+  item.insertText = new vscode.SnippetString(completion.snippet);
+  item.range = new vscode.Range(
+    document.positionAt(completion.range.start),
+    document.positionAt(completion.range.end),
+  );
+  item.detail = completion.detail;
+  if (completion.documentation !== undefined)
+    item.documentation = new vscode.MarkdownString(completion.documentation);
+  if (completion.retrigger) item.command = { command: "editor.action.triggerSuggest", title: "" };
+  return item;
 }
 
 export function activate(context: vscode.ExtensionContext): TestApi {
@@ -549,6 +584,22 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           );
         },
       },
+    ),
+    vscode.languages.registerCompletionItemProvider(
+      { scheme: "file", language: "latex" },
+      {
+        provideCompletionItems(document, position) {
+          if (!isManaged(document)) return undefined;
+          return deckCompletionsAt(document.getText(), document.offsetAt(position)).map(
+            (completion, index) => deckCompletionItem(document, completion, index),
+          );
+        },
+      },
+      "\\",
+      "{",
+      "[",
+      ",",
+      "=",
     ),
     vscode.languages.registerFoldingRangeProvider(
       { scheme: "file", language: "latex" },

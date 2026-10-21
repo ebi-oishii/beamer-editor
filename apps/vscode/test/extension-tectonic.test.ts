@@ -73,6 +73,7 @@ vi.mock("vscode", () => {
     languages: {
       createDiagnosticCollection: disposable,
       registerCodeActionsProvider: disposable,
+      registerCompletionItemProvider: disposable,
       registerFoldingRangeProvider: disposable,
       registerHoverProvider: disposable,
       registerCodeLensProvider: disposable,
