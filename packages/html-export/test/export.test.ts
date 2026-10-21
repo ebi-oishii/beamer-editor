@@ -396,6 +396,10 @@ describe("exportHtml", () => {
     expect(viewer).toContain("transform='scale('");
     expect(viewer).not.toContain("[data-min],[data-overlay]");
     expect(viewer.indexOf("[data-min]")).toBeLessThan(viewer.indexOf("[data-overlay]"));
+    // 本文のはみ出し表示(#193)は編集用プレビューの警告。書き出しの viewer はこのクラスを付けない
+    // (規則は PREVIEW_CSS を共有するので viewer.css には載るが、使われない)。
+    expect(viewer).not.toContain("slide-overflow");
+    expect(data).not.toContain("slide-overflow");
   });
 
   it("maps prevalidation filesystem failures into the public error taxonomy", async () => {

@@ -34,6 +34,14 @@ describe("renderDeck: basic.slide.tex", () => {
     expect(pauseFrame?.stepCount).toBe(2);
   });
 
+  it("allowframebreaks をプレビュー利用者へ引き継ぐ", () => {
+    const frame = deck.frames.find((candidate) => candidate.titleText === "Related work");
+    expect(frame?.allowFrameBreaks).toBe(true);
+    expect(
+      deck.frames.find((candidate) => candidate.titleText === "Summary")?.allowFrameBreaks,
+    ).toBe(false);
+  });
+
   it("画像が img タグになる", () => {
     expect(deck.frames[7]?.html).toContain('src="assets/logo.png"');
   });

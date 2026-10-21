@@ -15,6 +15,7 @@ import {
   useState,
 } from "react";
 import { clampMenuPosition } from "./detach.js";
+import { overflowMessage, type SlideOverflow } from "./overflow.js";
 import { type DetachRequest, type SlideSize, Stage } from "./Stage.js";
 import { fitWidthScale, frameAtScrollTop, trailingSpace } from "./scroll-layout.js";
 import type { ZoomState } from "./zoom.js";
@@ -115,6 +116,9 @@ function SlideCard({
     if (event.ctrlKey || event.metaKey) onJump(index);
     else onSelect(index);
   };
+  // 本文のはみ出し(#193)。Stage が実測して知らせ、カードはバッジと読み上げに使う。
+  const [overflow, setOverflow] = useState<SlideOverflow | null>(null);
+  const overflowText = overflow ? overflowMessage(overflow) : undefined;
 
   return (
     // biome-ignore lint/a11y/useSemanticElements: スライド html（内部に <a> 等）を含むため button 不可
@@ -125,7 +129,7 @@ function SlideCard({
       tabIndex={0}
       ref={cardRef}
       aria-current={active ? true : undefined}
-      aria-label={`フレーム ${frame.index}: ${frame.titleText}（Enter で選択、${MODIFIER_LABEL}+Enter でソースへ移動）`}
+      aria-label={`フレーム ${frame.index}: ${frame.titleText}（${overflowText ? `${overflowText}。` : ""}Enter で選択、${MODIFIER_LABEL}+Enter でソースへ移動）`}
       onClick={() => onSelect(index)}
       onDoubleClick={() => onJump(index)}
       onKeyDown={handleKeyDown}
@@ -153,6 +157,8 @@ function SlideCard({
           }
           selectedElementId={selectedElementId}
           onSelectionChange={(elementId) => onSelectionChange(index, elementId)}
+          overflow={overflow}
+          onOverflowChange={setOverflow}
         />
       </div>
       {/* biome-ignore lint/a11y/noStaticElementInteractions: keyboard access is provided by the focused slide card via Shift+F10/ContextMenu. */}
@@ -164,9 +170,17 @@ function SlideCard({
           onOpenOrderMenu(index, event.clientX, event.clientY);
         }}
       >
-        {frame.index}. {frame.titleText}
-        {frame.label ? `（label=${frame.label}）` : ""}
-        {frame.isRaw ? " ⚠" : ""}
+        <span className="slide-caption-text">
+          {frame.index}. {frame.titleText}
+          {frame.label ? `（label=${frame.label}）` : ""}
+          {frame.isRaw ? " ⚠" : ""}
+        </span>
+        {overflowText ? (
+          // 読み上げはカードの aria-label が担う(role="button" の子は読まれない)。
+          <span className="slide-overflow-badge" title={overflowText}>
+            はみ出し
+          </span>
+        ) : null}
       </div>
     </div>
   );

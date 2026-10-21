@@ -1063,6 +1063,170 @@ describe("mountPreview", () => {
     expect(Number.parseFloat(layout.style.height)).toBeCloseTo(341.4267 * 3, 4);
   });
 
+  it("通常フレームでは両方向を示し、allowframebreaks では縦だけを示さない(#193)", () => {
+    const observers: { callback: ResizeObserverCallback; targets: Element[] }[] = [];
+    class ResizeObserverMock {
+      private readonly targets: Element[] = [];
+      constructor(callback: ResizeObserverCallback) {
+        observers.push({ callback, targets: this.targets });
+      }
+      observe(target: Element) {
+        this.targets.push(target);
+      }
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    // 1 枚目の本文だけ寸法を変えられるようにする(jsdom はレイアウトしないので実測を差し替える)。
+    const firstBody = { height: 400, width: 607 };
+    const inFirstCard = (element: Element) =>
+      element.closest<HTMLElement>(".slide-card")?.dataset.index === "0";
+    const metric = (slide: number, body: (element: Element) => number) =>
+      function (this: Element) {
+        if (this.classList.contains("slide")) return slide;
+        if (this.classList.contains("slide-body")) return body(this);
+        return 0;
+      };
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(metric(607, () => 0));
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(metric(341, () => 0));
+    vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockImplementation(metric(0, () => 30));
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(
+      metric(607, () => 607),
+    );
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
+      metric(341, (body) => (inFirstCard(body) ? firstBody.height : 100)),
+    );
+    vi.spyOn(Element.prototype, "scrollWidth", "get").mockImplementation(
+      metric(607, (body) => (inFirstCard(body) ? firstBody.width : 607)),
+    );
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(
+      metric(341, (body) => (inFirstCard(body) ? firstBody.height : 100)),
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+    let unmount: () => void = () => {};
+    act(() => {
+      unmount = mountPreview(container, host);
+    });
+    act(() => host.push(DECK));
+    const cards = container.querySelectorAll<HTMLElement>(".slide-card");
+    let [first, second] = cards;
+    if (!first || !second) throw new Error("slide cards missing");
+    const remeasureFirst = () => {
+      if (!first) throw new Error("first slide card missing");
+      const body = first.querySelector(".slide-body");
+      const observer = [...observers]
+        .reverse()
+        .find((entry) => body && entry.targets.includes(body));
+      if (!observer) throw new Error("slide body is not observed");
+      act(() => observer.callback([], {} as ResizeObserver));
+    };
+    try {
+      expect(first.querySelector(".slide-overflow-edge")?.className).toBe(
+        "slide-overflow-edge bottom",
+      );
+      const badge = first.querySelector<HTMLElement>(".slide-caption .slide-overflow-badge");
+      expect(badge?.textContent).toBe("はみ出し");
+      expect(badge?.title).toContain("本文がスライドの下端を超えています");
+      expect(first.getAttribute("aria-label")).toContain("下端を超えています");
+      // 印は .slide-scale(スライドの中身)の外に置き、本文のレイアウトに入らない。
+      expect(first.querySelector(".slide-scale .slide-overflow-edge")).toBeNull();
+      expect(second.querySelector(".slide-overflow-edge, .slide-overflow-badge")).toBeNull();
+      expect(second.getAttribute("aria-label")).not.toContain("超えています");
+
+      // 横に広い表など、右端だけを超えた場合。
+      firstBody.height = 200;
+      firstBody.width = 700;
+      remeasureFirst();
+      expect(first.querySelector(".slide-overflow-edge")?.className).toBe(
+        "slide-overflow-edge right",
+      );
+      expect(first.querySelector<HTMLElement>(".slide-overflow-badge")?.title).toContain("右端");
+
+      firstBody.width = 607;
+      remeasureFirst();
+      expect(first.querySelector(".slide-overflow-edge, .slide-overflow-badge")).toBeNull();
+      expect(first.getAttribute("aria-label")).not.toContain("超えています");
+
+      // PDF では allowframebreaks の縦超過は次ページへ送られる。プレビューは 1 枚のままでも、
+      // PDF で内容が欠けるという誤警告や下端の印は出さない。
+      act(() =>
+        host.push({
+          ...DECK,
+          frames: DECK.frames.map((frame, index) =>
+            index === 0 ? { ...frame, allowFrameBreaks: true } : frame,
+          ),
+        }),
+      );
+      [first, second] = container.querySelectorAll<HTMLElement>(".slide-card");
+      if (!first || !second) throw new Error("updated slide cards missing");
+      expect(first.querySelector(".slide-overflow-edge, .slide-overflow-badge")).toBeNull();
+
+      firstBody.height = 400;
+      firstBody.width = 607;
+      remeasureFirst();
+      expect(first.querySelector(".slide-overflow-edge, .slide-overflow-badge")).toBeNull();
+      expect(first.getAttribute("aria-label")).not.toContain("PDF では Overfull");
+
+      // 横超過は allowframebreaks でも次ページに送れないので、通常どおり警告を維持する。
+      firstBody.width = 700;
+      remeasureFirst();
+      expect(first.querySelector(".slide-overflow-edge")?.className).toBe(
+        "slide-overflow-edge right",
+      );
+      const allowFrameBreaksBadge = first.querySelector<HTMLElement>(".slide-overflow-badge");
+      expect(allowFrameBreaksBadge?.textContent).toBe("はみ出し");
+      expect(allowFrameBreaksBadge?.title).toContain("右端");
+      expect(allowFrameBreaksBadge?.title).toContain("Overfull \\hbox");
+      expect(first.getAttribute("aria-label")).toContain("右端を超えています");
+    } finally {
+      act(() => unmount());
+    }
+  });
+
+  it("step を進めてもはみ出しの計測をやり直さない(寸法を変えないため)(#193)", () => {
+    const bodyObservers: Element[] = [];
+    class ResizeObserverMock {
+      observe(target: Element) {
+        if (target.classList.contains("slide-body")) bodyObservers.push(target);
+      }
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+    let unmount: () => void = () => {};
+    act(() => {
+      unmount = mountPreview(container, host);
+    });
+    act(() => host.push(DECK));
+    try {
+      const first = container.querySelector<HTMLElement>('.slide-card[data-index="0"]');
+      const covered = first?.querySelector<HTMLElement>('[data-min="2"]');
+      const stepRange = container.querySelector<HTMLInputElement>(
+        'input[aria-label="オーバーレイ step（2 段階）"]',
+      );
+      if (!covered || !stepRange) throw new Error("step fixture missing");
+      expect(covered.classList.contains("covered")).toBe(true);
+      const before = bodyObservers.length;
+      expect(before).toBeGreaterThan(0);
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+          stepRange,
+          "2",
+        );
+        stepRange.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(covered.classList.contains("covered")).toBe(false);
+      expect(bodyObservers).toHaveLength(before);
+    } finally {
+      act(() => unmount());
+    }
+  });
+
   it("外側の .slide-layout が transform のはみ出しを閉じ、影を持つ", () => {
     const container = document.createElement("div");
     document.body.append(container);

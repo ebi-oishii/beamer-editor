@@ -88,7 +88,7 @@ Markdown 風入力は `.slide.tex` の語彙ではない。入力補助が提供
 | 要素 | Beamer 構文 | プレビュー |
 |---|---|---|
 | フレーム | `\begin{frame}[opts]{タイトル}` … `\end{frame}` | 1 スライド |
-| フレームオプション | `fragile`, `plain`, `allowframebreaks`, `label=名前` のみ | `label` はフレームの永続アドレス([ai-protocol.md](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/ai-protocol.md) §3)としても使う |
+| フレームオプション | `fragile`, `plain`, `allowframebreaks`, `label=名前` のみ | `allowframebreaks` は PDF で縦に自動改ページする。プレビューは 1 スライドのままで自動改ページを再現しない。`label` はフレームの永続アドレス([ai-protocol.md](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/ai-protocol.md) §3)としても使う |
 | タイトルページ | `\titlepage` | メタデータから描画 |
 | 目次 | `\tableofcontents` | section 一覧から描画 |
 | セクション | `\section{…}`, `\subsection{…}` | 一覧ペインの区切り・目次 |
