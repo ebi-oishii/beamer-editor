@@ -8,6 +8,11 @@
  * KaTeX の CSS はホスト側が読み込む（ui は持たない）。
  */
 
+import { MONO_FONT_FALLBACK } from "@beamer-editor/renderer";
+
+/** プレビュー UI の等幅スタック。Windows 向けの末尾は renderer の `--deck-font-mono` と共通。 */
+const MONO_STACK = `"SF Mono", ui-monospace, Menlo, ${MONO_FONT_FALLBACK}`;
+
 export const PREVIEW_CSS = `
 .beamer-preview {
   position: relative;
@@ -237,10 +242,10 @@ export const PREVIEW_CSS = `
   font-style: italic;
 }
 .slide code {
-  font-family: var(--deck-font-mono, "SF Mono", ui-monospace, Menlo, monospace);
+  font-family: var(--deck-font-mono, ${MONO_STACK});
   font-size: 0.92em;
 }
-.slide .alert {
+.slide .alert:not(.beamer-block) {
   color: var(--deck-alert, #c0392b);
 }
 .slide a.url {
@@ -289,14 +294,14 @@ export const PREVIEW_CSS = `
 .slide .beamer-block {
   margin-bottom: 7pt;
 }
-.slide .beamer-block .block-title {
+.slide .beamer-block > .block-title {
   color: var(--deck-block-title-fg, var(--deck-structure, #3333b3));
   font-weight: 600;
 }
-.slide .beamer-block.alert .block-title {
+.slide .beamer-block.alert > .block-title {
   color: var(--deck-block-alerted-title-fg, var(--deck-alert, #c0392b));
 }
-.slide .beamer-block.example .block-title {
+.slide .beamer-block.example > .block-title {
   color: var(--deck-block-example-title-fg, var(--deck-example, #1e8449));
 }
 .slide .beamer-block .block-body {
@@ -473,7 +478,7 @@ export const PREVIEW_CSS = `
   padding: 3pt 5pt;
   font-size: 7pt;
   line-height: 1.35;
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: ${MONO_STACK};
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 130pt;
@@ -483,7 +488,7 @@ export const PREVIEW_CSS = `
   background: #fdf6e3;
   outline: 0.6pt dashed #b58900;
   border-radius: 2pt;
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: ${MONO_STACK};
   font-size: 0.85em;
   padding: 0 2pt;
 }
@@ -503,7 +508,7 @@ export const PREVIEW_CSS = `
   overflow: hidden;
 }
 .slide .placeholder-label {
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: ${MONO_STACK};
   font-size: 7.5pt;
   line-height: 1.3;
   text-align: center;

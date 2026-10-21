@@ -50,6 +50,25 @@
   \xdef\deck@logo@w{\the\deck@abs@w}%
   \gdef\deck@logo@path{#2}%
   \deck@refresh@background}
+% ---- \deckbackground{path} / \deckbackground[title]{path} ----
+% 無印は全スライド、[title] は表紙(\titlepage を含むフレーム)だけの背景画像で、表紙では無印より優先する。
+% Beamer は background テンプレートをフレーム本文の組版後(シップアウト時)に評価するので、
+% title page テンプレートが立てるフラグを、同じページの背景が読める。フラグは背景の描画後に必ず戻す
+% (重ね合わせ(\pause 等)の各ページでは title page が再び評価されて立て直す)。
+% title page テンプレートへのフックは、preamble-extra のテーマが \setbeamertemplate{title page} で
+% 差し替えても外れないよう、\AtBeginDocument で入れる。
+\newif\ifdeck@ontitle
+\AtBeginDocument{\addtobeamertemplate{title page}{\global\deck@ontitletrue}{}}
+\newcommand\deckbackground[2][]{%
+  \def\deck@bg@slot{#1}%
+  \ifx\deck@bg@slot\@empty
+    \gdef\deck@bg@path{#2}%
+  \else\def\deck@tmp@title{title}\ifx\deck@bg@slot\deck@tmp@title
+    \gdef\deck@titlebg@path{#2}%
+  \else
+    \typeout{DECKSTYLE unknown-background-slot: #1}%
+  \fi\fi
+  \deck@refresh@background}
 \newcommand\deckfooter[1]{%
   \gdef\deck@footer@text{#1}%
   \deck@refresh@background}
@@ -57,10 +76,18 @@
   \setbeamertemplate{background}{%
     \setlength{\unitlength}{1pt}%
     \begin{picture}(0,0)%
+      \ifdeck@ontitle\@ifundefined{deck@titlebg@path}%
+        {\@ifundefined{deck@bg@path}{}{\deck@put@background\deck@bg@path}}%
+        {\deck@put@background\deck@titlebg@path}%
+      \else\@ifundefined{deck@bg@path}{}{\deck@put@background\deck@bg@path}\fi
       \@ifundefined{deck@logo@path}{}{%
         \put(\deck@logo@x,-\deck@logo@y){\makebox(0,0)[tl]{\includegraphics[width=\deck@logo@w]{\deck@logo@path}}}}%
       \@ifundefined{deck@footer@text}{}{%
         \put(28.45,-249){\makebox(0,0)[bl]{\color{gray}\fontsize{6}{7}\selectfont\deck@footer@text}}%
         \put(426.79,-249){\makebox(0,0)[br]{\color{gray}\fontsize{6}{7}\selectfont\insertframenumber\,/\,\inserttotalframenumber}}}%
-    \end{picture}}}
+    \end{picture}%
+    \global\deck@ontitlefalse}}
+% 背景画像は用紙いっぱいに、背景テンプレートの原点(左上)から敷く。
+\newcommand\deck@put@background[1]{%
+  \put(0,0){\makebox(0,0)[tl]{\includegraphics[width=\paperwidth,height=\paperheight]{#1}}}}
 \makeatother

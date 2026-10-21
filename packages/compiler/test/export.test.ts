@@ -6,6 +6,7 @@ import {
   exportPdf,
   nodeProcessRunner,
   PdfExportError,
+  type PdfExportProgress,
   type ProcessResult,
   type ProcessRunner,
 } from "../src/index.ts";
@@ -40,6 +41,50 @@ async function source(name = "talk.slide.tex") {
 function result(overrides: Partial<ProcessResult> = {}): ProcessResult {
   return { exitCode: 0, stdout: "tectonic 0.16.0\n", stderr: "", ...overrides };
 }
+
+// Tectonic 0.17.0 が実際に出した stderr(#205。関係する行だけを残す)。
+const TECTONIC_TEX_ERROR = [
+  "error: a.tex:3: Undefined control sequence",
+  "error: something bad happened inside XeTeX; its output follows:",
+  "",
+  "===============================================================================",
+  "(a.tex",
+  "! Undefined control sequence.",
+  "l.3 Hello \\undefinedmacro",
+  "No pages of output.",
+  "===============================================================================",
+  "error: the XeTeX engine had an unrecoverable error",
+  "caused by: halted on potentially-recoverable error as specified",
+].join("\n");
+const TECTONIC_MISSING_PACKAGE = [
+  "error: b.tex:3: ! LaTeX Error: File `nonexistentpkgxyz.sty' not found.",
+  "error: something bad happened inside XeTeX; its output follows:",
+  "===============================================================================",
+  "! ! LaTeX Error: File `nonexistentpkgxyz.sty' not found..",
+  "===============================================================================",
+  "error: the XeTeX engine had an unrecoverable error",
+].join("\n");
+// 索引はキャッシュにあるがファイルを取得できない(オフライン)。TeX からは「ファイルが無い」に見える。
+const TECTONIC_DOWNLOAD_FAILURE = [
+  'warning: failure fetching "chemfig.sty" from network (3/3)',
+  "caused by: error sending request for url (https://relay.fullyjustified.net/default_bundle_v33.tar)",
+  "caused by: Connection refused (os error 61)",
+  "warning: open of input chemfig.sty failed",
+  'caused by: failed to download "chemfig.sty"; please check your network connection.',
+  "error: d.tex:3: ! LaTeX Error: File `chemfig.sty' not found.",
+  "error: something bad happened inside XeTeX; its output follows:",
+  "===============================================================================",
+  "! ! LaTeX Error: File `chemfig.sty' not found..",
+  "===============================================================================",
+  "error: the XeTeX engine had an unrecoverable error",
+].join("\n");
+// 初回にバンドルの索引を取得できない(オフライン)と、Tectonic は panic して 101 で終わる。
+const TECTONIC_PANIC = [
+  "",
+  "thread 'main' (64083727) panicked at src/config.rs:154:18:",
+  "called `Result::unwrap()` on an `Err` value: this bundle isn't cached, and we couldn't get it from the internet.",
+  "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+].join("\n");
 
 function successfulRunner(
   calls: Array<{ command: string; args: readonly string[]; cwd: string }>,
@@ -191,7 +236,12 @@ describe("exportPdf", () => {
       temps.push(value);
       return value;
     };
-    for (const compile of [result({ exitCode: 1, stderr: "bad tex" }), result({ stdout: "" })]) {
+    // TeX のエラーで止まったときだけ texFailed(終了 0 で PDF が無い・シグナルで止まったは立てない)。
+    for (const [compile, texFailed] of [
+      [result({ exitCode: 1, stderr: TECTONIC_TEX_ERROR }), true],
+      [result({ stdout: "" }), false],
+      [result({ exitCode: null, stderr: "killed" }), false],
+    ] as const) {
       let call = 0;
       const runner: ProcessRunner = { run: async () => (call++ === 0 ? result() : compile) };
       await expect(
@@ -199,10 +249,53 @@ describe("exportPdf", () => {
           { inputPath: input.path, overwrite: true },
           { runner, temporaryDirectory: makeTemp },
         ),
-      ).rejects.toMatchObject({ code: "E_COMPILE" });
+      ).rejects.toMatchObject({ code: "E_COMPILE", texFailed });
       expect(await readFile(output, "utf8")).toBe("old PDF");
     }
     await expect(Promise.all(temps.map((path) => access(path)))).rejects.toBeDefined();
+  });
+
+  it("texFailed は TeX のエラー行があるときだけ立て、パッケージ取得の失敗・panic・強制終了では立てない(#205)", async () => {
+    const input = await source();
+    for (const [compile, texFailed] of [
+      [result({ exitCode: 1, stderr: TECTONIC_TEX_ERROR }), true],
+      // パッケージが TeX 配布に無いのはデッキ側の誤り。
+      [result({ exitCode: 1, stderr: TECTONIC_MISSING_PACKAGE }), true],
+      [result({ exitCode: 1, stderr: TECTONIC_DOWNLOAD_FAILURE }), false],
+      [result({ exitCode: 101, stderr: TECTONIC_PANIC }), false],
+      // Windows の強制終了など: 非 0 でも TeX のエラー行が無い。
+      [result({ exitCode: 1, stdout: "note: Running TeX ...\n", stderr: "" }), false],
+    ] as const) {
+      let call = 0;
+      const runner: ProcessRunner = { run: async () => (call++ === 0 ? result() : compile) };
+      await expect(
+        exportPdf({ inputPath: input.path, overwrite: true }, { runner }),
+      ).rejects.toMatchObject({ code: "E_COMPILE", texFailed });
+    }
+  });
+
+  it("出力が上限を超えても、末尾に写された TeX のエラー行で texFailed を立てる(#205)", async () => {
+    const input = await source();
+    // 大量の警告(上限の 1 MiB を超える)の後に、Tectonic が TeX のエラー行を写す。
+    const script = [
+      "const warning = 'Overfull \\\\hbox (12.3pt too wide) in paragraph\\n';",
+      "process.stderr.write(warning.repeat(Math.ceil((1.5 * 1024 * 1024) / warning.length)));",
+      "process.stderr.write('! Undefined control sequence.\\nl.3 Hello \\\\undefinedmacro\\n', () => process.exit(1));",
+    ].join("\n");
+    let collected: ProcessResult | undefined;
+    const runner: ProcessRunner = {
+      run: async (_command, args, options) => {
+        if (args[0] === "--version") return result();
+        collected = await nodeProcessRunner.run(process.execPath, ["-e", script], options);
+        return collected;
+      },
+    };
+    await expect(
+      exportPdf({ inputPath: input.path, overwrite: true }, { runner }),
+    ).rejects.toMatchObject({ code: "E_COMPILE", texFailed: true });
+    // 残すのは上限までの末尾。
+    expect(collected?.stderr.length).toBeLessThanOrEqual(1024 * 1024);
+    expect(collected?.stderr.endsWith("l.3 Hello \\undefinedmacro\n")).toBe(true);
   });
 
   it("does not clobber an output created after preflight while Tectonic is running", async () => {
@@ -411,6 +504,127 @@ describe("exportPdf", () => {
     }
   }, 10_000);
 
+  it("Tectonic の起動に失敗した E_COMPILE は TeX の失敗として扱わない", async () => {
+    const input = await source();
+    let call = 0;
+    const runner: ProcessRunner = {
+      run: async () => {
+        if (call++ === 0) return result();
+        throw new Error("spawn EACCES");
+      },
+    };
+    await expect(
+      exportPdf({ inputPath: input.path, overwrite: true }, { runner }),
+    ).rejects.toMatchObject({
+      code: "E_COMPILE",
+      texFailed: false,
+      message: expect.stringContaining("Tectonic の実行に失敗しました"),
+    });
+  });
+
+  it("splits stdout and stderr into lines across chunk boundaries and flushes the last unterminated line", async () => {
+    // Each write is a separate chunk, so lines and a multi-byte character are cut mid-way.
+    const script = [
+      "const sleep = () => new Promise((resolve) => setTimeout(resolve, 30));",
+      "(async () => {",
+      "  process.stdout.write('note: down'); await sleep();",
+      "  process.stdout.write('loading a.sty\\r\\nnote: downloading b'); await sleep();",
+      "  process.stdout.write('.sty\\n');",
+      "  const kanji = Buffer.from('警告: 漢字\\n');",
+      "  process.stderr.write(kanji.subarray(0, 9)); await sleep();",
+      "  process.stderr.write(kanji.subarray(9)); await sleep();",
+      "  process.stderr.write('tail without newline');",
+      "})();",
+    ].join("\n");
+    const lines: Array<[string, string]> = [];
+    const value = await nodeProcessRunner.run(process.execPath, ["-e", script], {
+      cwd: tmpdir(),
+      onOutputLine: (line, stream) => lines.push([stream, line]),
+    });
+    expect(value).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(lines).toEqual([
+      ["stdout", "note: downloading a.sty"],
+      ["stdout", "note: downloading b.sty"],
+      ["stderr", "警告: 漢字"],
+      ["stderr", "tail without newline"],
+    ]);
+    // The collected output is unchanged by line handling.
+    expect(value.stdout).toBe("note: downloading a.sty\r\nnote: downloading b.sty\n");
+  });
+
+  it("restarts the timeout on matching output lines only and survives a throwing listener", async () => {
+    // Five progress lines 150 ms apart keep a 400 ms timeout alive for ~750 ms.
+    const progressing = [
+      "let n = 0;",
+      "const timer = setInterval(() => {",
+      "  console.log('note: downloading file' + n);",
+      "  if (++n === 5) { clearInterval(timer); process.exit(0); }",
+      "}, 150);",
+    ].join("\n");
+    const started = Date.now();
+    const restarted = await nodeProcessRunner.run(process.execPath, ["-e", progressing], {
+      cwd: tmpdir(),
+      timeoutMs: 400,
+      restartTimeoutOn: (line) => line.startsWith("note: downloading "),
+      onOutputLine: () => {
+        throw new Error("listener failure");
+      },
+    });
+    expect(restarted).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(600);
+
+    // Output that does not match keeps the original deadline.
+    const chatty = "setInterval(() => console.log('working'), 100);";
+    const timedOut = await nodeProcessRunner.run(process.execPath, ["-e", chatty], {
+      cwd: tmpdir(),
+      timeoutMs: 400,
+      restartTimeoutOn: (line) => line.startsWith("note: downloading "),
+    });
+    expect(timedOut).toMatchObject({ timedOut: true, cancelled: false });
+  });
+
+  it("reports Tectonic downloads with a running count and restarts the compile timeout on them", async () => {
+    const input = await source();
+    const progress: PdfExportProgress[] = [];
+    let restart: ((line: string) => boolean) | undefined;
+    const runner: ProcessRunner = {
+      async run(_command, args, options) {
+        if (args[0] === "--version") {
+          expect(options.restartTimeoutOn).toBeUndefined();
+          return result();
+        }
+        restart = options.restartTimeoutOn;
+        for (const line of [
+          'note: "version 2" Tectonic command-line interface activated',
+          "note: downloading latex.ltx",
+          "warning: something unrelated",
+          "\u001b[1;32mnote:\u001b[0m downloading beamer.cls",
+        ])
+          options.onOutputLine?.(line, "stdout");
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        await writeFile(join(outdir, "talk.slide.pdf"), "%PDF-1.7\n");
+        return result({ stdout: "" });
+      },
+    };
+    await exportPdf(
+      {
+        inputPath: input.path,
+        onProgress: (value) => {
+          progress.push(value);
+          throw new Error("a broken listener must not fail the export");
+        },
+      },
+      { runner },
+    );
+    expect(progress).toEqual([
+      { kind: "download", file: "latex.ltx", count: 1 },
+      { kind: "download", file: "beamer.cls", count: 2 },
+    ]);
+    expect(restart?.("note: downloading pgf.sty")).toBe(true);
+    expect(restart?.('note: generating format "latex"')).toBe(false);
+    expect(await readFile(join(input.dir, "talk.pdf"), "utf8")).toBe("%PDF-1.7\n");
+  });
+
   it("uses separate version and compile timeouts and maps compile timeout without replacing output", async () => {
     const input = await source();
     const output = join(input.dir, "talk.pdf");
@@ -430,6 +644,7 @@ describe("exportPdf", () => {
       ),
     ).rejects.toMatchObject({
       code: "E_COMPILE",
+      texFailed: false,
       message: expect.stringContaining("12.345 秒でタイムアウト"),
     });
     expect(timeoutValues).toEqual([10_000, 12_345]);
@@ -466,5 +681,7 @@ describe("exportPdf", () => {
 describe("PdfExportError", () => {
   it("exposes a stable machine-readable code", () => {
     expect(new PdfExportError("E_COMPILE", "failed").code).toBe("E_COMPILE");
+    expect(new PdfExportError("E_COMPILE", "failed").texFailed).toBe(false);
+    expect(new PdfExportError("E_IO", "io", undefined, { texFailed: true }).texFailed).toBe(false);
   });
 });

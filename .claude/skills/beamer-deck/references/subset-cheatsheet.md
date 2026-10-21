@@ -53,15 +53,17 @@
 |---|---|
 | `\documentclass` オプション | `aspectratio=169` / `aspectratio=43` のみ |
 | `%% macros:begin` 〜 `%% macros:end` | マクロ定義(§4 の規則に従う) |
-| `%% style:begin` 〜 `%% style:end` | スタイル語彙(`\deckcolor` `\deckfont` `\decklogo` `\deckfooter`。[theme-design.md](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/theme-design.md) §2)。語彙外は L020 |
+| `%% style:begin` 〜 `%% style:end` | スタイル語彙(`\deckcolor` `\deckfont` `\decklogo` `\deckbackground` `\deckfooter`。[theme-design.md](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/theme-design.md) §2)。語彙外は L020 |
 | `%% preamble-extra:begin` 〜 `%% preamble-extra:end` | 生の自由領域。ツールは素通しする(生スタイルの置き場でもある)。テンプレート(`.sty` + 画像)は Beamer 標準の `\usetheme{Name}` / `\usepackage{templates/<name>/beamertheme<name>}` でここから読む。配置はデッキのディレクトリ直下または `templates/<name>/`([theme-design.md](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/theme-design.md) §2.1)。プレビューは色・フォント・ロゴ・背景だけを標準記法から近似する |
 
 テーマ選択とパッケージはツール管理領域に入る。v1 のテーマは `default` の 1 種類から開始する(2 テーマ目は HTML/PDF の座標差を fixture で評価してから追加。`metropolis` は将来候補)。共通パッケージ(`graphicx`, `amsmath`, `amssymb`, `booktabs`, `hyperref` 等)と、キャンバス用の `deckcanvas` / `decktext` / `deckimage`(§2.8)の定義はツールが自動注入する。
 
 - ツール管理領域は `%% deck-source-version: 1` でソース形式の版を記録する。構文の版が上がるときは、フォーマッタが黙って破壊的変換せず、明示的な migration コマンドを通す(欠落・不一致は L017)。
-- スタイル(色・フォント・ロゴ・フッター)は `%% style` 領域のスタイル語彙で指定する([theme-design.md](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/theme-design.md))。スタイルは本文の語彙を変えない提示層であり、v1 の語彙は幾何中立(本文領域・タイトル帯の寸法を変えない)。語彙外の様式は `%% preamble-extra` に生で書け、PDF には完全に効く(プレビューは近似のまま)。
+- 構文を変えずにツール管理プリアンブルへマクロを足したとき(`\deckbackground` など)は版を上げない。古いデッキでそのマクロを使うと L025 になり、`deck init <file> --update-preamble` が `% ---- ツール管理プリアンブル` 〜 `% ---- ツール管理ここまで ----` の間だけを `deck init` が書く現行の内容に差し替える(版の行・ユーザー領域・本文は変えない。範囲を特定できない(印が無い・終了印が最初のユーザー領域か `\begin{document}` より後ろにある・終了印が開始印より前にある・開始印が複数ある)デッキは書き換えずに失敗し、L025 にも fix を付けない)。
+- スタイル(色・フォント・ロゴ・背景画像・フッター)は `%% style` 領域のスタイル語彙で指定する([theme-design.md](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/theme-design.md))。スタイルは本文の語彙を変えない提示層であり、v1 の語彙は幾何中立(本文領域・タイトル帯の寸法を変えない)。語彙外の様式は `%% preamble-extra` に生で書け、PDF には完全に効く(プレビューは近似のまま)。
+- 背景画像は `%% style` 領域の `\deckbackground{assets/bg.png}`(全スライド)と `\deckbackground[title]{assets/title-bg.png}`(表紙 = `\titlepage` のフレームだけ。全スライド用より優先)で指定する。画像は PNG / JPEG を使う(PDF の背景は PDF にだけ出てプレビューには出ない)。`\usebackgroundtemplate` / `\setbeamertemplate{background}` などをフレームの中・フレームの間・`%% preamble-extra` の外へ書かない(PDF には効くがプレビューには出ない。L024)
 - `deck` で始まるコマンド・環境名はツールの予約名前空間であり、`%% macros` 領域での再定義は不可(L016)。
-- GUI キャンバスの正式サポートは 16:9(`aspectratio=169`)のみ。4:3 デッキでの `deckcanvas` 使用は警告する(L018)。
+- GUI キャンバスの正式サポートは 16:9(`aspectratio=169`)のみ。4:3 デッキでの `deckcanvas` 使用は警告する(L018)。4:3 デッキでは自由配置を求められても `deckcanvas` を使わず通常フローで書き、16:9 に変えれば使えることを伝える。
 
 メタデータ: `\title{}` `\author{}` `\date{}` `\institute{}` `\subtitle{}` を解釈する。
 
@@ -111,8 +113,10 @@ Markdown 風入力は `.slide.tex` の語彙ではない。入力補助が提供
 
 | 要素 | Beamer 構文 | 備考 |
 |---|---|---|
-| 画像 | `\includegraphics[width=0.8\textwidth]{path}` | オプションは `width` / `height` のみ、値は `\textwidth`・`\linewidth` の係数のみ。パスは相対パス |
+| 画像 | `\includegraphics[width=0.8\textwidth]{path}` | オプションは `width` / `height` のみ、値は `\textwidth`・`\linewidth` の係数のみ。パスはデッキのディレクトリ基準の相対パスで、拡張子まで書く(下記「画像パスの規則」)。SVG は置けない(コンパイルエラーになる)ので PNG / PDF へ実際に変換したものを参照する |
 | 表 | `\begin{tabular}{lcr}` + `booktabs`(`\toprule` `\midrule` `\bottomrule`)+ `&` `\\` | 列指定は `l` `c` `r` と `|` なしの基本形のみ。`multicolumn` 等は生ブロックへ |
+
+HTML 書き出し(`deck export --format html`)が複製する画像はデッキ配下の PNG / JPEG だけである。それ以外(PDF など)や見つからない画像は `\includegraphics` でも `deckimage`(§2.8)でもプレースホルダーになる(PDF の背景は描かない)。該当する画像とフレーム番号を stderr に警告して終了コード 1 で終える(`--json` では stdout の `placeholders` に列挙する)。HTML でも図を出すには PNG へ変換したものを参照する(PDF 出力の画質が変わるため、AI が参照を書き換えるのはユーザーの同意がある場合だけ。[ai-protocol.md](https://github.com/ebi-oishii/beamer-editor/blob/main/docs/ai-protocol.md) §5 の 11)。
 
 ### 2.5 インライン要素
 
@@ -146,7 +150,7 @@ Markdown 風入力は `.slide.tex` の語彙ではない。入力補助が提供
 
 GUI で扱う自由配置は `deckcanvas` の層に集める。フレーム本文に `deckcanvas` がある場合、そのフレームはキャンバスフレームである。通常フロー要素と `deckcanvas` は同じフレームに共存できる(フロー配置の上に重なる層)。`deckcanvas` はフレームに 1 つまで(2 つ以上は L014)。
 
-- 通常フレーム: 既存の `columns`、`itemize`、`block` などで構成する
+- 通常フレーム: 既存の `columns`、`itemize`、`block`、`\includegraphics` などで構成する
 - キャンバスフレーム: `deckcanvas` の直下に位置指定オブジェクトだけを並べる(許容外の要素は L014)。フロー要素はそのまま残せる
 - 通常フレームの段落・箸条書き・画像は、GUI の「自由配置にする」で `deckcanvas` の `decktext` / `deckimage` へ移せる(位置は移動時の表示位置から取り、残ったフロー要素は詰まる)。表示条件が変わるもの(overlay 付きの block / `\item` の中、`\pause` との前後関係が移動先と異なるもの、`\pause` を含むリスト)は対象にしない。項目の唯一の内容を移すときは空になる `\item`(項目が 1 つならリスト)も取り除く(その範囲にあったコメントは同じ位置に残す)。`center` の中の要素は箱の中で `\centering` を保つ。フレームに `label` が無ければ、文書内で未使用の `canvas-N` を自動で付ける(L011)。候補にできない要素を右クリックしたときは理由を表示する
 - フレームタイトルは固定領域であり、GUI で移動しない
@@ -172,14 +176,14 @@ GUI で扱う自由配置は `deckcanvas` の層に集める。フレーム本�
 | `decktext` | テキスト・インライン要素・単純な箇条書き | 移動、幅変更、文字サイズ変更、削除、コピー・貼り付け |
 | `deckimage` | PNG / JPEG / PDF 画像 | 移動、縦横比を保った拡大縮小、削除、コピー・貼り付け |
 
-TikZ・複雑な表・生 LaTeX ブロック・動画・SVG はキャンバス GUI の対象外。必要な場合は生ブロック、または事前に PDF / PNG へ変換した画像として扱う。
+TikZ・複雑な表・生 LaTeX ブロック・動画・SVG はキャンバス GUI の対象外。必要な場合は生ブロック、または実際に PDF / PNG へ変換した画像として扱う。SVG はキャンバスに限らずデッキのどこにも直接置けない(通常フローの `\includegraphics{fig.svg}` も BoundingBox を決められずコンパイルエラーになる)。置く前に、利用可能な変換手段で PNG または PDF へ実際に変換し、変換後のファイルを参照する。変換手段がなければ未対応として報告し、拡張子だけを変えない。
 
 #### `decktext` 内部の許容語彙
 
 - `decktext` は現行の語彙を維持する。可: インライン要素(§2.5)、数式(§2.6)、改行 `\\`、`\centering`、`itemize` / `enumerate`(本文と同じくネスト 3 段まで)。`center` 環境は許容外で L014 の対象だが、整列コマンド `\centering` は許容する
-- block 系環境、`columns`、基本 `tabular` は通常フローで扱う。`\includegraphics` は `deckimage` を使う
+- block 系環境、`columns`、基本 `tabular` は通常フローで扱う。画像は通常フローでは `\includegraphics`、canvas では `deckimage` を使う
 - ディスプレイ数式は §2.6 の語彙として受理する。#97 はその構造化と、通常フローから自由配置へ変換する実装を追跡する。キャンバスオブジェクトへのオーバーレイは #98 で扱う
-- TikZ と生 LaTeX は通常フローで扱う。生ブロックのプレビューはキャッシュ付き standalone 部分コンパイル画像を用い、まだコンパイルされていない場合はプレースホルダを表示する。キャンバスへ置く必要があれば PDF / PNG に事前変換して `deckimage` を使う。表の GUI 編集は #12 で扱う
+- TikZ と生 LaTeX は通常フローで扱う。生ブロックのプレビューはキャッシュ付き standalone 部分コンパイル画像を用い、まだコンパイルされていない場合はプレースホルダを表示する。キャンバスへ置く必要があれば、利用可能な手段で PDF / PNG に実際に変換してから `deckimage` を使う。表の GUI 編集は #12 で扱う
 - 上記の許容外要素、またはネスト 4 段以上のリストは L014
 
 #### 座標系と正規形
@@ -226,8 +230,9 @@ v1 ではキャンバスオブジェクトへのオーバーレイ指定(`\pause
 
 #### 画像
 
-- v1 対象は PNG / JPEG / PDF。SVG は GUI へ直接入れず、PDF または PNG へ変換する(L015)
+- `deckimage` の v1 対象は PNG / JPEG / PDF。SVG は GUI へ直接入れず、利用可能な変換手段で PDF または PNG へ実際に変換する(L015)。変換手段がなければ canvas にも通常フローにも置けない
 - 参照は相対パス。将来 GUI から追加する場合は `assets/` へコピーし、ファイル名衝突を解決する
+- **画像パスの規則**: 画像パスはデッキのディレクトリ基準で、拡張子まで書く(`\graphicspath` や拡張子の省略は TeX では通るが、プレビュー・HTML 書き出し・lint が解決しないので使わない)。本文の `\includegraphics`、キャンバスの `deckimage`、`%% style` の `\decklogo` / `\deckbackground` のすべてに適用する。この規則を破って、書いたパスのファイルが無いが TeX なら拾えるファイル(拡張子の省略・`\graphicspath` の下)がある場合、L004 は「デッキのディレクトリ基準で拡張子まで書いてください: <パス>」と正しいパスを示し、VS Code では Quick Fix で直せる(テンプレート `.sty` と `%% preamble-extra` の土台の画像だけは別機構で、拡張子の補完と `\graphicspath` を解決する。theme-design.md §2.1)
 - 高さ自動算出・縦横比保持・L015 の検査に必要な画像寸法(PNG/JPEG ヘッダ、PDF の MediaBox)は、L004 と同じ注入パターンで core へ渡す「寸法プローブ」が取得する(core 自体はファイルシステムに依存しない)
 
 #### `deck check` によるキャンバス検証
@@ -279,7 +284,7 @@ pass では推測値を出力しないため、最終 pass で有効なレコー
 | L001 | サブセット外構文(生ブロック化された箇所)の通知 | info |
 | L002 | 展開不能なマクロ定義 | warning |
 | L003 | マクロ定義が公認領域の外にある | warning |
-| L004 | `\includegraphics` の参照先ファイルが存在しない | error |
+| L004 | `\includegraphics` / `\decklogo` / `\deckbackground` の参照先ファイルが書いたとおりのパス(デッキのディレクトリ基準・拡張子つき)に存在しない。TeX なら拾うファイルがあればメッセージで示す | error |
 | L005 | オーバーレイ番号の不整合(到達しないステップ等) | warning |
 | L006 | プリアンブルのツール管理領域への手編集 | error |
 | L007 | frame 内に verbatim 系があるのに `fragile` がない | error |
@@ -299,6 +304,8 @@ pass では推測値を出力しないため、最終 pass で有効なレコー
 | L021 | TeX command の開始に使われた円記号(`¥` / `￥`) | warning。バックスラッシュへ置換する Quick Fix を提供 |
 | L022 | preamble-extra が参照するテンプレート `.sty` がデッキのディレクトリ配下に無い | `\usetheme` は info(TeX 配布のテーマなら通る)、パス指定の `\usepackage` は warning |
 | L023 | テンプレート `.sty` が参照する画像が無い(デッキのディレクトリ基準) | warning |
+| L024 | 背景の指定(`\usebackgroundtemplate` / `\setbeamertemplate{background}` / `\addtobeamertemplate{background}` ほか)が `%% preamble-extra` と `%% style` のどちらの中にもない(PDF には効くがプレビューには出ない。ツール管理プリアンブルの中も対象で、`deck*` マクロ定義の本文だけは除く) | warning |
+| L025 | `%% style` の `\deckbackground` を使っているのに、ツール管理プリアンブルがそれより古く定義が無い(この機能の追加前に `deck init` したデッキ。プレビューには出るが PDF 書き出しは Undefined control sequence で止まる)。ユーザー領域の外に定義も `\input{…deck-style-preamble}` も無いものを報告する。`deck init <file> --update-preamble` で直る | error。VS Code では管理プリアンブルを差し替える Quick Fix を提供 |
 
 オブジェクト同士の重なりは意図的な場合があるため lint 対象にしない(`deck check` の実測レポートで info 表示のみ。§2.8)。
 

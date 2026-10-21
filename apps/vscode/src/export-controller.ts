@@ -3,8 +3,10 @@ import {
   exportPdf,
   PdfExportError,
   type PdfExportErrorCode,
+  type PdfExportProgress,
   type PdfExportResult,
 } from "@beamer-editor/compiler";
+import { type LintOptions, sourceLocation } from "@beamer-editor/core";
 import {
   defaultHtmlOutputPath,
   exportHtml,
@@ -12,6 +14,7 @@ import {
   type HtmlExportRequest,
   type HtmlExportResult,
 } from "@beamer-editor/html-export";
+import { lintDocumentText } from "./diagnostics";
 
 export interface ExportUri {
   readonly scheme: string;
@@ -23,6 +26,9 @@ export interface ExportDocument {
   readonly uri: ExportUri;
   readonly isDirty: boolean;
   save(): Thenable<boolean>;
+  getText(): string;
+  /** 0 始まりの行と、行頭からの UTF-16 コードユニット数(vscode.TextDocument.positionAt)。 */
+  positionAt(offset: number): { readonly line: number; readonly character: number };
 }
 
 export interface ExportCancellationToken {
@@ -35,7 +41,10 @@ export interface ExportHost {
   chooseFormat(): Thenable<"pdf" | "html" | undefined>;
   chooseOutput(defaultUri: ExportUri, format: "pdf" | "html"): Thenable<ExportUri | undefined>;
   outputExists(uri: ExportUri): Thenable<boolean>;
-  withProgress<T>(task: (token: ExportCancellationToken) => Thenable<T>): Thenable<T>;
+  /** `report` は進捗通知の本文を差し替える(VS Code の `progress.report({ message })`)。 */
+  withProgress<T>(
+    task: (token: ExportCancellationToken, report: (message: string) => void) => Thenable<T>,
+  ): Thenable<T>;
   showInformation(message: string, ...actions: string[]): Thenable<string | undefined>;
   showError(message: string, ...actions: string[]): Thenable<string | undefined>;
   showWarning(message: string, ...actions: string[]): Thenable<string | undefined>;
@@ -44,6 +53,12 @@ export interface ExportHost {
   revealInFileManager(uri: ExportUri): Thenable<unknown>;
   openTectonicSettings(): Thenable<unknown>;
   showExportDetails(detail: string): void;
+  /** Problems パネルを開く(コンパイル失敗に lint の error が伴うときの操作)。 */
+  showProblems(): Thenable<unknown>;
+  /** Problems パネルにこの文書の診断が出るか(managed file か)。出ない文書には「問題を表示」を出さない。 */
+  showsProblems(document: ExportDocument): boolean;
+  /** Problems パネルと同じ lint オプション(画像の存在・`text` から解決したテンプレート参照)。 */
+  lintOptions(document: ExportDocument, text: string): LintOptions;
   uriForFile(path: string): ExportUri;
   tectonicPath(document: ExportDocument): string | undefined;
   timeoutMs(document: ExportDocument): number;
@@ -57,6 +72,7 @@ export interface ExportControllerDependencies {
     tectonicPath?: string;
     timeoutMs?: number;
     signal: AbortSignal;
+    onProgress?: (progress: PdfExportProgress) => void;
   }) => Promise<PdfExportResult>;
   exportHtml?: (request: HtmlExportRequest) => Promise<HtmlExportResult>;
   htmlKatexAssetsPath?: string;
@@ -90,6 +106,46 @@ const ERROR_MESSAGES: Record<Exclude<PdfExportErrorCode, "E_CANCELLED">, string>
 };
 
 const DETAIL_LIMIT = 64 * 1024;
+const PROGRESS_INTERVAL_MS = 250;
+
+/**
+ * 初回の TeX パッケージ取得は数百件続くため、通知の更新を間引く。間引いて保留中の最後の値は、
+ * 成功時に `flush()` で同期的に出し、キャンセル・破棄時は `dispose()` で捨てる。
+ */
+function throttledReporter(report: (message: string) => void) {
+  let lastReported = Number.NEGATIVE_INFINITY;
+  let latest: string | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const dispose = () => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    latest = undefined;
+  };
+  const flush = () => {
+    const message = latest;
+    dispose();
+    if (message === undefined) return;
+    lastReported = Date.now();
+    report(message);
+  };
+  return {
+    report(message: string) {
+      latest = message;
+      if (timer) return;
+      const wait = lastReported + PROGRESS_INTERVAL_MS - Date.now();
+      if (wait <= 0) flush();
+      else timer = setTimeout(flush, wait);
+    },
+    /** 保留中の値があれば今すぐ出す。 */
+    flush,
+    /** 保留中の値を出さずに捨てる。以降のタイマー通知も出ない。 */
+    dispose,
+  };
+}
+
+function downloadProgressMessage(progress: PdfExportProgress): string {
+  return `TeX パッケージを取得中（初回のみ）: ${progress.count} 件 — ${progress.file}`;
+}
 
 function stripAnsi(value: string): string {
   let result = "";
@@ -128,6 +184,44 @@ export function exportErrorDetail(error: PdfExportError): string {
   );
   if (detail.length <= DETAIL_LIMIT) return detail;
   return `${detail.slice(0, DETAIL_LIMIT)}\n…（詳細を切り詰めました）`;
+}
+
+interface CompileLintError {
+  line: number;
+  column: number;
+  code: string;
+  message: string;
+}
+
+/**
+ * コンパイルに失敗した文書の lint error。古い管理プリアンブル(L025)のように lint が原因を
+ * 先に検出できる失敗を、TeX の出力だけで終わらせないために添える。lint するのはコンパイルに
+ * 渡した本文(`compiled`)で、コンパイル中に編集されても今の文書は使わない。lint が例外を
+ * 投げたら何も添えない(元の失敗の報告を妨げない)。
+ */
+function compileLintErrors(
+  document: ExportDocument,
+  compiled: string,
+  options: (text: string) => LintOptions,
+): { errors: CompileLintError[]; unchanged: boolean } {
+  try {
+    // 位置は Problems パネルと同じ positionAt で出す。今の文書が変わっていれば、その位置は
+    // コンパイルした本文とずれるので、取っておいた本文から数える。
+    const unchanged = document.getText() === compiled;
+    const errors = lintDocumentText(compiled, options(compiled))
+      .filter((diagnostic) => diagnostic.severity === "error")
+      .map((diagnostic) => {
+        const position = unchanged ? document.positionAt(diagnostic.span.start) : undefined;
+        const { line, column } =
+          position === undefined
+            ? sourceLocation(compiled, diagnostic.span.start)
+            : { line: position.line + 1, column: position.character + 1 };
+        return { line, column, code: diagnostic.code, message: diagnostic.message };
+      });
+    return { errors, unchanged };
+  } catch {
+    return { errors: [], unchanged: false };
+  }
 }
 
 /** Extension Host のみで PDF export の UI と compiler 呼び出しを調停する。 */
@@ -196,10 +290,18 @@ export class ExportController {
       return;
     }
     if (this.disposed) return;
+    // 保存直後の本文 = コンパイルする本文。失敗の報告ではこれを lint する(コンパイル中の編集を混ぜない)。
+    let compiled: string | undefined;
+    try {
+      compiled = document.getText();
+    } catch {
+      compiled = undefined;
+    }
 
     try {
-      const result = await this.host.withProgress(async (token) => {
+      const result = await this.host.withProgress(async (token, report) => {
         const abort = new AbortController();
+        const progress = throttledReporter(report);
         this.activeAbortControllers.add(abort);
         const subscription = token.onCancellationRequested(() => abort.abort());
         try {
@@ -223,10 +325,20 @@ export class ExportController {
             overwrite,
             timeoutMs,
             signal: abort.signal,
+            onProgress: (value: PdfExportProgress) => {
+              if (!this.disposed && !abort.signal.aborted)
+                progress.report(downloadProgressMessage(value));
+            },
             ...(tectonicPath === undefined ? {} : { tectonicPath }),
           };
-          return await this.compile(request);
+          // Cancel and controller dispose both abort; the compile may take a
+          // while to settle after that, so drop the pending update right away.
+          abort.signal.addEventListener("abort", () => progress.dispose(), { once: true });
+          const compiled = await this.compile(request);
+          if (!this.disposed && !abort.signal.aborted) progress.flush();
+          return compiled;
         } finally {
+          progress.dispose();
           subscription.dispose();
           this.activeAbortControllers.delete(abort);
         }
@@ -247,11 +359,15 @@ export class ExportController {
         await this.host.showWarning("書き出しは完了しましたが、表示操作に失敗しました。");
       }
     } catch (error) {
-      await this.reportError(error);
+      await this.reportError(error, document, compiled);
     }
   }
 
-  private async reportError(error: unknown): Promise<void> {
+  private async reportError(
+    error: unknown,
+    document: ExportDocument,
+    compiled: string | undefined,
+  ): Promise<void> {
     if (error instanceof HtmlExportError) {
       if (error.code !== "E_CANCELLED")
         await this.host.showError(`HTML の書き出しに失敗しました: ${error.message}`);
@@ -262,13 +378,42 @@ export class ExportController {
       return;
     }
     if (error.code === "E_CANCELLED") return;
-    const message = ERROR_MESSAGES[error.code];
-    const actions =
-      error.code === "E_TECTONIC_NOT_FOUND"
-        ? (["詳細を表示", "設定を開く"] as const)
-        : (["詳細を表示"] as const);
+    const { errors: lintErrors, unchanged } =
+      // TeX のエラーで止まったときだけ(起動の失敗・タイムアウト・パッケージ取得の失敗などにデッキ側の原因は添えない)。
+      error.texFailed && compiled !== undefined
+        ? compileLintErrors(document, compiled, (text) => this.host.lintOptions(document, text))
+        : { errors: [], unchanged: false };
+    const [first] = lintErrors;
+    const message =
+      first === undefined
+        ? ERROR_MESSAGES[error.code]
+        : `${ERROR_MESSAGES[error.code]} lint のエラーが ${lintErrors.length} 件あります(先頭: ${first.code}: ${first.message})`;
+    const actions = [
+      "詳細を表示",
+      ...(error.code === "E_TECTONIC_NOT_FOUND" ? ["設定を開く"] : []),
+      // 管理対象外の .tex は Problems パネルに診断が出ないので、通知と詳細に入れるだけにする。
+      // コンパイル中に文書が変わったときも出さない(Problems パネルは今の本文の診断で、通知と合わない)。
+      ...(first === undefined || !unchanged || !this.host.showsProblems(document)
+        ? []
+        : ["問題を表示"]),
+    ];
     const action = await this.host.showError(message, ...actions);
-    if (action === "詳細を表示") this.host.showExportDetails(exportErrorDetail(error));
+    if (action === "詳細を表示") {
+      const detail = exportErrorDetail(error);
+      this.host.showExportDetails(
+        first === undefined
+          ? detail
+          : [
+              "lint のエラー(コンパイル失敗の原因かもしれません):",
+              ...lintErrors.map(
+                (entry) => `${entry.line}:${entry.column} ${entry.code} ${entry.message}`,
+              ),
+              "",
+              detail,
+            ].join("\n"),
+      );
+    }
+    if (action === "問題を表示") await this.host.showProblems();
     if (error.code === "E_TECTONIC_NOT_FOUND") {
       if (action === "設定を開く") await this.host.openTectonicSettings();
     }

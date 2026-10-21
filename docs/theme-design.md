@@ -35,6 +35,8 @@
 \deckfont{main}{Noto Sans CJK JP}
 \deckfont{mono}{Source Han Code JP}
 \decklogo[x=0.930,y=0.020,w=0.050]{assets/logo.pdf}
+\deckbackground{assets/background.png}
+\deckbackground[title]{assets/title-background.png}
 \deckfooter{ACME Corp. — Confidential}
 %% style:end
 ```
@@ -44,6 +46,7 @@
 | `\deckcolor{役割}{RRGGBB}` | 役割色の変更。役割: `structure` `alert` `example` `text` `background` | `\setbeamercolor` 群 | CSS 変数(`--deck-structure` 等) |
 | `\deckfont{main\|mono}{名前}` | フォント指定(名前参照。§4) | fontspec / xeCJK | `font-family`(ローカルフォントへフォールバック) |
 | `\decklogo[x=,y=,w=]{path}` | 全フレーム共通のロゴ。座標はキャンバスと同じ正規化値 | 背景テンプレートへの絶対配置 | 各スライドへ絶対配置 `<img>` |
+| `\deckbackground{path}` / `\deckbackground[title]{path}` | 背景画像。無印は全スライド、`[title]` は表紙(`\titlepage` を含むフレーム。`[plain]` も含む)だけで、表紙では無印より優先する。`title` 以外のオプションは L020。同じ枠は最後の指定が勝つ | 背景テンプレートの左上原点へ用紙いっぱいに配置。表紙の判定は `title page` テンプレートに掛けたフラグ(Beamer は背景テンプレートを本文の組版後に評価するので、同じページの背景が読める。`\pause` 等の重ね合わせでは各ページで立て直される) | 各スライド最背面の `<img class="deck-background">`。表紙フレームは表紙用があればそちら、無ければ全スライド用 |
 | `\deckfooter{テキスト}` | フッター(左: テキスト、右: ページ番号) | 絶対配置のフッターバー | 各スライドへ絶対配置 |
 
 設計上の制約: **v1 のスタイル語彙は幾何中立**(本文領域・タイトル帯の寸法を変えない)。ロゴとフッターは本文領域を消費しないオーバーレイとして実装する。これによりキャンバス座標系(subset-spec §2.8 の実測定数)とプレビューの幾何がスタイルに関わらず安定する。タイトル帯の高さやレイアウト自体を変える様式は v1 では生スタイル(preamble-extra)へ——プレビューの幾何がずれ得ることは既知の劣化として扱い、snapshot で検証する。
@@ -51,7 +54,10 @@
 リント:
 
 - **L020**: `%% style` 領域に語彙外の記述(不明なコマンド・不正な役割名・不正な色値・許容外のキー)。**error**(未定義マクロはコンパイルエラーになるため事前に検出する)
-- ロゴ画像の存在は L004、`deck*` の再定義禁止は L016 をそのまま適用
+- ロゴ・背景画像の存在は L004、`deck*` の再定義禁止は L016 をそのまま適用
+- **画像パス**: `\decklogo` / `\deckbackground` のパスは本文の `\includegraphics` や `deckimage` と同じく、画像パスはデッキのディレクトリ基準で、拡張子まで書く(`\graphicspath` や拡張子の省略は TeX では通るが、プレビュー・HTML 書き出し・lint が解決しないので使わない)。書いたパスに無く TeX なら拾うファイルがある場合、L004 が正しいパスを示す(VS Code では Quick Fix)
+- **L024**(warning): 背景の指定(`\usebackgroundtemplate` / `\setbeamertemplate{background}` / `{background canvas}` / `\addtobeamertemplate{...}` の同名)が `%% preamble-extra` と `%% style` のどちらの中にもない(ツール管理プリアンブルの中、プリアンブルの管理領域の外・フレームの間・フレームの中)。ただしツール自身の背景テンプレートを持つ `deck*` マクロ定義(`\newcommand\deckX{...}` / `\def` / `\@namedef{deckX}` など)の本文は見ない。PDF には効くがプレビューは読まないので気づけるよう警告する。全スライド共通の背景は preamble-extra へ、表紙と本文で分けるなら `%% style` の `\deckbackground` を使う。`%% style` の中は L020 が報告するので L024 は重ねない
+- **L025**(error): `\deckbackground` は deck-source-version を上げずにツール管理プリアンブルへ足したので、それより前に `deck init` したデッキには定義が無く、lint もプレビューも通るのに PDF だけが Undefined control sequence で止まる(定義だけ補っても古い `\deck@refresh@background` は背景を描かない)。`%% style` に `\deckbackground` があり、ユーザー領域の外に定義も `\input{…deck-style-preamble}` も無ければ報告し、`deck init <file> --update-preamble` と同じ管理プリアンブルの差し替えを fix(VS Code の Quick Fix)として付ける。版を上げると全デッキに L017 が出るため、後から足すマクロは linter.ts の対応表(マクロ → 定義するリソース)へ足す
 
 ### 2.1 テンプレート(`.sty` + 画像)の読み込み
 
@@ -60,10 +66,11 @@
 - **配置**: デッキのディレクトリ配下に置く。デッキと同じディレクトリに `beamertheme<Name>.sty` と画像を置くか、`templates/<name>/` に一式(`.sty` と `assets/`)を置く。配下に限るのは、Webview のリソース許可とコンパイル時の CWD がデッキのディレクトリだから
 - **指定**: `%% preamble-extra` に `\usetheme{Name}`(同じディレクトリ)または `\usepackage{templates/<name>/beamertheme<name>}`(サブフォルダ)を書く。テーマの README に書いてある行をそのまま貼れる
 - **画像パス**: `.sty` 内の `\includegraphics` は TeX の規則どおりコンパイル時の CWD(= デッキのディレクトリ)基準。`templates/<name>/assets/...` のように書く
-- **プレビュー**: `.sty` と preamble-extra から `\definecolor` / `\colorlet`、`\setbeamercolor` の structure・alerted text・example text・normal text・background canvas、`\setsansfont` / `\setmainfont` / `\setmonofont`、`\logo{\includegraphics...}`(`\pgfdeclareimage` + `\pgfuseimage` 含む)、`\usebackgroundtemplate` / `\setbeamertemplate{background canvas}` を抽出して近似する。`%% style` 領域はこれを上書きする。footline や表紙の様式など、それ以外は PDF 専用(近似の限界は Phase 6 のコンパイル画像で埋める)。PDF 形式の背景・ロゴはプレビューに出ない
+- **プレビュー**: `.sty` と preamble-extra から `\definecolor` / `\colorlet`、`\setbeamercolor` の structure・alerted text・example text・normal text・background canvas、`\setsansfont` / `\setmainfont` / `\setmonofont`、`\logo{\includegraphics...}`(`\pgfdeclareimage` + `\pgfuseimage` 含む)、`\usebackgroundtemplate` / `\setbeamertemplate{background}` / `{background canvas}` / `\addtobeamertemplate{background}` / `{background canvas}`(前・後どちらの引数の画像も背景とみなす)を抽出して近似する。書き方の揺れは吸収する: コマンド名と引数の間・引数どうしの間の空白・改行・`%` コメントは許す(空行は越えない。TeX が引数探索を `\par` で打ち切るのと同じ)、`\graphicspath{{images/}}` の探索ディレクトリはデッキのディレクトリ基準で先に探したあとに順に試す(デッキ配下に限る点は変わらない。L023 の判定も同じ)、`\newcommand{\bgimage}{bg.png}` / `\def\bgimage{bg.png}` と `\includegraphics{\bgimage}` の組は素の文字列に限って展開する。`\graphicspath` はプリアンブル全体で積み上がるので、複数のファイルにあれば供給元を区別せず連結して使う。`%% style` 領域はこれを上書きする。footline や表紙の様式など、それ以外は PDF 専用(近似の限界は Phase 6 のコンパイル画像で埋める)。PDF 形式の背景・ロゴはプレビューに出ない
   - **ブロックの見た目(#193)**: `\setbeamercolor` の block title / block body(alerted / example 含む)の fg・bg と、`\setbeamertemplate{blocks}[rounded][shadow=true]` / `[default]`・`\useinnertheme[shadow]{rounded}` の形も読む。title の bg は色帯、body の bg は色付きの箱になり、rounded は角丸、shadow は右下の影で近似する(寸法は Beamer の `beamerboxesrounded` に合わせた近似。帯と箱の間のグラデーションやブロックタイトルの文字サイズは再現しない)。継承は Beamer 既定の色テーマ(`beamercolorthemedefault.sty`)どおり: title の fg が無ければその種類の文字色(structure / alerted text / example text)、alerted / example の title・body は block title / block body を**継がない**。`%% style` 語彙は増やさない(ブロックの色は生スタイルの近似としてだけ扱う)
-  - **色式**: 色名(xcolor の基本色・`\definecolor`・`\colorlet` の名前)と 6 桁の 16 進に加え、xcolor の混色 `a!p!b`・`a!p`(残りは white)・連鎖 `a!p1!b!p2!c`(左から順)を RGB の線形補間で読む。補色 `-red`、`rgb:...` などのモデル指定、`structure.fg` のような色の参照は読まず、その指定を無視する
+  - **色式とフォールバック**: 色名(xcolor の基本色・`\definecolor`・`\colorlet` の名前)と 6 桁の 16 進に加え、xcolor の混色 `a!p!b`・`a!p`(残りは white)・連鎖 `a!p1!b!p2!c`(左から順)を RGB の線形補間で読む。補色 `-red`、`rgb:...` などのモデル指定、`structure.fg` のような色の参照、未定義の色名は読まない。block title / body の指定に解釈不能な `bg` があれば、その部位の fg も採用せず既定の読みやすい表示へ戻す(白い fg だけが白地に残るのを防ぐ)。このリセットは複数の `.sty` と preamble-extra をまたいでも後の指定として効く。`fg` だけの指定はそのまま採用する
 - **診断**: 参照先 `.sty` が無い(L022)、`.sty` が参照する画像が無い(L023)をデッキ側の参照行に出す。`\usetheme{X}` の不在は info(TeX 配布に含まれるテーマならコンパイルは通る)、パスで指した `\usepackage` の不在は warning
+- **土台が拾うのは preamble-extra と `.sty` だけ**: 背景指定をそれ以外(ツール管理プリアンブルの中・プリアンブルの管理領域の外・フレームの間・フレームの中。`deck*` マクロ定義の本文を除く)に書くと PDF にだけ効く(L024。上記)。表紙だけ背景を変えたいときは `%% style` の `\deckbackground[title]{path}` を使う(土台の背景は全スライド用だけを持つ)
 - **更新**: `.sty` や画像を変えるとプレビューと診断を作り直す(キャッシュは持たない)
 - 見本: `fixtures/templates/corporate/` と `fixtures/templated.slide.tex`
 
@@ -114,6 +121,7 @@ Phase 5(VS Code シェル)と並行可。
 | S2 | Noto Sans CJK: `\deckfont` のフォント解決・`deck fonts fetch`・日本語 fixture。**実装済(2026-07-19)**。`deck-style-preamble.tex` に xeCJK 統合、`packages/cli` が Noto Sans CJK JP を取得・キャッシュ・配置、renderer は和文ローカルフォントへフォールバック。`fixtures/japanese.slide.tex` を tectonic で警告 0 コンパイル確認 | S〜M | tectonic |
 | S3 | 「見本に合わせて」ワークフロー: pptx からの色・フォント抽出補助、指示パターンの SKILL 追加、実物の社用テンプレで実演 | S〜M | S1, S2, 実物の PPT |
 | S4 | テンプレート(`.sty` + 画像)の読み込み(§2.1、#70): preamble-extra の `\usetheme` / `\usepackage` を解決し、標準記法から色・フォント・ロゴ・背景を抽出してプレビューへ、L022 / L023、`.sty` 変更の監視、`templated.slide.tex` fixture。**実装済(2026-09-05)**。コンパイル画像フォールバックと PDF 書き出しの一時ディレクトリへのテンプレート同梱は Phase 6 / #73 側 | M | S1 |
+| S5 | 背景画像(#192): `%% style` の `\deckbackground` / `\deckbackground[title]`(表紙だけ別背景。TeX 側は `title page` テンプレートのフラグ)、土台の背景抽出の取りこぼし(空白・改行・`\addtobeamertemplate`・`\graphicspath`・パスのマクロ)の解消、プレビューに出ない背景指定の L024。**実装済(2026-10-10)** | M | S1, S4 |
 
 将来候補(必要になったら): 幾何まで変える本格テーマ(タイトル帯高の変更等)。その場合はテーマごとの実測 metrics(`deck theme measure`)が必要になる——本書初版のテーマパック案はこの時の設計として保持する。
 

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { parseDeck } from "../src/parser.js";
 import {
   extractPreviewStyle,
+  graphicsPathsOf,
+  joinImageSearchPath,
   mergePreviewStyles,
   parseLength,
   templateImagePaths,
@@ -201,7 +203,58 @@ describe("ブロックの配色と形", () => {
     const style = extractPreviewStyle(`\\setbeamercolor{block title alerted}{bg=red,fg=white}
 \\setbeamercolor*{block  title alerted}{use=structure,parent=alerted text,bg=red!75!black}
 \\setbeamercolor{block body example}{fg=structure.fg,bg=-green}`);
-    expect(style.blocks).toEqual({ colors: { alerted: { titleBg: "BF0000", titleFg: "FFFFFF" } } });
+    expect(style.blocks).toEqual({
+      colors: { alerted: { titleBg: "BF0000", titleFg: "FFFFFF" } },
+      cleared: { example: { bodyFg: true, bodyBg: true } },
+    });
+  });
+
+  it("解釈不能な bg と一緒の fg は採用せず、既定の読みやすい表示へ戻す", () => {
+    for (const background of ["structure.fg!75!black", "cmykbg", "NavyBlue"]) {
+      const definition = background === "cmykbg" ? "\\definecolor{cmykbg}{cmyk}{0,1,1,0}\n" : "";
+      expect(
+        extractPreviewStyle(
+          `${definition}\\setbeamercolor{block title}{bg=blue,fg=black}\n` +
+            `\\setbeamercolor{block title}{use=structure,fg=white,bg=${background}}`,
+        ).blocks,
+        background,
+      ).toEqual({
+        colors: {},
+        cleared: { normal: { titleFg: true, titleBg: true } },
+      });
+    }
+  });
+
+  it("対応済み bg と fg だけの指定は引き続き抽出する", () => {
+    expect(
+      extractPreviewStyle("\\setbeamercolor{block title}{fg=white,bg=blue!75!black}").blocks,
+    ).toEqual({ colors: { normal: { titleFg: "FFFFFF", titleBg: "0000BF" } } });
+    expect(extractPreviewStyle("\\setbeamercolor{block title}{fg=white}").blocks).toEqual({
+      colors: { normal: { titleFg: "FFFFFF" } },
+    });
+  });
+
+  it("block body でも未対応 bg と一緒の fg を消し、後の fg-only は採用する", () => {
+    expect(
+      extractPreviewStyle(`\\setbeamercolor{block body}{fg=white,bg=blue!6}
+\\setbeamercolor{block body}{fg=white,bg=NavyBlue}`).blocks,
+    ).toEqual({ colors: {}, cleared: { normal: { bodyFg: true, bodyBg: true } } });
+    expect(
+      extractPreviewStyle(`\\setbeamercolor{block body}{fg=white,bg=NavyBlue}
+\\setbeamercolor{block body}{fg=black}`).blocks,
+    ).toEqual({
+      colors: { normal: { bodyFg: "000000" } },
+      cleared: { normal: { bodyBg: true } },
+    });
+  });
+
+  it("同じ指定内では最後の bg で可否を決め、古い bg を復活させない", () => {
+    expect(
+      extractPreviewStyle("\\setbeamercolor{block title}{bg=blue,fg=white,bg=NavyBlue}").blocks,
+    ).toEqual({ colors: {}, cleared: { normal: { titleFg: true, titleBg: true } } });
+    expect(
+      extractPreviewStyle("\\setbeamercolor{block title}{bg=NavyBlue,fg=white,bg=blue}").blocks,
+    ).toEqual({ colors: { normal: { titleFg: "FFFFFF", titleBg: "0000FF" } } });
   });
 
   it("ブロックの指定が無ければ blocks を持たない", () => {
@@ -300,11 +353,141 @@ describe("parseLength / mergePreviewStyles / templateImagePaths", () => {
     });
   });
 
+  it("後の抽出元の未対応 bg は先行する block 色を消し、後続の色だけを戻す", () => {
+    const white = extractPreviewStyle("\\setbeamercolor{block title}{fg=white,bg=blue}");
+    const unsupported = extractPreviewStyle("\\setbeamercolor{block title}{fg=white,bg=NavyBlue}");
+    expect(mergePreviewStyles(white, unsupported).blocks).toEqual({
+      colors: {},
+      cleared: { normal: { titleFg: true, titleBg: true } },
+    });
+    expect(
+      mergePreviewStyles(
+        white,
+        unsupported,
+        extractPreviewStyle("\\setbeamercolor{block title}{fg=black}"),
+      ).blocks,
+    ).toEqual({
+      colors: { normal: { titleFg: "000000" } },
+      cleared: { normal: { titleBg: true } },
+    });
+    expect(
+      mergePreviewStyles(
+        white,
+        unsupported,
+        extractPreviewStyle("\\setbeamercolor{block title}{bg=red}"),
+      ).blocks,
+    ).toEqual({
+      colors: { normal: { titleBg: "FF0000" } },
+      cleared: { normal: { titleFg: true } },
+    });
+  });
+
   it(".sty が参照する画像パスを列挙する", () => {
     expect(
       templateImagePaths(
         "\\includegraphics[width=1cm]{a.png} % \\includegraphics{no.png}\n\\pgfdeclareimage{x}{b} \\includegraphics{a.png}",
       ),
     ).toEqual(["a.png", "b"]);
+  });
+});
+
+describe("背景・ロゴ抽出の書き方の揺れ(#192)", () => {
+  const bg = (source: string) => extractPreviewStyle(source).background?.path;
+
+  it("コマンド名と引数の間の空白・改行・コメントを許す", () => {
+    expect(bg("\\usebackgroundtemplate {\\includegraphics{a.png}}")).toBe("a.png");
+    expect(bg("\\usebackgroundtemplate\n  {\\includegraphics{a.png}}")).toBe("a.png");
+    expect(bg("\\setbeamertemplate{background}%\n{\\includegraphics{b.png}}")).toBe("b.png");
+    expect(
+      bg("\\setbeamertemplate {background canvas} % 説明\n % 続き\n {\\includegraphics{c.png}}"),
+    ).toBe("c.png");
+    expect(bg("\\usebackgroundtemplate{\\includegraphics [width=\\paperwidth] {d.png}}")).toBe(
+      "d.png",
+    );
+  });
+
+  it("空行(\\par)は越えて引数を探さない", () => {
+    expect(bg("\\usebackgroundtemplate\n\n{\\includegraphics{a.png}}")).toBeUndefined();
+    expect(bg("\\setbeamertemplate{background}\n\n{\\includegraphics{a.png}}")).toBeUndefined();
+    // コメントだけの行は空行ではない。
+    expect(bg("\\usebackgroundtemplate\n%\n{\\includegraphics{a.png}}")).toBe("a.png");
+  });
+
+  it("\\addtobeamertemplate{background} の前・後どちらの画像も背景になる", () => {
+    expect(bg("\\addtobeamertemplate{background}{\\includegraphics{pre.png}}{}")).toBe("pre.png");
+    expect(bg("\\addtobeamertemplate{background canvas}{}{\\includegraphics{post.png}}")).toBe(
+      "post.png",
+    );
+    expect(bg("\\addtobeamertemplate{headline}{}{\\includegraphics{no.png}}")).toBeUndefined();
+  });
+
+  it("背景のコマンドはコマンドの種類をまたいでソース順に最後が勝つ", () => {
+    expect(
+      bg(
+        "\\addtobeamertemplate{background}{}{\\includegraphics{first.png}}\n\\usebackgroundtemplate{\\includegraphics{last.png}}",
+      ),
+    ).toBe("last.png");
+  });
+
+  it("\\newcommand / \\def で単純な文字列に定義された画像パスを展開する", () => {
+    const use = "\\usebackgroundtemplate{\\includegraphics{\\bgimage}}";
+    expect(bg(`\\newcommand{\\bgimage}{images/bg.png}\n${use}`)).toBe("images/bg.png");
+    expect(bg(`\\newcommand\\bgimage{images/bg.png}\n${use}`)).toBe("images/bg.png");
+    expect(bg(`\\renewcommand{\\bgimage}{x.png}\n\\renewcommand{\\bgimage}{y.png}\n${use}`)).toBe(
+      "y.png",
+    );
+    expect(bg(`\\def\\bgimage{images/bg.png}\n${use}`)).toBe("images/bg.png");
+    // 本文がマクロを含む・未定義のときは展開しない。
+    expect(bg(`\\newcommand{\\bgimage}{\\dir/bg.png}\n${use}`)).toBe("\\bgimage");
+    expect(bg(use)).toBe("\\bgimage");
+    // コメントの中の定義は見ない。
+    expect(bg(`% \\newcommand{\\bgimage}{no.png}\n${use}`)).toBe("\\bgimage");
+  });
+
+  it("展開は .sty の画像一覧(L023 用)にも効く", () => {
+    expect(templateImagePaths("\\newcommand{\\img}{a.png}\n\\includegraphics{\\img}")).toEqual([
+      "a.png",
+    ]);
+  });
+});
+
+describe("graphicsPathsOf / imageSearchPaths", () => {
+  it("\\graphicspath の探索ディレクトリを出現順に拾い、コメントの中は見ない", () => {
+    expect(
+      graphicsPathsOf(
+        "% \\graphicspath{{old/}}\n\\graphicspath{ {images/} {figs/} }\n\\graphicspath{{images/}{../shared/}}",
+      ),
+    ).toEqual(["images/", "figs/", "../shared/"]);
+    expect(graphicsPathsOf("\\includegraphics{a.png}")).toEqual([]);
+  });
+
+  it("extractPreviewStyle が探索ディレクトリを載せ、mergePreviewStyles は連結して重複を除く", () => {
+    const a = extractPreviewStyle(
+      "\\graphicspath{{images/}}\n\\usebackgroundtemplate{\\includegraphics{bg.png}}",
+    );
+    expect(a.imageSearchPaths).toEqual(["images/"]);
+    expect(a.background).toEqual({ path: "bg.png" });
+    expect(extractPreviewStyle("\\setsansfont{X}").imageSearchPaths).toBeUndefined();
+    const merged = mergePreviewStyles(a, {
+      colors: {},
+      fonts: {},
+      imageSearchPaths: ["figs/", "images/"],
+    });
+    expect(merged.imageSearchPaths).toEqual(["images/", "figs/"]);
+    expect(mergePreviewStyles(a, { colors: {}, fonts: {} }).imageSearchPaths).toEqual(["images/"]);
+  });
+
+  it("joinImageSearchPath は ./ と末尾の / を整える", () => {
+    expect(joinImageSearchPath("images/", "bg.png")).toBe("images/bg.png");
+    expect(joinImageSearchPath("./images", "bg.png")).toBe("images/bg.png");
+    expect(joinImageSearchPath("./", "bg.png")).toBe("bg.png");
+    expect(joinImageSearchPath("../x/", "bg.png")).toBe("../x/bg.png");
+  });
+});
+
+describe("\\deckbackground を .sty で読む", () => {
+  it("無印は全スライドの背景、[title] は土台では無視する", () => {
+    expect(extractPreviewStyle("\\deckbackground{a.png}").background).toEqual({ path: "a.png" });
+    expect(extractPreviewStyle("\\deckbackground[title]{t.png}").background).toBeUndefined();
   });
 });
