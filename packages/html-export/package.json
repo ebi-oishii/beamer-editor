@@ -15,8 +15,8 @@
     "katex": "^0.16.47"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
-    "typescript": "^5.9.0",
-    "vitest": "^4.0.0"
+    "@types/node": "^26.6.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
   }
 }

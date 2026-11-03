@@ -1,6 +1,8 @@
 packages:
   - packages/*
   - apps/*
+overrides:
+  'vite@>=8.0.0 <8.1.6': 8.1.6
 allowBuilds:
   # publish 時の署名・資格情報用ネイティブビルド。ローカルの vsce package には不要
   '@vscode/vsce-sign': false
