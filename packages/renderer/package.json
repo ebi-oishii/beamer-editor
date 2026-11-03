@@ -11,11 +11,11 @@
   },
   "dependencies": {
     "@beamer-editor/core": "workspace:*",
-    "katex": "^0.16.11"
+    "katex": "^0.16.47"
   },
   "devDependencies": {
-    "@types/katex": "^0.16.7",
-    "typescript": "^5.9.0",
-    "vitest": "^4.0.0"
+    "@types/katex": "^0.16.8",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
   }
 }

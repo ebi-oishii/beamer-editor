@@ -12,8 +12,8 @@
     "check:skills": "pnpm --filter @beamer-editor/cli build:skills --check"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.0",
-    "typescript": "^5.9.0",
-    "vitest": "^4.0.0"
+    "@biomejs/biome": "^2.6.4",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
   }
 }
