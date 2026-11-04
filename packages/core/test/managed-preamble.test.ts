@@ -327,6 +327,62 @@ describe("lintSource: L025(管理プリアンブルが使っているマクロ�
     ).toEqual(["warning"]);
   });
 
+  it("波括弧の中の実際の空行は比較し、コメント行と波括弧外の空行は比べない", () => {
+    const block = managedPreambleBlock();
+    const insertion = "\\@ifundefined{deck@applycolor@#1}%";
+    const withParagraph = block.replace(insertion, `${insertion}\n\n`);
+    for (const newline of ["\n", "\r\n"]) {
+      const source = initDeck(
+        withParagraph.replaceAll("\n", newline),
+        "\\deckcolor{structure}{FF0000}",
+      );
+      const found = l025(source);
+      expect(
+        found.map((entry) => entry.severity),
+        newline === "\n" ? "LF" : "CRLF",
+      ).toEqual(["warning"]);
+      const fix = found[0]?.fix;
+      if (fix === undefined) throw new Error("fix expected");
+      expect(l025(apply(source, fix))).toEqual([]);
+    }
+    const commentOnly = block.replace(insertion, `${insertion}\n% blank-looking comment`);
+    expect(l025(initDeck(commentOnly, "\\deckcolor{structure}{FF0000}"))).toEqual([]);
+    expect(
+      l025(
+        initDeck(block.replace(`${MANAGED_PREAMBLE_BEGIN}\n`, `${MANAGED_PREAMBLE_BEGIN}\n\n`), ""),
+      ),
+    ).toEqual([]);
+  });
+
+  it("比較用の波括弧の深さはコメント中の波括弧を数えない", () => {
+    const block = managedPreambleBlock();
+    const ending = "\\makeatother";
+    const withCommentBrace = block.replace(ending, `${ending} % } {`);
+    expect(l025(initDeck(withCommentBrace, ""))).toEqual([]);
+  });
+
+  it("比較用の波括弧の深さは制御記号と \\ の後の裸の波括弧を区別する", async () => {
+    const key = "deck-style-preamble.tex";
+    const original = MANAGED_PREAMBLE_RESOURCES[key];
+    try {
+      MANAGED_PREAMBLE_RESOURCES[key] = `${original}\n\\{literal brace\\}\n`;
+      const literal = await import("../src/managed-preamble.js?literal-brace");
+      const current = literal.managedPreambleBlock();
+      const source = current.replace("\\{literal brace\\}\n", "\\{literal brace\\}\n\n");
+      expect(literal.isCurrentManagedPreamble(source, { start: 0, end: source.length })).toBe(true);
+
+      MANAGED_PREAMBLE_RESOURCES[key] = `${original}\n\\\\{group\n}\n`;
+      const bare = await import("../src/managed-preamble.js?bare-brace");
+      const bareCurrent = bare.managedPreambleBlock();
+      const bareSource = bareCurrent.replace("\\\\{group\n", "\\\\{group\n\n");
+      expect(bare.isCurrentManagedPreamble(bareSource, { start: 0, end: bareSource.length })).toBe(
+        false,
+      );
+    } finally {
+      MANAGED_PREAMBLE_RESOURCES[key] = original;
+    }
+  });
+
   it("CRLF のデッキでは、warning の範囲を開始行の \\r の手前で止める", () => {
     const source = initDeck(oldManaged, "").replaceAll("\n", "\r\n");
     const found = l025(source);

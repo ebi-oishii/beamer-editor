@@ -23,17 +23,46 @@ function withoutComment(line: string): string {
   return match ? line.slice(0, match.index + match[0].length - 1) : line;
 }
 
+/** 波括弧の深さ。`\{` / `\}` は制御記号なので数えず、`\\{` の `{` は裸の波括弧として数える。 */
+function braceDepth(line: string, initial: number): number {
+  let depth = initial;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character !== "{" && character !== "}") continue;
+    let backslashes = 0;
+    for (let before = index - 1; before >= 0 && line[before] === "\\"; before -= 1)
+      backslashes += 1;
+    if (backslashes % 2 === 1) continue;
+    if (character === "{") depth += 1;
+    else depth = Math.max(0, depth - 1);
+  }
+  return depth;
+}
+
 /**
- * 比べる形。各行からコメントを除いて前後の空白を落とし、空行を除く(PDF に影響しない差は比べない)。
+ * 比べる形。コメントと波括弧の外の空行はPDFへ影響しないため除く。波括弧の中の実際の空行は
+ * TeX の `\par` になるので、段落の印として残す。コメントだけの行は空行ではない。
  * 行は合わせない(blankComments のようにコメントの行末を読み捨てると、コメントの長さが次の行の
  * 字下げとして残る)。
  */
 function comparableLines(text: string): string[] {
-  return text
-    .replaceAll("\r\n", "\n")
-    .split("\n")
-    .map((line) => withoutComment(line).trim())
-    .filter((line) => line !== "");
+  const lines: string[] = [];
+  let depth = 0;
+  let paragraphAtDepth = -1;
+  for (const original of text.replaceAll("\r\n", "\n").split("\n")) {
+    const without = withoutComment(original).trim();
+    if (without === "") {
+      if (original.trim() === "" && depth > 0 && paragraphAtDepth !== depth) {
+        lines.push(`\\par@${depth}`);
+        paragraphAtDepth = depth;
+      }
+      continue;
+    }
+    lines.push(without);
+    depth = braceDepth(without, depth);
+    paragraphAtDepth = -1;
+  }
+  return lines;
 }
 
 let currentLines: string[] | undefined;
@@ -45,7 +74,7 @@ export function managedPreambleBlock(): string {
 
 /**
  * `span`(locateManagedPreamble の結果)の開始行と終了行の間が、`deck init` が書く現行の中身と
- * 同じか。開始行の文言・改行コード・コメント・空行・行末の空白の違いは見ない。
+ * 同じか。開始行の文言・改行コード・コメント・波括弧の外の空行・行末の空白の違いは見ない。
  */
 export function isCurrentManagedPreamble(source: string, span: SourceSpan): boolean {
   const block = source.slice(span.start, span.end).replaceAll("\r\n", "\n");
