@@ -25,10 +25,13 @@ const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x0
 
 const tempDirs: string[] = [];
 
-function pngTransfer(): vscode.DataTransfer {
+function pngTransfer(text?: string): vscode.DataTransfer {
   const item = { asFile: () => ({ name: "image.png", uri: undefined, data: async () => PNG }) };
+  const textItem =
+    text === undefined ? undefined : { asFile: () => undefined, asString: async () => text };
   return {
-    get: (mime: string) => (mime === "image/png" ? item : undefined),
+    get: (mime: string) =>
+      mime === "image/png" ? item : mime === "text/plain" ? textItem : undefined,
   } as unknown as vscode.DataTransfer;
 }
 
@@ -94,5 +97,37 @@ suite("#153: エディタへの画像の貼り付け", () => {
       again?.[0]?.insertText,
       "\\includegraphics[width=0.8\\textwidth]{assets/image-1.png}",
     );
+  });
+
+  test("一緒にコピーされたテキストが URL だけなら画像を既定にし、それ以外はテキストに譲る(#179)", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "beamer-179-"));
+    tempDirs.push(dir);
+    const file = path.join(dir, "deck.slide.tex");
+    await writeFile(file, SOURCE);
+    const document = await vscode.workspace.openTextDocument(file);
+    await vscode.window.showTextDocument(document);
+    const extension = vscode.extensions.getExtension("ebi-oishii.beamer-editor");
+    assert.ok(extension, "拡張が見つかる");
+    const provider = ((await extension.activate()) as TestApi)._imagePasteProviderForTest();
+
+    const position = new vscode.Position(3, 4);
+    const paste = async (text: string) =>
+      (
+        await provider.provideDocumentPasteEdits(
+          document,
+          [new vscode.Range(position, position)],
+          pngTransfer(text),
+          { only: undefined, triggerKind: vscode.DocumentPasteTriggerKind.Automatic },
+          new vscode.CancellationTokenSource().token,
+        )
+      )?.[0];
+
+    // Safari は Web の画像のコピーで、画像の URL も文字列として入れる。
+    const fromBrowser = await paste("https://example.com/photo.png");
+    assert.ok(fromBrowser);
+    assert.equal(fromBrowser.yieldTo, undefined);
+    const withCaption = await paste("Figure 1. Results");
+    assert.ok(withCaption);
+    assert.deepEqual(withCaption.yieldTo, [vscode.DocumentDropOrPasteEditKind.Text]);
   });
 });
