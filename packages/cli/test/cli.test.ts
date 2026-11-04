@@ -50,9 +50,13 @@ async function fixture(name: string, source: string): Promise<{ path: string; ar
   return { path, argvPath: relative(ROOT, path) };
 }
 
+/**
+ * キャンバスとスタイルの定義を読むデッキ(deck init のデッキと同じく、deck の語彙を使っても L025 に
+ * ならない)。行番号を変えないよう、`\input` は `\documentclass` と同じ行に置く。
+ */
 function deck(body: string): string {
   return `%% deck-source-version: 1
-\\documentclass[aspectratio=169]{beamer}
+\\documentclass[aspectratio=169]{beamer}\\input{deck-canvas-preamble}\\input{deck-style-preamble}
 \\begin{document}
 ${body}
 \\end{document}
@@ -1183,7 +1187,7 @@ describe("deck format", () => {
     const expected = runCli("format", source.argvPath);
     expect(expected.status).toBe(0);
     expect(expected.stdout).toBe(
-      "%% deck-source-version: 1\n\\documentclass[aspectratio=169]{beamer}\n\\begin{document}\n\\begin{frame}[label=canvas]{Canvas}\n\\begin{deckcanvas}\n\\deckimage[x=0.800,y=0.000,w=0.300]{image.png}\n\\end{deckcanvas}\n\\end{frame}\n\\end{document}\n",
+      "%% deck-source-version: 1\n\\documentclass[aspectratio=169]{beamer}\\input{deck-canvas-preamble}\\input{deck-style-preamble}\n\\begin{document}\n\\begin{frame}[label=canvas]{Canvas}\n\\begin{deckcanvas}\n\\deckimage[x=0.800,y=0.000,w=0.300]{image.png}\n\\end{deckcanvas}\n\\end{frame}\n\\end{document}\n",
     );
     expect(await readFile(source.path, "utf8")).toBe(unformatted);
 

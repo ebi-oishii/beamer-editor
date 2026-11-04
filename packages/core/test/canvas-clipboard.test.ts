@@ -10,7 +10,9 @@ import { formatDeck } from "../src/formatter.js";
 import { lintSource } from "../src/linter.js";
 import { parseDeck } from "../src/parser.js";
 
-const PREAMBLE = "\\documentclass[aspectratio=169]{beamer}\n\\begin{document}\n";
+// キャンバスの定義を読む(実際のデッキと同じく、キャンバスを使っても L025 にならない)。
+const PREAMBLE =
+  "\\documentclass[aspectratio=169]{beamer}\n\\input{deck-canvas-preamble}\n\\begin{document}\n";
 const deck = (...frames: string[]) => `${PREAMBLE}${frames.join("\n")}\n\\end{document}\n`;
 
 const TEXT = `\\begin{decktext}[x=0.100,y=0.200,w=0.400,size=normal]
