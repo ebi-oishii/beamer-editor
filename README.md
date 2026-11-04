@@ -69,11 +69,11 @@ pnpm --dir packages/cli deck check talk.slide.tex --tectonic /path/to/tectonic -
 
 診断なし（または情報のみ）は終了コード 0、警告は 1、lint エラーは 2、Tectonic・入出力・
 使用法などの操作失敗は 3 で終了する。`--json` の操作失敗は stderr に出力される。
-TeX のコンパイルエラー(Tectonic が非 0 で終わった `E_COMPILE`)で、デッキに lint エラーがあれば、
+TeX のコンパイルエラー(Tectonic が TeX のエラーで止まった `E_COMPILE`)で、デッキに lint エラーがあれば、
 原因の手がかりとしてそれも添え(テキストではメッセージの後、`--json` では `error.diagnostics`)、失敗の原因は
 デッキ側にあるかもしれないので終了コードを 3 ではなく 2 にする。`deck snapshot` と
-`deck export --format pdf` も同じ。Tectonic の起動の失敗・タイムアウトなど TeX のエラーでない
-`E_COMPILE` には添えず、3 のまま。終了コード 2 では通常 stdout に結果が出るが、この場合だけは
+`deck export --format pdf` も同じ。Tectonic の起動の失敗・タイムアウト・TeX パッケージの取得の失敗・Tectonic の panic・TeX のエラー行が無い非 0 終了など
+TeX のエラーでない `E_COMPILE` には添えず、3 のまま。終了コード 2 では通常 stdout に結果が出るが、この場合だけは
 stdout が空で、エラーは stderr に出る(`--json` のときは `error.code` が `E_COMPILE`、lint エラーが
 `error.diagnostics` の JSON)。`--json` では、stdout が空で stderr の JSON に `error` があるかで見分ける。
 
