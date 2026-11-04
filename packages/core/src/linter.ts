@@ -448,6 +448,7 @@ function visitBlocks(blocks: BlockNode[], visitor: (block: BlockNode) => void): 
         break;
       case "blockEnv":
       case "center":
+      case "blockGroup":
         visitBlocks(block.children, visitor);
         break;
       case "canvas":
@@ -694,6 +695,10 @@ function lintCanvas(canvas: CanvasNode): LintDiagnostic[] {
         if (block.type === "paragraph" || block.type === "displayMath") {
           continue;
         }
+        if (block.type === "blockGroup") {
+          visitTextBlocks(block.children, listDepth);
+          continue;
+        }
         if (block.type === "rawBlock") {
           diagnostics.push(
             diagnostic(
@@ -785,7 +790,11 @@ function hasLineBreak(nodes: InlineNode[]): boolean {
     if (node.type === "lineBreak" || (node.type === "text" && node.value.includes("\n")))
       return true;
     return (
-      (node.type === "styled" || node.type === "colorText" || node.type === "href") &&
+      (node.type === "styled" ||
+        node.type === "colorText" ||
+        node.type === "href" ||
+        node.type === "group" ||
+        node.type === "footnote") &&
       hasLineBreak(node.children)
     );
   });

@@ -87,6 +87,7 @@ function countPauses(blocks: BlockNode[], stopAt?: BlockNode): { count: number; 
           break;
         case "blockEnv":
         case "center":
+        case "blockGroup":
           if (visit(block.children)) return true;
           break;
         case "list":
@@ -212,6 +213,9 @@ export function detachStatusesOf(frame: FrameNode): Map<BlockNode, DetachStatus>
           break;
         case "center":
           visit(block.children, { ...ctx, center: true, itemChild: false }, []);
+          break;
+        case "blockGroup":
+          visit(block.children, { ...ctx, itemChild: false }, []);
           break;
         case "list":
           for (const item of block.items) {

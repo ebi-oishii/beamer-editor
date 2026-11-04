@@ -253,6 +253,14 @@ export const PREVIEW_CSS = `
   text-decoration: none;
 }
 
+/* beamer は箇条書き・段組み・block の中で揃えを \\raggedright に戻す。外側の
+   \\centering や center の text-align を継承させない(中の宣言は renderer が直接付ける)。 */
+.slide ul,
+.slide ol,
+.slide .columns,
+.slide .beamer-block {
+  text-align: left;
+}
 .slide ul,
 .slide ol {
   margin: 0 0 6pt;
