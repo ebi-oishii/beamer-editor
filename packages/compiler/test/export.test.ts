@@ -42,6 +42,50 @@ function result(overrides: Partial<ProcessResult> = {}): ProcessResult {
   return { exitCode: 0, stdout: "tectonic 0.16.0\n", stderr: "", ...overrides };
 }
 
+// Tectonic 0.17.0 が実際に出した stderr(#205。関係する行だけを残す)。
+const TECTONIC_TEX_ERROR = [
+  "error: a.tex:3: Undefined control sequence",
+  "error: something bad happened inside XeTeX; its output follows:",
+  "",
+  "===============================================================================",
+  "(a.tex",
+  "! Undefined control sequence.",
+  "l.3 Hello \\undefinedmacro",
+  "No pages of output.",
+  "===============================================================================",
+  "error: the XeTeX engine had an unrecoverable error",
+  "caused by: halted on potentially-recoverable error as specified",
+].join("\n");
+const TECTONIC_MISSING_PACKAGE = [
+  "error: b.tex:3: ! LaTeX Error: File `nonexistentpkgxyz.sty' not found.",
+  "error: something bad happened inside XeTeX; its output follows:",
+  "===============================================================================",
+  "! ! LaTeX Error: File `nonexistentpkgxyz.sty' not found..",
+  "===============================================================================",
+  "error: the XeTeX engine had an unrecoverable error",
+].join("\n");
+// 索引はキャッシュにあるがファイルを取得できない(オフライン)。TeX からは「ファイルが無い」に見える。
+const TECTONIC_DOWNLOAD_FAILURE = [
+  'warning: failure fetching "chemfig.sty" from network (3/3)',
+  "caused by: error sending request for url (https://relay.fullyjustified.net/default_bundle_v33.tar)",
+  "caused by: Connection refused (os error 61)",
+  "warning: open of input chemfig.sty failed",
+  'caused by: failed to download "chemfig.sty"; please check your network connection.',
+  "error: d.tex:3: ! LaTeX Error: File `chemfig.sty' not found.",
+  "error: something bad happened inside XeTeX; its output follows:",
+  "===============================================================================",
+  "! ! LaTeX Error: File `chemfig.sty' not found..",
+  "===============================================================================",
+  "error: the XeTeX engine had an unrecoverable error",
+].join("\n");
+// 初回にバンドルの索引を取得できない(オフライン)と、Tectonic は panic して 101 で終わる。
+const TECTONIC_PANIC = [
+  "",
+  "thread 'main' (64083727) panicked at src/config.rs:154:18:",
+  "called `Result::unwrap()` on an `Err` value: this bundle isn't cached, and we couldn't get it from the internet.",
+  "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+].join("\n");
+
 function successfulRunner(
   calls: Array<{ command: string; args: readonly string[]; cwd: string }>,
 ): ProcessRunner {
@@ -192,9 +236,9 @@ describe("exportPdf", () => {
       temps.push(value);
       return value;
     };
-    // TeX が非 0 で終わったときだけ texFailed(終了 0 で PDF が無い・シグナルで止まったは立てない)。
+    // TeX のエラーで止まったときだけ texFailed(終了 0 で PDF が無い・シグナルで止まったは立てない)。
     for (const [compile, texFailed] of [
-      [result({ exitCode: 1, stderr: "bad tex" }), true],
+      [result({ exitCode: 1, stderr: TECTONIC_TEX_ERROR }), true],
       [result({ stdout: "" }), false],
       [result({ exitCode: null, stderr: "killed" }), false],
     ] as const) {
@@ -209,6 +253,49 @@ describe("exportPdf", () => {
       expect(await readFile(output, "utf8")).toBe("old PDF");
     }
     await expect(Promise.all(temps.map((path) => access(path)))).rejects.toBeDefined();
+  });
+
+  it("texFailed は TeX のエラー行があるときだけ立て、パッケージ取得の失敗・panic・強制終了では立てない(#205)", async () => {
+    const input = await source();
+    for (const [compile, texFailed] of [
+      [result({ exitCode: 1, stderr: TECTONIC_TEX_ERROR }), true],
+      // パッケージが TeX 配布に無いのはデッキ側の誤り。
+      [result({ exitCode: 1, stderr: TECTONIC_MISSING_PACKAGE }), true],
+      [result({ exitCode: 1, stderr: TECTONIC_DOWNLOAD_FAILURE }), false],
+      [result({ exitCode: 101, stderr: TECTONIC_PANIC }), false],
+      // Windows の強制終了など: 非 0 でも TeX のエラー行が無い。
+      [result({ exitCode: 1, stdout: "note: Running TeX ...\n", stderr: "" }), false],
+    ] as const) {
+      let call = 0;
+      const runner: ProcessRunner = { run: async () => (call++ === 0 ? result() : compile) };
+      await expect(
+        exportPdf({ inputPath: input.path, overwrite: true }, { runner }),
+      ).rejects.toMatchObject({ code: "E_COMPILE", texFailed });
+    }
+  });
+
+  it("出力が上限を超えても、末尾に写された TeX のエラー行で texFailed を立てる(#205)", async () => {
+    const input = await source();
+    // 大量の警告(上限の 1 MiB を超える)の後に、Tectonic が TeX のエラー行を写す。
+    const script = [
+      "const warning = 'Overfull \\\\hbox (12.3pt too wide) in paragraph\\n';",
+      "process.stderr.write(warning.repeat(Math.ceil((1.5 * 1024 * 1024) / warning.length)));",
+      "process.stderr.write('! Undefined control sequence.\\nl.3 Hello \\\\undefinedmacro\\n', () => process.exit(1));",
+    ].join("\n");
+    let collected: ProcessResult | undefined;
+    const runner: ProcessRunner = {
+      run: async (_command, args, options) => {
+        if (args[0] === "--version") return result();
+        collected = await nodeProcessRunner.run(process.execPath, ["-e", script], options);
+        return collected;
+      },
+    };
+    await expect(
+      exportPdf({ inputPath: input.path, overwrite: true }, { runner }),
+    ).rejects.toMatchObject({ code: "E_COMPILE", texFailed: true });
+    // 残すのは上限までの末尾。
+    expect(collected?.stderr.length).toBeLessThanOrEqual(1024 * 1024);
+    expect(collected?.stderr.endsWith("l.3 Hello \\undefinedmacro\n")).toBe(true);
   });
 
   it("does not clobber an output created after preflight while Tectonic is running", async () => {

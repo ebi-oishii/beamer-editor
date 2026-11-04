@@ -4,7 +4,9 @@ import { detachBlockToCanvas, detachStatusesOf, isDetachableBlock } from "../src
 import { lintSource } from "../src/linter.js";
 import { parseDeck } from "../src/parser.js";
 
-const PREAMBLE = "\\documentclass[aspectratio=169]{beamer}\n\\begin{document}\n";
+// キャンバスの定義を読む(実際のデッキと同じく、キャンバスを使っても L025 にならない)。
+const PREAMBLE =
+  "\\documentclass[aspectratio=169]{beamer}\n\\input{deck-canvas-preamble}\n\\begin{document}\n";
 const deck = (frame: string) => `${PREAMBLE}${frame}\n\\end{document}\n`;
 
 /**
