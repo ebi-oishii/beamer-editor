@@ -113,6 +113,20 @@ function skipTrivia(src: string, at: number, to: number): number {
   }
 }
 
+/** `\\begin` / `\\end` の引数を読む。制御綴の後の空白・コメントは TeX と同様に無視する。 */
+function environmentTag(
+  src: string,
+  commandEnd: number,
+  to: number,
+): { environment: string; end: number } | null {
+  const open = skipTrivia(src, commandEnd, to);
+  if (open >= to || src[open] !== "{") return null;
+  let close = open + 1;
+  while (close < to && !"}\\\r\n".includes(src[close] as string)) close++;
+  if (close >= to || src[close] !== "}") return null;
+  return { environment: src.slice(open + 1, close), end: close + 1 };
+}
+
 /**
  * `open` にある `{`(または `[`)に対応する閉じの直後を返す。コメントとエスケープを考慮し、
  * `[…]` では TeX と同様に波括弧内の `]` を閉じとみなさない。
@@ -301,14 +315,13 @@ export function* texTokens(src: string, from = 0, to = src.length): Generator<Te
       const close = groupEnd(src, next, to);
       if (close !== null) i = close;
       continue;
-    } else if ((name === "begin" || name === "end") && src[end] === "{") {
-      let close = end + 1;
-      while (close < to && !"}\\\r\n".includes(src[close] as string)) close++;
-      if (src[close] === "}" && close < to) {
-        const environment = src.slice(end + 1, close);
-        const tagEnd = close + 1;
+    } else if (name === "begin" || name === "end") {
+      const tag = environmentTag(src, end, to);
+      if (tag) {
+        const { environment, end: tagEnd } = tag;
         i = tagEnd;
         if (name === "begin" && VERBATIM_ENVS.has(environment)) {
+          // verbatim の終了は `\\end{…}` の完全一致だけ。本文中の `\\end {…}` は文字列のまま。
           const endTag = `\\end{${environment}}`;
           const endAt = src.indexOf(endTag, tagEnd);
           if (endAt === -1 || endAt + endTag.length > to) {
@@ -388,13 +401,11 @@ export function texExecutableText(src: string): string {
       }
       continue;
     }
-    if (name === "begin" && src[end] === "{") {
-      const close = src.indexOf("}", end + 1);
-      const environment = close === -1 ? "" : src.slice(end + 1, close);
-      if (close !== -1 && VERBATIM_ENVS.has(environment)) {
-        const tagEnd = close + 1;
-        const endTag = `\\end{${environment}}`;
-        const endAt = src.indexOf(endTag, tagEnd);
+    if (name === "begin") {
+      const tag = environmentTag(src, end, src.length);
+      if (tag && VERBATIM_ENVS.has(tag.environment)) {
+        const endTag = `\\end{${tag.environment}}`;
+        const endAt = src.indexOf(endTag, tag.end);
         if (endAt === -1) {
           blank(start, src.length);
           break;

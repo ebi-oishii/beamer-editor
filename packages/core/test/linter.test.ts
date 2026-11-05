@@ -627,6 +627,29 @@ code
     ).toBe(false);
   });
 
+  it("空白・コメントを挟む verbatim 系も rawBlock と deckfigure 内で L007 を報告する", () => {
+    const raw = String.raw`\begin{adjustbox}{width=\textwidth}
+\begin {verbatim}
+code
+\end{verbatim}
+\end{adjustbox}`;
+    const figure = String.raw`\begin{deckcanvas}
+\begin{deckfigure}[x=0,y=0,w=.4]\begin % literal environment
+{verbatim}code\end{verbatim}\end{deckfigure}
+\end{deckcanvas}`;
+    for (const body of [raw, figure]) {
+      const source = deck(String.raw`\begin{frame}[label=f]{Code}
+${body}
+\end{frame}`);
+      expect(lintDeck(parseDeck(source)).some((entry) => entry.code === "L007")).toBe(true);
+      expect(
+        lintDeck(parseDeck(source.replace("[label=f]", "[fragile,label=f]"))).some(
+          (entry) => entry.code === "L007",
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("未知環境の生ブロック内で文字列化された verbatim 系は L007 の対象外", () => {
     for (const content of [
       "\\detokenize{before { \\begin{verbatim} } after}",

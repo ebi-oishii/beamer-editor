@@ -822,4 +822,22 @@ describe("deckfigure へ移す生 LaTeX のオーバーレイ", () => {
     });
     expect(detachBlockToCanvas(source, spanOf(source, raw), { x: 0, y: 0, width: 1 })).toBeNull();
   });
+
+  it("空白・コメントを挟む verbatim の入れ子も対象外にし、literal 内の overlay を実行扱いしない", () => {
+    const raw = String.raw`\begin{minipage}{.5\textwidth}
+\begin % literal environment
+{verbatim}
+  \end {verbatim}
+  \only<2>{literal code}
+\end{verbatim}
+\end{minipage}`;
+    const source = deck(`\\begin{frame}[fragile,label=f]{F}\n${raw}\n\\end{frame}`);
+    const frame = parseDeck(source).body.find((node) => node.type === "frame");
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    expect([...detachStatusesOf(frame).values()]).toContainEqual({
+      eligible: false,
+      reason: "unsupported-kind",
+    });
+    expect(detachBlockToCanvas(source, spanOf(source, raw), { x: 0, y: 0, width: 1 })).toBeNull();
+  });
 });
