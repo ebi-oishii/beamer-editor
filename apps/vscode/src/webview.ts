@@ -70,7 +70,13 @@ async function rasterizePdf(pdf: Uint8Array): Promise<RasterImage> {
     const context = canvas.getContext("2d");
     if (!context) throw new Error("canvas 2D context を取得できません");
     await page.render({ canvas, canvasContext: context, viewport }).promise;
-    return { dataUrl: canvas.toDataURL("image/png"), width: canvas.width, height: canvas.height };
+    return {
+      dataUrl: canvas.toDataURL("image/png"),
+      width: canvas.width,
+      height: canvas.height,
+      widthPt: base.width,
+      heightPt: base.height,
+    };
   } finally {
     await task.destroy();
   }

@@ -59,7 +59,7 @@
 | `%% style:begin` 〜 `%% style:end` | スタイル語彙(`\deckcolor` `\deckfont` `\decklogo` `\deckbackground` `\deckfooter`。[theme-design.md](theme-design.md) §2)。語彙外は L020 |
 | `%% preamble-extra:begin` 〜 `%% preamble-extra:end` | 生の自由領域。ツールは素通しする(生スタイルの置き場でもある)。テンプレート(`.sty` + 画像)は Beamer 標準の `\usetheme{Name}` / `\usepackage{templates/<name>/beamertheme<name>}` でここから読む。配置はデッキのディレクトリ直下または `templates/<name>/`([theme-design.md](theme-design.md) §2.1)。プレビューは色・フォント・ロゴ・背景だけを標準記法から近似する |
 
-テーマ選択とパッケージはツール管理領域に入る。v1 のテーマは `default` の 1 種類から開始する(2 テーマ目は HTML/PDF の座標差を fixture で評価してから追加。`metropolis` は将来候補)。共通パッケージ(`graphicx`, `amsmath`, `amssymb`, `booktabs`, `hyperref` 等)と、キャンバス用の `deckcanvas` / `decktext` / `deckimage`(§2.8)の定義はツールが自動注入する。
+テーマ選択とパッケージはツール管理領域に入る。v1 のテーマは `default` の 1 種類から開始する(2 テーマ目は HTML/PDF の座標差を fixture で評価してから追加。`metropolis` は将来候補)。共通パッケージ(`graphicx`, `amsmath`, `amssymb`, `booktabs`, `hyperref` 等)と、キャンバス用の `deckcanvas` / `decktext` / `deckimage` / `deckfigure`(§2.8)の定義はツールが自動注入する。
 
 - ツール管理領域は `%% deck-source-version: 1` でソース形式の版を記録する。構文の版が上がるときは、フォーマッタが黙って破壊的変換せず、明示的な migration コマンドを通す(欠落・不一致は L017)。
 - 構文を変えずにツール管理プリアンブルへマクロを足したとき(`\deckbackground` など)は版を上げない。古いデッキでそのマクロを使うと L025(error)、使わなくても管理プリアンブルの中身が現行と違えば L025(warning)になり、`deck init <file> --update-preamble` が `% ---- ツール管理プリアンブル` 〜 `% ---- ツール管理ここまで ----` の間だけを `deck init` が書く現行の内容に差し替える(版の行・ユーザー領域・本文は変えない。範囲を特定できない(印が無い・終了印が最初のユーザー領域か `\begin{document}` より後ろにある・終了印が開始印より前にある・開始印が複数ある)デッキは書き換えずに失敗し、L025 にも fix を付けない)。
@@ -170,7 +170,7 @@ GUI で扱う自由配置は `deckcanvas` の層に集める。フレーム本�
 \end{frame}
 ```
 
-`deckcanvas` / `decktext` / `deckimage` はツール管理プリアンブルが本物の LaTeX として定義する。内部実装は textpos 等の絶対配置パッケージを利用してよいが、ソースの公開契約には含めない(実装は将来交換できる)。
+`deckcanvas` / `decktext` / `deckimage` / `deckfigure` はツール管理プリアンブルが本物の LaTeX として定義する。内部実装は textpos 等の絶対配置パッケージを利用してよいが、ソースの公開契約には含めない(実装は将来交換できる)。
 
 #### 公認オブジェクト
 
@@ -180,7 +180,7 @@ GUI で扱う自由配置は `deckcanvas` の層に集める。フレーム本�
 | `deckimage` | PNG / JPEG / PDF 画像 | 移動、縦横比を保った拡大縮小、削除、コピー・貼り付け |
 | `deckfigure` | TikZ・表など任意の LaTeX | 移動、縦横比を保った拡大縮小、削除、コピー・貼り付け |
 
-`deckfigure` の中身はソースが正で、幅 `w` に合わせて縦横比を保ったまま拡大縮小する。プレビューは中身の部分コンパイル画像(§3)で表示し、内容の編集はソースで行う。`verbatim` 系の環境は箱に入れられないため対象外。動画・SVG はキャンバス GUI の対象外。
+`deckfigure` の中身はソースが正で、幅 `w` に合わせて縦横比を保ったまま拡大縮小する。プレビューは中身の部分コンパイル画像(§3)で表示し、内容の編集はソースで行う。通常フローから移した図は、外側の幅指定がなければ部分コンパイル画像の自然幅(本文幅まで)で表示し、取得できない場合は従来のプレースホルダ幅にする。明示した外側の幅は保持する。`verbatim` 系の環境や overlay を含むものは箱に入れられないため対象外。動画・SVG はキャンバス GUI の対象外。
 
 ```latex
 \begin{deckfigure}[x=0.520,y=0.140,w=0.400]

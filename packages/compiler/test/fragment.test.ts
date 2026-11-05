@@ -8,13 +8,20 @@ import { buildFragmentDocument, fragmentDependencies } from "../src/fragment.js"
 import { compileFragment, type ProcessRunner } from "../src/index.js";
 
 describe("buildFragmentDocument", () => {
+  it("figure mode removes standalone border and keeps raw mode's 2pt border", () => {
+    expect(buildFragmentDocument("x", "")).toContain("border=2pt");
+    const figure = buildFragmentDocument("\\begin{tikzpicture}\\end{tikzpicture}", "", "figure");
+    expect(figure).toContain("border=0pt");
+    expect(figure).toContain("\\usepackage{amsmath,amssymb,graphicx,xcolor,booktabs,varwidth}");
+    expect(figure).toContain("\\begin{varwidth}{\\maxdimen}");
+  });
   it("standalone の前置きの後に preamble-extra とマクロを置き、本文を document に入れる", () => {
     const doc = buildFragmentDocument(
       "\\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture}",
       "\\usepackage{tikz}\n\\newcommand{\\code}[1]{\\texttt{#1}}",
     );
     expect(doc).toBe(`\\documentclass[preview,border=2pt]{standalone}
-\\usepackage{amsmath,amssymb,graphicx,xcolor,booktabs}
+\\usepackage{amsmath,amssymb,graphicx,xcolor,booktabs,varwidth}
 \\renewcommand{\\familydefault}{\\sfdefault}
 \\usepackage{tikz}
 \\newcommand{\\code}[1]{\\texttt{#1}}
@@ -66,6 +73,31 @@ describe("buildFragmentDocument", () => {
     expect(doc).toContain("\\usepackage{tikz,xcolor}");
     expect(doc).not.toContain("beamertheme");
   });
+});
+
+describe("figure fragment integration", () => {
+  it.runIf(process.env.TECTONIC_INTEGRATION === "1")(
+    "keeps a 3cm figure fragment at its natural PDF width",
+    async () => {
+      const result = await compileFragment({
+        document: buildFragmentDocument("\\rule{3cm}{4pt}", "", "figure"),
+        timeoutMs: 120_000,
+      });
+      // Tectonic may put the page dictionary in a compressed object stream; PDF.js resolves it
+      // instead of assuming that /MediaBox is a plain-text PDF token.
+      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+      const loadingTask = pdfjs.getDocument({ data: result.pdf });
+      try {
+        const document = await loadingTask.promise;
+        const viewport = (await document.getPage(1)).getViewport({ scale: 1 });
+        expect(viewport.width).toBeGreaterThan(84);
+        expect(viewport.width).toBeLessThan(87);
+      } finally {
+        await loadingTask.destroy();
+      }
+    },
+    180_000,
+  );
 });
 
 describe("fragmentDependencies", () => {

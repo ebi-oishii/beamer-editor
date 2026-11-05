@@ -23,12 +23,12 @@ import type {
   PreviewLogo,
   PreviewStyle,
   RawFrameNode,
-  RawInlineNode,
   SourceSpan,
 } from "@beamer-editor/core";
 import {
   type DetachStatus,
   detachStatusesOf,
+  figureLikeRawInline,
   fragmentPreambleOf,
   framesOf,
   frameTitleText,
@@ -82,6 +82,7 @@ export interface RawBlockRef {
   key: string;
   tex: string;
   environment: string | null;
+  mode?: "raw" | "figure";
 }
 
 const escapeHtml = (s: string) =>
@@ -167,35 +168,6 @@ function placeholderSize(tex: string): {
 
 const basename = (path: string): string => path.split(/[\\/]/).pop() ?? path;
 const environmentOf = (tex: string): string | null => /\\begin\{([^}]+)\}/.exec(tex)?.[1] ?? null;
-
-/** 図を包む命令。段落がこれで始まり、中身が描画系の環境なら「図」として箱にする。 */
-const FIGURE_WRAPPERS =
-  /^\s*\\(resizebox|scalebox|rotatebox|adjustbox|makebox|centerline|fbox|mbox)\b/;
-/** 描画系の環境。tabular や small のような本文を持つ環境は含めない(本文が消える)。 */
-const FIGURE_ENVIRONMENTS = new Set([
-  "tikzpicture",
-  "pgfpicture",
-  "picture",
-  "tikzcd",
-  "circuitikz",
-  "forest",
-  "pspicture",
-]);
-
-/**
- * 段落の中身が(空白を除いて)生インライン 1 つだけで、それが図を包む命令(`\\resizebox{…}{!}{\\begin{tikzpicture}…}`
- * など)なら、それを返す。`\\myemph{text \\begin{small}…\\end{small}}` のような本文を持つものは対象にしない。
- */
-function figureLikeRawInline(children: InlineNode[]): RawInlineNode | null {
-  const meaningful = children.filter(
-    (child) => !(child.type === "text" && child.value.trim() === ""),
-  );
-  const only = meaningful[0];
-  if (meaningful.length !== 1 || only?.type !== "rawInline") return null;
-  if (!FIGURE_WRAPPERS.test(only.tex)) return null;
-  const environment = environmentOf(only.tex);
-  return environment !== null && FIGURE_ENVIRONMENTS.has(environment) ? only : null;
-}
 
 const NAMED_COLORS: Record<string, string> = {
   red: "#e74c3c",
@@ -582,19 +554,27 @@ class FrameRenderer {
         return this.renderToc();
       case "canvas":
         return this.renderCanvas(block);
-      case "rawBlock":
+      case "rawBlock": {
+        const status = this.detachStatuses.get(block);
+        const natural = this.naturalWidthAttrs(block.tex, status?.eligible === true);
         return this.rawBlockPlaceholder(
           block.tex,
           block.environment,
-          `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}`,
+          `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}${natural}`,
+          status?.eligible ? "figure" : "raw",
         );
+      }
     }
   }
 
   /** 生ブロックを部分コンパイルの対象として登録し、プレースホルダに付ける data-raw-key 属性を返す。 */
-  private rawKeyAttr(tex: string, environment: string | null): string {
-    const key = rawFragmentKey(tex, this.fragmentPreamble);
-    if (!this.rawBlocks.has(key)) this.rawBlocks.set(key, { key, tex, environment });
+  private rawKeyAttr(
+    tex: string,
+    environment: string | null,
+    mode: "raw" | "figure" = "raw",
+  ): string {
+    const key = rawFragmentKey(tex, this.fragmentPreamble, mode);
+    if (!this.rawBlocks.has(key)) this.rawBlocks.set(key, { key, tex, environment, mode });
     return ` data-raw-key="${key}"`;
   }
 
@@ -617,7 +597,12 @@ class FrameRenderer {
   }
 
   /** 生ブロック(またはそれを包んだ生インライン)の箱。大きさは外枠の指定から、今の行幅を基準に決める。 */
-  private rawBlockPlaceholder(tex: string, environment: string | null, attrs: string): string {
+  private rawBlockPlaceholder(
+    tex: string,
+    environment: string | null,
+    attrs: string,
+    mode: "raw" | "figure" = "raw",
+  ): string {
     const size = placeholderSize(tex);
     const width = this.lengthInLinewidth(size.width);
     return placeholderHtml(
@@ -625,8 +610,14 @@ class FrameRenderer {
       environment ?? "生 LaTeX",
       tex,
       placeholderStyle(width, aspectOf(width, this.lengthInLinewidth(size.height))),
-      `${attrs}${this.rawKeyAttr(tex, environment)}`,
+      `${attrs}${this.rawKeyAttr(tex, environment, mode)}`,
     );
+  }
+
+  /** 外枠で幅を指定していない flow 図だけ、PDF の自然幅で置換する。 */
+  private naturalWidthAttrs(tex: string, detachable: boolean): string {
+    if (!detachable || placeholderSize(tex).width !== null) return "";
+    return ` data-raw-natural-width="true" data-raw-body-width-pt="${this.theme.metrics.bodyAreaPt.width.toFixed(3)}"`;
   }
 
   /**
@@ -637,10 +628,13 @@ class FrameRenderer {
   private figurePlaceholder(block: ParagraphNode): string | null {
     const figure = figureLikeRawInline(block.children);
     if (!figure) return null;
+    const status = this.detachStatuses.get(block);
+    const natural = this.naturalWidthAttrs(figure.tex, status?.eligible === true);
     return this.rawBlockPlaceholder(
       figure.tex,
       environmentOf(figure.tex),
-      `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}`,
+      `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}${natural}`,
+      "figure",
     );
   }
 
@@ -697,7 +691,7 @@ class FrameRenderer {
           environment ?? "deckfigure",
           item.tex,
           `${posStyle(item.position.x, item.position.y, item.position.width)};aspect-ratio:4 / 3`,
-          `${describe("figure", item.position)}${this.rawKeyAttr(item.tex, environment)}`,
+          `${describe("figure", item.position)}${this.rawKeyAttr(item.tex, environment, "figure")}`,
         );
       } else {
         html += placeholderHtml(

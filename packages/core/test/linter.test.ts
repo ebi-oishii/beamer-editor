@@ -1303,3 +1303,24 @@ describe("L004: TeX なら拾うファイルの提案", () => {
     expect(found?.fix).toBeUndefined();
   });
 });
+
+describe("L007: deckfigure 内の verbatim", () => {
+  it("非 fragile frame の deckfigure 内 verbatim を報告し、fragile と文字列化は除外する", () => {
+    const body = String.raw`\begin{frame}[label=f]{F}
+\begin{deckcanvas}
+\begin{deckfigure}[x=0,y=0,w=.4]\begin{verbatim}x\end{verbatim}\end{deckfigure}
+\end{deckcanvas}
+\end{frame}`;
+    expect(lintSource(deck(body)).some((entry) => entry.code === "L007")).toBe(true);
+    expect(
+      lintSource(deck(body.replace("[label=f]", "[fragile,label=f]"))).some(
+        (entry) => entry.code === "L007",
+      ),
+    ).toBe(false);
+    const quoted = body.replace(
+      "\\begin{verbatim}x\\end{verbatim}",
+      "\\detokenize{\\begin{verbatim}}",
+    );
+    expect(lintSource(deck(quoted)).some((entry) => entry.code === "L007")).toBe(false);
+  });
+});

@@ -764,6 +764,36 @@ ${preamble}
   );
 
   it.runIf(process.env.TECTONIC_INTEGRATION === "1")(
+    "places a 600pt deckfigure at w=.5 without overfull or canvas overflow, and accepts empty figures",
+    async () => {
+      const preamble = await readFile(canvasPreamblePath, "utf8");
+      const inputPath = await source(String.raw`\documentclass[aspectratio=169]{beamer}
+${preamble}
+\begin{document}
+\begin{frame}[label=fig]{Figure}
+\begin{deckcanvas}
+\begin{deckfigure}[x=0,y=0,w=.5]\rule{600pt}{5pt}\end{deckfigure}
+\begin{deckfigure}[x=0,y=.2,w=.3]\end{deckfigure}
+\begin{deckfigure}[x=0,y=.4,w=.3]\only<1>{}\end{deckfigure}
+\end{deckcanvas}
+\end{frame}
+\end{document}
+`);
+      const value = await compileDeckFrames({
+        inputPath,
+        timeoutMs: 120_000,
+        includeImages: false,
+      });
+      expect(value.warnings).toEqual([]);
+      expect(value.layoutDiagnostics.filter((entry) => entry.kind === "canvas-overflow")).toEqual(
+        [],
+      );
+      expect(value.frames).toHaveLength(1);
+    },
+    180_000,
+  );
+
+  it.runIf(process.env.TECTONIC_INTEGRATION === "1")(
     "resolves relative fixture dependencies from the original input directory",
     async () => {
       for (const file of ["basic.slide.tex", "japanese.slide.tex"]) {

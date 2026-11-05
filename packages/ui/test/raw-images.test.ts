@@ -170,6 +170,98 @@ describe("RawImageStore / applyRawImages", () => {
     expect(box?.title).toContain("\\begin{tikzpicture}");
   });
 
+  it("自由配置にできるフロー図だけは PDF の point 幅を使い、本文幅で上限を掛ける", async () => {
+    const store = new RawImageStore(async () => ({
+      dataUrl: "data:x",
+      width: 300,
+      height: 200,
+      widthPt: 85,
+      heightPt: 57,
+    }));
+    store.receive("natural", { pdfBase64: PDF_B64 });
+    await vi.waitFor(() => expect(store.get("natural")?.status).toBe("ready"));
+    const root = placeholderRoot("natural");
+    const box = root.querySelector<HTMLElement>("[data-raw-key]");
+    box?.setAttribute("data-raw-natural-width", "true");
+    box?.setAttribute("data-raw-body-width-pt", "100");
+    applyRawImages(root, store);
+    expect(box?.style.width).toBe(`${85 * (72.27 / 72)}pt`);
+
+    const capped = placeholderRoot("natural");
+    const cappedBox = capped.querySelector<HTMLElement>("[data-raw-key]");
+    cappedBox?.setAttribute("data-raw-natural-width", "true");
+    cappedBox?.setAttribute("data-raw-body-width-pt", "50");
+    applyRawImages(capped, store);
+    expect(cappedBox?.style.width).toBe("50pt");
+
+    store.receive("natural", { error: "late failure" });
+    applyRawImages(root, store);
+    expect(box?.style.width).toBe("60%");
+
+    store.receive("natural", { pdfBase64: PDF_B64 });
+    await vi.waitFor(() => expect(store.get("natural")?.status).toBe("ready"));
+    applyRawImages(root, store);
+    store.retain(new Set());
+    applyRawImages(root, store);
+    expect(box?.style.width).toBe("60%");
+  });
+
+  it("明示幅の flow 図は ready・failed・PDF 幅欠落でも 50% を保ち、段組みでも本文全幅で上限を掛ける", async () => {
+    const store = new RawImageStore(async () => ({ dataUrl: "data:x", width: 30, height: 20 }));
+    store.receive("explicit", { pdfBase64: PDF_B64 });
+    await vi.waitFor(() => expect(store.get("explicit")?.status).toBe("ready"));
+    const explicit = placeholderRoot("explicit");
+    const explicitBox = explicit.querySelector<HTMLElement>("[data-raw-key]");
+    explicitBox?.style.setProperty("width", "50%");
+    applyRawImages(explicit, store);
+    expect(explicitBox?.style.width).toBe("50%");
+    store.receive("explicit", { error: "bad" });
+    applyRawImages(explicit, store);
+    expect(explicitBox?.style.width).toBe("50%");
+
+    const sized = new RawImageStore(async () => ({
+      dataUrl: "data:x",
+      width: 300,
+      height: 20,
+      widthPt: 300,
+    }));
+    sized.receive("column", { pdfBase64: PDF_B64 });
+    await vi.waitFor(() => expect(sized.get("column")?.status).toBe("ready"));
+    const column = placeholderRoot("column");
+    const columnBox = column.querySelector<HTMLElement>("[data-raw-key]");
+    columnBox?.setAttribute("data-raw-natural-width", "true");
+    // 半幅 column 内でも上限は局所行幅でなく full body width。
+    columnBox?.setAttribute("data-raw-body-width-pt", "398.34");
+    applyRawImages(column, sized);
+    expect(columnBox?.style.width).toBe(`${300 * (72.27 / 72)}pt`);
+  });
+
+  it("自然幅を一度も適用しない failed・missing・幅欠落の箱は既定幅を保持する", async () => {
+    const root = placeholderRoot("failed");
+    const box = root.querySelector<HTMLElement>("[data-raw-key]");
+    box?.setAttribute("data-raw-natural-width", "true");
+    const failed = new RawImageStore(undefined);
+    failed.receive("failed", { error: "bad" });
+    applyRawImages(root, failed);
+    expect(box?.style.width).toBe("60%");
+    failed.retain(new Set());
+    applyRawImages(root, failed);
+    applyRawImages(root, failed);
+    expect(box?.style.width).toBe("60%");
+
+    const missingWidth = new RawImageStore(async () => ({
+      dataUrl: "data:x",
+      width: 3,
+      height: 2,
+    }));
+    missingWidth.receive("failed", { pdfBase64: PDF_B64 });
+    await vi.waitFor(() => expect(missingWidth.get("failed")?.status).toBe("ready"));
+    applyRawImages(root, missingWidth);
+    missingWidth.receive("failed", { error: "late" });
+    applyRawImages(root, missingWidth);
+    expect(box?.style.width).toBe("60%");
+  });
+
   it("retain は指定した key 以外の状態を捨て、clear は全部捨てる", async () => {
     const store = new RawImageStore(async () => ({
       dataUrl: "data:image/png;base64,AAAA",

@@ -30,9 +30,10 @@ import {
   nextCanvasLabel,
   type SourceReplacement,
 } from "./canvas-frame.js";
+import { figureLikeRawInline } from "./figure-like.js";
 import { parseDeck } from "./parser.js";
 import { detectEol, isBlank, lineEnd, lineStart, reindent, trimmedSpan } from "./source-text.js";
-import { VERBATIM_ENVS } from "./tex-scan.js";
+import { texExecutableText, texTokens, VERBATIM_ENVS } from "./tex-scan.js";
 
 export type { SourceReplacement } from "./canvas-frame.js";
 
@@ -70,17 +71,32 @@ const NOT_FIGURE_ENVS: ReadonlySet<string> = new Set([
 /** deckfigure で囲んで移すブロックか(表・TikZ などの生 LaTeX の環境。#191)。 */
 function isFigureBlock(block: BlockNode): boolean {
   if (block.type === "table") return true;
+  if (block.type === "paragraph") {
+    const figure = figureLikeRawInline(block.children);
+    return figure !== null && !rawHasVerbatim(figure.tex);
+  }
   return (
     block.type === "rawBlock" &&
     block.environment !== null &&
-    !NOT_FIGURE_ENVS.has(block.environment)
+    !NOT_FIGURE_ENVS.has(block.environment) &&
+    !rawHasVerbatim(block.tex)
   );
+}
+
+/** 箱に入れられない literal code は、外側が図環境でも移動対象にしない。 */
+function rawHasVerbatim(tex: string): boolean {
+  for (const token of texTokens(tex))
+    if (token.kind === "verbatim" || token.kind === "unterminated") return true;
+  return false;
 }
 
 /** 自由配置へ移せる種類・構造か(decktext / deckimage / deckfigure に収まるか)。 */
 export function isDetachableBlock(block: BlockNode): boolean {
   switch (block.type) {
-    case "paragraph":
+    case "paragraph": {
+      const figure = figureLikeRawInline(block.children);
+      return figure === null || !rawHasVerbatim(figure.tex);
+    }
     case "displayMath":
     case "image":
       return true;
@@ -89,6 +105,28 @@ export function isDetachableBlock(block: BlockNode): boolean {
     default:
       return isFigureBlock(block);
   }
+}
+
+/** 生 LaTeX に含まれるオーバーレイ。texTokens でコメント・verbatim・文字列化を除外する。 */
+function rawHasOverlay(tex: string): boolean {
+  for (const token of texTokens(tex))
+    if (
+      token.kind === "command" &&
+      ["pause", "only", "onslide", "uncover", "visible", "alt", "temporal"].includes(token.name)
+    )
+      return true;
+  // `<->` (TikZ の矢印)や座標を拾わず、数値だけから成る Beamer 範囲だけを拒否する。
+  const code = texExecutableText(tex);
+  return /<\s*\d+(?:\s*(?:-|,)\s*\d*)?\s*>/.test(code);
+}
+
+function blockHasOverlay(block: BlockNode): boolean {
+  if (block.type === "rawBlock") return rawHasOverlay(block.tex);
+  if (block.type === "paragraph") {
+    const figure = figureLikeRawInline(block.children);
+    return figure !== null && rawHasOverlay(figure.tex);
+  }
+  return false;
 }
 
 /** \\pause の数を文書順に数える。stopAt に到達したらそこで止める(canvas の中は見ない)。 */
@@ -194,7 +232,9 @@ export function detachStatusesOf(frame: FrameNode): Map<BlockNode, DetachStatus>
       }
       // 項目直下の段落は項目の本文そのもの(renderer も <span> で描く)。候補にも理由にもしない。
       if (!(ctx.itemChild && block.type === "paragraph")) {
-        if (!isDetachableBlock(block)) {
+        if (blockHasOverlay(block)) {
+          result.set(block, { eligible: false, reason: "overlay" });
+        } else if (!isDetachableBlock(block)) {
           result.set(block, { eligible: false, reason: "unsupported-kind" });
         } else if (ctx.overlay || pauses !== targetPauses) {
           result.set(block, { eligible: false, reason: "overlay" });
@@ -306,7 +346,8 @@ function buildObject(
   const position = `x=${f(placement.x)},y=${f(placement.y)},w=${f(placement.width)}`;
   if (block.type === "image") return `${indent}\\deckimage[${position}]{${block.path}}`;
   const span = trimmedSpan(source, block.span);
-  const content = reindent(source.slice(span.start, span.end), `${indent}  `, eol);
+  const figure = block.type === "paragraph" ? figureLikeRawInline(block.children) : null;
+  const content = reindent(figure?.tex ?? source.slice(span.start, span.end), `${indent}  `, eol);
   // 箱は中身の幅に縮むので、center の中にあっても中央寄せは要らない。
   if (isFigureBlock(block))
     return `${indent}\\begin{deckfigure}[${position}]${eol}${content}${eol}${indent}\\end{deckfigure}`;

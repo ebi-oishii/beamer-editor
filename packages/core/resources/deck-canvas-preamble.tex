@@ -94,10 +94,12 @@
 \newenvironment{deckfigure}[1][]{%
   \deck@pos@reset\setkeys{deckpos}{#1}\deck@computepos
   \begin{lrbox}{\deck@contentbox}%
-  \begin{varwidth}{\deck@body@width}\ignorespaces
+  \begin{varwidth}{\maxdimen}\ignorespaces
 }{%
   \unskip\end{varwidth}%
   \end{lrbox}%
-  \sbox\deck@contentbox{\resizebox{\deck@abs@w}{!}{\usebox\deck@contentbox}}%
+  \ifdim\wd\deck@contentbox>0pt
+    \sbox\deck@contentbox{\resizebox{\deck@abs@w}{!}{\usebox\deck@contentbox}}%
+  \fi
   \deck@place{figure}}
 \makeatother

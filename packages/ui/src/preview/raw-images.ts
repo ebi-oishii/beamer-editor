@@ -8,6 +8,8 @@ import type { RasterImage, RawBlockImageResult } from "../shell-host.js";
 
 /** 受け取る PDF の上限(バイト)。これを超えるものは復号・ラスタライズせず失敗として箱を残す。 */
 export const MAX_RAW_PDF_BYTES = 8 * 1024 * 1024;
+/** PDF.js viewport は bp(72/in)、プレビューの論理 CSS は TeX pt(72.27/in)。 */
+const PDF_BP_TO_TEX_PT = 72.27 / 72;
 
 export type RawImageState =
   | { status: "pending" }
@@ -120,6 +122,13 @@ function restorePlaceholder(element: HTMLElement): void {
     element.replaceChildren(span);
   }
   element.classList.remove("compiled", "failed");
+  if (element.dataset.rawNaturalWidth === "true") {
+    const original = element.dataset.rawOriginalWidth;
+    if (original !== undefined) {
+      element.style.width = original;
+      delete element.dataset.rawOriginalWidth;
+    }
+  }
   delete element.dataset.rawStatus;
   delete element.dataset.rawError;
   element.title = element.title.replace(/^コンパイルに失敗しました: [^\n]*\n\n/, "");
@@ -147,6 +156,21 @@ export function applyRawImages(root: ParentNode, store: RawImageStore): void {
       img.src = state.image.dataUrl;
       img.alt = label;
       element.style.aspectRatio = `${state.image.width} / ${state.image.height}`;
+      if (element.dataset.rawNaturalWidth === "true") {
+        const natural = state.image.widthPt;
+        const body = Number(element.dataset.rawBodyWidthPt);
+        if (
+          typeof natural === "number" &&
+          Number.isFinite(natural) &&
+          natural > 0 &&
+          Number.isFinite(body) &&
+          body > 0
+        ) {
+          if (element.dataset.rawOriginalWidth === undefined)
+            element.dataset.rawOriginalWidth = element.style.width;
+          element.style.width = `${Math.min(natural * PDF_BP_TO_TEX_PT, body)}pt`;
+        }
+      }
       element.replaceChildren(img);
       element.classList.remove("failed");
       element.classList.add("compiled");

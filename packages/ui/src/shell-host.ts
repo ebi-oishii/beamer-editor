@@ -31,6 +31,9 @@ export interface RasterImage {
   dataUrl: string;
   width: number;
   height: number;
+  /** PDF.js viewport(scale=1) の PDF point。自然幅をフロー図へ反映するために使う。 */
+  widthPt?: number;
+  heightPt?: number;
 }
 
 export interface ShellHost {

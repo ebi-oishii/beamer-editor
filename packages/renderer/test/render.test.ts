@@ -321,10 +321,21 @@ ${tikz}
     // key は包む命令まで含めた原文から作る(\\resizebox の有無で出力が違う)ので、2 つは別。
     expect(keys[0]).not.toBe(keys[1]);
     expect(deck.rawBlocks?.map((block) => block.key)).toEqual(keys);
-    expect(deck.rawBlocks?.[0]).toEqual({ key: keys[0], tex: tikz, environment: "tikzpicture" });
+    expect(deck.rawBlocks?.[0]).toEqual({
+      key: keys[0],
+      tex: tikz,
+      environment: "tikzpicture",
+      mode: "figure",
+    });
     expect(deck.rawBlocks?.[1]?.tex).toBe(`\\resizebox{0.5\\textwidth}{!}{${tikz}}`);
     expect(deck.rawBlocks?.[1]?.environment).toBe("tikzpicture");
     expect(deck.fragmentPreamble).toBe("\\usepackage{tikz}");
+    // 幅を明示した wrapper は PDF の自然幅で置き換えない。一方、幅なしの図だけが自然幅対象。
+    const boxes = [...out.matchAll(/<div class="raw-block placeholder"[^>]*>/g)].map((m) => m[0]);
+    expect(boxes[0]).toContain('data-raw-natural-width="true"');
+    expect(boxes[0]).toContain('data-raw-body-width-pt="398.340"');
+    expect(boxes[1]).toContain("width:50.0%");
+    expect(boxes[1]).not.toContain("data-raw-natural-width");
     // 同じ生ブロックが 2 回出ても一覧は 1 つ(キャッシュを共有する)。
     const twice = renderDeck(
       parseDeck(source.replace(`\\resizebox{0.5\\textwidth}{!}{${tikz}}`, tikz)),
@@ -369,7 +380,9 @@ ${tikz}
     const frame = deck.frames[0];
     const html = frame?.html ?? "";
     const key = /data-raw-key="([0-9a-f]{16})"/.exec(html)?.[1];
-    expect(deck.rawBlocks).toEqual([{ key, tex: tikz, environment: "tikzpicture" }]);
+    expect(deck.rawBlocks).toEqual([
+      { key, tex: tikz, environment: "tikzpicture", mode: "figure" },
+    ]);
     expect(html).toContain(
       'class="canvas-item canvas-figure placeholder" data-canvas-element-id="canvas-figure-0" data-canvas-element-kind="figure"',
     );

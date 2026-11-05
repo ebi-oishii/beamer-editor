@@ -5,6 +5,7 @@ export * from "./canvas-edit.js";
 export * from "./expander.js";
 export * from "./formatter.js";
 export * from "./fragment.js";
+export * from "./figure-like.js";
 export * from "./image.js";
 export * from "./linter.js";
 export * from "./managed-preamble.js";

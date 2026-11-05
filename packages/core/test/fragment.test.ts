@@ -46,4 +46,8 @@ describe("rawFragmentKey", () => {
       rawFragmentKey(tikz, "\\usepackage{tikz}\n\\newcommand{\\code}[1]{\\texttt{#1}}"),
     ).not.toBe(key);
   });
+
+  it("raw と figure は同じ本文でも別キャッシュにする", () => {
+    expect(rawFragmentKey(tikz, "")).not.toBe(rawFragmentKey(tikz, "", "figure"));
+  });
 });

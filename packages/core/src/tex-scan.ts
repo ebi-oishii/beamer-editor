@@ -336,6 +336,78 @@ export function* texTokens(src: string, from = 0, to = src.length): Generator<Te
   }
 }
 
+/**
+ * 実行されない文字列を空白で伏せた、元と同じ長さの TeX。
+ *
+ * 数値だけの Beamer overlay 指定のように制御綴ではない構文を探す用途で使う。texTokens と
+ * 同じくコメント、verb、verbatim 環境、文字列化命令を除外するため、`\\verb|<2>|` を
+ * 実際の overlay と誤認しない。閉じない verbatim は安全側で以後をすべて伏せる。
+ */
+export function texExecutableText(src: string): string {
+  const out = src.split("");
+  const blank = (start: number, end: number) => {
+    for (let at = start; at < end; at++) if (out[at] !== "\n" && out[at] !== "\r") out[at] = " ";
+  };
+  let i = 0;
+  while (i < src.length) {
+    if (src[i] === "%") {
+      const end = lineEnd(src, i, src.length);
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    if (src[i] !== "\\") {
+      i++;
+      continue;
+    }
+    const start = i;
+    const end = controlEnd(src, i, src.length);
+    const name = src.slice(i + 1, end);
+    i = end;
+    if (name === "verb") {
+      const close = verbArgumentEnd(src, end);
+      if (close !== null) {
+        blank(start, close);
+        i = close;
+      }
+      continue;
+    }
+    if (name === "string" || name === "meaning") {
+      const next = skipTrivia(src, end, src.length);
+      const close = next < src.length ? tokenEnd(src, next, src.length) : end;
+      blank(start, close);
+      i = close;
+      continue;
+    }
+    if (name === "detokenize") {
+      const next = skipTrivia(src, end, src.length);
+      const close = groupEnd(src, next, src.length);
+      if (close !== null) {
+        blank(start, close);
+        i = close;
+      }
+      continue;
+    }
+    if (name === "begin" && src[end] === "{") {
+      const close = src.indexOf("}", end + 1);
+      const environment = close === -1 ? "" : src.slice(end + 1, close);
+      if (close !== -1 && VERBATIM_ENVS.has(environment)) {
+        const tagEnd = close + 1;
+        const endTag = `\\end{${environment}}`;
+        const endAt = src.indexOf(endTag, tagEnd);
+        if (endAt === -1) {
+          blank(start, src.length);
+          break;
+        }
+        const finish = endAt + endTag.length;
+        blank(start, finish);
+        i = finish;
+      }
+    }
+  }
+  return out.join("");
+}
+
 /** 定義本体の中の定義も含め、ソース中のマクロ定義をすべて集める。 */
 export function macroDefinitions(
   src: string,
