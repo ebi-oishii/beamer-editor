@@ -840,4 +840,29 @@ describe("deckfigure へ移す生 LaTeX のオーバーレイ", () => {
     });
     expect(detachBlockToCanvas(source, spanOf(source, raw), { x: 0, y: 0, width: 1 })).toBeNull();
   });
+
+  it("非直結の通常環境タグを移しても構造文字を切り離さない", () => {
+    for (const [begin, end] of [
+      ["\\begin{center}", "\\end {center}"],
+      ["\\begin{center}", "\\end % closing\n{center}"],
+      ["\\begin {center}", "\\end{center}"],
+      ["\\begin % opening\n{center}", "\\end{center}"],
+      ["\\begin {center}", "\\end {center}"],
+    ]) {
+      const body = `${begin}\nX\n${end}\nY`;
+      const source = deck(`\\begin{frame}[label=f]{F}\n${body}\n\\end{frame}`);
+      const frame = parseDeck(source).body.find((node) => node.type === "frame");
+      if (frame?.type !== "frame") throw new Error("frame missing");
+      expect(frame.body).toHaveLength(1);
+      const block = frame.body[0];
+      if (!block) throw new Error("block missing");
+      expect(source.slice(block.span.start, block.span.end).trimEnd()).toBe(body);
+      const replacement = must(detachBlockToCanvas(source, block.span, { x: 0, y: 0, width: 1 }));
+      const detached = apply(source, replacement);
+      const unindented = detached.replaceAll(/^[ \t]+/gm, "");
+      expect(unindented).toContain(begin);
+      expect(unindented).toContain(end);
+      expect(() => parseDeck(detached)).not.toThrow();
+    }
+  });
 });

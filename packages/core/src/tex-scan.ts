@@ -113,8 +113,8 @@ function skipTrivia(src: string, at: number, to: number): number {
   }
 }
 
-/** `\\begin` / `\\end` の引数を読む。制御綴の後の空白・コメントは TeX と同様に無視する。 */
-function environmentTag(
+/** verbatim 系の `\\begin` の引数を読む。制御綴の後の空白・コメントは TeX と同様に無視する。 */
+function verbatimBeginTag(
   src: string,
   commandEnd: number,
   to: number,
@@ -315,25 +315,32 @@ export function* texTokens(src: string, from = 0, to = src.length): Generator<Te
       const close = groupEnd(src, next, to);
       if (close !== null) i = close;
       continue;
-    } else if (name === "begin" || name === "end") {
-      const tag = environmentTag(src, end, to);
-      if (tag) {
+    } else if (name === "begin") {
+      const tag = verbatimBeginTag(src, end, to);
+      if (tag && VERBATIM_ENVS.has(tag.environment)) {
         const { environment, end: tagEnd } = tag;
         i = tagEnd;
-        if (name === "begin" && VERBATIM_ENVS.has(environment)) {
-          // verbatim の終了は `\\end{…}` の完全一致だけ。本文中の `\\end {…}` は文字列のまま。
-          const endTag = `\\end{${environment}}`;
-          const endAt = src.indexOf(endTag, tagEnd);
-          if (endAt === -1 || endAt + endTag.length > to) {
-            // 書きかけのコードブロックで後続のフレームを見失わないよう、
-            // 開始タグだけを報告して以降は通常どおり走査する。
-            yield { kind: "unterminated", name: environment, start, end: tagEnd };
-            continue;
-          }
-          i = endAt + endTag.length;
-          yield { kind: "verbatim", name: environment, start, end: i };
+        // verbatim の終了は `\\end{…}` の完全一致だけ。本文中の `\\end {…}` は文字列のまま。
+        const endTag = `\\end{${environment}}`;
+        const endAt = src.indexOf(endTag, tagEnd);
+        if (endAt === -1 || endAt + endTag.length > to) {
+          // 書きかけのコードブロックで後続のフレームを見失わないよう、
+          // 開始タグだけを報告して以降は通常どおり走査する。
+          yield { kind: "unterminated", name: environment, start, end: tagEnd };
           continue;
         }
+        i = endAt + endTag.length;
+        yield { kind: "verbatim", name: environment, start, end: i };
+        continue;
+      }
+    }
+    if ((name === "begin" || name === "end") && src[end] === "{") {
+      let close = end + 1;
+      while (close < to && !"}\\\r\n".includes(src[close] as string)) close++;
+      if (src[close] === "}" && close < to) {
+        const environment = src.slice(end + 1, close);
+        const tagEnd = close + 1;
+        i = tagEnd;
         yield { kind: name, name: environment, start, end: tagEnd };
         continue;
       }
@@ -402,7 +409,7 @@ export function texExecutableText(src: string): string {
       continue;
     }
     if (name === "begin") {
-      const tag = environmentTag(src, end, src.length);
+      const tag = verbatimBeginTag(src, end, src.length);
       if (tag && VERBATIM_ENVS.has(tag.environment)) {
         const endTag = `\\end{${tag.environment}}`;
         const endAt = src.indexOf(endTag, tag.end);
