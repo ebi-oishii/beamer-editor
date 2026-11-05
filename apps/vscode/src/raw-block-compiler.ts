@@ -35,7 +35,7 @@ export interface RawBlockCompilerOptions {
   /** standalone 文書の全文を PDF にする(compiler の compileFragment)。 */
   compile(document: string, signal: AbortSignal): Promise<Uint8Array>;
   /** 生ブロック本文と前置きから standalone 文書を組み立てる(compiler の buildFragmentDocument)。 */
-  buildDocument(tex: string, preamble: string): string;
+  buildDocument(tex: string, preamble: string, mode?: RawBlockRef["mode"]): string;
   /** 生ブロックが参照する外部ファイルの指紋。無ければ ""。変わればキャッシュも失敗も別扱いになる。 */
   fingerprint?(tex: string, preamble: string): Promise<string>;
   /** コンパイルの失敗が「エンジンが使えない」(Tectonic が無い・壊れている)ことによるものか。 */
@@ -50,6 +50,7 @@ interface Job {
   key: string;
   tex: string;
   preamble: string;
+  mode: NonNullable<RawBlockRef["mode"]>;
   /** 一度 cancel されたジョブは、同じ key が再度 wanted になっても復活させない。 */
   cancelled: boolean;
   controller: AbortController | undefined;
@@ -99,6 +100,7 @@ export class RawBlockCompiler {
         key: block.key,
         tex: block.tex,
         preamble,
+        mode: block.mode ?? "raw",
         cancelled: false,
         controller: undefined,
       });
@@ -195,7 +197,7 @@ export class RawBlockCompiler {
       job.controller = new AbortController();
       try {
         const pdf = await this.options.compile(
-          this.options.buildDocument(job.tex, job.preamble),
+          this.options.buildDocument(job.tex, job.preamble, job.mode),
           job.controller.signal,
         );
         if (drop()) return;

@@ -26,10 +26,14 @@ function fnv1a(text: string, seed: number): string {
  * 生ブロックの画像キャッシュのキー(16 桁の hex)。本文の改行コードの違いは同じキーにする。
  * 本文だけのハッシュと、前置き + 本文のハッシュを並べて 64 bit 相当にする。
  */
-export function rawFragmentKey(tex: string, preamble: string): string {
+export function rawFragmentKey(
+  tex: string,
+  preamble: string,
+  mode: "raw" | "figure" = "raw",
+): string {
   const body = tex.replace(/\r\n/g, "\n").trim();
   const head = preamble.replace(/\r\n/g, "\n").trim();
-  return `${fnv1a(body, 0x811c9dc5)}${fnv1a(`${head}\u0000${body}`, 0x01000193)}`;
+  return `${fnv1a(`${mode}\u0000${body}`, 0x811c9dc5)}${fnv1a(`${mode}\u0000${head}\u0000${body}`, 0x01000193)}`;
 }
 
 /** 任意の文字列の 16 桁 hex ハッシュ(キャッシュの置き場や依存ファイルの指紋に使う)。 */

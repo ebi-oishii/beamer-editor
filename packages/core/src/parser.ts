@@ -58,6 +58,7 @@ const BLOCK_ENVS = new Set([
   "align*",
   "deckcanvas",
   "decktext",
+  "deckfigure",
 ]);
 
 const STYLE_COMMANDS = new Set(["textbf", "emph", "textit", "texttt", "alert"]);
@@ -131,7 +132,7 @@ function findNextTopLevelCanvasItem(src: string, from: number, end: number): num
         if (nameEnd === -1 || nameEnd >= end) return null;
         const name = src.slice(i + beginPrefix.length, nameEnd);
         const topLevel = braceDepth === 0 && bracketDepth === 0 && environments.length === 0;
-        if (topLevel && name === "decktext") return i;
+        if (topLevel && (name === "decktext" || name === "deckfigure")) return i;
         environments.push(name);
         i = nameEnd;
         continue;
@@ -782,7 +783,8 @@ class Parser {
         case "deckcanvas":
           return { node: this.parseCanvas(pos, bodyStart, endPos, next), next };
         case "decktext":
-          // deckcanvas の外の decktext は生ブロック
+        case "deckfigure":
+          // deckcanvas の外の decktext / deckfigure は生ブロック
           return asRaw("canvas-unsupported-content");
         default:
           return asRaw();
@@ -1106,6 +1108,41 @@ class Parser {
           size: keys.size,
           invalidSize: keys.invalidSize,
           children,
+          span: span(cursor, itemNext),
+        });
+        cursor = itemNext;
+        continue;
+      }
+      if (this.src.startsWith("\\begin{deckfigure}", cursor)) {
+        const optOpen = cursor + "\\begin{deckfigure}".length;
+        const optClose =
+          this.src[optOpen] === "[" ? readBalanced(this.src, optOpen, "[", "]") : null;
+        const contentStart = optClose === null ? optOpen : optClose + 1;
+        const envEnd = findEnvEnd(this.src, "deckfigure", contentStart);
+        if (envEnd === null || envEnd >= bodyEnd) {
+          items.push(this.rawBlock(cursor, bodyEnd, "deckfigure", "canvas-unsupported-content"));
+          cursor = bodyEnd;
+          continue;
+        }
+        const itemNext = envEnd + "\\end{deckfigure}".length;
+        const keys =
+          optClose === null
+            ? null
+            : this.parseCanvasKeys(this.src.slice(optOpen + 1, optClose), optOpen + 1, false);
+        if (keys === null) {
+          items.push(this.rawBlock(cursor, itemNext, "deckfigure", "canvas-unsupported-content"));
+          cursor = itemNext;
+          continue;
+        }
+        items.push({
+          type: "canvasFigure",
+          position: {
+            x: keys.x,
+            y: keys.y,
+            width: keys.w,
+            span: span(optOpen, contentStart),
+          },
+          tex: this.src.slice(contentStart, envEnd).trim(),
           span: span(cursor, itemNext),
         });
         cursor = itemNext;

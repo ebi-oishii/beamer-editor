@@ -179,7 +179,11 @@ export function Stage({
     handle.dataset.resizeElementId = descriptor.id;
     handle.setAttribute(
       "aria-label",
-      descriptor.kind === "image" ? "画像の幅を変更" : "テキストの幅を変更",
+      descriptor.kind === "image"
+        ? "画像の幅を変更"
+        : descriptor.kind === "figure"
+          ? "図の幅を変更"
+          : "テキストの幅を変更",
     );
     handle.addEventListener("dblclick", (event) => event.stopPropagation());
     handle.title = "ドラッグで幅を変更（左右キーでも変更）";

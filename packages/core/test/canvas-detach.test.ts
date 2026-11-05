@@ -714,3 +714,155 @@ describe("キャンバスフレームの label(L011)", () => {
     expect(after).toEqual(before);
   });
 });
+
+describe("表・生 LaTeX の環境を deckfigure へ移す(#191)", () => {
+  const placement = { x: 0.1, y: 0.2, width: 0.3 };
+  const tikz = "\\begin{tikzpicture}\n    \\draw (0,0) -- (1,1);\n  \\end{tikzpicture}";
+
+  it("TikZ は原文のまま deckfigure で囲んで deckcanvas へ移す", () => {
+    const source = deck(`\\begin{frame}[label=f]{F}\n  ${tikz}\n\\end{frame}`);
+    const result = apply(
+      source,
+      must(detachBlockToCanvas(source, spanOf(source, tikz), placement)),
+    );
+    expect(result).toBe(
+      deck(`\\begin{frame}[label=f]{F}
+  \\begin{deckcanvas}
+    \\begin{deckfigure}[x=0.100,y=0.200,w=0.300]
+      \\begin{tikzpicture}
+        \\draw (0,0) -- (1,1);
+      \\end{tikzpicture}
+    \\end{deckfigure}
+  \\end{deckcanvas}
+\\end{frame}`),
+    );
+    expect(lintSource(result).filter((entry) => entry.code === "L014")).toEqual([]);
+  });
+
+  it("表と center の中の TikZ も移す。箱は中身の幅に縮むので \\centering は付けない", () => {
+    const table = "\\begin{tabular}{lc}\n    a & b \\\\\n  \\end{tabular}";
+    const source = deck(
+      `\\begin{frame}[label=f]{F}\n  ${table}\n  \\begin{center}\n  ${tikz}\n  \\end{center}\n\\end{frame}`,
+    );
+    expect(
+      apply(source, must(detachBlockToCanvas(source, spanOf(source, table), placement))),
+    ).toContain(
+      "    \\begin{deckfigure}[x=0.100,y=0.200,w=0.300]\n      \\begin{tabular}{lc}\n        a & b \\\\\n      \\end{tabular}\n    \\end{deckfigure}",
+    );
+    const centered = apply(
+      source,
+      must(detachBlockToCanvas(source, spanOf(source, tikz), placement)),
+    );
+    expect(centered).toContain(
+      "\\begin{deckfigure}[x=0.100,y=0.200,w=0.300]\n      \\begin{tikzpicture}",
+    );
+    expect(centered).not.toContain("\\centering");
+  });
+
+  it("verbatim 系の環境とキャンバスの環境は箱に入れられないので対象外", () => {
+    const verbatim = "\\begin{verbatim}\nx\n\\end{verbatim}";
+    const source = deck(
+      `\\begin{frame}[fragile,label=f]{F}\n${verbatim}\n\\begin{decktext}[x=0,y=0,w=1]stray\\end{decktext}\n\\end{frame}`,
+    );
+    const frame = parseDeck(source).body.find((element) => element.type === "frame");
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    expect([...detachStatusesOf(frame).values()]).toEqual([
+      { eligible: false, reason: "unsupported-kind" },
+      { eligible: false, reason: "unsupported-kind" },
+    ]);
+    expect(detachBlockToCanvas(source, spanOf(source, verbatim), placement)).toBeNull();
+  });
+});
+
+describe("deckfigure へ移す生 LaTeX のオーバーレイ", () => {
+  it("実行される overlay は拒否し、コメント・verbatim・TikZ 矢印は拒否しない", () => {
+    const source = deck(String.raw`\begin{frame}[label=f]{F}
+\begin{tikzpicture}\draw[<->] (0,0) -- (1,1);\end{tikzpicture}
+\begin{tikzpicture}\pause\end{tikzpicture}
+% \only<2>{comment}
+\begin{verbatim}\only<2>{code}\end{verbatim}
+\end{frame}`);
+    const frame = parseDeck(source).body.find((node) => node.type === "frame");
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    const statuses = [...detachStatusesOf(frame).values()];
+    expect(statuses.some((status) => status.eligible)).toBe(true);
+    expect(statuses).toContainEqual({ eligible: false, reason: "overlay" });
+  });
+
+  it("数値 overlay だけを拒否し、文字列化・コメント・verbatim と TikZ 矢印は許可する", () => {
+    const source = deck(String.raw`\begin{frame}[label=f]{F}
+\begin{tikzpicture}<2>\end{tikzpicture}
+\begin{tikzpicture}<2->\end{tikzpicture}
+\begin{tikzpicture}<2-4>\end{tikzpicture}
+\begin{tikzpicture}<2,4>\end{tikzpicture}
+\begin{tikzpicture}\verb|<2>|\end{tikzpicture}
+\begin{tikzpicture}\detokenize{<2>}\end{tikzpicture}
+\begin{tikzpicture}\string<2> % <2>
+\draw[<->] (0,0)--(1,1);\end{tikzpicture}
+\end{frame}`);
+    const frame = parseDeck(source).body.find((node) => node.type === "frame");
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    const statuses = [...detachStatusesOf(frame).values()];
+    expect(statuses.slice(0, 4)).toEqual(Array(4).fill({ eligible: false, reason: "overlay" }));
+    expect(statuses.slice(4)).toEqual(Array(3).fill(expect.objectContaining({ eligible: true })));
+  });
+
+  it("図環境内の literal code は入れ子でも対象外にし、原文を編集しない", () => {
+    const raw = String.raw`\begin{minipage}{.5\textwidth}
+\begin{lstlisting}
+  literal <2>
+\end{lstlisting}
+\end{minipage}`;
+    const source = deck(`\\begin{frame}[fragile,label=f]{F}\n${raw}\n\\end{frame}`);
+    const frame = parseDeck(source).body.find((node) => node.type === "frame");
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    expect([...detachStatusesOf(frame).values()]).toContainEqual({
+      eligible: false,
+      reason: "unsupported-kind",
+    });
+    expect(detachBlockToCanvas(source, spanOf(source, raw), { x: 0, y: 0, width: 1 })).toBeNull();
+  });
+
+  it("空白・コメントを挟む verbatim の入れ子も対象外にし、literal 内の overlay を実行扱いしない", () => {
+    const raw = String.raw`\begin{minipage}{.5\textwidth}
+\begin % literal environment
+{verbatim}
+  \end {verbatim}
+  \only<2>{literal code}
+\end{verbatim}
+\end{minipage}`;
+    const source = deck(`\\begin{frame}[fragile,label=f]{F}\n${raw}\n\\end{frame}`);
+    const frame = parseDeck(source).body.find((node) => node.type === "frame");
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    expect([...detachStatusesOf(frame).values()]).toContainEqual({
+      eligible: false,
+      reason: "unsupported-kind",
+    });
+    expect(detachBlockToCanvas(source, spanOf(source, raw), { x: 0, y: 0, width: 1 })).toBeNull();
+  });
+
+  it("非直結の通常環境タグを移しても構造文字を切り離さない", () => {
+    for (const [begin, end] of [
+      ["\\begin{center}", "\\end {center}"],
+      ["\\begin{center}", "\\end % closing\n{center}"],
+      ["\\begin {center}", "\\end{center}"],
+      ["\\begin % opening\n{center}", "\\end{center}"],
+      ["\\begin {center}", "\\end {center}"],
+    ]) {
+      const body = `${begin}\nX\n${end}\nY`;
+      const source = deck(`\\begin{frame}[label=f]{F}\n${body}\n\\end{frame}`);
+      const frame = parseDeck(source).body.find((node) => node.type === "frame");
+      if (frame?.type !== "frame") throw new Error("frame missing");
+      expect(frame.body).toHaveLength(1);
+      const block = frame.body[0];
+      if (!block) throw new Error("block missing");
+      expect(source.slice(block.span.start, block.span.end).trimEnd()).toBe(body);
+      const replacement = must(detachBlockToCanvas(source, block.span, { x: 0, y: 0, width: 1 }));
+      const detached = apply(source, replacement);
+      const unindented = detached.replaceAll(/^[ \t]+/gm, "");
+      expect(unindented).toContain(begin);
+      expect(unindented).toContain(end);
+      expect(() => parseDeck(detached)).not.toThrow();
+    }
+  });
+});

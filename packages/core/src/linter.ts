@@ -457,9 +457,8 @@ function visitBlocks(blocks: BlockNode[], visitor: (block: BlockNode) => void): 
         visitBlocks(block.children, visitor);
         break;
       case "canvas":
-        for (const item of block.items) {
+        for (const item of block.items)
           if (item.type === "canvasText") visitBlocks(item.children, visitor);
-        }
         break;
       default:
         break;
@@ -552,6 +551,17 @@ function lintFragileFrames(doc: DeckDocument): LintDiagnostic[] {
           ),
         );
       }
+      if (block.type === "canvas")
+        for (const item of block.items)
+          if (item.type === "canvasFigure" && containsVerbatimEnvironment(item.tex))
+            diagnostics.push(
+              diagnostic(
+                "L007",
+                "error",
+                "verbatim 系を含む frame には fragile オプションが必要です",
+                item.span,
+              ),
+            );
     });
   }
   return diagnostics;
@@ -583,80 +593,7 @@ function stripTexComments(source: string): string {
 }
 
 function containsVerbatimEnvironment(source: string): boolean {
-  let stringifyNextToken = false;
-  for (let index = 0; index < source.length; ) {
-    const char = source[index] as string;
-    if (stringifyNextToken && /\s/.test(char)) {
-      index++;
-      continue;
-    }
-    if (char !== "\\") {
-      stringifyNextToken = false;
-      index++;
-      continue;
-    }
-    const next = source[index + 1] ?? "";
-    if (!/[a-zA-Z@]/.test(next)) {
-      // `\\` は改行コマンドであり、後続の `begin` は通常文字列になる。
-      stringifyNextToken = false;
-      index += Math.min(2, source.length - index);
-      continue;
-    }
-    let end = index + 1;
-    while (end < source.length && /[a-zA-Z@]/.test(source[end] as string)) end++;
-    const command = source.slice(index + 1, end);
-    if (stringifyNextToken) {
-      stringifyNextToken = false;
-      index = end;
-      continue;
-    }
-    if (command === "detokenize") {
-      const argumentEnd = balancedArgumentEnd(source, end);
-      index = argumentEnd ?? end;
-      continue;
-    }
-    if (command === "string" || command === "meaning") {
-      stringifyNextToken = true;
-      index = end;
-      continue;
-    }
-    if (command === "begin") {
-      let cursor = end;
-      while (cursor < source.length && /\s/.test(source[cursor] as string)) cursor++;
-      const close = source.indexOf("}", cursor + 1);
-      if (source[cursor] === "{" && close !== -1) {
-        const environment = source.slice(cursor + 1, close);
-        if (VERBATIM_ENVS.has(environment)) return true;
-      }
-    }
-    index = end;
-  }
-  return false;
-}
-
-function balancedArgumentEnd(source: string, index: number): number | null {
-  let cursor = index;
-  while (cursor < source.length && /\s/.test(source[cursor] as string)) cursor++;
-  if (source[cursor] !== "{") return null;
-
-  let depth = 1;
-  cursor++;
-  while (cursor < source.length) {
-    if (source[cursor] === "\\") {
-      const next = source[cursor + 1] ?? "";
-      if (/[a-zA-Z@]/.test(next)) {
-        cursor += 2;
-        while (cursor < source.length && /[a-zA-Z@]/.test(source[cursor] as string)) cursor++;
-      } else {
-        cursor += Math.min(2, source.length - cursor);
-      }
-      continue;
-    }
-    if (source[cursor] === "{") depth++;
-    if (source[cursor] === "}" && --depth === 0) return cursor + 1;
-    cursor++;
-  }
-  return null;
+  return [...texTokens(source)].some((token) => token.kind === "verbatim");
 }
 
 function lintCanvas(canvas: CanvasNode): LintDiagnostic[] {
@@ -667,7 +604,7 @@ function lintCanvas(canvas: CanvasNode): LintDiagnostic[] {
         diagnostic(
           "L014",
           "warning",
-          "deckcanvas 直下には decktext または deckimage だけを置けます",
+          "deckcanvas 直下には decktext・deckimage・deckfigure だけを置けます",
           item.span,
         ),
       );

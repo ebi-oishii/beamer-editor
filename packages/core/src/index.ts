@@ -3,6 +3,7 @@ export * from "./canvas-clipboard.js";
 export * from "./canvas-detach.js";
 export * from "./canvas-edit.js";
 export * from "./expander.js";
+export * from "./figure-like.js";
 export * from "./formatter.js";
 export * from "./fragment.js";
 export * from "./image.js";

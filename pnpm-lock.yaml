@@ -160,6 +160,9 @@ importers:
       '@types/node':
         specifier: ^26.1.1
         version: 26.1.1
+      pdfjs-dist:
+        specifier: 6.3.289
+        version: 6.3.289
       typescript:
         specifier: ^5.9.0
         version: 5.9.3

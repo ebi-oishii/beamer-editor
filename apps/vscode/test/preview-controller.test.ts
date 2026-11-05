@@ -1555,7 +1555,7 @@ describe("PreviewController: canvas clipboard(#148)", () => {
       version: 7,
     });
     expect(onWarning).toHaveBeenCalledExactlyOnceWith(
-      "貼り付けられませんでした。クリップボードがキャンバスの要素(decktext / deckimage)でないか、対象のフレームが受け付けられない形です。",
+      "貼り付けられませんでした。クリップボードがキャンバスの要素(decktext / deckimage / deckfigure)でないか、対象のフレームが受け付けられない形です。",
     );
   });
 });

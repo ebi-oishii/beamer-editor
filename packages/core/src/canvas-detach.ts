@@ -1,10 +1,10 @@
 /**
- * フロー配置の要素(段落・リスト・画像)を同じフレームの deckcanvas へ移す
+ * フロー配置の要素(段落・リスト・画像・表・生 LaTeX の環境)を同じフレームの deckcanvas へ移す
  * 「自由配置にする」のソース変換(design.md §4.6、subset-spec §2.8)。
  *
  * formatter と同じく source span ベースの局所置換で行い、触れていない箇所の原文
  * (コメント・空行・インデント)は保つ。対象ブロックの原文を行単位で取り除き、
- * フレーム末尾の deckcanvas(無ければ新設)へ decktext / deckimage として入れる。
+ * フレーム末尾の deckcanvas(無ければ新設)へ decktext / deckimage / deckfigure として入れる。
  * 取り出した要素の位置は呼び出し側(プレビュー上の表示位置)が決める。
  */
 
@@ -30,8 +30,10 @@ import {
   nextCanvasLabel,
   type SourceReplacement,
 } from "./canvas-frame.js";
+import { figureLikeRawInline } from "./figure-like.js";
 import { parseDeck } from "./parser.js";
 import { detectEol, isBlank, lineEnd, lineStart, reindent, trimmedSpan } from "./source-text.js";
+import { texExecutableText, texTokens, VERBATIM_ENVS } from "./tex-scan.js";
 
 export type { SourceReplacement } from "./canvas-frame.js";
 
@@ -58,18 +60,73 @@ function listHasPause(list: ListNode): boolean {
   );
 }
 
-/** 自由配置へ移せる種類・構造か(decktext / deckimage に収まるか)。 */
+/** deckfigure の中身にできない生ブロックの環境(箱に入れられない verbatim 系と、キャンバス自身)。 */
+const NOT_FIGURE_ENVS: ReadonlySet<string> = new Set([
+  ...VERBATIM_ENVS,
+  "deckcanvas",
+  "decktext",
+  "deckfigure",
+]);
+
+/** deckfigure で囲んで移すブロックか(表・TikZ などの生 LaTeX の環境。#191)。 */
+function isFigureBlock(block: BlockNode): boolean {
+  if (block.type === "table") return true;
+  if (block.type === "paragraph") {
+    const figure = figureLikeRawInline(block.children);
+    return figure !== null && !rawHasVerbatim(figure.tex);
+  }
+  return (
+    block.type === "rawBlock" &&
+    block.environment !== null &&
+    !NOT_FIGURE_ENVS.has(block.environment) &&
+    !rawHasVerbatim(block.tex)
+  );
+}
+
+/** 箱に入れられない literal code は、外側が図環境でも移動対象にしない。 */
+function rawHasVerbatim(tex: string): boolean {
+  for (const token of texTokens(tex))
+    if (token.kind === "verbatim" || token.kind === "unterminated") return true;
+  return false;
+}
+
+/** 自由配置へ移せる種類・構造か(decktext / deckimage / deckfigure に収まるか)。 */
 export function isDetachableBlock(block: BlockNode): boolean {
   switch (block.type) {
-    case "paragraph":
+    case "paragraph": {
+      const figure = figureLikeRawInline(block.children);
+      return figure === null || !rawHasVerbatim(figure.tex);
+    }
     case "displayMath":
     case "image":
       return true;
     case "list":
       return listFitsDecktext(block, 0);
     default:
-      return false;
+      return isFigureBlock(block);
   }
+}
+
+/** 生 LaTeX に含まれるオーバーレイ。texTokens でコメント・verbatim・文字列化を除外する。 */
+function rawHasOverlay(tex: string): boolean {
+  for (const token of texTokens(tex))
+    if (
+      token.kind === "command" &&
+      ["pause", "only", "onslide", "uncover", "visible", "alt", "temporal"].includes(token.name)
+    )
+      return true;
+  // `<->` (TikZ の矢印)や座標を拾わず、数値だけから成る Beamer 範囲だけを拒否する。
+  const code = texExecutableText(tex);
+  return /<\s*\d+(?:\s*(?:-|,)\s*\d*)?\s*>/.test(code);
+}
+
+function blockHasOverlay(block: BlockNode): boolean {
+  if (block.type === "rawBlock") return rawHasOverlay(block.tex);
+  if (block.type === "paragraph") {
+    const figure = figureLikeRawInline(block.children);
+    return figure !== null && rawHasOverlay(figure.tex);
+  }
+  return false;
 }
 
 /** \\pause の数を文書順に数える。stopAt に到達したらそこで止める(canvas の中は見ない)。 */
@@ -142,7 +199,7 @@ function removalSpan(block: BlockNode, ancestors: readonly Ancestor[]): SourceSp
 /**
  * フレーム内のフロー要素それぞれについて「自由配置にする」候補になれるか(なれなければ理由)を
  * 決める。renderer の候補属性と core の適用判定はこの同じ結果を使う。
- * - 種類・構造が decktext / deckimage に収まらない → unsupported-kind
+ * - 種類・構造が decktext / deckimage / deckfigure に収まらない → unsupported-kind
  * - overlay 付きの block / \\item の中、または \\pause との前後関係が移動先(既存の deckcanvas、
  *   無ければフレーム末尾)と異なる → overlay(移すと表示開始 step が変わる)
  * - 項目の唯一の内容で、その項目に \\pause がある → overlay(項目ごと消すと後続の step が変わる)
@@ -175,7 +232,9 @@ export function detachStatusesOf(frame: FrameNode): Map<BlockNode, DetachStatus>
       }
       // 項目直下の段落は項目の本文そのもの(renderer も <span> で描く)。候補にも理由にもしない。
       if (!(ctx.itemChild && block.type === "paragraph")) {
-        if (!isDetachableBlock(block)) {
+        if (blockHasOverlay(block)) {
+          result.set(block, { eligible: false, reason: "overlay" });
+        } else if (!isDetachableBlock(block)) {
           result.set(block, { eligible: false, reason: "unsupported-kind" });
         } else if (ctx.overlay || pauses !== targetPauses) {
           result.set(block, { eligible: false, reason: "overlay" });
@@ -287,7 +346,11 @@ function buildObject(
   const position = `x=${f(placement.x)},y=${f(placement.y)},w=${f(placement.width)}`;
   if (block.type === "image") return `${indent}\\deckimage[${position}]{${block.path}}`;
   const span = trimmedSpan(source, block.span);
-  const content = reindent(source.slice(span.start, span.end), `${indent}  `, eol);
+  const figure = block.type === "paragraph" ? figureLikeRawInline(block.children) : null;
+  const content = reindent(figure?.tex ?? source.slice(span.start, span.end), `${indent}  `, eol);
+  // 箱は中身の幅に縮むので、center の中にあっても中央寄せは要らない。
+  if (isFigureBlock(block))
+    return `${indent}\\begin{deckfigure}[${position}]${eol}${content}${eol}${indent}\\end{deckfigure}`;
   // center の中にあった要素は箱の中で中央寄せを保つ。
   const centering = center ? `${indent}  \\centering${eol}` : "";
   return `${indent}\\begin{decktext}[${position},size=normal]${eol}${centering}${content}${eol}${indent}\\end{decktext}`;

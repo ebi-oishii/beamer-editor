@@ -131,6 +131,46 @@ describe("parseDeck: canvas top-level items", () => {
       canvas?.type === "canvas" && canvas.items.find((item) => item.type === "canvasImage")?.path,
     ).toBe("top.png");
   });
+
+  it("deckfigure は位置と中身の原文で読み、deckcanvas の外や読めない options は生ブロックにする(#191)", () => {
+    const source = String.raw`\begin{document}
+\begin{frame}[label=fig]{F}
+\begin{deckfigure}[x=0,y=0,w=.5]outside\end{deckfigure}
+\begin{deckcanvas}
+\begin{deckfigure}[x=.1, y=.2 ,w=.3]
+  \begin{tikzpicture}
+    \draw (0,0) -- (1,1);
+  \end{tikzpicture}
+\end{deckfigure}
+\begin{deckfigure}[x=.1,y=.2,w=.3,size=small]bad\end{deckfigure}
+\deckimage[x=.5,y=.5,w=.2]{after.png}
+\end{deckcanvas}
+\end{frame}
+\end{document}`;
+    const frame = framesOf(parseDeck(source))[0];
+    if (frame?.type !== "frame") throw new Error("frame missing");
+    expect(frame.body[0]).toMatchObject({
+      type: "rawBlock",
+      environment: "deckfigure",
+      reason: "canvas-unsupported-content",
+    });
+    const canvas = frame.body.find((block) => block.type === "canvas");
+    if (canvas?.type !== "canvas") throw new Error("canvas missing");
+    expect(canvas.items.map((item) => item.type)).toEqual([
+      "canvasFigure",
+      "rawBlock",
+      "canvasImage",
+    ]);
+    const figure = canvas.items[0];
+    if (figure?.type !== "canvasFigure") throw new Error("figure missing");
+    expect(figure.position).toMatchObject({ x: 0.1, y: 0.2, width: 0.3 });
+    expect(source.slice(figure.position.span.start, figure.position.span.end)).toBe(
+      "[x=.1, y=.2 ,w=.3]",
+    );
+    expect(figure.tex).toBe(
+      "\\begin{tikzpicture}\n    \\draw (0,0) -- (1,1);\n  \\end{tikzpicture}",
+    );
+  });
 });
 
 describe("parseDeck: kitchen-sink.slide.tex", () => {

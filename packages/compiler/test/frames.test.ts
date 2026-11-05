@@ -198,6 +198,16 @@ describe("analyzeCanvasGeometry", () => {
     ]);
   });
 
+  it("reads deckfigure records (kind=figure) like images (#191)", () => {
+    const diagnostics = analyzeCanvasGeometry(
+      `${body}\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=1 page=1 kind=figure x=105pt y=20pt w=10pt h=10pt`,
+      frames,
+    );
+    expect(diagnostics).toMatchObject([
+      { kind: "canvas-overflow", geometry: { kind: "figure", x: 105, width: 10 } },
+    ]);
+  });
+
   it("reports real overlap but not edge contact, with the documented epsilon", () => {
     const diagnostics = analyzeCanvasGeometry(
       `${body}\nBEAMER_EDITOR_FRAME:000001\nDECKGEOM frame=1 page=1 kind=text x=10pt y=20pt w=20pt h=20pt\nDECKGEOM frame=1 page=1 kind=image x=30pt y=20pt w=10pt h=20pt\nDECKGEOM frame=1 page=1 kind=image x=29.98pt y=20pt w=10pt h=20pt`,
@@ -749,6 +759,36 @@ ${preamble}
           geometry: { kind: "text", x: expect.any(Number) },
         },
       ]);
+    },
+    180_000,
+  );
+
+  it.runIf(process.env.TECTONIC_INTEGRATION === "1")(
+    "places a 600pt deckfigure at w=.5 without overfull or canvas overflow, and accepts empty figures",
+    async () => {
+      const preamble = await readFile(canvasPreamblePath, "utf8");
+      const inputPath = await source(String.raw`\documentclass[aspectratio=169]{beamer}
+${preamble}
+\begin{document}
+\begin{frame}[label=fig]{Figure}
+\begin{deckcanvas}
+\begin{deckfigure}[x=0,y=0,w=.5]\rule{600pt}{5pt}\end{deckfigure}
+\begin{deckfigure}[x=0,y=.2,w=.3]\end{deckfigure}
+\begin{deckfigure}[x=0,y=.4,w=.3]\only<1>{}\end{deckfigure}
+\end{deckcanvas}
+\end{frame}
+\end{document}
+`);
+      const value = await compileDeckFrames({
+        inputPath,
+        timeoutMs: 120_000,
+        includeImages: false,
+      });
+      expect(value.warnings).toEqual([]);
+      expect(value.layoutDiagnostics.filter((entry) => entry.kind === "canvas-overflow")).toEqual(
+        [],
+      );
+      expect(value.frames).toHaveLength(1);
     },
     180_000,
   );

@@ -627,6 +627,29 @@ code
     ).toBe(false);
   });
 
+  it("空白・コメントを挟む verbatim 系も rawBlock と deckfigure 内で L007 を報告する", () => {
+    const raw = String.raw`\begin{adjustbox}{width=\textwidth}
+\begin {verbatim}
+code
+\end{verbatim}
+\end{adjustbox}`;
+    const figure = String.raw`\begin{deckcanvas}
+\begin{deckfigure}[x=0,y=0,w=.4]\begin % literal environment
+{verbatim}code\end{verbatim}\end{deckfigure}
+\end{deckcanvas}`;
+    for (const body of [raw, figure]) {
+      const source = deck(String.raw`\begin{frame}[label=f]{Code}
+${body}
+\end{frame}`);
+      expect(lintDeck(parseDeck(source)).some((entry) => entry.code === "L007")).toBe(true);
+      expect(
+        lintDeck(parseDeck(source.replace("[label=f]", "[fragile,label=f]"))).some(
+          (entry) => entry.code === "L007",
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("未知環境の生ブロック内で文字列化された verbatim 系は L007 の対象外", () => {
     for (const content of [
       "\\detokenize{before { \\begin{verbatim} } after}",
@@ -1301,5 +1324,26 @@ describe("L004: TeX なら拾うファイルの提案", () => {
     const [found] = lintDeck(parseDeck(source), probe("fig.png")).filter((e) => e.code === "L004");
     expect(found?.message).toContain("fig.png");
     expect(found?.fix).toBeUndefined();
+  });
+});
+
+describe("L007: deckfigure 内の verbatim", () => {
+  it("非 fragile frame の deckfigure 内 verbatim を報告し、fragile と文字列化は除外する", () => {
+    const body = String.raw`\begin{frame}[label=f]{F}
+\begin{deckcanvas}
+\begin{deckfigure}[x=0,y=0,w=.4]\begin{verbatim}x\end{verbatim}\end{deckfigure}
+\end{deckcanvas}
+\end{frame}`;
+    expect(lintSource(deck(body)).some((entry) => entry.code === "L007")).toBe(true);
+    expect(
+      lintSource(deck(body.replace("[label=f]", "[fragile,label=f]"))).some(
+        (entry) => entry.code === "L007",
+      ),
+    ).toBe(false);
+    const quoted = body.replace(
+      "\\begin{verbatim}x\\end{verbatim}",
+      "\\detokenize{\\begin{verbatim}}",
+    );
+    expect(lintSource(deck(quoted)).some((entry) => entry.code === "L007")).toBe(false);
   });
 });

@@ -1,11 +1,12 @@
 /**
- * プレビュー上のキャンバス要素(decktext / deckimage)の削除・コピー・貼り付け(#148)。
+ * プレビュー上のキャンバス要素(decktext / deckimage / deckfigure)の削除・コピー・貼り付け(#148)。
  * ソースを正とした PowerPoint 風の操作で、クリップボードには要素のソース原文をそのまま置く。
  * 貼り付けはその原文を解釈し、対象フレームの deckcanvas(無ければ新設)へ入れる。
  * formatter・自由配置と同じく span ベースの局所置換で、触れていない原文は保つ。
  */
 
 import {
+  type CanvasFigureNode,
   type CanvasImageNode,
   type CanvasNode,
   type CanvasTextNode,
@@ -30,7 +31,7 @@ import {
 import { parseDeck } from "./parser.js";
 import { detectEol, isBlank, lineEnd, lineStart, reindent, trimmedSpan } from "./source-text.js";
 
-type CanvasObject = CanvasTextNode | CanvasImageNode;
+type CanvasObject = CanvasTextNode | CanvasImageNode | CanvasFigureNode;
 
 /** 同じフレームへ貼り付けたとき、元の箱と重ならないようにずらす量(正規化座標)。 */
 export const CANVAS_PASTE_OFFSET = 0.02;
@@ -110,7 +111,7 @@ const CLIPBOARD_PREFIX =
 const CLIPBOARD_SUFFIX = "\n\\end{deckcanvas}\n\\end{frame}\n\\end{document}\n";
 
 /**
- * クリップボードの文字列を deckcanvas 直下の要素の列として読む。decktext / deckimage 以外
+ * クリップボードの文字列を deckcanvas 直下の要素の列として読む。decktext / deckimage / deckfigure 以外
  * (素の文章・生ブロック)を含むか、要素が無ければ null。
  */
 export function parseCanvasClipboard(text: string): CanvasClipboardObject[] | null {

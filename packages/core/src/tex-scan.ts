@@ -113,6 +113,20 @@ function skipTrivia(src: string, at: number, to: number): number {
   }
 }
 
+/** verbatim 系の `\\begin` の引数を読む。制御綴の後の空白・コメントは TeX と同様に無視する。 */
+function verbatimBeginTag(
+  src: string,
+  commandEnd: number,
+  to: number,
+): { environment: string; end: number } | null {
+  const open = skipTrivia(src, commandEnd, to);
+  if (open >= to || src[open] !== "{") return null;
+  let close = open + 1;
+  while (close < to && !"}\\\r\n".includes(src[close] as string)) close++;
+  if (close >= to || src[close] !== "}") return null;
+  return { environment: src.slice(open + 1, close), end: close + 1 };
+}
+
 /**
  * `open` にある `{`(または `[`)に対応する閉じの直後を返す。コメントとエスケープを考慮し、
  * `[…]` では TeX と同様に波括弧内の `]` を閉じとみなさない。
@@ -301,26 +315,32 @@ export function* texTokens(src: string, from = 0, to = src.length): Generator<Te
       const close = groupEnd(src, next, to);
       if (close !== null) i = close;
       continue;
-    } else if ((name === "begin" || name === "end") && src[end] === "{") {
+    } else if (name === "begin") {
+      const tag = verbatimBeginTag(src, end, to);
+      if (tag && VERBATIM_ENVS.has(tag.environment)) {
+        const { environment, end: tagEnd } = tag;
+        i = tagEnd;
+        // verbatim の終了は `\\end{…}` の完全一致だけ。本文中の `\\end {…}` は文字列のまま。
+        const endTag = `\\end{${environment}}`;
+        const endAt = src.indexOf(endTag, tagEnd);
+        if (endAt === -1 || endAt + endTag.length > to) {
+          // 書きかけのコードブロックで後続のフレームを見失わないよう、
+          // 開始タグだけを報告して以降は通常どおり走査する。
+          yield { kind: "unterminated", name: environment, start, end: tagEnd };
+          continue;
+        }
+        i = endAt + endTag.length;
+        yield { kind: "verbatim", name: environment, start, end: i };
+        continue;
+      }
+    }
+    if ((name === "begin" || name === "end") && src[end] === "{") {
       let close = end + 1;
       while (close < to && !"}\\\r\n".includes(src[close] as string)) close++;
       if (src[close] === "}" && close < to) {
         const environment = src.slice(end + 1, close);
         const tagEnd = close + 1;
         i = tagEnd;
-        if (name === "begin" && VERBATIM_ENVS.has(environment)) {
-          const endTag = `\\end{${environment}}`;
-          const endAt = src.indexOf(endTag, tagEnd);
-          if (endAt === -1 || endAt + endTag.length > to) {
-            // 書きかけのコードブロックで後続のフレームを見失わないよう、
-            // 開始タグだけを報告して以降は通常どおり走査する。
-            yield { kind: "unterminated", name: environment, start, end: tagEnd };
-            continue;
-          }
-          i = endAt + endTag.length;
-          yield { kind: "verbatim", name: environment, start, end: i };
-          continue;
-        }
         yield { kind: name, name: environment, start, end: tagEnd };
         continue;
       }
@@ -334,6 +354,76 @@ export function* texTokens(src: string, from = 0, to = src.length): Generator<Te
     }
     yield { kind: "command", name, start, end };
   }
+}
+
+/**
+ * 実行されない文字列を空白で伏せた、元と同じ長さの TeX。
+ *
+ * 数値だけの Beamer overlay 指定のように制御綴ではない構文を探す用途で使う。texTokens と
+ * 同じくコメント、verb、verbatim 環境、文字列化命令を除外するため、`\\verb|<2>|` を
+ * 実際の overlay と誤認しない。閉じない verbatim は安全側で以後をすべて伏せる。
+ */
+export function texExecutableText(src: string): string {
+  const out = src.split("");
+  const blank = (start: number, end: number) => {
+    for (let at = start; at < end; at++) if (out[at] !== "\n" && out[at] !== "\r") out[at] = " ";
+  };
+  let i = 0;
+  while (i < src.length) {
+    if (src[i] === "%") {
+      const end = lineEnd(src, i, src.length);
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    if (src[i] !== "\\") {
+      i++;
+      continue;
+    }
+    const start = i;
+    const end = controlEnd(src, i, src.length);
+    const name = src.slice(i + 1, end);
+    i = end;
+    if (name === "verb") {
+      const close = verbArgumentEnd(src, end);
+      if (close !== null) {
+        blank(start, close);
+        i = close;
+      }
+      continue;
+    }
+    if (name === "string" || name === "meaning") {
+      const next = skipTrivia(src, end, src.length);
+      const close = next < src.length ? tokenEnd(src, next, src.length) : end;
+      blank(start, close);
+      i = close;
+      continue;
+    }
+    if (name === "detokenize") {
+      const next = skipTrivia(src, end, src.length);
+      const close = groupEnd(src, next, src.length);
+      if (close !== null) {
+        blank(start, close);
+        i = close;
+      }
+      continue;
+    }
+    if (name === "begin") {
+      const tag = verbatimBeginTag(src, end, src.length);
+      if (tag && VERBATIM_ENVS.has(tag.environment)) {
+        const endTag = `\\end{${tag.environment}}`;
+        const endAt = src.indexOf(endTag, tag.end);
+        if (endAt === -1) {
+          blank(start, src.length);
+          break;
+        }
+        const finish = endAt + endTag.length;
+        blank(start, finish);
+        i = finish;
+      }
+    }
+  }
+  return out.join("");
 }
 
 /** 定義本体の中の定義も含め、ソース中のマクロ定義をすべて集める。 */

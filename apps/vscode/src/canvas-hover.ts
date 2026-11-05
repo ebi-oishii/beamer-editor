@@ -1,6 +1,6 @@
 import { texTokens } from "@beamer-editor/core";
 
-export type CanvasHoverName = "deckcanvas" | "decktext" | "deckimage";
+export type CanvasHoverName = "deckcanvas" | "decktext" | "deckimage" | "deckfigure";
 
 /** ユーザーへ表示する独自キャンバス構文の説明。将来の翻訳はこの定義を置き換えて行う。 */
 export interface CanvasHoverDocumentation {
@@ -21,11 +21,11 @@ export const CANVAS_HOVER_DOCUMENTATION: Readonly<
 
 テキストや画像を自由配置するキャンバス環境です。1 フレームにつき 1 つだけ置けます。
 
-中には \`decktext\` または \`deckimage\` を置きます。
+中には \`decktext\`、\`deckimage\`、\`deckfigure\` を置きます。
 
 \`\`\`latex
 \\begin{deckcanvas}
-  % decktext / deckimage
+  % decktext / deckimage / deckfigure
 \\end{deckcanvas}
 \`\`\``,
   },
@@ -62,6 +62,25 @@ export const CANVAS_HOVER_DOCUMENTATION: Readonly<
 \\deckimage[x=0.520,y=0.140,w=0.400]{assets/image.pdf}
 \`\`\``,
   },
+  deckfigure: {
+    name: "deckfigure",
+    markdown: `\`deckfigure\`
+
+キャンバス上に TikZ や表など任意の LaTeX を配置する環境です。中身は幅 \`w\` に合わせて縦横比を保ったまま拡大縮小され、高さは自動で決まります。プレビューでは中身をコンパイルした画像を表示します。
+
+オプション:
+- \`x\`: 左端の位置（通常は 0〜1）
+- \`y\`: 上端の位置（下向きが正、通常は 0〜1）
+- \`w\`: 幅（通常は 0〜1）
+
+\`\`\`latex
+\\begin{deckfigure}[x=0.520,y=0.140,w=0.400]
+  \\begin{tikzpicture}
+    \\draw (0,0) -- (1,1);
+  \\end{tikzpicture}
+\\end{deckfigure}
+\`\`\``,
+  },
 };
 
 function isCanvasHoverName(name: string): name is CanvasHoverName {
@@ -96,7 +115,7 @@ export function canvasHoverAt(
     const range =
       name === "deckimage" && token.kind === "command"
         ? { start: token.start + 1, end: token.end }
-        : (name === "deckcanvas" || name === "decktext") &&
+        : (name === "deckcanvas" || name === "decktext" || name === "deckfigure") &&
             (token.kind === "begin" || token.kind === "end")
           ? { start: token.end - name.length - 1, end: token.end - 1 }
           : undefined;
