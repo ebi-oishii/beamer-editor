@@ -3,6 +3,7 @@ import {
   link,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   symlink,
@@ -698,7 +699,7 @@ describe("compilePdf and publishPdf", () => {
     const calls: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
     const runner = successfulRunner(calls);
     const result = await exportPdf(
-      { inputPath: input.path, outputPath: output, review: { maxBytes: 64, capture: () => true } },
+      { inputPath: input.path, outputPath: output, review: { maxBytes: 64 } },
       {
         runner: {
           async run(command, args, options) {
@@ -724,13 +725,56 @@ describe("compilePdf and publishPdf", () => {
     expect(result.review?.pdf).toEqual(await readFile(output));
     expect(result.review?.writtenFileIdentity).toBe(await pdfFileIdentity(output));
     expect(result.review?.dependencyPaths).toEqual([
-      input.path,
-      join(input.dir, "assets", "figure 1.pdf"),
-      join(input.dir, "..", "theme.sty"),
+      ...new Set([
+        input.path,
+        await realpath(input.path),
+        join(input.dir, "assets", "figure 1.pdf"),
+        join(input.dir, "..", "theme.sty"),
+      ]),
     ]);
   });
 
-  it("rejects a large confirmation before capture and can still write that PDF", async () => {
+  it("captures the immutable result even when the review panel attaches after compilation begins", async () => {
+    const input = await source();
+    const output = join(input.dir, "published.pdf");
+    const result = await exportPdf(
+      { inputPath: input.path, outputPath: output, review: { maxBytes: 64 } },
+      { runner: successfulRunner([]) },
+    );
+    expect(result.review?.pdf).toEqual(await readFile(output));
+  });
+
+  it("keeps a symlink dependency name and its resolved target", async () => {
+    const input = await source();
+    const output = join(input.dir, "published.pdf");
+    const figure = join(input.dir, "figure.pdf");
+    const reference = join(input.dir, "ref.pdf");
+    await writeFile(figure, "%PDF-referenced\n");
+    await symlink(figure, reference);
+    const runner = successfulRunner([]);
+    const result = await exportPdf(
+      { inputPath: input.path, outputPath: output, review: { maxBytes: 64 } },
+      {
+        runner: {
+          async run(command, args, options) {
+            const outcome = await runner.run(command, args, options);
+            if (args.includes("--makefile-rules")) {
+              const rules = args[args.indexOf("--makefile-rules") + 1];
+              const outdir = args[args.indexOf("--outdir") + 1];
+              const pdf = join(outdir ?? "", "talk.slide.pdf");
+              await writeFile(rules ?? "", `${pdf} : ${input.path} \\\n  ${reference}\n`);
+            }
+            return outcome;
+          },
+        },
+      },
+    );
+    expect(result.review?.dependencyPaths).toEqual([
+      ...new Set([input.path, await realpath(input.path), reference, await realpath(figure)]),
+    ]);
+  });
+
+  it("rejects a large confirmation before loading bytes and can still write that PDF", async () => {
     const input = await source();
     const output = join(input.dir, "published.pdf");
     const size = 10_000;
@@ -754,9 +798,6 @@ describe("compilePdf and publishPdf", () => {
         outputPath: output,
         review: {
           maxBytes: 64,
-          capture: () => {
-            throw new Error("must skip capture");
-          },
         },
       },
       { runner: largeRunner },

@@ -69,7 +69,7 @@ export interface ExportHost {
   beginPdfExport?(
     document: ExportDocument,
     output: ExportUri,
-  ): { capture: () => boolean; finish: (review?: PdfExportResult["review"]) => void } | undefined;
+  ): { finish: (review?: PdfExportResult["review"]) => void } | undefined;
 }
 
 export interface ExportControllerDependencies {
@@ -340,9 +340,7 @@ export class ExportController {
                 progress.report(downloadProgressMessage(value));
             },
             ...(tectonicPath === undefined ? {} : { tectonicPath }),
-            ...(pdfReview
-              ? { review: { maxBytes: MAX_CONFIRMATION_PDF_BYTES, capture: pdfReview.capture } }
-              : {}),
+            ...(pdfReview ? { review: { maxBytes: MAX_CONFIRMATION_PDF_BYTES } } : {}),
           };
           // Cancel and controller dispose both abort; the compile may take a
           // while to settle after that, so drop the pending update right away.

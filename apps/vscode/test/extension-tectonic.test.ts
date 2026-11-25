@@ -18,10 +18,16 @@ const state = vi.hoisted(() => ({
   compilePdf: vi.fn<typeof import("@beamer-editor/compiler").compilePdf>(),
   postPdfState: vi.fn(),
   getConfiguration: vi.fn(),
+  saveListeners: [] as Array<(document: vscode.TextDocument) => void>,
+  changeListeners: [] as Array<(event: vscode.TextDocumentChangeEvent) => void>,
 }));
 
 vi.mock("vscode", () => {
   const disposable = () => ({ dispose() {} });
+  const listener = <T>(listeners: T[], value: T) => {
+    listeners.push(value);
+    return { dispose: () => listeners.splice(listeners.indexOf(value), 1) };
+  };
   const file = (fsPath: string) => ({ scheme: "file", fsPath, toString: () => `file://${fsPath}` });
   return {
     Uri: {
@@ -35,6 +41,14 @@ vi.mock("vscode", () => {
       dispose() {}
     },
     ThemeColor: class {},
+    Range: class {
+      constructor(
+        readonly startLine: number,
+        readonly startCharacter: number,
+        readonly endLine: number,
+        readonly endCharacter: number,
+      ) {}
+    },
     TreeItem: class {},
     RelativePattern: class {},
     DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2 },
@@ -64,7 +78,10 @@ vi.mock("vscode", () => {
       textDocuments: [],
       getConfiguration: state.getConfiguration,
       onDidOpenTextDocument: disposable,
-      onDidChangeTextDocument: disposable,
+      onDidChangeTextDocument: (callback: (event: vscode.TextDocumentChangeEvent) => void) =>
+        listener(state.changeListeners, callback),
+      onDidSaveTextDocument: (callback: (document: vscode.TextDocument) => void) =>
+        listener(state.saveListeners, callback),
       onDidCloseTextDocument: disposable,
       onDidChangeConfiguration: disposable,
       createFileSystemWatcher: () => ({
@@ -136,7 +153,7 @@ vi.mock("../src/preview-controller", () => ({
   },
 }));
 
-import { Uri } from "vscode";
+import { Range, Uri } from "vscode";
 import { activate, deactivate } from "../src/extension";
 
 describe("extension の Tectonic 接続", () => {
@@ -146,6 +163,8 @@ describe("extension の Tectonic 接続", () => {
     for (const item of subscriptions.splice(0)) item.dispose();
     state.activeEditor = undefined;
     state.commands.clear();
+    state.saveListeners.splice(0);
+    state.changeListeners.splice(0);
     vi.clearAllMocks();
   });
 
@@ -206,11 +225,7 @@ describe("extension の Tectonic 接続", () => {
       Uri.file("/project/output.pdf"),
     );
     expect(exportReview).toBeDefined();
-    if (!openFirst) {
-      expect(exportReview?.capture()).toBe(false);
-      state.commands.get("beamerEditor.openPreview")?.();
-    }
-    expect(exportReview?.capture()).toBe(true);
+    if (!openFirst) state.commands.get("beamerEditor.openPreview")?.();
     state.previewOptions?.pdfAction?.("open");
     expect(state.compilePdf).not.toHaveBeenCalled();
     expect(state.postPdfState).toHaveBeenLastCalledWith(
@@ -240,6 +255,113 @@ describe("extension の Tectonic 接続", () => {
     const exportReview = state.exportHost?.beginPdfExport?.(document as ExportDocument, output);
     state.previewOptions?.pdfAction?.("open");
     exportReview?.finish({ size: 1, pdf: Uint8Array.of(7), dependencyPaths: [output.fsPath] });
+    expect(state.postPdfState).toHaveBeenLastCalledWith(
+      "stale",
+      expect.any(Number),
+      expect.objectContaining({ artifactId: 1 }),
+    );
+  });
+
+  it.each([
+    "save",
+    "clean reload",
+  ])("パネルを開く前の %s で別版になった Export 結果は要更新として表示する", (change) => {
+    const document = openPdfTestDocument() as vscode.TextDocument & { getText(): string };
+    let text = "version A";
+    document.getText = () => text;
+    const exportReview = state.exportHost?.beginPdfExport?.(
+      document as ExportDocument,
+      Uri.file("/project/output.pdf"),
+    );
+    text = "version B";
+    if (change === "save") {
+      for (const saved of state.saveListeners) saved(document);
+    } else {
+      // The final listener belongs to the pending Export; call it directly
+      // so unrelated extension listeners do not affect this focused test.
+      const externalReload: vscode.TextDocumentChangeEvent = {
+        document,
+        contentChanges: [
+          {
+            range: new Range(0, 0, 0, 0),
+            rangeOffset: 0,
+            rangeLength: 0,
+            text,
+          },
+        ],
+        reason: undefined,
+      };
+      state.changeListeners.at(-1)?.(externalReload);
+    }
+    state.commands.get("beamerEditor.openPreview")?.();
+    state.previewOptions?.pdfAction?.("open");
+    exportReview?.finish({
+      size: 1,
+      pdf: Uint8Array.of(7),
+      dependencyPaths: [document.uri.fsPath],
+    });
+    expect(state.postPdfState).toHaveBeenLastCalledWith(
+      "stale",
+      expect.any(Number),
+      expect.objectContaining({ artifactId: 1 }),
+    );
+  });
+
+  it("完了した Export はパネルがなくても保存・再読込監視を破棄する", () => {
+    const document = openPdfTestDocument();
+    const saves = state.saveListeners.length;
+    const changes = state.changeListeners.length;
+    const exportReview = state.exportHost?.beginPdfExport?.(
+      document as ExportDocument,
+      Uri.file("/project/output.pdf"),
+    );
+    expect(state.saveListeners).toHaveLength(saves + 1);
+    expect(state.changeListeners).toHaveLength(changes + 1);
+    exportReview?.finish({ size: 1, pdf: Uint8Array.of(7) });
+    expect(state.saveListeners).toHaveLength(saves);
+    expect(state.changeListeners).toHaveLength(changes);
+  });
+
+  it("パネルを開く前の未保存編集だけでは Export 結果を要更新にしない", () => {
+    const document = openPdfTestDocument() as vscode.TextDocument & {
+      getText(): string;
+      isDirty: boolean;
+    };
+    let text = "version A";
+    document.getText = () => text;
+    const exportReview = state.exportHost?.beginPdfExport?.(
+      document as ExportDocument,
+      Uri.file("/project/output.pdf"),
+    );
+    text = "unsaved version B";
+    document.isDirty = true;
+    state.commands.get("beamerEditor.openPreview")?.();
+    state.previewOptions?.pdfAction?.("open");
+    exportReview?.finish({
+      size: 1,
+      pdf: Uint8Array.of(7),
+      dependencyPaths: [document.uri.fsPath],
+    });
+    expect(state.postPdfState).toHaveBeenLastCalledWith(
+      "ready",
+      expect.any(Number),
+      expect.objectContaining({ artifactId: 1, message: expect.stringContaining("未保存") }),
+    );
+  });
+
+  it("依存 symlink の実体への Export も要更新にする", () => {
+    const document = openPdfTestDocument();
+    state.commands.get("beamerEditor.openPreview")?.();
+    const exportReview = state.exportHost?.beginPdfExport?.(
+      document as ExportDocument,
+      Uri.file("/project/figure.pdf"),
+    );
+    state.previewOptions?.pdfAction?.("open");
+    exportReview?.finish({
+      size: 1,
+      pdf: Uint8Array.of(7),
+      dependencyPaths: ["/project/ref.pdf", "/project/figure.pdf"],
+    });
     expect(state.postPdfState).toHaveBeenLastCalledWith(
       "stale",
       expect.any(Number),

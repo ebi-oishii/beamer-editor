@@ -153,7 +153,6 @@ describe("ExportController", () => {
     const received: Uint8Array[] = [];
     const host = createHost({
       beginPdfExport: vi.fn(() => ({
-        capture: () => true,
         finish: (review?: import("@beamer-editor/compiler").PdfExportResult["review"]) => {
           if (review?.pdf) received.push(review.pdf);
         },
@@ -174,7 +173,6 @@ describe("ExportController", () => {
       expect.objectContaining({
         review: {
           maxBytes: 64 * 1024 * 1024,
-          capture: expect.any(Function),
         },
       }),
     );

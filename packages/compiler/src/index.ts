@@ -7,6 +7,7 @@ import {
   lstat,
   mkdtemp,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
@@ -41,8 +42,8 @@ export interface PdfExportRequest {
   timeoutMs?: number;
   /** Tectonic の進捗(初回の TeX パッケージ取得)を受け取る。例外は書き出しに影響しない。 */
   onProgress?: (progress: PdfExportProgress) => void;
-  /** Collect inputs for the review tab and capture bytes if its panel is still needed. */
-  review?: { maxBytes: number; capture: () => boolean };
+  /** Collect inputs and a bounded compiler-owned artifact for the review tab. */
+  review?: { maxBytes: number };
 }
 
 /** `count` は 1 始まりの累計ダウンロード数。 */
@@ -527,6 +528,23 @@ function pdfDependencyPaths(
   });
 }
 
+/**
+ * Preserve the literal names Tectonic reported while adding their resolved
+ * targets. A dependency may be reached through a symlink (`ref.pdf`), while
+ * an export atomically replaces its target (`figure.pdf`). Keeping both names
+ * lets callers invalidate either write without treating unrelated outputs as
+ * dependencies.
+ */
+async function dependencyPathAliases(paths: readonly string[]): Promise<readonly string[]> {
+  const aliases = await Promise.all(
+    paths.map(async (entry) => {
+      const target = await realpath(entry).catch(() => undefined);
+      return target === undefined || target === entry ? [entry] : [entry, target];
+    }),
+  );
+  return [...new Set(aliases.flat())];
+}
+
 async function withCompiledPdf<T>(
   request: Omit<PdfExportRequest, "outputPath" | "overwrite" | "review">,
   dependencies: PdfExportDependencies,
@@ -617,7 +635,10 @@ async function withCompiledPdf<T>(
       const rules = await readCompilationLog(dependencyFile, DEFAULT_DECK_LOG_BYTES_LIMIT).catch(
         () => undefined,
       );
-      if (rules !== undefined) dependencyPaths = pdfDependencyPaths(rules, compiledPdf, inputPath);
+      if (rules !== undefined) {
+        const paths = pdfDependencyPaths(rules, compiledPdf, inputPath);
+        if (paths !== undefined) dependencyPaths = await dependencyPathAliases(paths);
+      }
     }
     throwIfCancelled(signal);
     return await use({
@@ -785,8 +806,11 @@ export async function exportPdf(
       (path) => copyFile(artifact.path, path, constants.COPYFILE_EXCL),
     );
     // Use the immutable compiler output. The user's destination may be replaced at any time.
+    // This is read from the immutable compiler output, never the user-selected
+    // destination. Capture it whenever VS Code requested review data: a panel
+    // can attach after compilation has begun but before this Export completes.
     const pdf =
-      review && artifact.size <= review.maxBytes && review.capture()
+      review && artifact.size <= review.maxBytes
         ? await readFile(artifact.path).catch(() => undefined)
         : undefined;
     return {

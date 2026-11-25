@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import * as path from "node:path";
 import {
   buildFragmentDocument,
@@ -78,8 +79,15 @@ import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 let previewController: PreviewController | undefined;
 const previewLifecycle = new ManagedPreviewLifecycle<PreviewController, vscode.TextDocument>();
 type FinishPdfExport = (review?: PdfExportResult["review"]) => void;
+interface PendingPdfExport {
+  output: string;
+  /** True once the saved text changed after this Export accepted its input. */
+  savedInputChanged: boolean;
+  finishPanel?: FinishPdfExport;
+  dispose(): void;
+}
 const pdfConfirmationExports = new Map<string, (output: string) => FinishPdfExport>();
-const pendingPdfExports = new Map<string, { output: string; finishPanel?: FinishPdfExport }>();
+const pendingPdfExports = new Map<string, PendingPdfExport>();
 
 const LINT_SEVERITIES: Record<LintSeverity, vscode.DiagnosticSeverity> = {
   error: vscode.DiagnosticSeverity.Error,
@@ -340,16 +348,44 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       },
       beginPdfExport: (document, output) => {
         const key = document.uri.toString();
-        const operation: { output: string; finishPanel?: FinishPdfExport } = {
+        let sourceText: string | undefined;
+        try {
+          sourceText = document.getText();
+        } catch {
+          sourceText = undefined;
+        }
+        const operation: PendingPdfExport = {
           output: output.fsPath,
+          savedInputChanged: false,
+          dispose: () => {},
+        };
+        const recordSavedInput = (saved: ExportDocument) => {
+          if (saved.uri.toString() !== key || sourceText === undefined) return;
+          try {
+            if (saved.getText() !== sourceText) operation.savedInputChanged = true;
+          } catch {
+            // The export result remains usable when VS Code cannot read a
+            // transient document; do not invent a stale saved revision.
+          }
+        };
+        const saveSubscription = vscode.workspace.onDidSaveTextDocument((saved) =>
+          recordSavedInput(saved as ExportDocument),
+        );
+        const cleanReloadSubscription = vscode.workspace.onDidChangeTextDocument((event) => {
+          if (!event.document.isDirty && event.contentChanges.length)
+            recordSavedInput(event.document as ExportDocument);
+        });
+        operation.dispose = () => {
+          saveSubscription.dispose();
+          cleanReloadSubscription.dispose();
         };
         pendingPdfExports.set(key, operation);
         const finishPanel = pdfConfirmationExports.get(key)?.(output.fsPath);
         if (finishPanel) operation.finishPanel = finishPanel;
         return {
-          capture: () => operation.finishPanel !== undefined,
           finish: (review) => {
             pendingPdfExports.delete(key);
+            operation.dispose();
             operation.finishPanel?.(review);
           },
         };
@@ -964,8 +1000,22 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         postPdf();
       }
     };
-    const mayReadPdfOutput = (output: string, dependencies: readonly string[] | undefined) =>
-      dependencies === undefined || dependencies.includes(path.resolve(output));
+    const mayReadPdfOutput = (output: string, dependencies: readonly string[] | undefined) => {
+      if (dependencies === undefined) return true;
+      const lexical = path.resolve(output);
+      // `publishPdf` atomically replaces the final entry. Resolve only its
+      // parent so a pre-existing symlink leaf keeps its lexical identity while
+      // an aliased directory still matches a resolved dependency target.
+      let parentAlias: string | undefined;
+      try {
+        parentAlias = path.join(realpathSync(path.dirname(lexical)), path.basename(lexical));
+      } catch {
+        parentAlias = undefined;
+      }
+      return dependencies.some(
+        (dependency) => dependency === lexical || dependency === parentAlias,
+      );
+    };
     const saveDisplayedPdf = async (artifactId: number | undefined) => {
       const displayed = pdfBytes;
       if (!vscode.workspace.isTrusted || !displayed) return;
@@ -1254,7 +1304,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         },
       },
     );
-    const beginPanelExport = (output: string): FinishPdfExport => {
+    const beginPanelExport = (output: string, savedInputChanged = false): FinishPdfExport => {
       // A normal Export saves first. Its later result must outrank an older
       // confirmation compile that happens to finish afterwards.
       const request = ++pdfRequest;
@@ -1264,6 +1314,10 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       pdfAbort = undefined;
       pdfFailure = undefined;
       pdfTooLarge = false;
+      // A normal Export may have started before this panel existed. Only a
+      // later saved/reloaded input makes that result stale; unsaved edits have
+      // their own label and must not change the saved revision.
+      if (savedInputChanged) markPdfStale();
       postPdf();
       const finishPublication = pdfPublications.begin(output);
       return (review) => {
@@ -1284,7 +1338,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     const pdfDocumentKey = document.uri.toString();
     pdfConfirmationExports.set(pdfDocumentKey, beginPanelExport);
     const pendingPdfExport = pendingPdfExports.get(pdfDocumentKey);
-    if (pendingPdfExport) pendingPdfExport.finishPanel = beginPanelExport(pendingPdfExport.output);
+    if (pendingPdfExport)
+      pendingPdfExport.finishPanel = beginPanelExport(
+        pendingPdfExport.output,
+        pendingPdfExport.savedInputChanged,
+      );
     const refreshTemplates = (changed: vscode.Uri) => {
       // 画像や .sty が足されたり直ったりしたときは、失敗していた生ブロックも次の描画で再試行する。
       rawBlockCompiler.resetFailures();
