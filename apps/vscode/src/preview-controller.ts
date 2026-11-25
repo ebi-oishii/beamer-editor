@@ -11,7 +11,7 @@ import { parseWebviewToExtension } from "@beamer-editor/ui";
 import type * as vscode from "vscode";
 import { type RenderOutcome, renderDocument } from "./document-controller";
 import { frameIndexAtSourceOffset } from "./reveal-slide";
-import { resolveJumpOffset } from "./source-navigation";
+import { resolveElementJumpOffset, resolveJumpOffset } from "./source-navigation";
 
 /**
  * PreviewController が必要とする Webview 面。実 vscode.Webview はこれらを満たす。
@@ -420,7 +420,7 @@ export class PreviewController implements vscode.Disposable {
       this.onWebviewReady();
       this.sendDeck();
     } else if (msg.type === "jumpToSource") {
-      this.handleJump(msg.frameIndex, msg.version);
+      this.handleJump(msg.frameIndex, msg.version, msg.sourceOffset);
     } else if (msg.type === "resizeCanvasElement" || msg.type === "setCanvasFontSize") {
       await this.handleCanvasStyle(msg);
     } else if (msg.type === "moveCanvasElement") {
@@ -970,14 +970,15 @@ export class PreviewController implements vscode.Disposable {
   /**
    * プレビューからのソースジャンプ(VS-4)。プレビューが古い文書バージョンを参照して
    * いた場合(未 debounce の編集が保留中の場合を含む)は移動せず、再描画だけを送る。
+   * ダブルクリックした要素の位置があればそこへ、無ければフレーム先頭へ移動する(#186)。
    */
-  private handleJump(frameIndex: number, version: number): void {
+  private handleJump(frameIndex: number, version: number, sourceOffset?: number): void {
     const latest = this.latest;
     if (!latest || version !== this.document.version || latest.version !== this.document.version) {
       this.sendDeck();
       return;
     }
-    const offset = resolveJumpOffset(latest, frameIndex);
+    const offset = resolveElementJumpOffset(latest, frameIndex, sourceOffset);
     if (offset === null) return;
     this.navigate(offset);
   }

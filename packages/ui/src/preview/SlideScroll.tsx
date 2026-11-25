@@ -58,6 +58,18 @@ export interface RevealRequest {
   token: number;
 }
 
+/**
+ * ダブルクリックした要素(内側から最初に見つかるもの)の、展開後ソース上の開始位置(#186)。
+ * 余白・背景など位置を持つ要素が無ければ undefined で、host はフレーム先頭へ移動する。
+ */
+function sourceOffsetAt(target: EventTarget, card: HTMLElement): number | undefined {
+  if (!(target instanceof Element)) return undefined;
+  const element = target.closest<HTMLElement>("[data-source-start]");
+  if (!element || !card.contains(element)) return undefined;
+  const offset = Number(element.dataset.sourceStart);
+  return Number.isInteger(offset) && offset >= 0 ? offset : undefined;
+}
+
 function SlideCard({
   frame,
   index,
@@ -85,7 +97,7 @@ function SlideCard({
   slideSize: SlideSize;
   version: number;
   onSelect: (index: number) => void;
-  onJump: (index: number) => void;
+  onJump: (index: number, sourceOffset?: number) => void;
   onOpenOrderMenu?: ((index: number, x: number, y: number) => void) | undefined;
   cardRef?: (element: HTMLElement | null) => void;
   onSetCanvasFontSize?:
@@ -127,7 +139,7 @@ function SlideCard({
       aria-current={active ? true : undefined}
       aria-label={`フレーム ${frame.index}: ${frame.titleText}（Enter で選択、${MODIFIER_LABEL}+Enter でソースへ移動）`}
       onClick={() => onSelect(index)}
-      onDoubleClick={() => onJump(index)}
+      onDoubleClick={(event) => onJump(index, sourceOffsetAt(event.target, event.currentTarget))}
       onKeyDown={handleKeyDown}
     >
       <div className="slide-card-select">
@@ -201,7 +213,7 @@ export function SlideScroll({
   version: number;
   reveal: RevealRequest | undefined;
   onSelect: (index: number) => void;
-  onJump: (index: number) => void;
+  onJump: (index: number, sourceOffset?: number) => void;
   onEditSlide?: ((action: "moveUp" | "moveDown", index: number) => void) | undefined;
   editableFrameIndexes: number[];
   /** スライド移動後、ホストが確認した移動先カードだけへフォーカスを戻す。 */

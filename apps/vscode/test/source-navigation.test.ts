@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { renderDocument } from "../src/document-controller";
-import { resolveJumpOffset, resolveSourceViewColumn } from "../src/source-navigation";
+import {
+  resolveElementJumpOffset,
+  resolveJumpOffset,
+  resolveSourceViewColumn,
+} from "../src/source-navigation";
 
 function fixture(name: string): string {
   return readFileSync(fileURLToPath(new URL(`../../../fixtures/${name}`, import.meta.url)), "utf8");
@@ -41,6 +45,42 @@ describe("resolveJumpOffset", () => {
 
     expect(resolveJumpOffset(outcome, 99)).toBeNull();
     expect(resolveJumpOffset(outcome, -1)).toBeNull();
+  });
+});
+
+describe("resolveElementJumpOffset", () => {
+  /** フレームの html に出た data-source-start(展開後座標)を順に返す。 */
+  const sourceStarts = (html: string, tag: string) =>
+    [...html.matchAll(new RegExp(`<${tag} data-source-start="(\\d+)"`, "g"))].map((m) =>
+      Number(m[1]),
+    );
+
+  it("プレビューの要素の位置を、マクロ展開の前の元ソースの位置へ戻す(#186)", () => {
+    const source = fixture("macros.slide.tex");
+    const outcome = renderDocument(source, 1);
+    const index = outcome.deck.frames.findIndex(
+      (frame) => frame.titleText === "Macros with arguments",
+    );
+    const frame = outcome.deck.frames[index];
+    if (!frame) throw new Error("frame missing");
+    const items = sourceStarts(frame.html, "li");
+    expect(items).toHaveLength(2);
+    // 2 つ目の項目より前で \\code などが展開され、展開後と元ソースの位置がずれている。
+    expect(
+      items.map((offset) =>
+        source.slice(resolveElementJumpOffset(outcome, index, offset) ?? 0).slice(0, 22),
+      ),
+    ).toEqual(["\\item \\code{deck forma", "\\item Nested calls: \\c"]);
+  });
+
+  it("位置が無いかフレームの外を指すときは、フレームの先頭へ戻す", () => {
+    const source = fixture("macros.slide.tex");
+    const outcome = renderDocument(source, 1);
+    const frameStart = resolveJumpOffset(outcome, 2);
+    expect(resolveElementJumpOffset(outcome, 2, undefined)).toBe(frameStart);
+    expect(resolveElementJumpOffset(outcome, 2, 0)).toBe(frameStart);
+    expect(resolveElementJumpOffset(outcome, 2, 10 ** 9)).toBe(frameStart);
+    expect(resolveElementJumpOffset(outcome, 99, 0)).toBeNull();
   });
 });
 

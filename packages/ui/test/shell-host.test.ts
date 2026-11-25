@@ -130,11 +130,13 @@ describe("createMessageShellHost", () => {
 
     host.ready();
     host.jumpToSource(3, 5);
+    host.jumpToSource(3, 5, 120);
     host.notifyActiveFrame(1);
 
     expect(posted).toEqual([
       { type: "ready" },
       { type: "jumpToSource", frameIndex: 3, version: 5 },
+      { type: "jumpToSource", frameIndex: 3, version: 5, sourceOffset: 120 },
       { type: "activeFrameChanged", frameIndex: 1 },
     ]);
   });

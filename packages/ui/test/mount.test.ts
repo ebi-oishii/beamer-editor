@@ -1133,6 +1133,40 @@ describe("mountPreview", () => {
     expect(jumpToSource).toHaveBeenLastCalledWith(1, 1);
   });
 
+  it("ダブルクリックした要素の位置をジャンプに添え、位置の無い所ではフレームだけを渡す(#186)", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const jumpToSource = vi.fn();
+    const host = { ...fakeHost(), jumpToSource };
+
+    act(() => {
+      mountPreview(container, host);
+    });
+    act(() => {
+      host.push(DECK);
+    });
+
+    const dblclick = (selector: string, text: string) => {
+      const target = [...container.querySelectorAll<HTMLElement>(selector)].find(
+        (element) => element.textContent === text,
+      );
+      if (!target) throw new Error(`missing ${text}`);
+      act(() => {
+        target.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      });
+    };
+    // 内側から最初に位置を持つ要素(ブロックの中の段落、入れ子のリスト)。
+    dblclick("p", "inner p");
+    expect(jumpToSource).toHaveBeenLastCalledWith(0, 1, 100);
+    dblclick("span", "inner");
+    expect(jumpToSource).toHaveBeenLastCalledWith(0, 1, 45);
+    // 位置を持つ要素が無い所(余白・位置の無い段落)は従来どおりフレームだけ。
+    dblclick("p", "hi");
+    expect(jumpToSource).toHaveBeenLastCalledWith(0, 1);
+    dblclick("p", "bye");
+    expect(jumpToSource).toHaveBeenLastCalledWith(1, 1);
+  });
+
   it("全フレームを縦一列に描画し、現在フレームだけに step を適用する", () => {
     const container = document.createElement("div");
     document.body.append(container);
