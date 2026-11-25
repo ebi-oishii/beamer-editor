@@ -1,6 +1,6 @@
 # スタイル設計(指定フォーマットへのその場対応)
 
-ステータス: proposed decision / 最終更新: 2026-07-14
+ステータス: proposed decision / 最終更新: 2026-10-10
 
 社用スライドなどで強制される特定のスタイル(色・フォント・ロゴ・フッター・表紙様式)を、**事前のテーマ整備なしに、渡されたフォーマットへその場で柔軟に合わせられる**ようにする設計。
 
@@ -67,6 +67,8 @@
 - **指定**: `%% preamble-extra` に `\usetheme{Name}`(同じディレクトリ)または `\usepackage{templates/<name>/beamertheme<name>}`(サブフォルダ)を書く。テーマの README に書いてある行をそのまま貼れる
 - **画像パス**: `.sty` 内の `\includegraphics` は TeX の規則どおりコンパイル時の CWD(= デッキのディレクトリ)基準。`templates/<name>/assets/...` のように書く
 - **プレビュー**: `.sty` と preamble-extra から `\definecolor` / `\colorlet`、`\setbeamercolor` の structure・alerted text・example text・normal text・background canvas、`\setsansfont` / `\setmainfont` / `\setmonofont`、`\logo{\includegraphics...}`(`\pgfdeclareimage` + `\pgfuseimage` 含む)、`\usebackgroundtemplate` / `\setbeamertemplate{background}` / `{background canvas}` / `\addtobeamertemplate{background}` / `{background canvas}`(前・後どちらの引数の画像も背景とみなす)を抽出して近似する。書き方の揺れは吸収する: コマンド名と引数の間・引数どうしの間の空白・改行・`%` コメントは許す(空行は越えない。TeX が引数探索を `\par` で打ち切るのと同じ)、`\graphicspath{{images/}}` の探索ディレクトリはデッキのディレクトリ基準で先に探したあとに順に試す(デッキ配下に限る点は変わらない。L023 の判定も同じ)、`\newcommand{\bgimage}{bg.png}` / `\def\bgimage{bg.png}` と `\includegraphics{\bgimage}` の組は素の文字列に限って展開する。`\graphicspath` はプリアンブル全体で積み上がるので、複数のファイルにあれば供給元を区別せず連結して使う。`%% style` 領域はこれを上書きする。footline や表紙の様式など、それ以外は PDF 専用(近似の限界は Phase 6 のコンパイル画像で埋める)。PDF 形式の背景・ロゴはプレビューに出ない
+  - **ブロックの見た目(#193)**: `\setbeamercolor` の block title / block body(alerted / example 含む)の fg・bg と、`\setbeamertemplate{blocks}[rounded][shadow=true]` / `[default]`・`\useinnertheme[shadow]{rounded}` の形も読む。title の bg は色帯、body の bg は色付きの箱になり、rounded は角丸、shadow は右下の影で近似する(寸法は Beamer の `beamerboxesrounded` に合わせた近似。帯と箱の間のグラデーションやブロックタイトルの文字サイズは再現しない)。継承は Beamer 既定の色テーマ(`beamercolorthemedefault.sty`)どおり: title の fg が無ければその種類の文字色(structure / alerted text / example text)、alerted / example の title・body は block title / block body を**継がない**。`%% style` 語彙は増やさない(ブロックの色は生スタイルの近似としてだけ扱う)
+  - **色式とフォールバック**: 色名(xcolor の基本色・`\definecolor`・`\colorlet` の名前)と 6 桁の 16 進に加え、xcolor の混色 `a!p!b`・`a!p`(残りは white)・連鎖 `a!p1!b!p2!c`(左から順)を RGB の線形補間で読む。補色 `-red`、`rgb:...` などのモデル指定、`structure.fg` のような色の参照、未定義の色名は読まない。block title / body の指定に解釈不能な `bg` があれば、その部位の fg も採用せず既定の読みやすい表示へ戻す(白い fg だけが白地に残るのを防ぐ)。このリセットは複数の `.sty` と preamble-extra をまたいでも後の指定として効く。`fg` だけの指定はそのまま採用する
 - **診断**: 参照先 `.sty` が無い(L022)、`.sty` が参照する画像が無い(L023)をデッキ側の参照行に出す。`\usetheme{X}` の不在は info(TeX 配布に含まれるテーマならコンパイルは通る)、パスで指した `\usepackage` の不在は warning
 - **土台が拾うのは preamble-extra と `.sty` だけ**: 背景指定をそれ以外(ツール管理プリアンブルの中・プリアンブルの管理領域の外・フレームの間・フレームの中。`deck*` マクロ定義の本文を除く)に書くと PDF にだけ効く(L024。上記)。表紙だけ背景を変えたいときは `%% style` の `\deckbackground[title]{path}` を使う(土台の背景は全スライド用だけを持つ)
 - **更新**: `.sty` や画像を変えるとプレビューと診断を作り直す(キャッシュは持たない)

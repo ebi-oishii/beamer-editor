@@ -6,7 +6,7 @@
  * 開発用 chrome を残し、LocalShellHost 経由で ui へレンダリング済み deck を流し込む。
  */
 
-import { parseDeck } from "@beamer-editor/core";
+import { extractPreviewStyle, parseDeck } from "@beamer-editor/core";
 import { type RenderedDeck, renderDeck } from "@beamer-editor/renderer";
 import { mountPreview, type ShellHost } from "@beamer-editor/ui";
 import "katex/dist/katex.min.css";
@@ -96,7 +96,11 @@ let version = 0;
 
 function reparse(source: string): void {
   try {
-    const deck = renderDeck(parseDeck(source));
+    const doc = parseDeck(source);
+    // テンプレート(.sty)は読まないが、preamble-extra の標準記法(色・ブロックの見た目等)は近似する。
+    const deck = renderDeck(doc, undefined, {
+      baseStyle: extractPreviewStyle(doc.preambleExtra.tex),
+    });
     docTitleEl.textContent = deck.title;
     host.push(deck, ++version);
   } catch (err) {
