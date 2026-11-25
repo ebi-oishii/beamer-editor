@@ -20,6 +20,11 @@ jobs:
       - run: pnpm check:skills
       - run: pnpm lint
       - run: pnpm typecheck
+      - name: 日本語 PDF 描画テスト用のフォントをインストール
+        # テスト用 PDF は和文フォントを埋め込まず、ランナーのフォントで描画する。
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
       - run: pnpm test
       # VS Code 拡張のバンドル(Extension Host + Webview)が壊れていないことを確認
       - run: pnpm --dir apps/vscode build
