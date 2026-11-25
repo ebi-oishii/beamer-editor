@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import type { compileFragment, PdfReviewContent } from "@beamer-editor/compiler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as vscode from "vscode";
@@ -19,6 +21,10 @@ const state = vi.hoisted(() => ({
   postPdfState: vi.fn(),
   getConfiguration: vi.fn(),
   fileChanges: [] as Array<(uri: vscode.Uri) => void>,
+  fileCreates: [] as Array<(uri: vscode.Uri) => void>,
+  fileDeletes: [] as Array<(uri: vscode.Uri) => void>,
+  watchedFiles: new Map<string, Uint8Array>(),
+  temporaryDirectories: [] as string[],
   refreshPreview: vi.fn(),
   pdfIdentity: vi.fn<() => Promise<string | undefined>>(),
   saveListeners: [] as Array<(document: vscode.TextDocument) => void>,
@@ -93,9 +99,21 @@ vi.mock("vscode", () => {
       createFileSystemWatcher: () => ({
         ...disposable(),
         onDidChange: (callback: (uri: vscode.Uri) => void) => listener(state.fileChanges, callback),
-        onDidCreate: disposable,
-        onDidDelete: disposable,
+        onDidCreate: (callback: (uri: vscode.Uri) => void) => listener(state.fileCreates, callback),
+        onDidDelete: (callback: (uri: vscode.Uri) => void) => listener(state.fileDeletes, callback),
       }),
+      fs: {
+        stat: async (uri: { fsPath: string }) => {
+          const data = state.watchedFiles.get(uri.fsPath);
+          if (!data) throw new Error("not found");
+          return { type: 1, mtime: 0, size: data.byteLength };
+        },
+        readFile: async (uri: { fsPath: string }) => {
+          const data = state.watchedFiles.get(uri.fsPath);
+          if (!data) throw new Error("not found");
+          return data;
+        },
+      },
     },
     languages: {
       createDiagnosticCollection: disposable,
@@ -141,6 +159,8 @@ vi.mock("../src/raw-block-compiler", async (original) => ({
       state.rawHost = host;
     }
     dispose() {}
+    pause() {}
+    resume() {}
     forgetDelivered() {}
     resetFailures() {}
   },
@@ -174,6 +194,11 @@ describe("extension の Tectonic 接続", () => {
     state.commands.clear();
     state.saveListeners.splice(0);
     state.fileChanges.splice(0);
+    state.fileCreates.splice(0);
+    state.fileDeletes.splice(0);
+    state.watchedFiles.clear();
+    for (const directory of state.temporaryDirectories.splice(0))
+      rmSync(directory, { recursive: true, force: true });
     state.changeListeners.splice(0);
     state.configurationListeners.splice(0);
     vi.clearAllMocks();
@@ -277,6 +302,135 @@ describe("extension の Tectonic 接続", () => {
       expect.any(Number),
       expect.objectContaining({ artifactId: 1 }),
     );
+  });
+
+  it("現在の組版ログで非参照と証明できる外部 PDF の変更はプレビュー更新を起こさない", async () => {
+    const document = openPdfTestDocument();
+    state.compilePdf.mockResolvedValue({
+      inputPath: document.uri.fsPath,
+      engineVersion: "0.17.0",
+      pdf: Uint8Array.of(7),
+      dependencyPaths: [document.uri.fsPath, "/project/figure.pdf"],
+    });
+    state.commands.get("beamerEditor.openPreview")?.();
+    showPdf();
+    await vi.waitFor(() => expect(state.postPdfState.mock.lastCall?.[0]).toBe("ready"));
+    state.refreshPreview.mockClear();
+    const watcher = state.fileChanges.at(-1);
+    watcher?.(Uri.file("/project/external-unrelated.pdf"));
+    expect(state.refreshPreview).not.toHaveBeenCalled();
+
+    watcher?.(Uri.file("/project/figure.pdf"));
+    expect(state.refreshPreview).toHaveBeenCalledOnce();
+  });
+
+  it("無関係な PDF の作成は現在の組版ログと保存済み本文から除外する", async () => {
+    const document = openPdfTestDocument();
+    state.compilePdf.mockResolvedValue({
+      inputPath: document.uri.fsPath,
+      engineVersion: "0.17.0",
+      pdf: Uint8Array.of(7),
+      dependencyPaths: [document.uri.fsPath, "/project/figure.pdf"],
+    });
+    state.commands.get("beamerEditor.openPreview")?.();
+    showPdf();
+    await vi.waitFor(() => expect(state.postPdfState.mock.lastCall?.[0]).toBe("ready"));
+    state.refreshPreview.mockClear();
+    state.fileCreates.at(-1)?.(Uri.file("/project/external-unrelated.pdf"));
+    await vi.waitFor(() => expect(state.refreshPreview).not.toHaveBeenCalled());
+  });
+
+  it.each([
+    ["\\IfFileExists{optional.pdf}{}{ }", "/project/optional.pdf"],
+    ["\\includegraphics{figure}", "/project/figure.pdf"],
+  ])("作成で参照先になり得る PDF は更新する (%s)", async (source, created) => {
+    const document = openPdfTestDocument() as vscode.TextDocument & { getText(): string };
+    document.getText = () => source;
+    state.compilePdf.mockResolvedValue({
+      inputPath: document.uri.fsPath,
+      engineVersion: "0.17.0",
+      pdf: Uint8Array.of(7),
+      dependencyPaths: [document.uri.fsPath],
+    });
+    state.commands.get("beamerEditor.openPreview")?.();
+    showPdf();
+    await vi.waitFor(() => expect(state.postPdfState.mock.lastCall?.[0]).toBe("ready"));
+    state.refreshPreview.mockClear();
+    state.fileCreates.at(-1)?.(Uri.file(created));
+    await vi.waitFor(() => expect(state.refreshPreview).toHaveBeenCalledOnce());
+  });
+
+  it("追跡済み画像と同じ stem の PDF 作成は、マクロ経由の拡張子省略参照として更新する", async () => {
+    const document = openPdfTestDocument();
+    state.compilePdf.mockResolvedValue({
+      inputPath: document.uri.fsPath,
+      engineVersion: "0.17.0",
+      pdf: Uint8Array.of(7),
+      dependencyPaths: [document.uri.fsPath, "/project/assets/figure.png"],
+    });
+    state.commands.get("beamerEditor.openPreview")?.();
+    showPdf();
+    await vi.waitFor(() => expect(state.postPdfState.mock.lastCall?.[0]).toBe("ready"));
+    state.refreshPreview.mockClear();
+    state.fileCreates.at(-1)?.(Uri.file("/project/other-path/figure.pdf"));
+    await vi.waitFor(() => expect(state.refreshPreview).toHaveBeenCalledOnce());
+  });
+
+  it("ローカル style の参照先になり得る PDF の作成は更新する", async () => {
+    const document = openPdfTestDocument();
+    state.watchedFiles.set(
+      "/project/theme.sty",
+      new TextEncoder().encode("\\IfFileExists{style-optional.pdf}{}{ }"),
+    );
+    state.compilePdf.mockResolvedValue({
+      inputPath: document.uri.fsPath,
+      engineVersion: "0.17.0",
+      pdf: Uint8Array.of(7),
+      dependencyPaths: [document.uri.fsPath, "/project/theme.sty"],
+    });
+    state.commands.get("beamerEditor.openPreview")?.();
+    showPdf();
+    await vi.waitFor(() => expect(state.postPdfState.mock.lastCall?.[0]).toBe("ready"));
+    state.refreshPreview.mockClear();
+    state.fileCreates.at(-1)?.(Uri.file("/project/style-optional.pdf"));
+    await vi.waitFor(() => expect(state.refreshPreview).toHaveBeenCalledOnce());
+  });
+
+  it("別 symlink 名から依存 PDF を更新しても監視する", async () => {
+    const temporary = mkdtempSync(join(tmpdir(), "beamer-editor-watcher-"));
+    state.temporaryDirectories.push(temporary);
+    const target = join(temporary, "figure.pdf");
+    const alias = join(temporary, "alias.pdf");
+    writeFileSync(target, "PDF");
+    symlinkSync(target, alias);
+    const document = openPdfTestDocument();
+    state.compilePdf.mockResolvedValue({
+      inputPath: document.uri.fsPath,
+      engineVersion: "0.17.0",
+      pdf: Uint8Array.of(7),
+      dependencyPaths: [document.uri.fsPath, realpathSync(target)],
+    });
+    state.commands.get("beamerEditor.openPreview")?.();
+    showPdf();
+    await vi.waitFor(() => expect(state.postPdfState.mock.lastCall?.[0]).toBe("ready"));
+    state.refreshPreview.mockClear();
+    state.fileChanges.at(-1)?.(Uri.file(alias));
+    expect(state.refreshPreview).toHaveBeenCalledOnce();
+  });
+
+  it("依存一覧が不明な外部 PDF は安全側でプレビュー更新する", async () => {
+    const document = openPdfTestDocument();
+    state.compilePdf.mockResolvedValue({
+      inputPath: document.uri.fsPath,
+      engineVersion: "0.17.0",
+      pdf: Uint8Array.of(7),
+    });
+    state.commands.get("beamerEditor.openPreview")?.();
+    showPdf();
+    await vi.waitFor(() => expect(state.postPdfState.mock.lastCall?.[0]).toBe("ready"));
+    state.refreshPreview.mockClear();
+    state.fileChanges.at(-1)?.(Uri.file("/project/external-unknown.pdf"));
+    expect(state.refreshPreview).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -570,6 +724,7 @@ describe("extension の Tectonic 接続", () => {
       uri: Uri.file("/project/deck.slide.tex"),
       fileName: "/project/deck.slide.tex",
       isDirty: false,
+      getText: () => "",
     } as vscode.TextDocument;
     activate({
       extensionPath: "/extension",

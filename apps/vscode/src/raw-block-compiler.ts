@@ -69,6 +69,9 @@ export class RawBlockCompiler {
   private disposed = false;
   /** エンジンが使えないと分かった後は、reset() まで何もしない。 */
   private unavailable = false;
+  /** PDF 確認中は部分コンパイルを起動しない。最後の要求だけ保持して編集タブで戻す。 */
+  private paused = false;
+  private latestRequest: { blocks: readonly RawBlockRef[]; preamble: string } | undefined;
   /** reset() ごとに進む世代。処理の途中で変わっていたら、その処理の結果は捨てる。 */
   private generation = 0;
   /** 今 process しているジョブ。同じ世代の未キャンセル job とだけ重複を抑止する。 */
@@ -79,6 +82,7 @@ export class RawBlockCompiler {
   /** 描画結果の生ブロック一覧。最新に無い key は待ち行列から落とし、まだ無いものだけを入れる。 */
   request(blocks: readonly RawBlockRef[], preamble: string): void {
     if (this.disposed || this.unavailable) return;
+    this.latestRequest = { blocks, preamble };
     this.wanted.clear();
     for (const block of blocks) this.wanted.add(block.key);
     for (const [cacheName, key] of this.done)
@@ -92,6 +96,7 @@ export class RawBlockCompiler {
       this.queue.splice(i, 1);
     }
     if (this.current && !this.wanted.has(this.current.key)) this.cancel(this.current);
+    if (this.paused) return;
     for (const block of blocks) {
       const inFlightSameGeneration = this.current?.key === block.key && !this.current.cancelled;
       if (this.queued.has(block.key) || inFlightSameGeneration) continue;
@@ -106,6 +111,27 @@ export class RawBlockCompiler {
       });
     }
     void this.pump();
+  }
+
+  /**
+   * 新しい fragment の起動を止め、待機中・前処理中の古い仕事を捨てる。
+   * 成功/失敗キャッシュは残し、resume() が最後に要求された本文から復帰する。
+   */
+  pause(): void {
+    if (this.disposed || this.paused) return;
+    this.paused = true;
+    this.queue.length = 0;
+    this.queued.clear();
+    this.wanted.clear();
+    if (this.current) this.cancel(this.current);
+  }
+
+  /** pause 中に受けた最新の要求だけをキューに戻す。 */
+  resume(): void {
+    if (this.disposed || !this.paused) return;
+    this.paused = false;
+    const request = this.latestRequest;
+    if (request) this.request(request.blocks, request.preamble);
   }
 
   /** 失敗の記録を消す。テンプレート・画像などの外部ファイルが変わったときに呼び、次の描画で再試行させる。 */
@@ -134,6 +160,7 @@ export class RawBlockCompiler {
     this.failed.clear();
     this.done.clear();
     this.wanted.clear();
+    this.latestRequest = undefined;
     this.queue.length = 0;
     this.queued.clear();
     if (this.current) this.cancel(this.current);
@@ -144,6 +171,7 @@ export class RawBlockCompiler {
     this.queue.length = 0;
     this.queued.clear();
     this.wanted.clear();
+    this.latestRequest = undefined;
     if (this.current) this.cancel(this.current);
   }
 
@@ -151,7 +179,7 @@ export class RawBlockCompiler {
     if (this.running) return;
     this.running = true;
     try {
-      while (!this.disposed) {
+      while (!this.disposed && !this.paused) {
         const job = this.queue.shift();
         if (!job) break;
         this.queued.delete(job.key);
@@ -168,7 +196,11 @@ export class RawBlockCompiler {
     this.current = job;
     /** dispose / reset されたか、最新の描画にこの key がもう無い。 */
     const drop = () =>
-      job.cancelled || this.disposed || generation !== this.generation || !this.wanted.has(job.key);
+      job.cancelled ||
+      this.disposed ||
+      this.paused ||
+      generation !== this.generation ||
+      !this.wanted.has(job.key);
     try {
       let fingerprint = "";
       try {

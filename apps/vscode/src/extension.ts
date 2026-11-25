@@ -942,6 +942,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     let pdfAbort: AbortController | undefined;
     let pdfInputRevision = 0;
     let pdfCompiledRevision = 0;
+    let panelDisposed = false;
     let pdfDependencyPaths: readonly string[] | undefined;
     let pendingPdf:
       | {
@@ -955,6 +956,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     const requestRawBlocks = (outcome: ReturnType<typeof renderDocument>) => {
       if (pdfTabVisible || !rawBlocksEnabled()) return;
       rawBlockCompiler.request(outcome.deck.rawBlocks ?? [], outcome.deck.fragmentPreamble ?? "");
+      // request が pause 中の最後の本文を置き換えてから再開する。
+      rawBlockCompiler.resume();
     };
     const postPdf = () => {
       if (!pdfOpened) return;
@@ -1135,6 +1138,98 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         (dependency) => dependency === lexical || dependency === parentAlias,
       );
     };
+    /**
+     * FileSystemWatcher の通知先は原子的な公開先とは違い、別名の symlink leaf
+     * になることがある。公開先の照合規則は変えず、監視時だけ既存 leaf の実体も照合する。
+     */
+    const watchesPdfInput = (changed: string, dependencies: readonly string[]) => {
+      if (mayReadPdfOutput(changed, dependencies)) return true;
+      try {
+        return dependencies.includes(realpathSync(changed));
+      } catch {
+        return false;
+      }
+    };
+    const watcherDependencies = () => {
+      if (pdfDirty) return undefined;
+      if (pendingPdf?.inputRevision === pdfInputRevision) return pendingPdf.dependencyPaths;
+      if (pdfBytes !== undefined && pdfCompiledRevision === pdfInputRevision)
+        return pdfDependencyPaths;
+      return undefined;
+    };
+    const isTextualDependency = (entry: string) => /\.(?:tex|sty|cls|def)$/i.test(entry);
+    const isImageDependency = (entry: string) => /\.(?:png|jpe?g)$/i.test(entry);
+    const MAX_WATCH_TEXT_BYTES = 1024 * 1024;
+    const dynamicExistenceProbe =
+      /\\(?:IfFileExists|InputIfFileExists|openin)\b(?!\s*(?:\[[^\]]*\]\s*)?\{[^{}\\#]*\})/;
+    /**
+     * Tectonic が前回読まなかった PDF でも、作成によって extensionless の画像や
+     * IfFileExists が解決することがある。保存済み入力とそのローカル文字列依存に
+     * basename が無ければ無関係とみなす。式で組み立てた名前はこの初期段階では
+     * 静的に証明できないため、存在確認系の動的引数は更新側へ倒す。
+     */
+    const mayReferenceCreatedPdf = async (changed: string, dependencies: readonly string[]) => {
+      const stem = path.basename(changed, path.extname(changed)).toLowerCase();
+      // `\includegraphics{figure}` が以前は PNG を選んでいても、新しい
+      // `figure.pdf` が探索順で選ばれることがある。本文に stem が無いマクロ経由の
+      // 参照もあるため、既知の画像入力の basename も保守的に照合する。
+      if (
+        dependencies.some(
+          (dependency) =>
+            isImageDependency(dependency) &&
+            path.basename(dependency, path.extname(dependency)).toLowerCase() === stem,
+        )
+      )
+        return true;
+      const hasReference = (input: string) => {
+        const lower = input.toLowerCase();
+        return lower.includes(stem) || dynamicExistenceProbe.test(input);
+      };
+      const currentDocument =
+        vscode.workspace.textDocuments.find(
+          (candidate) => candidate.uri.toString() === document.uri.toString(),
+        ) ?? document;
+      if (hasReference(currentDocument.getText())) return true;
+      try {
+        for (const dependency of dependencies) {
+          if (path.resolve(dependency) === path.resolve(document.uri.fsPath)) continue;
+          if (!isTextualDependency(dependency)) continue;
+          const info = await vscode.workspace.fs.stat(vscode.Uri.file(dependency));
+          if (info.size > MAX_WATCH_TEXT_BYTES) return true;
+          const text = new TextDecoder("utf-8", { fatal: true }).decode(
+            await vscode.workspace.fs.readFile(vscode.Uri.file(dependency)),
+          );
+          if (hasReference(text)) return true;
+        }
+      } catch {
+        return true;
+      }
+      return false;
+    };
+    /**
+     * 現在の保存済み入力の組版ログに対応する依存一覧だけを使って、無関係な
+     * PDF 通知を早期に捨てる。未保存編集・古い結果・不明な依存一覧は安全側で監視する。
+     */
+    const isProvenUnreferencedPdf = (changed: string) => {
+      if (path.extname(changed).toLowerCase() !== ".pdf") return false;
+      const dependencies = watcherDependencies();
+      if (dependencies === undefined || watchesPdfInput(changed, dependencies)) return false;
+      return true;
+    };
+    const isProvenUnreferencedCreatedPdf = async (changed: string) => {
+      if (!isProvenUnreferencedPdf(changed)) return false;
+      const dependencies = watcherDependencies();
+      if (dependencies === undefined) return false;
+      const revision = pdfInputRevision;
+      const mayReference = await mayReferenceCreatedPdf(changed, dependencies);
+      // 読み込み中に保存・再組版があれば、古いスナップショットでは捨てない。
+      return (
+        !mayReference &&
+        pdfInputRevision === revision &&
+        watcherDependencies() === dependencies &&
+        !watchesPdfInput(changed, dependencies)
+      );
+    };
     const saveDisplayedPdf = async (artifactId: number | undefined) => {
       const displayed = pdfBytes;
       if (!vscode.workspace.isTrusted || !displayed) return;
@@ -1197,6 +1292,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
       },
       () => {
+        panelDisposed = true;
         const key = document.uri.toString();
         pdfConfirmationExports.delete(key);
         const operation = pendingPdfExports.get(key);
@@ -1230,6 +1326,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
             if (outcome) requestRawBlocks(outcome);
             return;
           }
+          // Full-deck Tectonic より先に、待機中/前処理中の fragment を止める。
+          // 成功キャッシュは保持し、編集タブで最新本文だけ復帰する。
+          rawBlockCompiler.pause();
         },
         render: (text, version) =>
           renderDocument(text, version, { baseStyle: (doc) => baseStyleOf(doc, templateFs) }),
@@ -1489,10 +1588,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         pendingPdfExport.output,
         pendingPdfExport.savedInputChanged,
       );
-    const refreshTemplates = (changed: vscode.Uri) => {
-      const ownChange = pdfPublications.ownChange(changed.fsPath, () =>
-        pdfFileIdentity(changed.fsPath),
-      );
+    const refreshTemplates = (
+      changed: vscode.Uri,
+      ownChange = pdfPublications.ownChange(changed.fsPath, () => pdfFileIdentity(changed.fsPath)),
+    ) => {
+      if (panelDisposed) return;
       const refresh = () => {
         // 画像や .sty が足されたり直ったりしたときは、失敗していた生ブロックも次の描画で再試行する。
         rawBlockCompiler.resetFailures();
@@ -1507,15 +1607,31 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       // Ignore our own unrelated publication before it can reset raw output,
       // transfer hidden HTML, or refresh diagnostics.
       void ownChange.then((matches) => {
+        if (panelDisposed) return;
         const affectsDisplayed = pdfBytes && mayReadPdfOutput(changed.fsPath, pdfDependencyPaths);
         const affectsPending =
           pendingPdf && mayReadPdfOutput(changed.fsPath, pendingPdf.dependencyPaths);
         if (!matches || affectsDisplayed || affectsPending || (!pdfBytes && !pendingPdf)) refresh();
       });
     };
-    templateWatcher.onDidChange(refreshTemplates);
-    templateWatcher.onDidCreate(refreshTemplates);
-    templateWatcher.onDidDelete(refreshTemplates);
+    const onTemplateChanged = (kind: "create" | "change" | "delete") => (changed: vscode.Uri) => {
+      // FileSystemWatcher は外部で作られた PDF も通知する。現在の組版ログで
+      // 非参照と証明できるものは、部分コンパイル失敗の解除や画像 URL の世代更新より前に捨てる。
+      if (kind !== "create") {
+        if (!isProvenUnreferencedPdf(changed.fsPath)) refreshTemplates(changed);
+        return;
+      }
+      // 公開記録は通知を受けた時点で取得する。静的走査を待つ間に有効期限を越えないようにする。
+      const ownChange = pdfPublications.ownChange(changed.fsPath, () =>
+        pdfFileIdentity(changed.fsPath),
+      );
+      void isProvenUnreferencedCreatedPdf(changed.fsPath).then((unreferenced) => {
+        if (!unreferenced && !panelDisposed) refreshTemplates(changed, ownChange);
+      });
+    };
+    templateWatcher.onDidChange(onTemplateChanged("change"));
+    templateWatcher.onDidCreate(onTemplateChanged("create"));
+    templateWatcher.onDidDelete(onTemplateChanged("delete"));
     // Tectonic の場所や部分コンパイルの有効/無効が変わったら、エンジンの判定と失敗を捨てて描画し直す
     // (プレビューを開き直さずに再試行できる)。
     const rawBlockSettings = vscode.workspace.onDidChangeConfiguration((event) => {

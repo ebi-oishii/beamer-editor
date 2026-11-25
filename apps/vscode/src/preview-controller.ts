@@ -317,7 +317,8 @@ export class PreviewController implements vscode.Disposable {
   private readonly pdfAction: NonNullable<PreviewControllerOptions["pdfAction"]>;
   private readonly previewTabChanged: NonNullable<PreviewControllerOptions["previewTabChanged"]>;
   private webviewTab: "edit" | "pdf" = "edit";
-  private pendingDeckMessage: ExtensionToWebview | undefined;
+  /** PDF タブ中に変更された。編集へ戻るまで HTML 化・asset URL 化を遅延する。 */
+  private pendingDeckRender = false;
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
@@ -448,23 +449,22 @@ export class PreviewController implements vscode.Disposable {
     if (!msg) return;
     if (msg.type === "ready") {
       this.webviewTab = "edit";
-      this.pendingDeckMessage = undefined;
+      this.pendingDeckRender = false;
       this.onWebviewReady();
       this.sendDeck();
     } else if (msg.type === "previewTabChanged") {
       if (this.webviewTab === msg.tab) return;
       this.webviewTab = msg.tab;
-      const deckChanged = msg.tab === "edit" && !!(this.debounceTimer || this.pendingDeckMessage);
+      if (msg.tab === "pdf" && this.debounceTimer) {
+        clearTimeout(this.debounceTimer);
+        this.debounceTimer = undefined;
+        this.pendingDeckRender = true;
+      }
+      const deckChanged = msg.tab === "edit" && this.pendingDeckRender;
       if (msg.tab === "edit") {
-        if (this.debounceTimer) {
-          clearTimeout(this.debounceTimer);
-          this.debounceTimer = undefined;
-          this.pendingDeckMessage = undefined;
+        if (this.pendingDeckRender) {
+          this.pendingDeckRender = false;
           this.sendDeck();
-        } else if (this.pendingDeckMessage) {
-          const pending = this.pendingDeckMessage;
-          this.pendingDeckMessage = undefined;
-          this.publishDeck(pending);
         } else this.publishPendingReveal();
       }
       this.previewTabChanged(msg.tab, msg.retryPdfId, deckChanged);
@@ -1047,6 +1047,10 @@ export class PreviewController implements vscode.Disposable {
     // close → 再オープンで新しい TextDocument になっても追従できるよう差し替える。
     this.document = event.document;
     if (event.contentChanges.length === 0) return;
+    if (this.webviewTab === "pdf") {
+      this.pendingDeckRender = true;
+      return;
+    }
     clearTimeout(this.debounceTimer);
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = undefined;
@@ -1062,6 +1066,10 @@ export class PreviewController implements vscode.Disposable {
    */
   private sendDeck(): void {
     if (this.disposed) return;
+    if (this.webviewTab === "pdf") {
+      this.pendingDeckRender = true;
+      return;
+    }
     let message: ExtensionToWebview;
     try {
       const renderedDocument = this.document;
@@ -1104,8 +1112,7 @@ export class PreviewController implements vscode.Disposable {
       this.onError(text);
       message = { type: "error", message: text };
     }
-    if (this.webviewTab === "pdf") this.pendingDeckMessage = message;
-    else this.publishDeck(message);
+    this.publishDeck(message);
   }
 
   private publishDeck(message: ExtensionToWebview): void {

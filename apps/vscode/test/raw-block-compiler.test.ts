@@ -32,6 +32,38 @@ function memoryFs(initial: Record<string, Uint8Array> = {}) {
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("RawBlockCompiler", () => {
+  it("pause 中は前処理待ちの古い job を起動せず、resume で最新の要求だけを組版する", async () => {
+    const { fs } = memoryFs();
+    let releaseFingerprint: (() => void) | undefined;
+    const compile = vi.fn(async (document: string) => new Uint8Array([document.length]));
+    const compiler = new RawBlockCompiler({
+      cacheDir: "/cache",
+      fs,
+      compile,
+      buildDocument: (tex) => tex,
+      fingerprint: async () =>
+        new Promise<string>((resolve) => {
+          releaseFingerprint = () => resolve("");
+        }),
+      onReady: vi.fn(),
+      onFailed: vi.fn(),
+    });
+    compiler.request([{ key: "old", tex: "old", environment: null }], "");
+    await flush();
+    compiler.pause();
+    compiler.request([{ key: "new", tex: "new", environment: null }], "");
+    releaseFingerprint?.();
+    await flush();
+    expect(compile).not.toHaveBeenCalled();
+
+    compiler.resume();
+    await flush();
+    // The resumed job gets its own preflight gate.
+    releaseFingerprint?.();
+    await flush();
+    expect(compile).toHaveBeenCalledExactlyOnceWith("new", expect.any(AbortSignal));
+  });
+
   it("未処理の key を 1 本ずつコンパイルし、PDF をキャッシュして onReady へ渡す", async () => {
     const { fs, files } = memoryFs();
     const order: string[] = [];
