@@ -69,7 +69,14 @@ export interface ExportHost {
   beginPdfExport?(
     document: ExportDocument,
     output: ExportUri,
-  ): { finish: (review?: PdfExportResult["review"]) => void } | undefined;
+  ):
+    | {
+        finish: (
+          review?: PdfExportResult["review"],
+          publication?: Pick<PdfExportResult, "overwritten">,
+        ) => void;
+      }
+    | undefined;
 }
 
 export interface ExportControllerDependencies {
@@ -356,7 +363,12 @@ export class ExportController {
       });
       const review = result?.format === "pdf" ? result.review : undefined;
       if (this.disposed || !pdfReview) void review?.content?.dispose();
-      pdfReview?.finish(!this.disposed ? review : undefined);
+      pdfReview?.finish(
+        !this.disposed ? review : undefined,
+        !this.disposed && result?.format === "pdf"
+          ? { overwritten: result.overwritten }
+          : undefined,
+      );
       pdfReview = undefined;
       if (!result || this.disposed) return;
       const isHtml = result.format === "html";

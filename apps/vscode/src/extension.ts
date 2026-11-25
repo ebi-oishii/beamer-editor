@@ -82,6 +82,7 @@ type FinishPdfExport = (
   review?: PdfExportResult["review"],
   dependencyChanged?: boolean,
   pdfOnlyChanged?: boolean,
+  publication?: Pick<PdfExportResult, "overwritten">,
 ) => void;
 interface PendingPdfExport {
   output: string;
@@ -431,7 +432,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         const finishPanel = pdfConfirmationExports.get(key)?.(output.fsPath);
         if (finishPanel) operation.finishPanel = finishPanel;
         return {
-          finish: (review) => {
+          finish: (review, publication) => {
             pendingPdfExports.delete(key);
             operation.dispose();
             const dependencyChanged =
@@ -445,6 +446,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
                 review,
                 dependencyChanged || operation.tectonicSettingsChanged,
                 operation.externalPdfCreated,
+                publication,
               );
             else void review?.content?.dispose();
           },
@@ -1177,6 +1179,32 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       );
     };
     /**
+     * 初回作成の PDF は直前の Tectonic 入力一覧に無くても、TeX の条件分岐や
+     * マクロ展開で次の組版内容を変えられる。deck 配下に新設した PDF だけを
+     * PDF確認の要更新へ倒す。既存ファイルへの上書きと deck 外の出力は既存の
+     * 依存一覧照合に委ねる。
+     */
+    const isNewWatchedPdfOutput = (output: string, overwritten: boolean | undefined) => {
+      if (overwritten || path.extname(output).toLowerCase() !== ".pdf") return false;
+      const within = (candidate: string, root: string) => {
+        const relative = path.relative(root, candidate);
+        return (
+          relative === "" ||
+          (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+        );
+      };
+      const lexical = path.resolve(output);
+      if (within(lexical, documentDir.fsPath)) return true;
+      try {
+        return within(
+          path.join(realpathSync(path.dirname(lexical)), path.basename(lexical)),
+          realpathSync(documentDir.fsPath),
+        );
+      } catch {
+        return false;
+      }
+    };
+    /**
      * FileSystemWatcher の通知先は原子的な公開先とは違い、別名の symlink leaf
      * になることがある。公開先の照合規則は変えず、監視時だけ既存 leaf の実体も照合する。
      */
@@ -1295,6 +1323,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         });
         finishPublication(published.writtenFileIdentity);
         if (mayReadPdfOutput(output.fsPath, pdfDependencyPaths)) markPdfStale();
+        else if (isNewWatchedPdfOutput(output.fsPath, published.overwritten)) markPdfStale(false);
         void vscode.window.showInformationMessage(`表示中の PDF を保存しました: ${output.fsPath}`);
       } catch (error) {
         finishPublication();
@@ -1586,7 +1615,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       if (savedInputChanged) markPdfStale();
       postPdf();
       const finishPublication = pdfPublications.begin(output);
-      return (review, dependencyChanged = false, pdfOnlyChanged = false) => {
+      return (review, dependencyChanged = false, pdfOnlyChanged = false, publication) => {
         finishPublication(review?.writtenFileIdentity);
         if (pdfExportRequest === request) pdfExportRequest = undefined;
         const shouldDisplay = request === pdfRequest;
@@ -1604,8 +1633,10 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           (shouldDisplay && dependencyChanged) ||
           outputChangedAdoptedPdf ||
           outputChangedCurrentPdf;
+        const createdWatchedPdf =
+          publication !== undefined && isNewWatchedPdfOutput(output, publication.overwritten);
         if (inputChanged) markPdfStale();
-        else if (shouldDisplay && pdfOnlyChanged) markPdfStale(false);
+        else if ((shouldDisplay && pdfOnlyChanged) || createdWatchedPdf) markPdfStale(false);
         if (shouldDisplay && review) {
           setCompiledPdf(review, inputRevision, compiledEditingRevision);
           if (pdfTabVisible) void loadPendingPdf();

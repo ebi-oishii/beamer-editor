@@ -153,8 +153,12 @@ describe("ExportController", () => {
     const received: unknown[] = [];
     const host = createHost({
       beginPdfExport: vi.fn(() => ({
-        finish: (review?: import("@beamer-editor/compiler").PdfExportResult["review"]) => {
+        finish: (
+          review?: import("@beamer-editor/compiler").PdfExportResult["review"],
+          publication?: Pick<import("@beamer-editor/compiler").PdfExportResult, "overwritten">,
+        ) => {
           if (review?.content) received.push(review.content);
+          received.push(publication);
         },
       })),
     });
@@ -177,7 +181,7 @@ describe("ExportController", () => {
         },
       }),
     );
-    expect(received).toEqual([content]);
+    expect(received).toEqual([content, { overwritten: false }]);
     expect(content.read).not.toHaveBeenCalled();
   });
 

@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   commands: new Map<string, () => void>(),
   compile: vi.fn<typeof compileFragment>(),
   compilePdf: vi.fn<typeof import("@beamer-editor/compiler").compilePdf>(),
+  publishPdf: vi.fn<typeof import("@beamer-editor/compiler").publishPdf>(),
   postPdfState: vi.fn(),
   getConfiguration: vi.fn(),
   fileChanges: [] as Array<(uri: vscode.Uri) => void>,
@@ -27,6 +28,7 @@ const state = vi.hoisted(() => ({
   temporaryDirectories: [] as string[],
   refreshPreview: vi.fn(),
   pdfIdentity: vi.fn<() => Promise<string | undefined>>(),
+  saveDialog: vi.fn(),
   saveListeners: [] as Array<(document: vscode.TextDocument) => void>,
   changeListeners: [] as Array<(event: vscode.TextDocumentChangeEvent) => void>,
   configurationListeners: [] as Array<(event: vscode.ConfigurationChangeEvent) => void>,
@@ -74,6 +76,9 @@ vi.mock("vscode", () => {
       visibleTextEditors: [],
       createTextEditorDecorationType: disposable,
       createOutputChannel: disposable,
+      showInformationMessage: vi.fn(),
+      showErrorMessage: vi.fn(),
+      showWarningMessage: vi.fn(),
       registerTreeDataProvider: disposable,
       onDidChangeActiveTextEditor: disposable,
       onDidChangeTextEditorSelection: disposable,
@@ -83,6 +88,7 @@ vi.mock("vscode", () => {
         onDidChangeViewState: disposable,
         webview: { asWebviewUri: (uri: unknown) => uri },
       }),
+      showSaveDialog: state.saveDialog,
     },
     workspace: {
       isTrusted: true,
@@ -138,6 +144,7 @@ vi.mock("@beamer-editor/compiler", async (original) => ({
   compileFragment: state.compile,
   compilePdf: state.compilePdf,
   pdfFileIdentity: state.pdfIdentity,
+  publishPdf: state.publishPdf,
 }));
 vi.mock("../src/tectonic", async (original) => ({
   ...(await original<typeof import("../src/tectonic")>()),
@@ -201,6 +208,7 @@ describe("extension の Tectonic 接続", () => {
       rmSync(directory, { recursive: true, force: true });
     state.changeListeners.splice(0);
     state.configurationListeners.splice(0);
+    state.saveDialog.mockResolvedValue(undefined);
     vi.clearAllMocks();
   });
 
@@ -680,6 +688,68 @@ describe("extension の Tectonic 接続", () => {
     expect(content.read).toHaveBeenCalledOnce();
   });
 
+  it("deck 配下へ初めて作成した Export の PDF は依存一覧に無くても要更新にする", async () => {
+    const document = openPdfTestDocument();
+    state.commands.get("beamerEditor.openPreview")?.();
+    const output = Uri.file("/project/deck.slide-flag.pdf");
+    const exportReview = state.exportHost?.beginPdfExport?.(document as ExportDocument, output);
+    showPdf();
+    exportReview?.finish(
+      { size: 1, content: pdfContent(), dependencyPaths: [document.uri.fsPath] },
+      { overwritten: false },
+    );
+    await Promise.resolve();
+    expect(state.postPdfState).toHaveBeenLastCalledWith(
+      "stale",
+      expect.any(Number),
+      expect.objectContaining({ artifactId: 1 }),
+    );
+    expect(state.refreshPreview).not.toHaveBeenCalled();
+  });
+
+  it("deck 外へ初めて作成した未参照 Export の PDF は確認版を要更新にしない", async () => {
+    const document = openPdfTestDocument();
+    state.commands.get("beamerEditor.openPreview")?.();
+    const output = Uri.file("/exports/deck.slide-flag.pdf");
+    const exportReview = state.exportHost?.beginPdfExport?.(document as ExportDocument, output);
+    showPdf();
+    exportReview?.finish(
+      { size: 1, content: pdfContent(), dependencyPaths: [document.uri.fsPath] },
+      { overwritten: false },
+    );
+    await Promise.resolve();
+    expect(state.postPdfState).toHaveBeenLastCalledWith(
+      "ready",
+      expect.any(Number),
+      expect.objectContaining({ artifactId: 1 }),
+    );
+  });
+
+  it("deck 配下へ初めて保存した表示中 PDF は依存一覧に無くても要更新にする", async () => {
+    const document = openPdfTestDocument();
+    const output = Uri.file("/project/deck.slide-flag.pdf");
+    state.compilePdf.mockResolvedValue({
+      inputPath: document.uri.fsPath,
+      engineVersion: "0.17.0",
+      pdf: Uint8Array.of(7),
+      dependencyPaths: [document.uri.fsPath],
+    });
+    state.saveDialog.mockResolvedValue(output);
+    state.publishPdf.mockResolvedValue({
+      outputPath: output.fsPath,
+      overwritten: false,
+      writtenFileIdentity: "published",
+    });
+    state.commands.get("beamerEditor.openPreview")?.();
+    showPdf();
+    await vi.waitFor(() => expect(state.postPdfState.mock.lastCall?.[0]).toBe("ready"));
+    state.refreshPreview.mockClear();
+    state.previewOptions?.pdfAction?.("save", 1);
+    await vi.waitFor(() => expect(state.publishPdf).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(state.postPdfState.mock.lastCall?.[0]).toBe("stale"));
+    expect(state.refreshPreview).not.toHaveBeenCalled();
+  });
+
   it("遅れて読み込みが終わった Export は新しい PDF を上書きしない", async () => {
     const document = openPdfTestDocument();
     state.commands.get("beamerEditor.openPreview")?.();
@@ -705,6 +775,39 @@ describe("extension の Tectonic 接続", () => {
     await oldBytes;
     expect(state.postPdfState.mock.lastCall?.[2]).toMatchObject({ pdf });
     expect(oldContent.dispose).toHaveBeenCalled();
+  });
+
+  it("古い Export が deck 配下へ初めて PDF を作成すると新しい確認版も要更新にする", async () => {
+    const document = openPdfTestDocument();
+    state.commands.get("beamerEditor.openPreview")?.();
+    const oldExport = state.exportHost?.beginPdfExport?.(
+      document as ExportDocument,
+      Uri.file("/project/deck.slide-flag.pdf"),
+    );
+    showPdf();
+    const newer = state.exportHost?.beginPdfExport?.(
+      document as ExportDocument,
+      Uri.file("/exports/current.pdf"),
+    );
+    const current = Uint8Array.of(9);
+    newer?.finish(
+      { size: 1, content: pdfContent(current), dependencyPaths: [document.uri.fsPath] },
+      { overwritten: true },
+    );
+    await vi.waitFor(() =>
+      expect(state.postPdfState.mock.lastCall?.[2]).toMatchObject({ pdf: current }),
+    );
+
+    oldExport?.finish(
+      { size: 1, content: pdfContent(Uint8Array.of(4)), dependencyPaths: [document.uri.fsPath] },
+      { overwritten: false },
+    );
+    await Promise.resolve();
+    expect(state.postPdfState).toHaveBeenLastCalledWith(
+      "stale",
+      expect.any(Number),
+      expect.not.objectContaining({ pdf: Uint8Array.of(4) }),
+    );
   });
 
   it("パネルを開く前の未保存編集だけでは Export 結果を要更新にしない", async () => {
