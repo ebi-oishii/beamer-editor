@@ -128,6 +128,19 @@ export interface PreviewControllerOptions {
     document: PreviewDocument;
     expectedOptions: string;
   }) => Promise<CanvasEditResult>;
+  /**
+   * decktext の中身を text(書き換えた後の中身の LaTeX)に置き換える(#217)。sourceSpan は
+   * `[...]` の範囲で、中身はその直後から `\end{decktext}` まで。
+   */
+  editCanvasText?: (move: {
+    frameIndex: number;
+    elementId: string;
+    version: number;
+    text: string;
+    sourceSpan: { start: number; end: number };
+    document: PreviewDocument;
+    expectedOptions: string;
+  }) => Promise<CanvasEditResult>;
   moveCanvasElement?: (move: {
     frameIndex: number;
     elementId: string;
@@ -278,6 +291,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly resolveResource: ((path: string) => string) | undefined;
   private readonly setCanvasFontSize: PreviewControllerOptions["setCanvasFontSize"];
   private readonly resizeCanvasElement: PreviewControllerOptions["resizeCanvasElement"];
+  private readonly editCanvasText: PreviewControllerOptions["editCanvasText"];
   private readonly onRendered: (outcome: RenderOutcome) => void;
   private readonly onWebviewReady: () => void;
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
@@ -342,6 +356,7 @@ export class PreviewController implements vscode.Disposable {
     this.resolveResource = options.resolveResource;
     this.setCanvasFontSize = options.setCanvasFontSize;
     this.resizeCanvasElement = options.resizeCanvasElement;
+    this.editCanvasText = options.editCanvasText;
     this.onRendered = options.onRendered ?? (() => {});
     this.onWebviewReady = options.onWebviewReady ?? (() => {});
     this.moveCanvasElement = options.moveCanvasElement;
@@ -421,7 +436,11 @@ export class PreviewController implements vscode.Disposable {
       this.sendDeck();
     } else if (msg.type === "jumpToSource") {
       this.handleJump(msg.frameIndex, msg.version);
-    } else if (msg.type === "resizeCanvasElement" || msg.type === "setCanvasFontSize") {
+    } else if (
+      msg.type === "resizeCanvasElement" ||
+      msg.type === "setCanvasFontSize" ||
+      msg.type === "editCanvasText"
+    ) {
       await this.handleCanvasStyle(msg);
     } else if (msg.type === "moveCanvasElement") {
       await this.handleMove(msg);
@@ -472,7 +491,7 @@ export class PreviewController implements vscode.Disposable {
       frameIndex: number;
       elementId: string;
       version: number;
-    } & ({ width: number } | { size: CanvasFontSize }),
+    } & ({ width: number } | { size: CanvasFontSize } | { text: string }),
   ): Promise<void> {
     if (this.editInFlight()) return;
     const latest = this.latest;
@@ -489,7 +508,8 @@ export class PreviewController implements vscode.Disposable {
       !element ||
       ("width" in move
         ? !Number.isFinite(move.width) || move.width <= 0
-        : element.kind !== "text" || !isCanvasFontSize(move.size))
+        : element.kind !== "text" ||
+          ("size" in move ? !isCanvasFontSize(move.size) : element.textBody === undefined))
     ) {
       this.sendDeck();
       return;
@@ -498,7 +518,9 @@ export class PreviewController implements vscode.Disposable {
     if (
       "width" in move
         ? width === null || element.position.width === width
-        : element.invalidFontSize === undefined && element.fontSize === move.size
+        : "size" in move
+          ? element.invalidFontSize === undefined && element.fontSize === move.size
+          : element.textBody === move.text
     ) {
       this.sendDeck();
       return;
@@ -523,7 +545,9 @@ export class PreviewController implements vscode.Disposable {
           ? await this.resizeCanvasElement?.({ ...request, width })
           : "size" in move
             ? await this.setCanvasFontSize?.({ ...request, size: move.size })
-            : "failed";
+            : "text" in move
+              ? await this.editCanvasText?.({ ...request, text: move.text })
+              : "failed";
       this.editApplyPending = false;
       if (this.disposed) return;
       if (result === "applied") {
@@ -541,7 +565,9 @@ export class PreviewController implements vscode.Disposable {
         this.onWarning(
           "size" in move
             ? "Canvas text size was not updated. Try selecting it again."
-            : "Canvas element width was not updated. Try dragging it again.",
+            : "text" in move
+              ? "Canvas text was not updated. Double-click it and edit it again."
+              : "Canvas element width was not updated. Try dragging it again.",
         );
         this.sendDeck();
         return;

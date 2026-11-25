@@ -211,3 +211,18 @@ describe("parseWebviewToExtension: canvas clipboard(#148)", () => {
     ).toBeNull();
   });
 });
+
+describe("parseWebviewToExtension: editCanvasText(#217)", () => {
+  it("要素と version と書き換えた中身を受理し、欠けていれば null", () => {
+    const base = { frameIndex: 0, elementId: "canvas-text-0", version: 3 };
+    expect(parseWebviewToExtension({ type: "editCanvasText", ...base, text: "" })).toEqual({
+      type: "editCanvasText",
+      ...base,
+      text: "",
+    });
+    expect(parseWebviewToExtension({ type: "editCanvasText", ...base })).toBeNull();
+    expect(
+      parseWebviewToExtension({ type: "editCanvasText", ...base, elementId: "", text: "a" }),
+    ).toBeNull();
+  });
+});

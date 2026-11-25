@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CANVAS_FONT_SIZES } from "../src/ast.js";
 import {
   CANVAS_MIN_WIDTH,
   canvasFontSizeReplacement,
   canvasPositionReplacement,
+  canvasTextBody,
+  canvasTextBodyReplacement,
   canvasWidthReplacement,
   clampCanvasPlacement,
   normalizeCanvasWidth,
@@ -160,5 +163,60 @@ describe("canvas font size", () => {
   it("rejects unknown sizes and duplicate declarations", () => {
     expect(canvasFontSizeReplacement("[x=0,y=0,w=.3]", "Huge" as never)).toBeNull();
     expect(canvasFontSizeReplacement("[size=normal,size=small]", "Large")).toBeNull();
+  });
+});
+
+describe("decktext の中身の書き換え(#217)", () => {
+  const deck = (body: string) =>
+    `\\begin{deckcanvas}\n    \\begin{decktext}[x=0.1,y=0.1,w=0.4]${body}\\end{decktext}\n\\end{deckcanvas}\n`;
+  const optionsEnd = (source: string) => source.indexOf("]") + 1;
+  const apply = (source: string, text: string) => {
+    const replacement = canvasTextBodyReplacement(source, optionsEnd(source), text);
+    if (replacement === null) throw new Error("body expected");
+    return (
+      source.slice(0, replacement.span.start) +
+      replacement.text +
+      source.slice(replacement.span.end)
+    );
+  };
+
+  it("中身を字下げを除いた文字列で返し、書き換えは元の改行と字下げに合わせる", () => {
+    const source = deck("\n      First \\textbf{bold}\\\\\n      second\n    ");
+    expect(canvasTextBody(source, optionsEnd(source))?.text).toBe(
+      "First \\textbf{bold}\\\\\nsecond",
+    );
+    expect(apply(source, "One\n\nTwo\n")).toBe(deck("\n      One\n\n      Two\n    "));
+  });
+
+  it("1 行で書いた中身と CRLF の中身も形を保つ", () => {
+    const inline = deck(" Hello ");
+    expect(canvasTextBody(inline, optionsEnd(inline))?.text).toBe("Hello");
+    expect(apply(inline, "Bye")).toBe(deck(" Bye "));
+    const crlf = deck("\r\n      a\r\n      b\r\n    ");
+    expect(apply(crlf, "c\nd")).toBe(deck("\r\n      c\r\n      d\r\n    "));
+  });
+
+  it("コメントの中の \\end{decktext} では止まらず、閉じが無ければ null", () => {
+    const commented = deck("\n      a % \\end{decktext}\n    ");
+    expect(canvasTextBody(commented, optionsEnd(commented))?.text).toBe("a % \\end{decktext}");
+    const unclosed = "\\begin{decktext}[x=0,y=0,w=0.5]\n  a\n";
+    expect(canvasTextBody(unclosed, optionsEnd(unclosed))).toBeNull();
+    expect(canvasTextBodyReplacement(unclosed, optionsEnd(unclosed), "b")).toBeNull();
+  });
+
+  it("fixture の decktext は、取り出した文字列のまま戻すとソースが変わらない", () => {
+    for (const name of ["canvas", "canvas-math", "styled", "japanese"]) {
+      const source = readFileSync(
+        new URL(`../../../fixtures/${name}.slide.tex`, import.meta.url),
+        "utf8",
+      );
+      for (const match of source.matchAll(/\\begin\{decktext\}\[[^\]]*\]/g)) {
+        const end = (match.index ?? 0) + match[0].length;
+        const body = canvasTextBody(source, end);
+        expect(body, name).not.toBeNull();
+        const replacement = canvasTextBodyReplacement(source, end, body?.text ?? "");
+        expect(replacement?.text, name).toBe(source.slice(body?.span.start, body?.span.end));
+      }
+    }
   });
 });

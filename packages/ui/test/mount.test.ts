@@ -2393,3 +2393,103 @@ describe("canvas selection across frames(#148)", () => {
     expect(deleteCanvasElement).toHaveBeenCalledExactlyOnceWith(1, "canvas-text-0", 5);
   });
 });
+
+describe("decktext の書き換え(#217)", () => {
+  const textDeck = (textBody: string | undefined): RenderedDeck => ({
+    title: "edit",
+    css: "",
+    frames: [
+      {
+        index: 1,
+        label: "text",
+        titleText: "text",
+        html: `<div class="slide"><div class="slide-body"><div class="canvas">
+            <div class="canvas-item canvas-text" data-canvas-element-id="canvas-text-0" data-canvas-element-kind="text" style="left:10%;top:20%;width:40%;font-size:11pt"><p>hello <strong>world</strong></p></div>
+          </div></div></div>`,
+        stepCount: 1,
+        isRaw: false,
+        sourceSpan: { start: 0, end: 100 },
+        canvasElements: [
+          {
+            id: "canvas-text-0",
+            kind: "text",
+            position: { x: 0.1, y: 0.2, width: 0.4 },
+            sourceSpan: { start: 10, end: 30 },
+            editable: true,
+            ...(textBody === undefined ? {} : { textBody }),
+          },
+        ],
+      },
+    ],
+  });
+  const mount = (deck: RenderedDeck) => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const editCanvasText = vi.fn();
+    const jumpToSource = vi.fn();
+    const host = { ...fakeHost(), editCanvasText, jumpToSource };
+    let unmount: () => void = () => {};
+    act(() => {
+      unmount = mountPreview(container, host);
+    });
+    act(() => host.push(deck, 3));
+    const text = container.querySelector<HTMLElement>('[data-canvas-element-id="canvas-text-0"]');
+    if (!text) throw new Error("canvas text fixture missing");
+    const editor = () =>
+      container.querySelector<HTMLTextAreaElement>("textarea.canvas-text-editor");
+    const doubleClick = () =>
+      act(() => {
+        text.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+      });
+    const press = (key: string, init: KeyboardEventInit = {}) => {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+      act(() => {
+        editor()?.dispatchEvent(event);
+      });
+      return event;
+    };
+    return { editCanvasText, jumpToSource, text, editor, doubleClick, press, unmount };
+  };
+
+  it("ダブルクリックで中身の LaTeX を出し、Cmd/Ctrl+Enter で書き換えを送る", () => {
+    const ui = mount(textDeck("hello \\textbf{world}"));
+    ui.doubleClick();
+    const editor = ui.editor();
+    expect(editor?.value).toBe("hello \\textbf{world}");
+    expect(document.activeElement).toBe(editor);
+    expect(ui.text.style.visibility).toBe("hidden");
+    // ソースへの移動(スライドのダブルクリック)はしない。
+    expect(ui.jumpToSource).not.toHaveBeenCalled();
+    if (!editor) throw new Error("editor expected");
+    editor.value = "bye";
+    // Enter は入力欄の改行で、スライドの選択に使わない。
+    expect(ui.press("Enter").defaultPrevented).toBe(false);
+    ui.press("Enter", { ctrlKey: true });
+    expect(ui.editCanvasText).toHaveBeenCalledExactlyOnceWith(0, "canvas-text-0", 3, "bye");
+    expect(ui.editor()).toBeNull();
+    expect(ui.text.style.visibility).toBe("");
+    act(() => ui.unmount());
+  });
+
+  it("Escape では送らず、変えずに外へ出ても送らない", () => {
+    const ui = mount(textDeck("hello"));
+    ui.doubleClick();
+    const editor = ui.editor();
+    if (!editor) throw new Error("editor expected");
+    editor.value = "changed";
+    ui.press("Escape");
+    expect(ui.editor()).toBeNull();
+    ui.doubleClick();
+    act(() => ui.editor()?.blur());
+    expect(ui.editor()).toBeNull();
+    expect(ui.editCanvasText).not.toHaveBeenCalled();
+    act(() => ui.unmount());
+  });
+
+  it("元ソースの中身が無い要素(マクロ展開だけの要素など)は書き換えを始めない", () => {
+    const ui = mount(textDeck(undefined));
+    ui.doubleClick();
+    expect(ui.editor()).toBeNull();
+    act(() => ui.unmount());
+  });
+});

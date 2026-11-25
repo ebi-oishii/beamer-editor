@@ -245,6 +245,8 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       const target = event.target;
+      // decktext の書き換え中(#217)の入力欄では、Cmd+Z・Cmd+C・矢印などを入力欄に任せる。
+      if (target instanceof HTMLTextAreaElement) return;
       if (
         !(target instanceof Node) ||
         (!preview.contains(target) &&
@@ -379,6 +381,12 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
           host.resizeCanvasElement
             ? (frameIndex, elementId, width) =>
                 host.resizeCanvasElement?.(frameIndex, elementId, version, width)
+            : undefined
+        }
+        onEditCanvasText={
+          host.editCanvasText
+            ? (frameIndex, elementId, text) =>
+                host.editCanvasText?.(frameIndex, elementId, version, text)
             : undefined
         }
         onMoveCanvasElement={(frameIndex, elementId, x, y) =>
