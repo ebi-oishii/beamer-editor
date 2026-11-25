@@ -78,13 +78,19 @@ import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 
 let previewController: PreviewController | undefined;
 const previewLifecycle = new ManagedPreviewLifecycle<PreviewController, vscode.TextDocument>();
-type FinishPdfExport = (review?: PdfExportResult["review"], dependencyChanged?: boolean) => void;
+type FinishPdfExport = (
+  review?: PdfExportResult["review"],
+  dependencyChanged?: boolean,
+  pdfOnlyChanged?: boolean,
+) => void;
 interface PendingPdfExport {
   output: string;
   /** True once the saved text changed after this Export accepted its input. */
   savedInputChanged: boolean;
   tectonicSettingsChanged: boolean;
   changedPaths: Set<string>;
+  /** A PDF appeared while this Export was compiling, outside its own output. */
+  externalPdfCreated: boolean;
   finishPanel?: FinishPdfExport;
   dispose(): void;
 }
@@ -361,6 +367,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           savedInputChanged: false,
           tectonicSettingsChanged: false,
           changedPaths: new Set(),
+          externalPdfCreated: false,
           dispose: () => {},
         };
         const recordSavedInput = (saved: ExportDocument) => {
@@ -399,9 +406,18 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         );
         const recordDependency = (uri: vscode.Uri) =>
           operation.changedPaths.add(path.resolve(uri.fsPath));
+        const recordCreatedDependency = (uri: vscode.Uri) => {
+          const created = path.resolve(uri.fsPath);
+          if (
+            path.extname(created).toLowerCase() === ".pdf" &&
+            created !== path.resolve(operation.output)
+          )
+            operation.externalPdfCreated = true;
+          operation.changedPaths.add(created);
+        };
         const dependencySubscriptions = [
           dependencyWatcher.onDidChange(recordDependency),
-          dependencyWatcher.onDidCreate(recordDependency),
+          dependencyWatcher.onDidCreate(recordCreatedDependency),
           dependencyWatcher.onDidDelete(recordDependency),
         ];
         operation.dispose = () => {
@@ -425,7 +441,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
                   review.dependencyPaths?.some((dependency) => dependency === changed),
                 ));
             if (operation.finishPanel)
-              operation.finishPanel(review, dependencyChanged || operation.tectonicSettingsChanged);
+              operation.finishPanel(
+                review,
+                dependencyChanged || operation.tectonicSettingsChanged,
+                operation.externalPdfCreated,
+              );
             else void review?.content?.dispose();
           },
         };
@@ -942,6 +962,10 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     let pdfAbort: AbortController | undefined;
     let pdfInputRevision = 0;
     let pdfCompiledRevision = 0;
+    /** Saved-source and shared-input generation used by the HTML-side dependency snapshot. */
+    let editingInputsRevision = 0;
+    let compiledEditingInputsRevision = 0;
+    let editingDependencyPaths: readonly string[] | undefined;
     let panelDisposed = false;
     let pdfDependencyPaths: readonly string[] | undefined;
     let pendingPdf:
@@ -1009,7 +1033,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         ...(deliver && pdfBytes ? { pdf: pdfBytes, artifactId: pdfArtifactId } : {}),
       });
     };
-    const markPdfStale = () => {
+    const markPdfStale = (editingInputsChanged = true) => {
+      if (editingInputsChanged) editingInputsRevision += 1;
       pdfInputRevision += 1;
       postPdf();
     };
@@ -1031,7 +1056,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       pendingPdf = undefined;
       void candidate?.content.dispose();
     };
-    const setCompiledPdf = (artifact: PdfReviewArtifact, inputRevision: number) => {
+    const setCompiledPdf = (
+      artifact: PdfReviewArtifact,
+      inputRevision: number,
+      compiledEditingRevision: number,
+    ) => {
       pdfFailure = undefined;
       pdfTooLarge = artifact.size > MAX_CONFIRMATION_PDF_BYTES;
       discardPendingPdfContent();
@@ -1045,6 +1074,10 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       } else if (!pdfTooLarge) {
         pdfFailure =
           "書き出した PDF を確認タブに読み込めませんでした。更新して再試行してください。";
+      }
+      if (compiledEditingRevision === editingInputsRevision) {
+        compiledEditingInputsRevision = compiledEditingRevision;
+        editingDependencyPaths = artifact.dependencyPaths;
       }
       postPdf();
     };
@@ -1086,6 +1119,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       }
       const request = ++pdfRequest;
       const inputRevision = pdfInputRevision;
+      const compiledEditingRevision = editingInputsRevision;
       pdfAbort?.abort();
       const abort = new AbortController();
       pdfAbort = abort;
@@ -1113,6 +1147,10 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         pdfArtifactId += 1;
         pdfCompiledRevision = inputRevision;
         pdfDependencyPaths = compiled.dependencyPaths;
+        if (compiledEditingRevision === editingInputsRevision) {
+          compiledEditingInputsRevision = compiledEditingRevision;
+          editingDependencyPaths = compiled.dependencyPaths;
+        }
         postPdf();
       } catch (error) {
         if (request !== pdfRequest) return;
@@ -1157,6 +1195,15 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         return pdfDependencyPaths;
       return undefined;
     };
+    /**
+     * PDF 確認だけが古くなった後も、最後に成功した保存済み入力の依存一覧は
+     * 編集プレビューの更新を絞り込む根拠に使える。本文・設定・既知の依存が
+     * 変わった場合は generation を進めてこの根拠を捨てる。
+     */
+    const editingWatcherDependencies = () =>
+      !pdfDirty && compiledEditingInputsRevision === editingInputsRevision
+        ? editingDependencyPaths
+        : undefined;
     const isTextualDependency = (entry: string) => /\.(?:tex|sty|cls|def)$/i.test(entry);
     const isImageDependency = (entry: string) => /\.(?:png|jpe?g)$/i.test(entry);
     const MAX_WATCH_TEXT_BYTES = 1024 * 1024;
@@ -1205,30 +1252,6 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         return true;
       }
       return false;
-    };
-    /**
-     * 現在の保存済み入力の組版ログに対応する依存一覧だけを使って、無関係な
-     * PDF 通知を早期に捨てる。未保存編集・古い結果・不明な依存一覧は安全側で監視する。
-     */
-    const isProvenUnreferencedPdf = (changed: string) => {
-      if (path.extname(changed).toLowerCase() !== ".pdf") return false;
-      const dependencies = watcherDependencies();
-      if (dependencies === undefined || watchesPdfInput(changed, dependencies)) return false;
-      return true;
-    };
-    const isProvenUnreferencedCreatedPdf = async (changed: string) => {
-      if (!isProvenUnreferencedPdf(changed)) return false;
-      const dependencies = watcherDependencies();
-      if (dependencies === undefined) return false;
-      const revision = pdfInputRevision;
-      const mayReference = await mayReferenceCreatedPdf(changed, dependencies);
-      // 読み込み中に保存・再組版があれば、古いスナップショットでは捨てない。
-      return (
-        !mayReference &&
-        pdfInputRevision === revision &&
-        watcherDependencies() === dependencies &&
-        !watchesPdfInput(changed, dependencies)
-      );
     };
     const saveDisplayedPdf = async (artifactId: number | undefined) => {
       const displayed = pdfBytes;
@@ -1552,6 +1575,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       const request = ++pdfRequest;
       pdfExportRequest = request;
       const inputRevision = pdfInputRevision;
+      const compiledEditingRevision = editingInputsRevision;
       pdfAbort?.abort();
       pdfAbort = undefined;
       pdfFailure = undefined;
@@ -1562,15 +1586,28 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       if (savedInputChanged) markPdfStale();
       postPdf();
       const finishPublication = pdfPublications.begin(output);
-      return (review, dependencyChanged = false) => {
+      return (review, dependencyChanged = false, pdfOnlyChanged = false) => {
         finishPublication(review?.writtenFileIdentity);
         if (pdfExportRequest === request) pdfExportRequest = undefined;
         const shouldDisplay = request === pdfRequest;
-        const dependencies = shouldDisplay && review ? review.dependencyPaths : pdfDependencyPaths;
-        if (dependencyChanged || (review && mayReadPdfOutput(output, dependencies)))
-          pdfInputRevision += 1;
+        // A later Export can still overwrite a file read by the currently shown PDF.
+        // Its own output is reliable evidence even after this request was superseded.
+        const outputChangedCurrentPdf =
+          pdfBytes !== undefined &&
+          pdfDependencyPaths !== undefined &&
+          mayReadPdfOutput(output, pdfDependencyPaths);
+        const outputChangedAdoptedPdf =
+          shouldDisplay &&
+          review?.dependencyPaths !== undefined &&
+          mayReadPdfOutput(output, review.dependencyPaths);
+        const inputChanged =
+          (shouldDisplay && dependencyChanged) ||
+          outputChangedAdoptedPdf ||
+          outputChangedCurrentPdf;
+        if (inputChanged) markPdfStale();
+        else if (shouldDisplay && pdfOnlyChanged) markPdfStale(false);
         if (shouldDisplay && review) {
-          setCompiledPdf(review, inputRevision);
+          setCompiledPdf(review, inputRevision, compiledEditingRevision);
           if (pdfTabVisible) void loadPendingPdf();
         } else {
           void review?.content?.dispose();
@@ -1588,17 +1625,21 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         pendingPdfExport.output,
         pendingPdfExport.savedInputChanged,
       );
+    const refreshEditingInputs = () => {
+      editingInputsRevision += 1;
+      // 画像や .sty が足されたり直ったりしたときは、失敗していた生ブロックも次の描画で再試行する。
+      rawBlockCompiler.resetFailures();
+      controller.refresh();
+      lintController.refresh(vscode.workspace.textDocuments);
+    };
     const refreshTemplates = (
       changed: vscode.Uri,
       ownChange = pdfPublications.ownChange(changed.fsPath, () => pdfFileIdentity(changed.fsPath)),
     ) => {
       if (panelDisposed) return;
       const refresh = () => {
-        // 画像や .sty が足されたり直ったりしたときは、失敗していた生ブロックも次の描画で再試行する。
-        rawBlockCompiler.resetFailures();
-        controller.refresh();
-        lintController.refresh(vscode.workspace.textDocuments);
-        markPdfStale();
+        refreshEditingInputs();
+        markPdfStale(false);
       };
       if (!ownChange) {
         refresh();
@@ -1614,19 +1655,90 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         if (!matches || affectsDisplayed || affectsPending || (!pdfBytes && !pendingPdf)) refresh();
       });
     };
+    const refreshCreatedPdfEditingInputs = (changed: vscode.Uri) => {
+      const dependencies = editingWatcherDependencies();
+      const editingRevision = editingInputsRevision;
+      if (dependencies === undefined || watchesPdfInput(changed.fsPath, dependencies)) {
+        refreshEditingInputs();
+        return;
+      }
+      void mayReferenceCreatedPdf(changed.fsPath, dependencies).then((mayReference) => {
+        // PDF だけを古くした通知は、このスナップショットを無効にしない。
+        if (
+          mayReference &&
+          !panelDisposed &&
+          !pdfDirty &&
+          editingInputsRevision === editingRevision
+        )
+          refreshEditingInputs();
+      });
+    };
+    const refreshChangedPdfInputs = (
+      changed: vscode.Uri,
+      ownChange = pdfPublications.ownChange(changed.fsPath, () => pdfFileIdentity(changed.fsPath)),
+    ) => {
+      const currentDependencies = watcherDependencies();
+      const editingDependencies = editingWatcherDependencies();
+      const affectsPdf =
+        currentDependencies === undefined || watchesPdfInput(changed.fsPath, currentDependencies);
+      const affectsEditing =
+        editingDependencies === undefined || watchesPdfInput(changed.fsPath, editingDependencies);
+      const refresh = () => {
+        // An in-flight compile has no current dependency proof. It becomes stale
+        // even if the older HTML snapshot proves the change irrelevant.
+        if (affectsPdf) markPdfStale(false);
+        if (affectsEditing) refreshEditingInputs();
+      };
+      if (!ownChange) {
+        refresh();
+        return;
+      }
+      void ownChange.then((matches) => {
+        if (panelDisposed) return;
+        const affectsKnownInput =
+          (currentDependencies !== undefined &&
+            watchesPdfInput(changed.fsPath, currentDependencies)) ||
+          (editingDependencies !== undefined &&
+            watchesPdfInput(changed.fsPath, editingDependencies));
+        if (matches && !affectsKnownInput) return;
+        refresh();
+      });
+    };
     const onTemplateChanged = (kind: "create" | "change" | "delete") => (changed: vscode.Uri) => {
       // FileSystemWatcher は外部で作られた PDF も通知する。現在の組版ログで
       // 非参照と証明できるものは、部分コンパイル失敗の解除や画像 URL の世代更新より前に捨てる。
       if (kind !== "create") {
-        if (!isProvenUnreferencedPdf(changed.fsPath)) refreshTemplates(changed);
+        if (path.extname(changed.fsPath).toLowerCase() === ".pdf") refreshChangedPdfInputs(changed);
+        else refreshTemplates(changed);
         return;
       }
       // 公開記録は通知を受けた時点で取得する。静的走査を待つ間に有効期限を越えないようにする。
       const ownChange = pdfPublications.ownChange(changed.fsPath, () =>
         pdfFileIdentity(changed.fsPath),
       );
-      void isProvenUnreferencedCreatedPdf(changed.fsPath).then((unreferenced) => {
-        if (!unreferenced && !panelDisposed) refreshTemplates(changed, ownChange);
+      if (path.extname(changed.fsPath).toLowerCase() !== ".pdf") {
+        refreshTemplates(changed, ownChange);
+        return;
+      }
+      const external = () => {
+        if (panelDisposed) return;
+        // Tectonic が前回読まなかったファイルでも TeX の条件分岐やマクロ展開で
+        // 内容を変えられる。PDF の版は直ちに古くし、編集側の再生成だけを別途絞る。
+        markPdfStale(false);
+        refreshCreatedPdfEditingInputs(changed);
+      };
+      if (!ownChange) {
+        external();
+        return;
+      }
+      void ownChange.then((matches) => {
+        if (panelDisposed) return;
+        const dependencies = editingWatcherDependencies();
+        const affectsEditing =
+          dependencies === undefined || watchesPdfInput(changed.fsPath, dependencies);
+        if (matches && !affectsEditing) return;
+        if (matches) refreshTemplates(changed, ownChange);
+        else external();
       });
     };
     templateWatcher.onDidChange(onTemplateChanged("change"));
