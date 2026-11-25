@@ -7,13 +7,14 @@ import {
   lstat,
   mkdtemp,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { lineSplitter } from "./line-splitter.js";
 
 const MAX_PROCESS_OUTPUT = 1024 * 1024;
@@ -41,6 +42,8 @@ export interface PdfExportRequest {
   timeoutMs?: number;
   /** Tectonic の進捗(初回の TeX パッケージ取得)を受け取る。例外は書き出しに影響しない。 */
   onProgress?: (progress: PdfExportProgress) => void;
+  /** Collect inputs and a bounded compiler-owned artifact for the review tab. */
+  review?: { maxBytes: number };
 }
 
 /** `count` は 1 始まりの累計ダウンロード数。 */
@@ -56,6 +59,37 @@ export interface PdfExportResult {
   outputPath: string;
   overwritten: boolean;
   engineVersion: string;
+  review?: PdfReviewArtifact & { writtenFileIdentity?: string };
+}
+
+export interface PdfReviewArtifact {
+  size: number;
+  /**
+   * A bounded, compiler-owned immutable artifact. It is deliberately lazy:
+   * callers must dispose it when no confirmation panel consumes it.
+   */
+  content?: PdfReviewContent;
+  /** Absent when the compiler did not produce a usable input list. */
+  dependencyPaths?: readonly string[];
+}
+
+export interface PdfReviewContent {
+  read(): Promise<Uint8Array>;
+  dispose(): Promise<void>;
+}
+
+/** A full-deck TeX result before it is placed at a user-selected destination. */
+export interface CompiledPdf {
+  inputPath: string;
+  engineVersion: string;
+  pdf: Uint8Array;
+  dependencyPaths?: readonly string[];
+}
+
+export interface PdfPublishResult {
+  outputPath: string;
+  overwritten: boolean;
+  writtenFileIdentity?: string;
 }
 
 export type PdfExportErrorCode =
@@ -469,58 +503,80 @@ async function ensureTectonic(
   return engineVersion;
 }
 
+interface TemporaryPdf {
+  path: string;
+  size: number;
+  engineVersion: string;
+  dependencyPaths?: readonly string[];
+  retain(): PdfReviewContent;
+}
+
+// Tectonic describes local inputs one per continued line, without escaping spaces.
+// It resolves relative reads against outdir in this file even when read from cwd.
+function pdfDependencyPaths(
+  rules: string,
+  pdfPath: string,
+  inputPath: string,
+): readonly string[] | undefined {
+  const prefix = `${pdfPath} : `;
+  if (!rules.startsWith(prefix)) return undefined;
+  const entries = rules
+    .slice(prefix.length)
+    .trimEnd()
+    .split(/ \\\r?\n[ \t]+/);
+  if (entries[0] !== inputPath || entries.some((entry) => !entry || /[\r\n]/.test(entry)))
+    return undefined;
+  const outdir = dirname(pdfPath);
+  return entries.map((entry) => {
+    // Keep literal "../" segments until the working directory has been restored.
+    const fromOutput = `${outdir}${sep}`;
+    return resolve(
+      dirname(inputPath),
+      entry.startsWith(fromOutput) ? entry.slice(fromOutput.length) : entry,
+    );
+  });
+}
+
 /**
- * Compile the untouched input source through Tectonic, staging all compiler
- * output under the OS temp directory. The destination is replaced only after a
- * non-empty PDF has been produced.
+ * Preserve the literal names Tectonic reported while adding their resolved
+ * targets. A dependency may be reached through a symlink (`ref.pdf`), while
+ * an export atomically replaces its target (`figure.pdf`). Keeping both names
+ * lets callers invalidate either write without treating unrelated outputs as
+ * dependencies.
  */
-export async function exportPdf(
-  request: PdfExportRequest,
-  dependencies: PdfExportDependencies = {},
-): Promise<PdfExportResult> {
+async function dependencyPathAliases(paths: readonly string[]): Promise<readonly string[]> {
+  const aliases = await Promise.all(
+    paths.map(async (entry) => {
+      const target = await realpath(entry).catch(() => undefined);
+      return target === undefined || target === entry ? [entry] : [entry, target];
+    }),
+  );
+  return [...new Set(aliases.flat())];
+}
+
+async function withCompiledPdf<T>(
+  request: Omit<PdfExportRequest, "outputPath" | "overwrite" | "review">,
+  dependencies: PdfExportDependencies,
+  collectDependencies: boolean,
+  use: (artifact: TemporaryPdf) => Promise<T>,
+): Promise<T> {
   const runner = dependencies.runner ?? nodeProcessRunner;
   const tectonic = request.tectonicPath ?? "tectonic";
   const inputPath = resolve(request.inputPath);
-  const outputPath = resolve(request.outputPath ?? defaultOutputPath(inputPath));
   const signal = request.signal;
   throwIfCancelled(signal);
   if (!(await regularFile(inputPath))) {
     throw new PdfExportError("E_INPUT", `入力 TeX を読み込めません: ${request.inputPath}`);
   }
-  throwIfCancelled(signal);
-  let outputEntry: Awaited<ReturnType<typeof existingEntry>>;
-  try {
-    outputEntry = await existingEntry(outputPath);
-  } catch (error) {
-    throw new PdfExportError(
-      "E_IO",
-      `出力先を確認できません: ${outputPath}: ${errorMessage(error)}`,
-      error,
-    );
-  }
-  const outputExists = outputEntry !== undefined;
-  if (inputPath === outputPath || (outputExists && (await sameFile(inputPath, outputPath)))) {
-    throw new PdfExportError("E_INPUT", "出力先を入力 TeX と同じファイルにはできません");
-  }
-  if (outputEntry !== undefined && !outputEntry.isFile() && !outputEntry.isSymbolicLink()) {
-    throw new PdfExportError(
-      "E_OUTPUT_EXISTS",
-      `出力先は通常ファイルではありません: ${outputPath}`,
-    );
-  }
-  if (outputExists && !request.overwrite) {
-    throw new PdfExportError("E_OUTPUT_EXISTS", `出力先は既に存在します: ${outputPath}`);
-  }
-  throwIfCancelled(signal);
-
   const engineVersion = await ensureTectonic(runner, tectonic, dirname(inputPath), signal);
 
   const makeTemp =
     dependencies.temporaryDirectory ?? ((prefix: string) => mkdtemp(join(tmpdir(), prefix)));
   let tempDirectory: string | undefined;
-  let stagingPath: string | undefined;
+  let retained = false;
   try {
     tempDirectory = await makeTemp("beamer-editor-pdf-");
+    const dependencyFile = join(tempDirectory, "inputs.mk");
     throwIfCancelled(signal);
     const onProgress = request.onProgress;
     let downloads = 0;
@@ -528,7 +584,14 @@ export async function exportPdf(
     try {
       compileResult = await runner.run(
         tectonic,
-        ["-X", "compile", "--outdir", tempDirectory, inputPath],
+        [
+          "-X",
+          "compile",
+          ...(collectDependencies ? ["--makefile-rules", dependencyFile] : []),
+          "--outdir",
+          tempDirectory,
+          inputPath,
+        ],
         compileRunnerOptions(
           dirname(inputPath),
           signal,
@@ -570,24 +633,129 @@ export async function exportPdf(
       );
     }
     const compiledPdf = join(tempDirectory, compiledPdfName(inputPath));
-    if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(compiledPdf))) {
+    const info = await stat(compiledPdf).catch(() => undefined);
+    if (compileResult.exitCode !== 0 || !info?.isFile() || info.size === 0) {
       throw compileFailure(
         compileResult,
         `PDF のコンパイルに失敗しました${processDetail(compileResult)}`,
       );
     }
-    // Stage in the target filesystem. `COPYFILE_EXCL` plus UUID prevents one
-    // export from ever consuming another export's staging file.
-    stagingPath = join(dirname(outputPath), `.${basename(outputPath)}.deck-export-${randomUUID()}`);
-    await copyFile(compiledPdf, stagingPath, constants.COPYFILE_EXCL);
+    let dependencyPaths: readonly string[] | undefined;
+    if (collectDependencies) {
+      const rules = await readCompilationLog(dependencyFile, DEFAULT_DECK_LOG_BYTES_LIMIT).catch(
+        () => undefined,
+      );
+      if (rules !== undefined) {
+        const paths = pdfDependencyPaths(rules, compiledPdf, inputPath);
+        if (paths !== undefined) dependencyPaths = await dependencyPathAliases(paths);
+      }
+    }
     throwIfCancelled(signal);
-    if (request.overwrite) {
-      await rename(stagingPath, outputPath);
-    } else {
+    const retain = (): PdfReviewContent => {
+      if (retained) throw new Error("PDF review artifact was already retained");
+      retained = true;
+      let disposed = false;
+      let reading: Promise<Uint8Array> | undefined;
+      return {
+        read: () => {
+          if (disposed) return Promise.reject(new Error("PDF review artifact was disposed"));
+          reading ??= readFile(compiledPdf);
+          return reading;
+        },
+        dispose: async () => {
+          if (disposed) return;
+          disposed = true;
+          await reading?.catch(() => undefined);
+          const directory = tempDirectory;
+          tempDirectory = undefined;
+          if (directory)
+            await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+        },
+      };
+    };
+    return await use({
+      path: compiledPdf,
+      size: info.size,
+      engineVersion,
+      ...(dependencyPaths === undefined ? {} : { dependencyPaths }),
+      retain,
+    });
+  } catch (error) {
+    if (error instanceof PdfExportError) throw error;
+    if (isAbort(error, signal))
+      throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました", error);
+    throw new PdfExportError("E_IO", `組版結果を読み込めません: ${String(error)}`, error);
+  } finally {
+    if (tempDirectory && !retained)
+      await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/** Compile a saved deck for review, checking the size before loading the result. */
+export async function compilePdf(
+  request: Omit<PdfExportRequest, "outputPath" | "overwrite" | "review"> & { maxPdfBytes?: number },
+  dependencies: PdfExportDependencies = {},
+): Promise<CompiledPdf> {
+  return withCompiledPdf(request, dependencies, true, async (artifact) => {
+    if (request.maxPdfBytes !== undefined && artifact.size > request.maxPdfBytes)
+      throw new PdfExportError("E_LIMIT", "PDF が確認画面のサイズ上限を超えています。");
+    const pdf = await readFile(artifact.path);
+    throwIfCancelled(request.signal);
+    return {
+      inputPath: resolve(request.inputPath),
+      engineVersion: artifact.engineVersion,
+      pdf,
+      ...(artifact.dependencyPaths === undefined
+        ? {}
+        : { dependencyPaths: artifact.dependencyPaths }),
+    };
+  });
+}
+
+interface PdfDestination {
+  outputPath: string;
+  sourcePath?: string | undefined;
+  overwrite?: boolean | undefined;
+  signal?: AbortSignal | undefined;
+}
+
+/** Atomically publish already-generated PDF bytes to a destination. */
+export async function publishPdf(
+  request: PdfDestination & { pdf: Uint8Array },
+  dependencies: Pick<PdfExportDependencies, "removeStagingFile"> = {},
+): Promise<PdfPublishResult> {
+  if (request.pdf.byteLength === 0) throw new PdfExportError("E_INPUT", "公開する PDF が空です");
+  return publishPdfFile(request, dependencies, (path) =>
+    writeFile(path, request.pdf, { flag: "wx" }),
+  );
+}
+
+/** Identity of the published inode, checked against filesystem notifications without reading PDF bytes. */
+export async function pdfFileIdentity(path: string): Promise<string | undefined> {
+  const info = await stat(path, { bigint: true }).catch(() => undefined);
+  return info?.isFile() ? `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}` : undefined;
+}
+
+async function publishPdfFile(
+  request: PdfDestination,
+  dependencies: Pick<PdfExportDependencies, "removeStagingFile">,
+  stage: (path: string) => Promise<void>,
+): Promise<PdfPublishResult> {
+  const outputPath = resolve(request.outputPath);
+  const signal = request.signal;
+  throwIfCancelled(signal);
+  if (request.sourcePath !== undefined)
+    await protectPdfSource(resolve(request.sourcePath), outputPath);
+  const outputExists = await preflightPdfOutput(outputPath, request.overwrite);
+  let stagingPath: string | undefined;
+  try {
+    stagingPath = join(dirname(outputPath), `.${basename(outputPath)}.deck-export-${randomUUID()}`);
+    await stage(stagingPath);
+    const writtenFileIdentity = await pdfFileIdentity(stagingPath);
+    throwIfCancelled(signal);
+    if (request.overwrite) await rename(stagingPath, outputPath);
+    else {
       try {
-        // link is an atomic create-only operation on the destination filesystem.
-        // It closes the preflight-to-commit no-clobber race without deleting any
-        // file another process created while Tectonic was running.
         await link(stagingPath, outputPath);
       } catch (error) {
         if (isAlreadyExists(error))
@@ -598,27 +766,103 @@ export async function exportPdf(
           );
         throw error;
       }
-      // The link has published the final file. Its staging peer can now be
-      // removed best-effort; a cleanup failure must not turn a completed export
-      // into E_IO.
-      const publishedStagingPath = stagingPath;
+      const published = stagingPath;
       stagingPath = undefined;
       await (dependencies.removeStagingFile ?? ((path: string) => rm(path, { force: true })))(
-        publishedStagingPath,
+        published,
       ).catch(() => undefined);
     }
     stagingPath = undefined;
-    return { format: "pdf", inputPath, outputPath, overwritten: outputExists, engineVersion };
+    return {
+      outputPath,
+      overwritten: outputExists,
+      ...(writtenFileIdentity === undefined ? {} : { writtenFileIdentity }),
+    };
   } catch (error) {
     if (error instanceof PdfExportError) throw error;
     if (isAbort(error, signal))
-      throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました", error);
+      throw new PdfExportError("E_CANCELLED", "PDF の保存はキャンセルされました", error);
     throw new PdfExportError("E_IO", `PDF の配置に失敗しました: ${String(error)}`, error);
   } finally {
     if (stagingPath) await rm(stagingPath, { force: true }).catch(() => undefined);
-    if (tempDirectory)
-      await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+async function preflightPdfOutput(
+  outputPath: string,
+  overwrite: boolean | undefined,
+): Promise<boolean> {
+  let outputEntry: Awaited<ReturnType<typeof existingEntry>>;
+  try {
+    outputEntry = await existingEntry(outputPath);
+  } catch (error) {
+    throw new PdfExportError(
+      "E_IO",
+      `出力先を確認できません: ${outputPath}: ${errorMessage(error)}`,
+      error,
+    );
+  }
+  const outputExists = outputEntry !== undefined;
+  if (outputEntry !== undefined && !outputEntry.isFile() && !outputEntry.isSymbolicLink())
+    throw new PdfExportError(
+      "E_OUTPUT_EXISTS",
+      `出力先は通常ファイルではありません: ${outputPath}`,
+    );
+  if (outputExists && !overwrite)
+    throw new PdfExportError("E_OUTPUT_EXISTS", `出力先は既に存在します: ${outputPath}`);
+  return outputExists;
+}
+
+async function protectPdfSource(inputPath: string, outputPath: string): Promise<void> {
+  if (inputPath === outputPath || (await sameFile(inputPath, outputPath)))
+    throw new PdfExportError("E_INPUT", "出力先を入力 TeX と同じファイルにはできません");
+}
+
+/** Generate once, then atomically publish the same bytes. */
+export async function exportPdf(
+  request: PdfExportRequest,
+  dependencies: PdfExportDependencies = {},
+): Promise<PdfExportResult> {
+  const inputPath = resolve(request.inputPath);
+  const outputPath = resolve(request.outputPath ?? defaultOutputPath(inputPath));
+  throwIfCancelled(request.signal);
+  if (!(await regularFile(inputPath)))
+    throw new PdfExportError("E_INPUT", `入力 TeX を読み込めません: ${request.inputPath}`);
+  await protectPdfSource(inputPath, outputPath);
+  // Preserve the existing fast failure contract before starting Tectonic.
+  await preflightPdfOutput(outputPath, request.overwrite);
+  const review = request.review;
+  return withCompiledPdf(request, dependencies, review !== undefined, async (artifact) => {
+    const published = await publishPdfFile(
+      { outputPath, sourcePath: inputPath, overwrite: request.overwrite, signal: request.signal },
+      dependencies,
+      (path) => copyFile(artifact.path, path, constants.COPYFILE_EXCL),
+    );
+    // Keep the compiler output available through handoff without reading it.
+    // The user's destination may be replaced before confirmation opens.
+    const content = review && artifact.size <= review.maxBytes ? artifact.retain() : undefined;
+    return {
+      format: "pdf",
+      inputPath,
+      outputPath,
+      overwritten: published.overwritten,
+      engineVersion: artifact.engineVersion,
+      ...(review === undefined
+        ? {}
+        : {
+            review: {
+              size: artifact.size,
+              ...(content === undefined ? {} : { content }),
+              ...(artifact.dependencyPaths === undefined
+                ? {}
+                : { dependencyPaths: artifact.dependencyPaths }),
+              ...(published.writtenFileIdentity === undefined
+                ? {}
+                : { writtenFileIdentity: published.writtenFileIdentity }),
+            },
+          }),
+    };
+  });
 }
 
 export function defaultPdfOutputPath(inputPath: string): string {

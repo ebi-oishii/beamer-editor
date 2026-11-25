@@ -25,6 +25,17 @@ export type ExtensionToWebview =
   | { type: "rawBlockFailed"; key: string; message: string }
   /** 部分コンパイルを切ったとき、差し込み済みの画像を捨ててプレースホルダへ戻す。 */
   | { type: "rawImagesCleared" }
+  /** Full-deck PDF confirmation state. PDF bytes stay in the webview only. */
+  | {
+      type: "pdfUpdated";
+      status: "idle" | "compiling" | "ready" | "stale" | "failed" | "restricted";
+      message?: string;
+      /** Native binary transport; unlike a base64 string this is not copied into JSON. */
+      pdf?: ArrayBuffer;
+      /** Changes only when the actual PDF bytes change, never for status text. */
+      artifactId?: number;
+      revision: number;
+    }
   | { type: "error"; message: string };
 
 export type WebviewToExtension =
@@ -44,6 +55,9 @@ export type WebviewToExtension =
       width: number;
     }
   | { type: "ready" }
+  | { type: "previewTabChanged"; tab: "edit" | "pdf"; retryPdfId?: number }
+  | { type: "refreshPdfConfirmation" }
+  | { type: "saveDisplayedPdf"; artifactId?: number }
   /** version はプレビューが表示中の deck の document version(古い版からのジャンプ検出に使う)。 */
   | { type: "jumpToSource"; frameIndex: number; version: number }
   | { type: "activeFrameChanged"; frameIndex: number }
@@ -132,6 +146,30 @@ export function parseExtensionToWebview(raw: unknown): ExtensionToWebview | null
       return null;
     case "rawImagesCleared":
       return { type: "rawImagesCleared" };
+    case "pdfUpdated":
+      if (
+        (raw.status === "idle" ||
+          raw.status === "compiling" ||
+          raw.status === "ready" ||
+          raw.status === "stale" ||
+          raw.status === "failed" ||
+          raw.status === "restricted") &&
+        typeof raw.revision === "number" &&
+        Number.isInteger(raw.revision) &&
+        raw.revision >= 0 &&
+        (raw.message === undefined || typeof raw.message === "string") &&
+        (raw.pdf === undefined || raw.pdf instanceof ArrayBuffer) &&
+        (raw.artifactId === undefined || isNonNegativeInteger(raw.artifactId))
+      )
+        return {
+          type: "pdfUpdated",
+          status: raw.status,
+          revision: raw.revision,
+          ...(typeof raw.message === "string" ? { message: raw.message } : {}),
+          ...(raw.pdf instanceof ArrayBuffer ? { pdf: raw.pdf } : {}),
+          ...(isNonNegativeInteger(raw.artifactId) ? { artifactId: raw.artifactId } : {}),
+        };
+      return null;
     case "error":
       if (typeof raw.message === "string") {
         return { type: "error", message: raw.message };
@@ -154,6 +192,20 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
         : null;
     case "ready":
       return { type: "ready" };
+    case "previewTabChanged":
+      if (raw.tab === "pdf") return { type: raw.type, tab: raw.tab };
+      if (raw.tab === "edit")
+        return {
+          type: raw.type,
+          tab: raw.tab,
+          ...(isNonNegativeInteger(raw.retryPdfId) ? { retryPdfId: raw.retryPdfId } : {}),
+        };
+      return null;
+    case "refreshPdfConfirmation":
+    case "saveDisplayedPdf":
+      return isNonNegativeInteger(raw.artifactId)
+        ? { type: raw.type, artifactId: raw.artifactId }
+        : { type: raw.type };
     case "jumpToSource":
       if (typeof raw.frameIndex === "number" && typeof raw.version === "number") {
         return { type: "jumpToSource", frameIndex: raw.frameIndex, version: raw.version };

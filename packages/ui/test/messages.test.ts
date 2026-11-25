@@ -4,6 +4,14 @@ import { parseExtensionToWebview, parseWebviewToExtension } from "../src/message
 const deck = { title: "t", frames: [], css: "" };
 
 describe("parseExtensionToWebview", () => {
+  it("receives PDF confirmation as an ArrayBuffer", () => {
+    const pdf = Uint8Array.of(1, 2, 3).buffer;
+    const message = { type: "pdfUpdated", status: "ready", revision: 1, artifactId: 1, pdf };
+    const parsed = parseExtensionToWebview(message);
+    expect(parsed?.type === "pdfUpdated" && parsed.pdf).toBe(pdf);
+    expect(parseExtensionToWebview({ ...message, pdf: [1, 2, 3] })).toBeNull();
+  });
+
   it("正当な deckUpdated を受理する", () => {
     const msg = { type: "deckUpdated", deck, version: 3, activeFrame: 0 };
     expect(parseExtensionToWebview(msg)).toEqual(msg);

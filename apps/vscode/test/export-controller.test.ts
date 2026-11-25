@@ -149,6 +149,42 @@ describe("ExportController", () => {
     expect(host.openPdf).toHaveBeenCalledWith(output);
   });
 
+  it("passes the lazy compiler-owned PDF to the Export observer without reading it", async () => {
+    const received: unknown[] = [];
+    const host = createHost({
+      beginPdfExport: vi.fn(() => ({
+        finish: (
+          review?: import("@beamer-editor/compiler").PdfExportResult["review"],
+          publication?: Pick<import("@beamer-editor/compiler").PdfExportResult, "overwritten">,
+        ) => {
+          if (review?.content) received.push(review.content);
+          received.push(publication);
+        },
+      })),
+    });
+    const pdf = new Uint8Array([1, 2, 3]);
+    const content = { read: vi.fn(async () => pdf), dispose: vi.fn(async () => {}) };
+    const compile = vi.fn(async () => ({
+      format: "pdf" as const,
+      inputPath: input.fsPath,
+      outputPath: output.fsPath,
+      overwritten: false,
+      engineVersion: "0.17.0",
+      review: { size: pdf.length, content },
+    }));
+    await new ExportController(host, { exportPdf: compile }).export(createDocument());
+    expect(host.beginPdfExport).toHaveBeenCalledTimes(1);
+    expect(compile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        review: {
+          maxBytes: 64 * 1024 * 1024,
+        },
+      }),
+    );
+    expect(received).toEqual([content, { overwritten: false }]);
+    expect(content.read).not.toHaveBeenCalled();
+  });
+
   it("reports Tectonic package downloads in the progress notification, throttled", async () => {
     vi.useFakeTimers();
     try {

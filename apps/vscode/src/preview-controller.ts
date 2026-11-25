@@ -82,6 +82,8 @@ export function toCanvasPlacement(rect: { x: number; y: number; width: number })
 }
 
 export interface PreviewControllerOptions {
+  /** 編集/PDF タブの可視状態。重い PDF 転送は host 側でこの状態に従う。 */
+  previewTabChanged?: (tab: "edit" | "pdf", retryPdfId?: number, deckChanged?: boolean) => void;
   /** レンダリングパイプラインの差し替え口(テスト用)。既定は renderDocument。 */
   render?: (text: string, version: number) => RenderOutcome;
   /** 予期しないレンダリング例外の通知先(既定は何もしない)。 */
@@ -183,6 +185,8 @@ export interface PreviewControllerOptions {
     frameOffset: number;
     document: PreviewDocument;
   }) => Promise<PasteResult>;
+  /** PDF確認の操作。PDF の生成は extension host が所有する。 */
+  pdfAction?: (action: "open" | "refresh" | "save", artifactId?: number) => void;
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -234,10 +238,11 @@ export function emptyPreviewHtml(assets: WebviewAssets, cspSource: string, nonce
   const csp = [
     "default-src 'none'",
     `img-src ${cspSource} data:`,
+    `connect-src ${cspSource}`,
     `style-src ${cspSource} 'unsafe-inline'`,
     // KaTeX の CSS は版によって data: URL のフォントを含むため許可する
     `font-src ${cspSource} data:`,
-    // pdf.js の worker は拡張の media から読む。Webview とは別オリジンなので blob: 経由で起動される。
+    // PDF.js の worker は拡張の media から読み、Webview 内で blob: として起動する。
     `script-src 'nonce-${nonce}' ${cspSource}`,
     `worker-src blob: ${cspSource}`,
   ].join("; ");
@@ -252,7 +257,25 @@ export function emptyPreviewHtml(assets: WebviewAssets, cspSource: string, nonce
     <link rel="stylesheet" href="${assets.styleUri}" />
     <style>
       html, body { height: 100%; margin: 0; }
-      #app { display: flex; height: 100%; }
+      body { display: flex; flex-direction: column; }
+      #app { display: flex; }
+      #app, #deck-pdf-confirmation { flex: 1; min-height: 0; }
+      #app[hidden] { display: none; }
+      #deck-pdf-confirmation { overflow: auto; background: var(--vscode-editor-background); }
+      .deck-preview-tabs, .deck-pdf-controls { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+      .deck-preview-tabs, .deck-pdf-toolbar { padding: .5rem .75rem; border-bottom: 1px solid var(--vscode-panel-border); }
+      .deck-pdf-toolbar { position: sticky; top: 0; background: var(--vscode-editor-background); }
+      .deck-pdf-status { display: block; margin-bottom: .5rem; overflow-wrap: anywhere; }
+      .deck-pdf-render-error { overflow-wrap: anywhere; }
+      .deck-preview-tabs button, .deck-pdf-controls button {
+        padding: .25rem .5rem; border: 1px solid var(--vscode-button-border, transparent);
+        color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground);
+        font: inherit;
+      }
+      .deck-preview-tabs button[aria-pressed="true"] { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+      .deck-pdf-controls button:disabled { opacity: .55; }
+      .deck-pdf-pages { padding: 1rem; }
+      .deck-pdf-pages canvas { display: block; margin: auto; max-width: 100%; height: auto; box-shadow: 0 1px 5px #0008; }
     </style>
   </head>
   <body>
@@ -291,6 +314,11 @@ export class PreviewController implements vscode.Disposable {
   private readonly deleteCanvasElement: PreviewControllerOptions["deleteCanvasElement"];
   private readonly copyCanvasElement: PreviewControllerOptions["copyCanvasElement"];
   private readonly pasteCanvasElements: PreviewControllerOptions["pasteCanvasElements"];
+  private readonly pdfAction: NonNullable<PreviewControllerOptions["pdfAction"]>;
+  private readonly previewTabChanged: NonNullable<PreviewControllerOptions["previewTabChanged"]>;
+  private webviewTab: "edit" | "pdf" = "edit";
+  /** PDF タブ中に変更された。編集へ戻るまで HTML 化・asset URL 化を遅延する。 */
+  private pendingDeckRender = false;
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
@@ -351,6 +379,8 @@ export class PreviewController implements vscode.Disposable {
     this.deleteCanvasElement = options.deleteCanvasElement;
     this.copyCanvasElement = options.copyCanvasElement;
     this.pasteCanvasElements = options.pasteCanvasElements;
+    this.pdfAction = options.pdfAction ?? (() => {});
+    this.previewTabChanged = options.previewTabChanged ?? (() => {});
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
@@ -375,6 +405,7 @@ export class PreviewController implements vscode.Disposable {
     // move / detach と同じく、latest が今の文書の今の version を描いたものでなければ使わない。
     // 通常の編集では TextDocument object は同じまま version だけが進むので object 比較では足りない。
     if (
+      this.webviewTab === "pdf" ||
       !latest ||
       this.latestDocument !== this.document ||
       latest.version !== this.document.version
@@ -417,8 +448,31 @@ export class PreviewController implements vscode.Disposable {
     const msg = parseWebviewToExtension(raw);
     if (!msg) return;
     if (msg.type === "ready") {
+      this.webviewTab = "edit";
+      this.pendingDeckRender = false;
       this.onWebviewReady();
       this.sendDeck();
+    } else if (msg.type === "previewTabChanged") {
+      if (this.webviewTab === msg.tab) return;
+      this.webviewTab = msg.tab;
+      if (msg.tab === "pdf" && this.debounceTimer) {
+        clearTimeout(this.debounceTimer);
+        this.debounceTimer = undefined;
+        this.pendingDeckRender = true;
+      }
+      const deckChanged = msg.tab === "edit" && this.pendingDeckRender;
+      if (msg.tab === "edit") {
+        if (this.pendingDeckRender) {
+          this.pendingDeckRender = false;
+          this.sendDeck();
+        } else this.publishPendingReveal();
+      }
+      this.previewTabChanged(msg.tab, msg.retryPdfId, deckChanged);
+      if (msg.tab === "pdf") this.pdfAction("open");
+    } else if (msg.type === "refreshPdfConfirmation") {
+      this.pdfAction("refresh");
+    } else if (msg.type === "saveDisplayedPdf") {
+      this.pdfAction("save", msg.artifactId);
     } else if (msg.type === "jumpToSource") {
       this.handleJump(msg.frameIndex, msg.version);
     } else if (msg.type === "resizeCanvasElement" || msg.type === "setCanvasFontSize") {
@@ -993,8 +1047,15 @@ export class PreviewController implements vscode.Disposable {
     // close → 再オープンで新しい TextDocument になっても追従できるよう差し替える。
     this.document = event.document;
     if (event.contentChanges.length === 0) return;
+    if (this.webviewTab === "pdf") {
+      this.pendingDeckRender = true;
+      return;
+    }
     clearTimeout(this.debounceTimer);
-    this.debounceTimer = setTimeout(() => this.sendDeck(), RENDER_DEBOUNCE_MS);
+    this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = undefined;
+      this.sendDeck();
+    }, RENDER_DEBOUNCE_MS);
   }
 
   /**
@@ -1005,6 +1066,10 @@ export class PreviewController implements vscode.Disposable {
    */
   private sendDeck(): void {
     if (this.disposed) return;
+    if (this.webviewTab === "pdf") {
+      this.pendingDeckRender = true;
+      return;
+    }
     let message: ExtensionToWebview;
     try {
       const renderedDocument = this.document;
@@ -1047,17 +1112,24 @@ export class PreviewController implements vscode.Disposable {
       this.onError(text);
       message = { type: "error", message: text };
     }
+    this.publishDeck(message);
+  }
+
+  private publishDeck(message: ExtensionToWebview): void {
     void this.panel.webview.postMessage(message);
     if (message.type === "deckUpdated") {
       // フレーム番号は描画ごとに変わり得るので、追従の既読は描画単位でリセットする。
       this.lastRevealedFrame = undefined;
       this.revealMovedSlide();
-      if (this.pendingReveal !== undefined) {
-        const { offset, onlyIfChanged } = this.pendingReveal;
-        this.pendingReveal = undefined;
-        this.revealSourceOffset(offset, { onlyIfChanged });
-      }
+      this.publishPendingReveal();
     }
+  }
+
+  private publishPendingReveal(): void {
+    if (!this.pendingReveal) return;
+    const { offset, onlyIfChanged } = this.pendingReveal;
+    this.pendingReveal = undefined;
+    this.revealSourceOffset(offset, { onlyIfChanged });
   }
 
   close(): void {
@@ -1067,7 +1139,7 @@ export class PreviewController implements vscode.Disposable {
 
   /** 生ブロックの部分コンパイル結果を Webview へ送る(#81)。 */
   postRawBlockReady(key: string, pdf: Uint8Array): void {
-    if (this.disposed) return;
+    if (this.disposed || this.webviewTab === "pdf") return;
     const message: ExtensionToWebview = {
       type: "rawBlockReady",
       key,
@@ -1077,7 +1149,7 @@ export class PreviewController implements vscode.Disposable {
   }
 
   postRawBlockFailed(key: string, message: string): void {
-    if (this.disposed) return;
+    if (this.disposed || this.webviewTab === "pdf") return;
     const msg: ExtensionToWebview = { type: "rawBlockFailed", key, message };
     void this.panel.webview.postMessage(msg);
   }
@@ -1086,6 +1158,33 @@ export class PreviewController implements vscode.Disposable {
   postRawImagesCleared(): void {
     if (this.disposed) return;
     const message: ExtensionToWebview = { type: "rawImagesCleared" };
+    void this.panel.webview.postMessage(message);
+  }
+
+  postPdfState(
+    status: "idle" | "compiling" | "ready" | "stale" | "failed" | "restricted",
+    revision: number,
+    options: { message?: string; pdf?: Uint8Array; artifactId?: number } = {},
+  ): void {
+    if (this.disposed) return;
+    const pdf = options.pdf;
+    const bytes =
+      pdf &&
+      (pdf.buffer instanceof ArrayBuffer &&
+      pdf.byteOffset === 0 &&
+      pdf.byteLength === pdf.buffer.byteLength
+        ? pdf.buffer
+        : new Uint8Array(pdf).buffer);
+    const message: ExtensionToWebview = {
+      type: "pdfUpdated",
+      status,
+      revision,
+      ...(options.message === undefined ? {} : { message: options.message }),
+      // VS Code 1.130+ transfers an ArrayBuffer natively.  Base64 used to
+      // allocate two additional full-size strings for every confirmation.
+      ...(bytes === undefined ? {} : { pdf: bytes as ArrayBuffer }),
+      ...(options.artifactId === undefined ? {} : { artifactId: options.artifactId }),
+    };
     void this.panel.webview.postMessage(message);
   }
 

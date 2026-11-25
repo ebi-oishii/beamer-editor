@@ -338,6 +338,81 @@ describe("PreviewController", () => {
     expect(message.version).toBe(8);
   });
 
+  it("PDF確認中の HTML 更新を保留し、編集復帰時に最新版とジャンプを送る", () => {
+    const { panel, posted, fire } = makePanel();
+    const { events, change } = makeEvents();
+    const doc = makeDoc();
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn());
+    fire({ type: "ready" });
+    fire({ type: "previewTabChanged", tab: "pdf" });
+    for (const title of ["first", "latest"]) {
+      doc.edit(`\\begin{document}\\begin{frame}{${title}}B\\end{frame}\\end{document}`);
+      change(doc);
+      vi.advanceTimersByTime(RENDER_DEBOUNCE_MS);
+    }
+    controller.revealSourceOffset(doc.getText().indexOf("\\begin{frame}"));
+    expect(posted).toHaveLength(1);
+    fire({ type: "previewTabChanged", tab: "edit" });
+    expect(posted.slice(1)).toMatchObject([
+      { type: "deckUpdated", version: 9 },
+      { type: "activeFrameChanged", version: 9, frameIndex: 0 },
+    ]);
+    fire({ type: "previewTabChanged", tab: "pdf" });
+    fire({ type: "previewTabChanged", tab: "edit" });
+    expect(posted).toHaveLength(3);
+  });
+
+  it("PDF確認中は renderer と画像 URL 解決を呼ばず、編集復帰で最新本文を一度だけ HTML 化する", () => {
+    const { panel, fire } = makePanel();
+    const { events, change } = makeEvents();
+    const doc = makeDoc();
+    const render = vi.fn(
+      (_: string, version: number): RenderOutcome => ({
+        deck: {
+          title: "t",
+          css: "",
+          frames: [
+            {
+              index: 1,
+              label: null,
+              titleText: "one",
+              html: '<img src="fig.pdf">',
+              stepCount: 1,
+              isRaw: false,
+              sourceSpan: { start: 0, end: 1 },
+            },
+          ],
+        },
+        version,
+        expansionMap: [],
+        expandDiagnostics: [],
+      }),
+    );
+    const resolveResource = vi.fn((resource: string) => `webview:${resource}`);
+    new PreviewController(panel, ASSETS, doc, events, vi.fn(), { render, resolveResource });
+    fire({ type: "ready" });
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(resolveResource).toHaveBeenCalledTimes(1);
+
+    fire({ type: "previewTabChanged", tab: "pdf" });
+    doc.edit("first");
+    change(doc);
+    doc.edit("latest");
+    change(doc);
+    vi.advanceTimersByTime(RENDER_DEBOUNCE_MS);
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(resolveResource).toHaveBeenCalledTimes(1);
+
+    fire({ type: "previewTabChanged", tab: "edit" });
+    expect(render).toHaveBeenCalledTimes(2);
+    expect(resolveResource).toHaveBeenCalledTimes(2);
+    // 変更の無い往復では deck を再送/再構築しない。
+    fire({ type: "previewTabChanged", tab: "pdf" });
+    fire({ type: "previewTabChanged", tab: "edit" });
+    expect(render).toHaveBeenCalledTimes(2);
+    expect(resolveResource).toHaveBeenCalledTimes(2);
+  });
+
   it("連続入力は 1 回のレンダリングへまとめられ、最後の内容だけが送られる", () => {
     const { panel, posted } = makePanel();
     const { events, change } = makeEvents();

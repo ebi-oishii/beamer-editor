@@ -4,6 +4,7 @@ import {
   PdfExportError,
   type PdfExportErrorCode,
   type PdfExportProgress,
+  type PdfExportRequest,
   type PdfExportResult,
 } from "@beamer-editor/compiler";
 import { type LintOptions, sourceLocation } from "@beamer-editor/core";
@@ -15,6 +16,8 @@ import {
   type HtmlExportResult,
 } from "@beamer-editor/html-export";
 import { lintDocumentText } from "./diagnostics";
+
+export const MAX_CONFIRMATION_PDF_BYTES = 64 * 1024 * 1024;
 
 export interface ExportUri {
   readonly scheme: string;
@@ -62,6 +65,18 @@ export interface ExportHost {
   uriForFile(path: string): ExportUri;
   tectonicPath(document: ExportDocument): string | undefined;
   timeoutMs(document: ExportDocument): number;
+  /** Reserves one Export invocation's confirmation result before compilation begins. */
+  beginPdfExport?(
+    document: ExportDocument,
+    output: ExportUri,
+  ):
+    | {
+        finish: (
+          review?: PdfExportResult["review"],
+          publication?: Pick<PdfExportResult, "overwritten">,
+        ) => void;
+      }
+    | undefined;
 }
 
 export interface ExportControllerDependencies {
@@ -73,6 +88,7 @@ export interface ExportControllerDependencies {
     timeoutMs?: number;
     signal: AbortSignal;
     onProgress?: (progress: PdfExportProgress) => void;
+    review?: NonNullable<PdfExportRequest["review"]>;
   }) => Promise<PdfExportResult>;
   exportHtml?: (request: HtmlExportRequest) => Promise<HtmlExportResult>;
   htmlKatexAssetsPath?: string;
@@ -298,6 +314,7 @@ export class ExportController {
       compiled = undefined;
     }
 
+    let pdfReview = format === "pdf" ? this.host.beginPdfExport?.(document, output) : undefined;
     try {
       const result = await this.host.withProgress(async (token, report) => {
         const abort = new AbortController();
@@ -330,6 +347,7 @@ export class ExportController {
                 progress.report(downloadProgressMessage(value));
             },
             ...(tectonicPath === undefined ? {} : { tectonicPath }),
+            ...(pdfReview ? { review: { maxBytes: MAX_CONFIRMATION_PDF_BYTES } } : {}),
           };
           // Cancel and controller dispose both abort; the compile may take a
           // while to settle after that, so drop the pending update right away.
@@ -343,6 +361,15 @@ export class ExportController {
           this.activeAbortControllers.delete(abort);
         }
       });
+      const review = result?.format === "pdf" ? result.review : undefined;
+      if (this.disposed || !pdfReview) void review?.content?.dispose();
+      pdfReview?.finish(
+        !this.disposed ? review : undefined,
+        !this.disposed && result?.format === "pdf"
+          ? { overwritten: result.overwritten }
+          : undefined,
+      );
+      pdfReview = undefined;
       if (!result || this.disposed) return;
       const isHtml = result.format === "html";
       const action = await this.host.showInformation(
@@ -359,6 +386,7 @@ export class ExportController {
         await this.host.showWarning("書き出しは完了しましたが、表示操作に失敗しました。");
       }
     } catch (error) {
+      pdfReview?.finish();
       await this.reportError(error, document, compiled);
     }
   }

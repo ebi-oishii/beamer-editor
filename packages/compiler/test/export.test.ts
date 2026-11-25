@@ -1,14 +1,28 @@
-import { access, link, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  link,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  compilePdf,
   exportPdf,
   nodeProcessRunner,
   PdfExportError,
   type PdfExportProgress,
   type ProcessResult,
   type ProcessRunner,
+  pdfFileIdentity,
+  publishPdf,
 } from "../src/index.ts";
 
 const directories: string[] = [];
@@ -676,6 +690,147 @@ describe("exportPdf", () => {
       expect(await readFile(value.outputPath, "utf8")).toContain("%PDF-");
     },
   );
+});
+
+describe("compilePdf and publishPdf", () => {
+  it("collects Tectonic's paths with spaces relative to the TeX input for review", async () => {
+    const input = await source("talk with spaces.slide.tex");
+    const output = join(input.dir, "published.pdf");
+    const calls: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
+    const runner = successfulRunner(calls);
+    const result = await exportPdf(
+      { inputPath: input.path, outputPath: output, review: { maxBytes: 64 } },
+      {
+        runner: {
+          async run(command, args, options) {
+            const outcome = await runner.run(command, args, options);
+            const rules = args[args.indexOf("--makefile-rules") + 1];
+            if (args.includes("--makefile-rules") && rules) {
+              const outdir = args[args.indexOf("--outdir") + 1] ?? "";
+              const pdf = join(outdir, "talk with spaces.slide.pdf");
+              await writeFile(
+                rules,
+                [
+                  `${pdf} : ${input.path}`,
+                  `  ${join(outdir, "assets", "figure 1.pdf")}`,
+                  `  ${outdir}${sep}..${sep}theme.sty\n`,
+                ].join(" \\\n"),
+              );
+            }
+            return outcome;
+          },
+        },
+      },
+    );
+    expect(await result.review?.content?.read()).toEqual(await readFile(output));
+    await result.review?.content?.dispose();
+    expect(result.review?.writtenFileIdentity).toBe(await pdfFileIdentity(output));
+    expect(result.review?.dependencyPaths).toEqual([
+      ...new Set([
+        input.path,
+        await realpath(input.path),
+        join(input.dir, "assets", "figure 1.pdf"),
+        join(input.dir, "..", "theme.sty"),
+      ]),
+    ]);
+  });
+
+  it("captures the immutable result even when the review panel attaches after compilation begins", async () => {
+    const input = await source();
+    const output = join(input.dir, "published.pdf");
+    const result = await exportPdf(
+      { inputPath: input.path, outputPath: output, review: { maxBytes: 64 } },
+      { runner: successfulRunner([]) },
+    );
+    const published = await readFile(output);
+    await writeFile(output, "replaced by another process");
+    expect(await result.review?.content?.read()).toEqual(published);
+    await result.review?.content?.dispose();
+  });
+
+  it("keeps a symlink dependency name and its resolved target", async () => {
+    const input = await source();
+    const output = join(input.dir, "published.pdf");
+    const figure = join(input.dir, "figure.pdf");
+    const reference = join(input.dir, "ref.pdf");
+    await writeFile(figure, "%PDF-referenced\n");
+    await symlink(figure, reference);
+    const runner = successfulRunner([]);
+    const result = await exportPdf(
+      { inputPath: input.path, outputPath: output, review: { maxBytes: 64 } },
+      {
+        runner: {
+          async run(command, args, options) {
+            const outcome = await runner.run(command, args, options);
+            if (args.includes("--makefile-rules")) {
+              const rules = args[args.indexOf("--makefile-rules") + 1];
+              const outdir = args[args.indexOf("--outdir") + 1];
+              const pdf = join(outdir ?? "", "talk.slide.pdf");
+              await writeFile(rules ?? "", `${pdf} : ${input.path} \\\n  ${reference}\n`);
+            }
+            return outcome;
+          },
+        },
+      },
+    );
+    expect(result.review?.dependencyPaths).toEqual([
+      ...new Set([input.path, await realpath(input.path), reference, await realpath(figure)]),
+    ]);
+    await result.review?.content?.dispose();
+  });
+
+  it("rejects a large confirmation before loading bytes and can still write that PDF", async () => {
+    const input = await source();
+    const output = join(input.dir, "published.pdf");
+    const size = 10_000;
+    const runner = successfulRunner([]);
+    const largeRunner: ProcessRunner = {
+      async run(command, args, options) {
+        const outcome = await runner.run(command, args, options);
+        if (args.includes("--outdir")) {
+          const outdir = args[args.indexOf("--outdir") + 1] ?? "";
+          await truncate(join(outdir, "talk.slide.pdf"), size);
+        }
+        return outcome;
+      },
+    };
+    await expect(
+      compilePdf({ inputPath: input.path, maxPdfBytes: 64 }, { runner: largeRunner }),
+    ).rejects.toMatchObject({ code: "E_LIMIT" });
+    const artifact = await exportPdf(
+      {
+        inputPath: input.path,
+        outputPath: output,
+        review: {
+          maxBytes: 64,
+        },
+      },
+      { runner: largeRunner },
+    );
+    expect(artifact.review?.size).toBe(size);
+    expect(artifact.review?.content).toBeUndefined();
+    expect((await stat(output)).size).toBe(size);
+  });
+
+  it("separates generation from byte-for-byte atomic publication", async () => {
+    const input = await source();
+    const output = join(input.dir, "published.pdf");
+    const compiled = await compilePdf({ inputPath: input.path }, { runner: successfulRunner([]) });
+    expect(Array.from(compiled.pdf)).toEqual(Array.from(Buffer.from("%PDF-1.7\n")));
+    await publishPdf({ pdf: compiled.pdf, outputPath: output });
+    expect(await readFile(output)).toEqual(Buffer.from("%PDF-1.7\n"));
+  });
+
+  it("publishes displayed PDF bytes without invoking Tectonic", async () => {
+    const dir = await directory();
+    const savedPdf = join(dir, "saved.pdf");
+    const bytes = Buffer.from("%PDF-1.7\nexact displayed artifact\n");
+    await expect(publishPdf({ pdf: bytes, outputPath: savedPdf })).resolves.toMatchObject({
+      outputPath: savedPdf,
+      overwritten: false,
+    });
+    expect(await readFile(savedPdf)).toEqual(bytes);
+  });
 });
 
 describe("PdfExportError", () => {
