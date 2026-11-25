@@ -151,8 +151,18 @@ function installPdfConfirmation(app: HTMLElement): void {
   )
     return;
 
-  let currentPdf: string | undefined;
+  let pdfDocument: pdfjs.PDFDocumentProxy | undefined;
+  let pdfWorkerSession:
+    | {
+        run: <T>(operation: Promise<T>) => Promise<T>;
+        close: () => Promise<void>;
+      }
+    | undefined;
+  let closingSession = Promise.resolve();
+  let pageRender: pdfjs.RenderTask | undefined;
+  let pdfLoadRevision = 0;
   let currentArtifactId: number | undefined;
+  let requestedArtifactId: number | undefined;
   let revision = -1;
   let rendering = 0;
   let pageNumber = 1;
@@ -161,10 +171,98 @@ function installPdfConfirmation(app: HTMLElement): void {
   let restricted = false;
 
   const updateControls = () => {
-    previous.disabled = busy || pageNumber <= 1;
-    next.disabled = busy || pageNumber >= pageCount;
-    save.disabled = restricted || currentArtifactId === undefined || !pages.firstElementChild;
+    const canNavigate = !busy && !!pdfDocument && currentArtifactId === requestedArtifactId;
+    previous.disabled = !canNavigate || pageNumber <= 1;
+    next.disabled = !canNavigate || pageNumber >= pageCount;
+    save.disabled =
+      restricted ||
+      currentArtifactId === undefined ||
+      currentArtifactId !== requestedArtifactId ||
+      !pages.firstElementChild;
     pageLabel.textContent = pageCount > 0 ? `${pageNumber} / ${pageCount}` : "";
+  };
+  const disposePdf = () => {
+    rendering += 1;
+    pageRender?.cancel();
+    pageRender = undefined;
+    const session = pdfWorkerSession;
+    pdfDocument = undefined;
+    pdfWorkerSession = undefined;
+    if (session) closingSession = session.close();
+    return closingSession;
+  };
+  const loadPdf = async (bytes: ArrayBuffer, artifactId: number) => {
+    const loadRevision = ++pdfLoadRevision;
+    requestedArtifactId = artifactId;
+    busy = true;
+    renderError.hidden = true;
+    updateControls();
+    try {
+      await disposePdf();
+      if (loadRevision !== pdfLoadRevision) return;
+      const workerUrl = await localPdfWorker();
+      if (loadRevision !== pdfLoadRevision) return;
+      const port = new Worker(workerUrl, { type: "module" });
+      const startupFailure = new AbortController();
+      port.addEventListener(
+        "error",
+        (event) =>
+          startupFailure.abort(new Error(event.message || "PDF ワーカーを起動できません。")),
+        { once: true },
+      );
+      let worker: pdfjs.PDFWorker | undefined;
+      let loading: pdfjs.PDFDocumentLoadingTask;
+      try {
+        worker = pdfjs.PDFWorker.create({ port });
+        loading = pdfjs.getDocument({ data: new Uint8Array(bytes), worker });
+      } catch (error) {
+        worker?.destroy();
+        port.terminate();
+        throw error;
+      }
+      const run = async <T>(operation: Promise<T>): Promise<T> => {
+        const signal = startupFailure.signal;
+        const listener = new AbortController();
+        try {
+          return await Promise.race([
+            operation,
+            new Promise<never>((_resolve, reject) => {
+              if (signal.aborted) reject(signal.reason);
+              else
+                signal.addEventListener("abort", () => reject(signal.reason), {
+                  once: true,
+                  signal: listener.signal,
+                });
+            }),
+          ]);
+        } finally {
+          listener.abort();
+        }
+      };
+      pdfWorkerSession = {
+        run,
+        close: async () => {
+          try {
+            // A broken worker cannot acknowledge destruction.
+            await run(loading.destroy()).catch(() => undefined);
+          } finally {
+            worker.destroy();
+            port.terminate();
+          }
+        },
+      };
+      const loaded = await run(loading.promise);
+      if (loadRevision !== pdfLoadRevision) return;
+      pdfDocument = loaded;
+      await renderPage(1, artifactId);
+    } catch (error) {
+      if (loadRevision !== pdfLoadRevision) return;
+      void disposePdf();
+      renderError.textContent = `PDF を表示できません。 ${String(error)}`;
+      renderError.hidden = false;
+      busy = false;
+      updateControls();
+    }
   };
   const showTab = (tab: "edit" | "pdf") => {
     app.hidden = tab === "pdf";
@@ -173,30 +271,35 @@ function installPdfConfirmation(app: HTMLElement): void {
     pdfTab.setAttribute("aria-pressed", String(tab === "pdf"));
     if (tab === "pdf") api.postMessage({ type: "openPdfConfirmation" });
   };
-  const renderPage = async (requested: number) => {
-    if (!currentPdf) return;
+  const renderPage = async (requested: number, artifactId = currentArtifactId) => {
+    const pdf = pdfDocument;
+    const session = pdfWorkerSession;
+    if (!pdf || !session || artifactId === undefined) return;
     const request = ++rendering;
     busy = true;
     renderError.hidden = true;
     updateControls();
+    let page: pdfjs.PDFPageProxy | undefined;
     try {
-      const bytes = Uint8Array.from(atob(currentPdf), (character) => character.charCodeAt(0));
-      const result = await readPdf(bytes, async (pdf) => {
-        const number = Math.min(requested, pdf.numPages);
-        const page = await pdf.getPage(number);
-        const base = page.getViewport({ scale: 1 });
-        const scale = rasterScaleFor(base.width, base.height, 2);
-        if (scale === null) throw new Error("PDF のページが大きすぎます。");
-        const viewport = page.getViewport({ scale });
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.ceil(viewport.width);
-        canvas.height = Math.ceil(viewport.height);
-        await page.render({ canvas, viewport }).promise;
-        return { canvas, number, count: pdf.numPages };
-      });
+      pageRender?.cancel();
+      const number = Math.max(1, Math.min(requested, pdf.numPages));
+      page = await session.run(pdf.getPage(number));
+      if (request !== rendering) return;
+      const base = page.getViewport({ scale: 1 });
+      const scale = rasterScaleFor(base.width, base.height, 2);
+      if (scale === null) throw new Error("PDF のページが大きすぎます。");
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      const task = page.render({ canvas, viewport });
+      pageRender = task;
+      await session.run(task.promise);
+      const result = { canvas, number, count: pdf.numPages };
       if (request !== rendering) return;
       pageNumber = result.number;
       pageCount = result.count;
+      currentArtifactId = artifactId;
       result.canvas.setAttribute("aria-label", `PDF ページ ${pageNumber} / ${pageCount}`);
       pages.replaceChildren(result.canvas);
     } catch (error) {
@@ -204,7 +307,9 @@ function installPdfConfirmation(app: HTMLElement): void {
       renderError.textContent = `PDF を表示できません。 ${String(error)}`;
       renderError.hidden = false;
     } finally {
+      page?.cleanup();
       if (request === rendering) {
+        pageRender = undefined;
         busy = false;
         updateControls();
       }
@@ -236,18 +341,25 @@ function installPdfConfirmation(app: HTMLElement): void {
         restricted: "Restricted Mode では PDF確認を利用できません。",
       }[message.status];
     refresh.disabled = restricted || message.status === "compiling";
-    if (message.pdfBase64 && message.artifactId !== currentArtifactId) {
-      currentPdf = message.pdfBase64;
-      currentArtifactId = message.artifactId;
-      pages.replaceChildren();
-      pageNumber = 1;
-      pageCount = 0;
-      void renderPage(1);
+    if (
+      message.pdf &&
+      message.artifactId !== undefined &&
+      message.artifactId !== requestedArtifactId
+    ) {
+      void loadPdf(message.pdf, message.artifactId);
     }
     updateControls();
   });
   showTab("edit");
   updateControls();
+  window.addEventListener(
+    "unload",
+    () => {
+      pdfLoadRevision += 1;
+      void disposePdf();
+    },
+    { once: true },
+  );
 }
 
 async function rasterizePdf(pdf: Uint8Array): Promise<RasterImage> {

@@ -6,6 +6,9 @@ import {
   FRAGMENT_DOCUMENT_VERSION,
   fragmentDependencies,
   PdfExportError,
+  type PdfExportResult,
+  type PdfReviewArtifact,
+  pdfFileIdentity,
   publishPdf,
 } from "@beamer-editor/compiler";
 import {
@@ -32,6 +35,7 @@ import {
   ExportController,
   type ExportDocument,
   type ExportUri,
+  MAX_CONFIRMATION_PDF_BYTES,
   normalizeTectonicPath,
   resolveExportDocument,
 } from "./export-controller";
@@ -73,7 +77,9 @@ import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 
 let previewController: PreviewController | undefined;
 const previewLifecycle = new ManagedPreviewLifecycle<PreviewController, vscode.TextDocument>();
-const pdfConfirmationExports = new Map<string, (output: string) => (pdf?: Uint8Array) => void>();
+type FinishPdfExport = (review?: PdfExportResult["review"]) => void;
+const pdfConfirmationExports = new Map<string, (output: string) => FinishPdfExport>();
+const pendingPdfExports = new Map<string, { output: string; finishPanel?: FinishPdfExport }>();
 
 const LINT_SEVERITIES: Record<LintSeverity, vscode.DiagnosticSeverity> = {
   error: vscode.DiagnosticSeverity.Error,
@@ -332,8 +338,22 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         const normalized = Number.isFinite(seconds) ? Math.trunc(seconds) : 300;
         return Math.max(5, Math.min(1800, normalized)) * 1000;
       },
-      beginPdfExport: (document, output) =>
-        pdfConfirmationExports.get(document.uri.toString())?.(output.fsPath),
+      beginPdfExport: (document, output) => {
+        const key = document.uri.toString();
+        const operation: { output: string; finishPanel?: FinishPdfExport } = {
+          output: output.fsPath,
+        };
+        pendingPdfExports.set(key, operation);
+        const finishPanel = pdfConfirmationExports.get(key)?.(output.fsPath);
+        if (finishPanel) operation.finishPanel = finishPanel;
+        return {
+          capture: () => operation.finishPanel !== undefined,
+          finish: (review) => {
+            pendingPdfExports.delete(key);
+            operation.finishPanel?.(review);
+          },
+        };
+      },
     },
     {
       htmlKatexAssetsPath: path.join(context.extensionPath, "media", "html-export", "katex"),
@@ -826,21 +846,25 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     let pdfArtifactId = 0;
     let pdfRevision = 0;
     let pdfRequest = 0;
+    let pdfExportRequest: number | undefined;
     let pdfOpened = false;
+    let sentPdfArtifactId: number | undefined;
     let pdfDirty = document.isDirty;
     let pdfFailure: string | undefined;
+    let pdfTooLarge = false;
     let pdfAbort: AbortController | undefined;
     let pdfInputRevision = 0;
     let pdfCompiledRevision = 0;
+    let pdfDependencyPaths: readonly string[] | undefined;
     const pdfPublications = new PdfPublications();
-    const postPdf = (includeArtifact = false) => {
+    const postPdf = () => {
       if (!pdfOpened) return;
       const stale = pdfBytes !== undefined && pdfCompiledRevision !== pdfInputRevision;
       const status = !vscode.workspace.isTrusted
         ? "restricted"
-        : pdfAbort
+        : pdfAbort || pdfExportRequest === pdfRequest
           ? "compiling"
-          : pdfFailure !== undefined
+          : pdfFailure !== undefined || pdfTooLarge
             ? "failed"
             : stale
               ? "stale"
@@ -849,23 +873,28 @@ export function activate(context: vscode.ExtensionContext): TestApi {
                 : "idle";
       const labels: string[] = [];
       if (status === "compiling") labels.push("Tectonic で組版中です。");
-      if (status === "failed") labels.push(`組版に失敗しました。 ${pdfFailure}`);
+      if (status === "failed")
+        labels.push(
+          pdfTooLarge
+            ? "64 MiB を超える PDF は確認タブで開けません。通常の PDF 書き出しから確認できます。"
+            : `組版に失敗しました。 ${pdfFailure}`,
+        );
       if (status !== "restricted") {
         if (stale) labels.push("要更新。");
         if (pdfBytes) {
           labels.push(
-            stale || pdfFailure !== undefined
+            stale || pdfFailure !== undefined || pdfTooLarge
               ? "前回成功した保存済みの版を表示しています。"
               : "保存済みの版を表示しています。",
           );
         }
         if (pdfDirty) labels.push("未保存の編集があります。");
       }
+      const deliver = pdfBytes && sentPdfArtifactId !== pdfArtifactId && status !== "restricted";
+      if (deliver) sentPdfArtifactId = pdfArtifactId;
       controller.postPdfState(status, ++pdfRevision, {
         ...(labels.length ? { message: labels.join(" ") } : {}),
-        ...(includeArtifact && pdfBytes && status !== "restricted"
-          ? { pdf: pdfBytes, artifactId: pdfArtifactId }
-          : {}),
+        ...(deliver && pdfBytes ? { pdf: pdfBytes, artifactId: pdfArtifactId } : {}),
       });
     };
     const markPdfStale = () => {
@@ -885,12 +914,19 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       if (!pdfDirty && !wasDirty && event.contentChanges.length) markPdfStale();
       else if (wasDirty !== pdfDirty) postPdf();
     });
-    const setCompiledPdf = (bytes: Uint8Array, inputRevision: number) => {
-      pdfBytes = bytes;
-      pdfArtifactId += 1;
-      pdfCompiledRevision = inputRevision;
+    const setCompiledPdf = (artifact: PdfReviewArtifact, inputRevision: number) => {
       pdfFailure = undefined;
-      postPdf(true);
+      pdfTooLarge = artifact.size > MAX_CONFIRMATION_PDF_BYTES;
+      if (artifact.pdf) {
+        pdfBytes = artifact.pdf;
+        pdfArtifactId += 1;
+        pdfCompiledRevision = inputRevision;
+        pdfDependencyPaths = artifact.dependencyPaths;
+      } else if (!pdfTooLarge) {
+        pdfFailure =
+          "書き出した PDF を確認タブに読み込めませんでした。更新して再試行してください。";
+      }
+      postPdf();
     };
     const compilePdfConfirmation = async () => {
       if (!vscode.workspace.isTrusted) {
@@ -903,6 +939,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       const abort = new AbortController();
       pdfAbort = abort;
       pdfFailure = undefined;
+      pdfTooLarge = false;
       postPdf();
       const config = vscode.workspace.getConfiguration("beamerEditor", document.uri);
       const seconds = config.get<number>("pdfExport.timeoutSeconds", 300);
@@ -911,24 +948,35 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       try {
         const compiled = await compilePdf({
           inputPath: document.uri.fsPath,
+          maxPdfBytes: MAX_CONFIRMATION_PDF_BYTES,
           signal: abort.signal,
           timeoutMs: Math.max(5, Math.min(1800, normalized)) * 1000,
           ...(tectonicPath === undefined ? {} : { tectonicPath }),
         });
         if (request !== pdfRequest) return;
         pdfAbort = undefined;
-        setCompiledPdf(compiled.pdf, inputRevision);
+        setCompiledPdf({ size: compiled.pdf.byteLength, ...compiled }, inputRevision);
       } catch (error) {
         if (request !== pdfRequest) return;
         pdfAbort = undefined;
-        pdfFailure = error instanceof Error ? error.message : String(error);
+        pdfTooLarge = error instanceof PdfExportError && error.code === "E_LIMIT";
+        if (!pdfTooLarge) pdfFailure = error instanceof Error ? error.message : String(error);
         postPdf();
       }
     };
+    const mayReadPdfOutput = (output: string, dependencies: readonly string[] | undefined) =>
+      dependencies === undefined || dependencies.includes(path.resolve(output));
     const saveDisplayedPdf = async (artifactId: number | undefined) => {
       const displayed = pdfBytes;
-      if (!vscode.workspace.isTrusted || !displayed || artifactId !== pdfArtifactId) return;
-      const earlier = pdfCompiledRevision !== pdfInputRevision || pdfFailure !== undefined;
+      if (!vscode.workspace.isTrusted || !displayed) return;
+      if (artifactId !== pdfArtifactId) {
+        void vscode.window.showWarningMessage(
+          "PDF が更新されました。表示を確認してから再度保存してください。",
+        );
+        return;
+      }
+      const earlier =
+        pdfCompiledRevision !== pdfInputRevision || pdfFailure !== undefined || pdfTooLarge;
       const output = await vscode.window.showSaveDialog({
         defaultUri: vscode.Uri.file(
           path.join(
@@ -952,13 +1000,14 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       }
       const finishPublication = pdfPublications.begin(output.fsPath);
       try {
-        await publishPdf({
+        const published = await publishPdf({
           pdf: displayed,
           outputPath: output.fsPath,
           sourcePath: document.uri.fsPath,
           overwrite,
         });
-        finishPublication(displayed);
+        finishPublication(published.writtenFileIdentity);
+        if (mayReadPdfOutput(output.fsPath, pdfDependencyPaths)) markPdfStale();
         void vscode.window.showInformationMessage(`表示中の PDF を保存しました: ${output.fsPath}`);
       } catch (error) {
         finishPublication();
@@ -979,7 +1028,10 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
       },
       () => {
-        pdfConfirmationExports.delete(document.uri.toString());
+        const key = document.uri.toString();
+        pdfConfirmationExports.delete(key);
+        const operation = pendingPdfExports.get(key);
+        if (operation) delete operation.finishPanel;
         pdfRequest += 1;
         pdfAbort?.abort();
         pdfSaveSubscription?.dispose();
@@ -1002,7 +1054,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
             outcome.deck.fragmentPreamble ?? "",
           );
         },
-        onWebviewReady: () => rawBlockCompiler.forgetDelivered(),
+        onWebviewReady: () => {
+          rawBlockCompiler.forgetDelivered();
+          sentPdfArtifactId = undefined;
+          pdfOpened = false;
+        },
         pdfAction: (action, artifactId) => {
           if (action === "save") {
             void saveDisplayedPdf(artifactId);
@@ -1011,10 +1067,15 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           pdfOpened = true;
           if (
             action === "refresh" ||
-            (vscode.workspace.isTrusted && !pdfBytes && !pdfAbort && !pdfFailure)
+            (vscode.workspace.isTrusted &&
+              !pdfBytes &&
+              !pdfAbort &&
+              !pdfFailure &&
+              !pdfTooLarge &&
+              pdfExportRequest !== pdfRequest)
           )
             void compilePdfConfirmation();
-          else postPdf(true);
+          else postPdf();
         },
         onError: (message) => {
           void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
@@ -1193,34 +1254,49 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         },
       },
     );
-    pdfConfirmationExports.set(document.uri.toString(), (output) => {
+    const beginPanelExport = (output: string): FinishPdfExport => {
       // A normal Export saves first. Its later result must outrank an older
       // confirmation compile that happens to finish afterwards.
-      pdfRequest += 1;
-      const request = pdfRequest;
+      const request = ++pdfRequest;
+      pdfExportRequest = request;
       const inputRevision = pdfInputRevision;
       pdfAbort?.abort();
       pdfAbort = undefined;
+      pdfFailure = undefined;
+      pdfTooLarge = false;
       postPdf();
       const finishPublication = pdfPublications.begin(output);
-      return (bytes) => {
-        finishPublication(bytes);
-        if (bytes === undefined || request !== pdfRequest) return;
-        setCompiledPdf(bytes, inputRevision);
+      return (review) => {
+        finishPublication(review?.writtenFileIdentity);
+        if (pdfExportRequest === request) pdfExportRequest = undefined;
+        const shouldDisplay = request === pdfRequest;
+        const dependencies =
+          shouldDisplay && review?.pdf ? review.dependencyPaths : pdfDependencyPaths;
+        if (review && mayReadPdfOutput(output, dependencies)) pdfInputRevision += 1;
+        if (shouldDisplay && review) setCompiledPdf(review, inputRevision);
+        else {
+          if (shouldDisplay && pdfOpened && !pdfBytes)
+            pdfFailure = "PDF 書き出しが完了しませんでした。更新して再試行できます。";
+          postPdf();
+        }
       };
-    });
+    };
+    const pdfDocumentKey = document.uri.toString();
+    pdfConfirmationExports.set(pdfDocumentKey, beginPanelExport);
+    const pendingPdfExport = pendingPdfExports.get(pdfDocumentKey);
+    if (pendingPdfExport) pendingPdfExport.finishPanel = beginPanelExport(pendingPdfExport.output);
     const refreshTemplates = (changed: vscode.Uri) => {
       // 画像や .sty が足されたり直ったりしたときは、失敗していた生ブロックも次の描画で再試行する。
       rawBlockCompiler.resetFailures();
       controller.refresh();
       lintController.refresh(vscode.workspace.textDocuments);
       const ownChange = pdfPublications.ownChange(changed.fsPath, () =>
-        vscode.workspace.fs.readFile(changed),
+        pdfFileIdentity(changed.fsPath),
       );
       if (!ownChange) markPdfStale();
       else
         void ownChange.then((matches) => {
-          if (!matches) markPdfStale();
+          if (!matches || mayReadPdfOutput(changed.fsPath, pdfDependencyPaths)) markPdfStale();
         });
     };
     templateWatcher.onDidChange(refreshTemplates);

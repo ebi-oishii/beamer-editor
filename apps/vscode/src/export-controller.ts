@@ -4,6 +4,7 @@ import {
   PdfExportError,
   type PdfExportErrorCode,
   type PdfExportProgress,
+  type PdfExportRequest,
   type PdfExportResult,
 } from "@beamer-editor/compiler";
 import { type LintOptions, sourceLocation } from "@beamer-editor/core";
@@ -15,6 +16,8 @@ import {
   type HtmlExportResult,
 } from "@beamer-editor/html-export";
 import { lintDocumentText } from "./diagnostics";
+
+export const MAX_CONFIRMATION_PDF_BYTES = 64 * 1024 * 1024;
 
 export interface ExportUri {
   readonly scheme: string;
@@ -66,7 +69,7 @@ export interface ExportHost {
   beginPdfExport?(
     document: ExportDocument,
     output: ExportUri,
-  ): ((pdf?: Uint8Array) => void) | undefined;
+  ): { capture: () => boolean; finish: (review?: PdfExportResult["review"]) => void } | undefined;
 }
 
 export interface ExportControllerDependencies {
@@ -78,6 +81,7 @@ export interface ExportControllerDependencies {
     timeoutMs?: number;
     signal: AbortSignal;
     onProgress?: (progress: PdfExportProgress) => void;
+    review?: NonNullable<PdfExportRequest["review"]>;
   }) => Promise<PdfExportResult>;
   exportHtml?: (request: HtmlExportRequest) => Promise<HtmlExportResult>;
   htmlKatexAssetsPath?: string;
@@ -303,7 +307,7 @@ export class ExportController {
       compiled = undefined;
     }
 
-    let finishPdf = format === "pdf" ? this.host.beginPdfExport?.(document, output) : undefined;
+    let pdfReview = format === "pdf" ? this.host.beginPdfExport?.(document, output) : undefined;
     try {
       const result = await this.host.withProgress(async (token, report) => {
         const abort = new AbortController();
@@ -336,6 +340,9 @@ export class ExportController {
                 progress.report(downloadProgressMessage(value));
             },
             ...(tectonicPath === undefined ? {} : { tectonicPath }),
+            ...(pdfReview
+              ? { review: { maxBytes: MAX_CONFIRMATION_PDF_BYTES, capture: pdfReview.capture } }
+              : {}),
           };
           // Cancel and controller dispose both abort; the compile may take a
           // while to settle after that, so drop the pending update right away.
@@ -349,8 +356,8 @@ export class ExportController {
           this.activeAbortControllers.delete(abort);
         }
       });
-      finishPdf?.(result?.format === "pdf" && !this.disposed ? result.pdf : undefined);
-      finishPdf = undefined;
+      pdfReview?.finish(result?.format === "pdf" && !this.disposed ? result.review : undefined);
+      pdfReview = undefined;
       if (!result || this.disposed) return;
       const isHtml = result.format === "html";
       const action = await this.host.showInformation(
@@ -367,7 +374,7 @@ export class ExportController {
         await this.host.showWarning("書き出しは完了しましたが、表示操作に失敗しました。");
       }
     } catch (error) {
-      finishPdf?.();
+      pdfReview?.finish();
       await this.reportError(error, document, compiled);
     }
   }

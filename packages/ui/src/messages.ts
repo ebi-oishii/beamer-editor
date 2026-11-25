@@ -30,7 +30,8 @@ export type ExtensionToWebview =
       type: "pdfUpdated";
       status: "idle" | "compiling" | "ready" | "stale" | "failed" | "restricted";
       message?: string;
-      pdfBase64?: string;
+      /** Native binary transport; unlike a base64 string this is not copied into JSON. */
+      pdf?: ArrayBuffer;
       /** Changes only when the actual PDF bytes change, never for status text. */
       artifactId?: number;
       revision: number;
@@ -157,7 +158,7 @@ export function parseExtensionToWebview(raw: unknown): ExtensionToWebview | null
         Number.isInteger(raw.revision) &&
         raw.revision >= 0 &&
         (raw.message === undefined || typeof raw.message === "string") &&
-        (raw.pdfBase64 === undefined || typeof raw.pdfBase64 === "string") &&
+        (raw.pdf === undefined || raw.pdf instanceof ArrayBuffer) &&
         (raw.artifactId === undefined || isNonNegativeInteger(raw.artifactId))
       )
         return {
@@ -165,7 +166,7 @@ export function parseExtensionToWebview(raw: unknown): ExtensionToWebview | null
           status: raw.status,
           revision: raw.revision,
           ...(typeof raw.message === "string" ? { message: raw.message } : {}),
-          ...(typeof raw.pdfBase64 === "string" ? { pdfBase64: raw.pdfBase64 } : {}),
+          ...(raw.pdf instanceof ArrayBuffer ? { pdf: raw.pdf } : {}),
           ...(isNonNegativeInteger(raw.artifactId) ? { artifactId: raw.artifactId } : {}),
         };
       return null;

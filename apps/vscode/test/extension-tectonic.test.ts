@@ -3,6 +3,7 @@ import type { compileFragment } from "@beamer-editor/compiler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as vscode from "vscode";
 import type { ExportDocument, ExportHost } from "../src/export-controller";
+import type { PreviewControllerOptions } from "../src/preview-controller";
 import type { RawBlockCompilerOptions } from "../src/raw-block-compiler";
 
 const state = vi.hoisted(() => ({
@@ -10,9 +11,12 @@ const state = vi.hoisted(() => ({
   configured: undefined as unknown,
   exportHost: undefined as ExportHost | undefined,
   rawHost: undefined as RawBlockCompilerOptions | undefined,
+  previewOptions: undefined as PreviewControllerOptions | undefined,
   activeEditor: undefined as vscode.TextEditor | undefined,
   commands: new Map<string, () => void>(),
   compile: vi.fn<typeof compileFragment>(),
+  compilePdf: vi.fn<typeof import("@beamer-editor/compiler").compilePdf>(),
+  postPdfState: vi.fn(),
   getConfiguration: vi.fn(),
 }));
 
@@ -91,6 +95,7 @@ vi.mock("vscode", () => {
 vi.mock("@beamer-editor/compiler", async (original) => ({
   ...(await original<typeof import("@beamer-editor/compiler")>()),
   compileFragment: state.compile,
+  compilePdf: state.compilePdf,
 }));
 vi.mock("../src/tectonic", async (original) => ({
   ...(await original<typeof import("../src/tectonic")>()),
@@ -112,6 +117,7 @@ vi.mock("../src/raw-block-compiler", async (original) => ({
       state.rawHost = host;
     }
     dispose() {}
+    forgetDelivered() {}
   },
 }));
 vi.mock("../src/preview-controller", () => ({
@@ -122,7 +128,11 @@ vi.mock("../src/preview-controller", () => ({
       _document: unknown,
       _events: unknown,
       readonly close: () => void,
-    ) {}
+      options: PreviewControllerOptions,
+    ) {
+      state.previewOptions = options;
+    }
+    postPdfState = state.postPdfState;
   },
 }));
 
@@ -184,4 +194,121 @@ describe("extension の Tectonic 接続", () => {
       expect(state.getConfiguration).toHaveBeenLastCalledWith("beamerEditor", document.uri);
     }
   });
+
+  it.each([
+    true,
+    false,
+  ])("進行中の Export を初回の PDF確認で使い、同じ Webview へ再送しない (先にプレビュー=%s)", (openFirst) => {
+    const document = openPdfTestDocument();
+    if (openFirst) state.commands.get("beamerEditor.openPreview")?.();
+    const exportReview = state.exportHost?.beginPdfExport?.(
+      document as ExportDocument,
+      Uri.file("/project/output.pdf"),
+    );
+    expect(exportReview).toBeDefined();
+    if (!openFirst) {
+      expect(exportReview?.capture()).toBe(false);
+      state.commands.get("beamerEditor.openPreview")?.();
+    }
+    expect(exportReview?.capture()).toBe(true);
+    state.previewOptions?.pdfAction?.("open");
+    expect(state.compilePdf).not.toHaveBeenCalled();
+    expect(state.postPdfState).toHaveBeenLastCalledWith(
+      "compiling",
+      expect.any(Number),
+      expect.anything(),
+    );
+
+    const pdf = Uint8Array.of(7);
+    exportReview?.finish({ size: pdf.length, pdf, dependencyPaths: [document.uri.fsPath] });
+    expect(state.postPdfState).toHaveBeenLastCalledWith(
+      "ready",
+      expect.any(Number),
+      expect.objectContaining({ pdf, artifactId: 1 }),
+    );
+    state.previewOptions?.pdfAction?.("open");
+    expect(state.postPdfState.mock.lastCall?.[2]).not.toHaveProperty("pdf");
+    state.previewOptions?.onWebviewReady?.();
+    state.previewOptions?.pdfAction?.("open");
+    expect(state.postPdfState.mock.lastCall?.[2]).toMatchObject({ pdf, artifactId: 1 });
+  });
+
+  it("参照する PDF への Export は採用した時点で要更新にする", () => {
+    const document = openPdfTestDocument();
+    state.commands.get("beamerEditor.openPreview")?.();
+    const output = Uri.file("/project/figure.pdf");
+    const exportReview = state.exportHost?.beginPdfExport?.(document as ExportDocument, output);
+    state.previewOptions?.pdfAction?.("open");
+    exportReview?.finish({ size: 1, pdf: Uint8Array.of(7), dependencyPaths: [output.fsPath] });
+    expect(state.postPdfState).toHaveBeenLastCalledWith(
+      "stale",
+      expect.any(Number),
+      expect.objectContaining({ artifactId: 1 }),
+    );
+  });
+
+  it("進行中の Export が失敗した後に更新できる", async () => {
+    const document = openPdfTestDocument();
+    state.commands.get("beamerEditor.openPreview")?.();
+    const exportReview = state.exportHost?.beginPdfExport?.(
+      document as ExportDocument,
+      Uri.file("/project/output.pdf"),
+    );
+    state.previewOptions?.pdfAction?.("open");
+    exportReview?.finish();
+    expect(state.postPdfState.mock.lastCall?.[0]).toBe("failed");
+    state.compilePdf.mockResolvedValue({
+      inputPath: document.uri.fsPath,
+      engineVersion: "Tectonic 0.17.0",
+      pdf: Uint8Array.of(7),
+    });
+    state.previewOptions?.pdfAction?.("refresh");
+    await vi.waitFor(() => expect(state.postPdfState.mock.lastCall?.[0]).toBe("ready"));
+  });
+
+  it("古い組版が後から完了しても Export の PDF を保持する", async () => {
+    const document = openPdfTestDocument();
+    state.commands.get("beamerEditor.openPreview")?.();
+    let finishCompile: (
+      result: Awaited<ReturnType<typeof import("@beamer-editor/compiler").compilePdf>>,
+    ) => void = () => {};
+    state.compilePdf.mockReturnValue(
+      new Promise((resolve) => {
+        finishCompile = resolve;
+      }),
+    );
+    state.previewOptions?.pdfAction?.("open");
+    const exportReview = state.exportHost?.beginPdfExport?.(
+      document as ExportDocument,
+      Uri.file("/project/output.pdf"),
+    );
+    const pdf = Uint8Array.of(9);
+    exportReview?.finish({ size: 1, pdf, dependencyPaths: [document.uri.fsPath] });
+    finishCompile({
+      inputPath: document.uri.fsPath,
+      engineVersion: "0.17.0",
+      pdf: Uint8Array.of(7),
+    });
+    await Promise.resolve();
+    expect(state.postPdfState.mock.lastCall?.[2]).toMatchObject({ pdf, artifactId: 1 });
+  });
+
+  function openPdfTestDocument(): vscode.TextDocument {
+    state.getConfiguration.mockImplementation(() => ({
+      get: (_name: string, fallback: unknown) => fallback,
+    }));
+    const document = {
+      uri: Uri.file("/project/deck.slide.tex"),
+      fileName: "/project/deck.slide.tex",
+      isDirty: false,
+    } as vscode.TextDocument;
+    activate({
+      extensionPath: "/extension",
+      extensionUri: Uri.file("/extension"),
+      globalStorageUri: Uri.file("/storage"),
+      subscriptions,
+    } as vscode.ExtensionContext);
+    state.activeEditor = { document } as vscode.TextEditor;
+    return document;
+  }
 });

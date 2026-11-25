@@ -1124,14 +1124,22 @@ export class PreviewController implements vscode.Disposable {
     options: { message?: string; pdf?: Uint8Array; artifactId?: number } = {},
   ): void {
     if (this.disposed) return;
+    const pdf = options.pdf;
+    const bytes =
+      pdf &&
+      (pdf.buffer instanceof ArrayBuffer &&
+      pdf.byteOffset === 0 &&
+      pdf.byteLength === pdf.buffer.byteLength
+        ? pdf.buffer
+        : new Uint8Array(pdf).buffer);
     const message: ExtensionToWebview = {
       type: "pdfUpdated",
       status,
       revision,
       ...(options.message === undefined ? {} : { message: options.message }),
-      ...(options.pdf === undefined
-        ? {}
-        : { pdfBase64: Buffer.from(options.pdf).toString("base64") }),
+      // VS Code 1.130+ transfers an ArrayBuffer natively.  Base64 used to
+      // allocate two additional full-size strings for every confirmation.
+      ...(bytes === undefined ? {} : { pdf: bytes as ArrayBuffer }),
       ...(options.artifactId === undefined ? {} : { artifactId: options.artifactId }),
     };
     void this.panel.webview.postMessage(message);

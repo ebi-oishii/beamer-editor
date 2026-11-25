@@ -1,8 +1,19 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { link, lstat, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import {
+  copyFile,
+  link,
+  lstat,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { lineSplitter } from "./line-splitter.js";
 
 const MAX_PROCESS_OUTPUT = 1024 * 1024;
@@ -30,6 +41,8 @@ export interface PdfExportRequest {
   timeoutMs?: number;
   /** Tectonic の進捗(初回の TeX パッケージ取得)を受け取る。例外は書き出しに影響しない。 */
   onProgress?: (progress: PdfExportProgress) => void;
+  /** Collect inputs for the review tab and capture bytes if its panel is still needed. */
+  review?: { maxBytes: number; capture: () => boolean };
 }
 
 /** `count` は 1 始まりの累計ダウンロード数。 */
@@ -45,8 +58,15 @@ export interface PdfExportResult {
   outputPath: string;
   overwritten: boolean;
   engineVersion: string;
-  /** The exact artifact that was atomically published. */
+  review?: PdfReviewArtifact & { writtenFileIdentity?: string };
+}
+
+export interface PdfReviewArtifact {
+  size: number;
+  /** The exact artifact, omitted when the review size limit is exceeded. */
   pdf?: Uint8Array;
+  /** Absent when the compiler did not produce a usable input list. */
+  dependencyPaths?: readonly string[];
 }
 
 /** A full-deck TeX result before it is placed at a user-selected destination. */
@@ -54,11 +74,13 @@ export interface CompiledPdf {
   inputPath: string;
   engineVersion: string;
   pdf: Uint8Array;
+  dependencyPaths?: readonly string[];
 }
 
 export interface PdfPublishResult {
   outputPath: string;
   overwritten: boolean;
+  writtenFileIdentity?: string;
 }
 
 export type PdfExportErrorCode =
@@ -472,14 +494,45 @@ async function ensureTectonic(
   return engineVersion;
 }
 
-/**
- * Compile the saved input in its original directory and read the PDF from the
- * temporary output directory before cleaning up.
- */
-export async function compilePdf(
-  request: Omit<PdfExportRequest, "outputPath" | "overwrite">,
-  dependencies: PdfExportDependencies = {},
-): Promise<CompiledPdf> {
+interface TemporaryPdf {
+  path: string;
+  size: number;
+  engineVersion: string;
+  dependencyPaths?: readonly string[];
+}
+
+// Tectonic describes local inputs one per continued line, without escaping spaces.
+// It resolves relative reads against outdir in this file even when read from cwd.
+function pdfDependencyPaths(
+  rules: string,
+  pdfPath: string,
+  inputPath: string,
+): readonly string[] | undefined {
+  const prefix = `${pdfPath} : `;
+  if (!rules.startsWith(prefix)) return undefined;
+  const entries = rules
+    .slice(prefix.length)
+    .trimEnd()
+    .split(/ \\\r?\n[ \t]+/);
+  if (entries[0] !== inputPath || entries.some((entry) => !entry || /[\r\n]/.test(entry)))
+    return undefined;
+  const outdir = dirname(pdfPath);
+  return entries.map((entry) => {
+    // Keep literal "../" segments until the working directory has been restored.
+    const fromOutput = `${outdir}${sep}`;
+    return resolve(
+      dirname(inputPath),
+      entry.startsWith(fromOutput) ? entry.slice(fromOutput.length) : entry,
+    );
+  });
+}
+
+async function withCompiledPdf<T>(
+  request: Omit<PdfExportRequest, "outputPath" | "overwrite" | "review">,
+  dependencies: PdfExportDependencies,
+  collectDependencies: boolean,
+  use: (artifact: TemporaryPdf) => Promise<T>,
+): Promise<T> {
   const runner = dependencies.runner ?? nodeProcessRunner;
   const tectonic = request.tectonicPath ?? "tectonic";
   const inputPath = resolve(request.inputPath);
@@ -495,6 +548,7 @@ export async function compilePdf(
   let tempDirectory: string | undefined;
   try {
     tempDirectory = await makeTemp("beamer-editor-pdf-");
+    const dependencyFile = join(tempDirectory, "inputs.mk");
     throwIfCancelled(signal);
     const onProgress = request.onProgress;
     let downloads = 0;
@@ -502,7 +556,14 @@ export async function compilePdf(
     try {
       compileResult = await runner.run(
         tectonic,
-        ["-X", "compile", "--outdir", tempDirectory, inputPath],
+        [
+          "-X",
+          "compile",
+          ...(collectDependencies ? ["--makefile-rules", dependencyFile] : []),
+          "--outdir",
+          tempDirectory,
+          inputPath,
+        ],
         compileRunnerOptions(
           dirname(inputPath),
           signal,
@@ -544,13 +605,27 @@ export async function compilePdf(
       );
     }
     const compiledPdf = join(tempDirectory, compiledPdfName(inputPath));
-    if (compileResult.exitCode !== 0 || !(await regularNonEmptyFile(compiledPdf))) {
+    const info = await stat(compiledPdf).catch(() => undefined);
+    if (compileResult.exitCode !== 0 || !info?.isFile() || info.size === 0) {
       throw compileFailure(
         compileResult,
         `PDF のコンパイルに失敗しました${processDetail(compileResult)}`,
       );
     }
-    return { inputPath, engineVersion, pdf: new Uint8Array(await readFile(compiledPdf)) };
+    let dependencyPaths: readonly string[] | undefined;
+    if (collectDependencies) {
+      const rules = await readCompilationLog(dependencyFile, DEFAULT_DECK_LOG_BYTES_LIMIT).catch(
+        () => undefined,
+      );
+      if (rules !== undefined) dependencyPaths = pdfDependencyPaths(rules, compiledPdf, inputPath);
+    }
+    throwIfCancelled(signal);
+    return await use({
+      path: compiledPdf,
+      size: info.size,
+      engineVersion,
+      ...(dependencyPaths === undefined ? {} : { dependencyPaths }),
+    });
   } catch (error) {
     if (error instanceof PdfExportError) throw error;
     if (isAbort(error, signal))
@@ -562,28 +637,67 @@ export async function compilePdf(
   }
 }
 
+/** Compile a saved deck for review, checking the size before loading the result. */
+export async function compilePdf(
+  request: Omit<PdfExportRequest, "outputPath" | "overwrite" | "review"> & { maxPdfBytes?: number },
+  dependencies: PdfExportDependencies = {},
+): Promise<CompiledPdf> {
+  return withCompiledPdf(request, dependencies, true, async (artifact) => {
+    if (request.maxPdfBytes !== undefined && artifact.size > request.maxPdfBytes)
+      throw new PdfExportError("E_LIMIT", "PDF が確認画面のサイズ上限を超えています。");
+    const pdf = await readFile(artifact.path);
+    throwIfCancelled(request.signal);
+    return {
+      inputPath: resolve(request.inputPath),
+      engineVersion: artifact.engineVersion,
+      pdf,
+      ...(artifact.dependencyPaths === undefined
+        ? {}
+        : { dependencyPaths: artifact.dependencyPaths }),
+    };
+  });
+}
+
+interface PdfDestination {
+  outputPath: string;
+  sourcePath?: string | undefined;
+  overwrite?: boolean | undefined;
+  signal?: AbortSignal | undefined;
+}
+
 /** Atomically publish already-generated PDF bytes to a destination. */
 export async function publishPdf(
-  request: {
-    pdf: Uint8Array;
-    outputPath: string;
-    sourcePath?: string;
-    overwrite?: boolean;
-    signal?: AbortSignal;
-  },
+  request: PdfDestination & { pdf: Uint8Array },
   dependencies: Pick<PdfExportDependencies, "removeStagingFile"> = {},
+): Promise<PdfPublishResult> {
+  if (request.pdf.byteLength === 0) throw new PdfExportError("E_INPUT", "公開する PDF が空です");
+  return publishPdfFile(request, dependencies, (path) =>
+    writeFile(path, request.pdf, { flag: "wx" }),
+  );
+}
+
+/** Identity of the published inode, checked against filesystem notifications without reading PDF bytes. */
+export async function pdfFileIdentity(path: string): Promise<string | undefined> {
+  const info = await stat(path, { bigint: true }).catch(() => undefined);
+  return info?.isFile() ? `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}` : undefined;
+}
+
+async function publishPdfFile(
+  request: PdfDestination,
+  dependencies: Pick<PdfExportDependencies, "removeStagingFile">,
+  stage: (path: string) => Promise<void>,
 ): Promise<PdfPublishResult> {
   const outputPath = resolve(request.outputPath);
   const signal = request.signal;
   throwIfCancelled(signal);
-  if (request.pdf.byteLength === 0) throw new PdfExportError("E_INPUT", "公開する PDF が空です");
   if (request.sourcePath !== undefined)
     await protectPdfSource(resolve(request.sourcePath), outputPath);
   const outputExists = await preflightPdfOutput(outputPath, request.overwrite);
   let stagingPath: string | undefined;
   try {
     stagingPath = join(dirname(outputPath), `.${basename(outputPath)}.deck-export-${randomUUID()}`);
-    await writeFile(stagingPath, request.pdf, { flag: "wx" });
+    await stage(stagingPath);
+    const writtenFileIdentity = await pdfFileIdentity(stagingPath);
     throwIfCancelled(signal);
     if (request.overwrite) await rename(stagingPath, outputPath);
     else {
@@ -605,7 +719,11 @@ export async function publishPdf(
       ).catch(() => undefined);
     }
     stagingPath = undefined;
-    return { outputPath, overwritten: outputExists };
+    return {
+      outputPath,
+      overwritten: outputExists,
+      ...(writtenFileIdentity === undefined ? {} : { writtenFileIdentity }),
+    };
   } catch (error) {
     if (error instanceof PdfExportError) throw error;
     if (isAbort(error, signal))
@@ -659,25 +777,40 @@ export async function exportPdf(
   await protectPdfSource(inputPath, outputPath);
   // Preserve the existing fast failure contract before starting Tectonic.
   await preflightPdfOutput(outputPath, request.overwrite);
-  const compiled = await compilePdf(request, dependencies);
-  const published = await publishPdf(
-    {
-      pdf: compiled.pdf,
+  const review = request.review;
+  return withCompiledPdf(request, dependencies, review !== undefined, async (artifact) => {
+    const published = await publishPdfFile(
+      { outputPath, sourcePath: inputPath, overwrite: request.overwrite, signal: request.signal },
+      dependencies,
+      (path) => copyFile(artifact.path, path, constants.COPYFILE_EXCL),
+    );
+    // Use the immutable compiler output. The user's destination may be replaced at any time.
+    const pdf =
+      review && artifact.size <= review.maxBytes && review.capture()
+        ? await readFile(artifact.path).catch(() => undefined)
+        : undefined;
+    return {
+      format: "pdf",
+      inputPath,
       outputPath,
-      sourcePath: inputPath,
-      ...(request.overwrite === undefined ? {} : { overwrite: request.overwrite }),
-      ...(request.signal === undefined ? {} : { signal: request.signal }),
-    },
-    dependencies,
-  );
-  return {
-    format: "pdf",
-    inputPath,
-    outputPath,
-    overwritten: published.overwritten,
-    engineVersion: compiled.engineVersion,
-    pdf: compiled.pdf,
-  };
+      overwritten: published.overwritten,
+      engineVersion: artifact.engineVersion,
+      ...(review === undefined
+        ? {}
+        : {
+            review: {
+              size: artifact.size,
+              ...(pdf === undefined ? {} : { pdf }),
+              ...(artifact.dependencyPaths === undefined
+                ? {}
+                : { dependencyPaths: artifact.dependencyPaths }),
+              ...(published.writtenFileIdentity === undefined
+                ? {}
+                : { writtenFileIdentity: published.writtenFileIdentity }),
+            },
+          }),
+    };
+  });
 }
 
 export function defaultPdfOutputPath(inputPath: string): string {

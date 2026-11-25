@@ -1,6 +1,16 @@
-import { access, link, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  link,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   compilePdf,
@@ -10,6 +20,7 @@ import {
   type PdfExportProgress,
   type ProcessResult,
   type ProcessRunner,
+  pdfFileIdentity,
   publishPdf,
 } from "../src/index.ts";
 
@@ -681,6 +692,80 @@ describe("exportPdf", () => {
 });
 
 describe("compilePdf and publishPdf", () => {
+  it("collects Tectonic's paths with spaces relative to the TeX input for review", async () => {
+    const input = await source("talk with spaces.slide.tex");
+    const output = join(input.dir, "published.pdf");
+    const calls: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
+    const runner = successfulRunner(calls);
+    const result = await exportPdf(
+      { inputPath: input.path, outputPath: output, review: { maxBytes: 64, capture: () => true } },
+      {
+        runner: {
+          async run(command, args, options) {
+            const outcome = await runner.run(command, args, options);
+            const rules = args[args.indexOf("--makefile-rules") + 1];
+            if (args.includes("--makefile-rules") && rules) {
+              const outdir = args[args.indexOf("--outdir") + 1] ?? "";
+              const pdf = join(outdir, "talk with spaces.slide.pdf");
+              await writeFile(
+                rules,
+                [
+                  `${pdf} : ${input.path}`,
+                  `  ${join(outdir, "assets", "figure 1.pdf")}`,
+                  `  ${outdir}${sep}..${sep}theme.sty\n`,
+                ].join(" \\\n"),
+              );
+            }
+            return outcome;
+          },
+        },
+      },
+    );
+    expect(result.review?.pdf).toEqual(await readFile(output));
+    expect(result.review?.writtenFileIdentity).toBe(await pdfFileIdentity(output));
+    expect(result.review?.dependencyPaths).toEqual([
+      input.path,
+      join(input.dir, "assets", "figure 1.pdf"),
+      join(input.dir, "..", "theme.sty"),
+    ]);
+  });
+
+  it("rejects a large confirmation before capture and can still write that PDF", async () => {
+    const input = await source();
+    const output = join(input.dir, "published.pdf");
+    const size = 10_000;
+    const runner = successfulRunner([]);
+    const largeRunner: ProcessRunner = {
+      async run(command, args, options) {
+        const outcome = await runner.run(command, args, options);
+        if (args.includes("--outdir")) {
+          const outdir = args[args.indexOf("--outdir") + 1] ?? "";
+          await truncate(join(outdir, "talk.slide.pdf"), size);
+        }
+        return outcome;
+      },
+    };
+    await expect(
+      compilePdf({ inputPath: input.path, maxPdfBytes: 64 }, { runner: largeRunner }),
+    ).rejects.toMatchObject({ code: "E_LIMIT" });
+    const artifact = await exportPdf(
+      {
+        inputPath: input.path,
+        outputPath: output,
+        review: {
+          maxBytes: 64,
+          capture: () => {
+            throw new Error("must skip capture");
+          },
+        },
+      },
+      { runner: largeRunner },
+    );
+    expect(artifact.review?.size).toBe(size);
+    expect(artifact.review?.pdf).toBeUndefined();
+    expect((await stat(output)).size).toBe(size);
+  });
+
   it("separates generation from byte-for-byte atomic publication", async () => {
     const input = await source();
     const output = join(input.dir, "published.pdf");

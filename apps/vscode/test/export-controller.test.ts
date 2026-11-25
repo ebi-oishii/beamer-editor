@@ -152,9 +152,12 @@ describe("ExportController", () => {
   it("passes the compiler-owned PDF bytes to the Export invocation observer", async () => {
     const received: Uint8Array[] = [];
     const host = createHost({
-      beginPdfExport: vi.fn(() => (pdf?: Uint8Array) => {
-        if (pdf) received.push(pdf);
-      }),
+      beginPdfExport: vi.fn(() => ({
+        capture: () => true,
+        finish: (review?: import("@beamer-editor/compiler").PdfExportResult["review"]) => {
+          if (review?.pdf) received.push(review.pdf);
+        },
+      })),
     });
     const pdf = new Uint8Array([1, 2, 3]);
     const compile = vi.fn(async () => ({
@@ -163,10 +166,18 @@ describe("ExportController", () => {
       outputPath: output.fsPath,
       overwritten: false,
       engineVersion: "0.17.0",
-      pdf,
+      review: { size: pdf.length, pdf },
     }));
     await new ExportController(host, { exportPdf: compile }).export(createDocument());
     expect(host.beginPdfExport).toHaveBeenCalledTimes(1);
+    expect(compile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        review: {
+          maxBytes: 64 * 1024 * 1024,
+          capture: expect.any(Function),
+        },
+      }),
+    );
     expect(received).toEqual([pdf]);
   });
 
