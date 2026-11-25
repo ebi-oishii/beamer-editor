@@ -48,14 +48,210 @@ const host = createMessageShellHost(transport, {
 });
 const container = document.getElementById("app");
 
-// 生ブロックの部分コンパイル画像(#81): PDF を pdf.js で 3 倍解像度に描いて data URL にする。
-// worker の URI は拡張側が #app の data-pdf-worker に入れる(別オリジンなので pdf.js が blob 経由で起動する)。
 const pdfWorker = container?.dataset.pdfWorker;
-if (pdfWorker) pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
-async function rasterizePdf(pdf: Uint8Array): Promise<RasterImage> {
-  const task = pdfjs.getDocument({ data: pdf });
-  const loaded = await task.promise;
+let pdfWorkerBlob: Promise<string> | undefined;
+
+function localPdfWorker(): Promise<string> {
+  // A blob worker importing the cross-origin Webview resource can stall in
+  // Electron. Load the bundled module from the Webview and start it directly.
+  pdfWorkerBlob ??= (async () => {
+    if (!pdfWorker) throw new Error("PDF ワーカーの URI を取得できません。");
+    const response = await fetch(pdfWorker);
+    if (!response.ok) throw new Error(`PDF ワーカーを読み込めません (${response.status})。`);
+    const module = new Blob([await response.blob()], { type: "text/javascript" });
+    return URL.createObjectURL(module);
+  })().catch((error) => {
+    pdfWorkerBlob = undefined;
+    throw error;
+  });
+  return pdfWorkerBlob;
+}
+
+async function readPdf<T>(
+  bytes: Uint8Array,
+  read: (pdf: pdfjs.PDFDocumentProxy) => Promise<T>,
+): Promise<T> {
+  const port = new Worker(await localPdfWorker(), { type: "module" });
+  const worker = pdfjs.PDFWorker.create({ port });
+  const listener = new AbortController();
+  let failed = false;
+  const workerError = new Promise<never>((_resolve, reject) => {
+    port.addEventListener(
+      "error",
+      (event) => {
+        failed = true;
+        reject(new Error(event.message || "PDF ワーカーを起動できません。"));
+      },
+      { once: true, signal: listener.signal },
+    );
+  });
+  let task: pdfjs.PDFDocumentLoadingTask | undefined;
   try {
+    task = pdfjs.getDocument({ data: bytes, worker });
+    return await Promise.race([task.promise.then(read), workerError]);
+  } finally {
+    listener.abort();
+    try {
+      if (!failed) await task?.destroy();
+    } finally {
+      worker.destroy();
+      port.terminate();
+    }
+  }
+}
+
+function installPdfConfirmation(app: HTMLElement): void {
+  const toolbar = document.createElement("header");
+  toolbar.className = "deck-preview-tabs";
+  toolbar.setAttribute("role", "group");
+  toolbar.setAttribute("aria-label", "プレビュー表示");
+  toolbar.innerHTML = `
+    <button type="button" data-tab="edit" aria-controls="app">編集</button>
+    <button type="button" data-tab="pdf" aria-controls="deck-pdf-confirmation">PDF確認</button>`;
+  app.before(toolbar);
+
+  const pane = document.createElement("section");
+  pane.id = "deck-pdf-confirmation";
+  pane.setAttribute("aria-label", "PDF確認");
+  pane.innerHTML = `
+    <div class="deck-pdf-toolbar">
+      <span class="deck-pdf-status" role="status"></span>
+      <div class="deck-pdf-controls">
+        <button type="button" data-action="previous-page">前のページ</button>
+        <span class="deck-pdf-page" aria-live="polite"></span>
+        <button type="button" data-action="next-page">次のページ</button>
+        <button type="button" data-action="refresh">更新</button>
+        <button type="button" data-action="save">表示中の PDF を保存</button>
+      </div>
+      <p class="deck-pdf-render-error" role="status" hidden></p>
+    </div>
+    <div class="deck-pdf-pages"></div>`;
+  app.after(pane);
+
+  const [edit, pdfTab] = toolbar.querySelectorAll("button");
+  const status = pane.querySelector<HTMLElement>(".deck-pdf-status");
+  const renderError = pane.querySelector<HTMLElement>(".deck-pdf-render-error");
+  const pages = pane.querySelector<HTMLElement>(".deck-pdf-pages");
+  const refresh = pane.querySelector<HTMLButtonElement>('[data-action="refresh"]');
+  const save = pane.querySelector<HTMLButtonElement>('[data-action="save"]');
+  const previous = pane.querySelector<HTMLButtonElement>('[data-action="previous-page"]');
+  const next = pane.querySelector<HTMLButtonElement>('[data-action="next-page"]');
+  const pageLabel = pane.querySelector<HTMLElement>(".deck-pdf-page");
+  if (
+    !edit ||
+    !pdfTab ||
+    !status ||
+    !renderError ||
+    !pages ||
+    !refresh ||
+    !save ||
+    !previous ||
+    !next ||
+    !pageLabel
+  )
+    return;
+
+  let currentPdf: string | undefined;
+  let currentArtifactId: number | undefined;
+  let revision = -1;
+  let rendering = 0;
+  let pageNumber = 1;
+  let pageCount = 0;
+  let busy = false;
+  let restricted = false;
+
+  const updateControls = () => {
+    previous.disabled = busy || pageNumber <= 1;
+    next.disabled = busy || pageNumber >= pageCount;
+    save.disabled = restricted || currentArtifactId === undefined || !pages.firstElementChild;
+    pageLabel.textContent = pageCount > 0 ? `${pageNumber} / ${pageCount}` : "";
+  };
+  const showTab = (tab: "edit" | "pdf") => {
+    app.hidden = tab === "pdf";
+    pane.hidden = tab === "edit";
+    edit.setAttribute("aria-pressed", String(tab === "edit"));
+    pdfTab.setAttribute("aria-pressed", String(tab === "pdf"));
+    if (tab === "pdf") api.postMessage({ type: "openPdfConfirmation" });
+  };
+  const renderPage = async (requested: number) => {
+    if (!currentPdf) return;
+    const request = ++rendering;
+    busy = true;
+    renderError.hidden = true;
+    updateControls();
+    try {
+      const bytes = Uint8Array.from(atob(currentPdf), (character) => character.charCodeAt(0));
+      const result = await readPdf(bytes, async (pdf) => {
+        const number = Math.min(requested, pdf.numPages);
+        const page = await pdf.getPage(number);
+        const base = page.getViewport({ scale: 1 });
+        const scale = rasterScaleFor(base.width, base.height, 2);
+        if (scale === null) throw new Error("PDF のページが大きすぎます。");
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        await page.render({ canvas, viewport }).promise;
+        return { canvas, number, count: pdf.numPages };
+      });
+      if (request !== rendering) return;
+      pageNumber = result.number;
+      pageCount = result.count;
+      result.canvas.setAttribute("aria-label", `PDF ページ ${pageNumber} / ${pageCount}`);
+      pages.replaceChildren(result.canvas);
+    } catch (error) {
+      if (request !== rendering) return;
+      renderError.textContent = `PDF を表示できません。 ${String(error)}`;
+      renderError.hidden = false;
+    } finally {
+      if (request === rendering) {
+        busy = false;
+        updateControls();
+      }
+    }
+  };
+
+  edit.addEventListener("click", () => showTab("edit"));
+  pdfTab.addEventListener("click", () => showTab("pdf"));
+  refresh.addEventListener("click", () => api.postMessage({ type: "refreshPdfConfirmation" }));
+  save.addEventListener("click", () => {
+    if (currentArtifactId !== undefined)
+      api.postMessage({ type: "saveDisplayedPdf", artifactId: currentArtifactId });
+  });
+  previous.addEventListener("click", () => void renderPage(pageNumber - 1));
+  next.addEventListener("click", () => void renderPage(pageNumber + 1));
+
+  transport.subscribe((message) => {
+    if (message.type !== "pdfUpdated" || message.revision < revision) return;
+    revision = message.revision;
+    restricted = message.status === "restricted";
+    status.textContent =
+      message.message ??
+      {
+        idle: "PDF確認を開くと、保存済みのデッキを組版します。",
+        compiling: "Tectonic で組版中です。",
+        ready: "保存済みの版を表示しています。",
+        stale: "要更新。表示中は前回成功した保存済みの版です。",
+        failed: "組版に失敗しました。",
+        restricted: "Restricted Mode では PDF確認を利用できません。",
+      }[message.status];
+    refresh.disabled = restricted || message.status === "compiling";
+    if (message.pdfBase64 && message.artifactId !== currentArtifactId) {
+      currentPdf = message.pdfBase64;
+      currentArtifactId = message.artifactId;
+      pages.replaceChildren();
+      pageNumber = 1;
+      pageCount = 0;
+      void renderPage(1);
+    }
+    updateControls();
+  });
+  showTab("edit");
+  updateControls();
+}
+
+async function rasterizePdf(pdf: Uint8Array): Promise<RasterImage> {
+  return readPdf(pdf, async (loaded) => {
     const page = await loaded.getPage(1);
     const base = page.getViewport({ scale: 1 });
     const scale = rasterScaleFor(base.width, base.height);
@@ -77,12 +273,11 @@ async function rasterizePdf(pdf: Uint8Array): Promise<RasterImage> {
       widthPt: base.width,
       heightPt: base.height,
     };
-  } finally {
-    await task.destroy();
-  }
+  });
 }
 
 if (container) {
   mountPreview(container, { ...host, rasterizePdf });
+  installPdfConfirmation(container);
   host.ready();
 }

@@ -62,6 +62,11 @@ export interface ExportHost {
   uriForFile(path: string): ExportUri;
   tectonicPath(document: ExportDocument): string | undefined;
   timeoutMs(document: ExportDocument): number;
+  /** Reserves one Export invocation's confirmation result before compilation begins. */
+  beginPdfExport?(
+    document: ExportDocument,
+    output: ExportUri,
+  ): ((pdf?: Uint8Array) => void) | undefined;
 }
 
 export interface ExportControllerDependencies {
@@ -298,6 +303,7 @@ export class ExportController {
       compiled = undefined;
     }
 
+    let finishPdf = format === "pdf" ? this.host.beginPdfExport?.(document, output) : undefined;
     try {
       const result = await this.host.withProgress(async (token, report) => {
         const abort = new AbortController();
@@ -343,6 +349,8 @@ export class ExportController {
           this.activeAbortControllers.delete(abort);
         }
       });
+      finishPdf?.(result?.format === "pdf" && !this.disposed ? result.pdf : undefined);
+      finishPdf = undefined;
       if (!result || this.disposed) return;
       const isHtml = result.format === "html";
       const action = await this.host.showInformation(
@@ -359,6 +367,7 @@ export class ExportController {
         await this.host.showWarning("書き出しは完了しましたが、表示操作に失敗しました。");
       }
     } catch (error) {
+      finishPdf?.();
       await this.reportError(error, document, compiled);
     }
   }

@@ -1,17 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
-import {
-  copyFile,
-  link,
-  lstat,
-  mkdtemp,
-  readFile,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { link, lstat, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { lineSplitter } from "./line-splitter.js";
@@ -56,6 +45,20 @@ export interface PdfExportResult {
   outputPath: string;
   overwritten: boolean;
   engineVersion: string;
+  /** The exact artifact that was atomically published. */
+  pdf?: Uint8Array;
+}
+
+/** A full-deck TeX result before it is placed at a user-selected destination. */
+export interface CompiledPdf {
+  inputPath: string;
+  engineVersion: string;
+  pdf: Uint8Array;
+}
+
+export interface PdfPublishResult {
+  outputPath: string;
+  overwritten: boolean;
 }
 
 export type PdfExportErrorCode =
@@ -470,55 +473,26 @@ async function ensureTectonic(
 }
 
 /**
- * Compile the untouched input source through Tectonic, staging all compiler
- * output under the OS temp directory. The destination is replaced only after a
- * non-empty PDF has been produced.
+ * Compile the saved input in its original directory and read the PDF from the
+ * temporary output directory before cleaning up.
  */
-export async function exportPdf(
-  request: PdfExportRequest,
+export async function compilePdf(
+  request: Omit<PdfExportRequest, "outputPath" | "overwrite">,
   dependencies: PdfExportDependencies = {},
-): Promise<PdfExportResult> {
+): Promise<CompiledPdf> {
   const runner = dependencies.runner ?? nodeProcessRunner;
   const tectonic = request.tectonicPath ?? "tectonic";
   const inputPath = resolve(request.inputPath);
-  const outputPath = resolve(request.outputPath ?? defaultOutputPath(inputPath));
   const signal = request.signal;
   throwIfCancelled(signal);
   if (!(await regularFile(inputPath))) {
     throw new PdfExportError("E_INPUT", `入力 TeX を読み込めません: ${request.inputPath}`);
   }
-  throwIfCancelled(signal);
-  let outputEntry: Awaited<ReturnType<typeof existingEntry>>;
-  try {
-    outputEntry = await existingEntry(outputPath);
-  } catch (error) {
-    throw new PdfExportError(
-      "E_IO",
-      `出力先を確認できません: ${outputPath}: ${errorMessage(error)}`,
-      error,
-    );
-  }
-  const outputExists = outputEntry !== undefined;
-  if (inputPath === outputPath || (outputExists && (await sameFile(inputPath, outputPath)))) {
-    throw new PdfExportError("E_INPUT", "出力先を入力 TeX と同じファイルにはできません");
-  }
-  if (outputEntry !== undefined && !outputEntry.isFile() && !outputEntry.isSymbolicLink()) {
-    throw new PdfExportError(
-      "E_OUTPUT_EXISTS",
-      `出力先は通常ファイルではありません: ${outputPath}`,
-    );
-  }
-  if (outputExists && !request.overwrite) {
-    throw new PdfExportError("E_OUTPUT_EXISTS", `出力先は既に存在します: ${outputPath}`);
-  }
-  throwIfCancelled(signal);
-
   const engineVersion = await ensureTectonic(runner, tectonic, dirname(inputPath), signal);
 
   const makeTemp =
     dependencies.temporaryDirectory ?? ((prefix: string) => mkdtemp(join(tmpdir(), prefix)));
   let tempDirectory: string | undefined;
-  let stagingPath: string | undefined;
   try {
     tempDirectory = await makeTemp("beamer-editor-pdf-");
     throwIfCancelled(signal);
@@ -576,18 +550,44 @@ export async function exportPdf(
         `PDF のコンパイルに失敗しました${processDetail(compileResult)}`,
       );
     }
-    // Stage in the target filesystem. `COPYFILE_EXCL` plus UUID prevents one
-    // export from ever consuming another export's staging file.
+    return { inputPath, engineVersion, pdf: new Uint8Array(await readFile(compiledPdf)) };
+  } catch (error) {
+    if (error instanceof PdfExportError) throw error;
+    if (isAbort(error, signal))
+      throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました", error);
+    throw new PdfExportError("E_IO", `組版結果を読み込めません: ${String(error)}`, error);
+  } finally {
+    if (tempDirectory)
+      await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/** Atomically publish already-generated PDF bytes to a destination. */
+export async function publishPdf(
+  request: {
+    pdf: Uint8Array;
+    outputPath: string;
+    sourcePath?: string;
+    overwrite?: boolean;
+    signal?: AbortSignal;
+  },
+  dependencies: Pick<PdfExportDependencies, "removeStagingFile"> = {},
+): Promise<PdfPublishResult> {
+  const outputPath = resolve(request.outputPath);
+  const signal = request.signal;
+  throwIfCancelled(signal);
+  if (request.pdf.byteLength === 0) throw new PdfExportError("E_INPUT", "公開する PDF が空です");
+  if (request.sourcePath !== undefined)
+    await protectPdfSource(resolve(request.sourcePath), outputPath);
+  const outputExists = await preflightPdfOutput(outputPath, request.overwrite);
+  let stagingPath: string | undefined;
+  try {
     stagingPath = join(dirname(outputPath), `.${basename(outputPath)}.deck-export-${randomUUID()}`);
-    await copyFile(compiledPdf, stagingPath, constants.COPYFILE_EXCL);
+    await writeFile(stagingPath, request.pdf, { flag: "wx" });
     throwIfCancelled(signal);
-    if (request.overwrite) {
-      await rename(stagingPath, outputPath);
-    } else {
+    if (request.overwrite) await rename(stagingPath, outputPath);
+    else {
       try {
-        // link is an atomic create-only operation on the destination filesystem.
-        // It closes the preflight-to-commit no-clobber race without deleting any
-        // file another process created while Tectonic was running.
         await link(stagingPath, outputPath);
       } catch (error) {
         if (isAlreadyExists(error))
@@ -598,27 +598,86 @@ export async function exportPdf(
           );
         throw error;
       }
-      // The link has published the final file. Its staging peer can now be
-      // removed best-effort; a cleanup failure must not turn a completed export
-      // into E_IO.
-      const publishedStagingPath = stagingPath;
+      const published = stagingPath;
       stagingPath = undefined;
       await (dependencies.removeStagingFile ?? ((path: string) => rm(path, { force: true })))(
-        publishedStagingPath,
+        published,
       ).catch(() => undefined);
     }
     stagingPath = undefined;
-    return { format: "pdf", inputPath, outputPath, overwritten: outputExists, engineVersion };
+    return { outputPath, overwritten: outputExists };
   } catch (error) {
     if (error instanceof PdfExportError) throw error;
     if (isAbort(error, signal))
-      throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました", error);
+      throw new PdfExportError("E_CANCELLED", "PDF の保存はキャンセルされました", error);
     throw new PdfExportError("E_IO", `PDF の配置に失敗しました: ${String(error)}`, error);
   } finally {
     if (stagingPath) await rm(stagingPath, { force: true }).catch(() => undefined);
-    if (tempDirectory)
-      await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+async function preflightPdfOutput(
+  outputPath: string,
+  overwrite: boolean | undefined,
+): Promise<boolean> {
+  let outputEntry: Awaited<ReturnType<typeof existingEntry>>;
+  try {
+    outputEntry = await existingEntry(outputPath);
+  } catch (error) {
+    throw new PdfExportError(
+      "E_IO",
+      `出力先を確認できません: ${outputPath}: ${errorMessage(error)}`,
+      error,
+    );
+  }
+  const outputExists = outputEntry !== undefined;
+  if (outputEntry !== undefined && !outputEntry.isFile() && !outputEntry.isSymbolicLink())
+    throw new PdfExportError(
+      "E_OUTPUT_EXISTS",
+      `出力先は通常ファイルではありません: ${outputPath}`,
+    );
+  if (outputExists && !overwrite)
+    throw new PdfExportError("E_OUTPUT_EXISTS", `出力先は既に存在します: ${outputPath}`);
+  return outputExists;
+}
+
+async function protectPdfSource(inputPath: string, outputPath: string): Promise<void> {
+  if (inputPath === outputPath || (await sameFile(inputPath, outputPath)))
+    throw new PdfExportError("E_INPUT", "出力先を入力 TeX と同じファイルにはできません");
+}
+
+/** Generate once, then atomically publish the same bytes. */
+export async function exportPdf(
+  request: PdfExportRequest,
+  dependencies: PdfExportDependencies = {},
+): Promise<PdfExportResult> {
+  const inputPath = resolve(request.inputPath);
+  const outputPath = resolve(request.outputPath ?? defaultOutputPath(inputPath));
+  throwIfCancelled(request.signal);
+  if (!(await regularFile(inputPath)))
+    throw new PdfExportError("E_INPUT", `入力 TeX を読み込めません: ${request.inputPath}`);
+  await protectPdfSource(inputPath, outputPath);
+  // Preserve the existing fast failure contract before starting Tectonic.
+  await preflightPdfOutput(outputPath, request.overwrite);
+  const compiled = await compilePdf(request, dependencies);
+  const published = await publishPdf(
+    {
+      pdf: compiled.pdf,
+      outputPath,
+      sourcePath: inputPath,
+      ...(request.overwrite === undefined ? {} : { overwrite: request.overwrite }),
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    },
+    dependencies,
+  );
+  return {
+    format: "pdf",
+    inputPath,
+    outputPath,
+    overwritten: published.overwritten,
+    engineVersion: compiled.engineVersion,
+    pdf: compiled.pdf,
+  };
 }
 
 export function defaultPdfOutputPath(inputPath: string): string {

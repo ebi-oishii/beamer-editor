@@ -149,6 +149,27 @@ describe("ExportController", () => {
     expect(host.openPdf).toHaveBeenCalledWith(output);
   });
 
+  it("passes the compiler-owned PDF bytes to the Export invocation observer", async () => {
+    const received: Uint8Array[] = [];
+    const host = createHost({
+      beginPdfExport: vi.fn(() => (pdf?: Uint8Array) => {
+        if (pdf) received.push(pdf);
+      }),
+    });
+    const pdf = new Uint8Array([1, 2, 3]);
+    const compile = vi.fn(async () => ({
+      format: "pdf" as const,
+      inputPath: input.fsPath,
+      outputPath: output.fsPath,
+      overwritten: false,
+      engineVersion: "0.17.0",
+      pdf,
+    }));
+    await new ExportController(host, { exportPdf: compile }).export(createDocument());
+    expect(host.beginPdfExport).toHaveBeenCalledTimes(1);
+    expect(received).toEqual([pdf]);
+  });
+
   it("reports Tectonic package downloads in the progress notification, throttled", async () => {
     vi.useFakeTimers();
     try {

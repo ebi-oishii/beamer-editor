@@ -295,7 +295,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": true,
-      "description": "プレビュー・lint はコードを実行しません。PDF 書き出しは Workspace Trust が無い場合に無効化します。",
+      "description": "HTML 編集プレビューと lint は Restricted Mode でも利用できます。PDF確認と PDF 書き出しには Workspace Trust が必要です。",
       "restrictedConfigurations": [
         "beamerEditor.tectonicPath"
       ]

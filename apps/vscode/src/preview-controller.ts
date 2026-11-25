@@ -183,6 +183,8 @@ export interface PreviewControllerOptions {
     frameOffset: number;
     document: PreviewDocument;
   }) => Promise<PasteResult>;
+  /** PDF確認の操作。PDF の生成は extension host が所有する。 */
+  pdfAction?: (action: "open" | "refresh" | "save", artifactId?: number) => void;
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -234,10 +236,11 @@ export function emptyPreviewHtml(assets: WebviewAssets, cspSource: string, nonce
   const csp = [
     "default-src 'none'",
     `img-src ${cspSource} data:`,
+    `connect-src ${cspSource}`,
     `style-src ${cspSource} 'unsafe-inline'`,
     // KaTeX の CSS は版によって data: URL のフォントを含むため許可する
     `font-src ${cspSource} data:`,
-    // pdf.js の worker は拡張の media から読む。Webview とは別オリジンなので blob: 経由で起動される。
+    // PDF.js の worker は拡張の media から読み、Webview 内で blob: として起動する。
     `script-src 'nonce-${nonce}' ${cspSource}`,
     `worker-src blob: ${cspSource}`,
   ].join("; ");
@@ -252,7 +255,25 @@ export function emptyPreviewHtml(assets: WebviewAssets, cspSource: string, nonce
     <link rel="stylesheet" href="${assets.styleUri}" />
     <style>
       html, body { height: 100%; margin: 0; }
-      #app { display: flex; height: 100%; }
+      body { display: flex; flex-direction: column; }
+      #app { display: flex; }
+      #app, #deck-pdf-confirmation { flex: 1; min-height: 0; }
+      #app[hidden] { display: none; }
+      #deck-pdf-confirmation { overflow: auto; background: var(--vscode-editor-background); }
+      .deck-preview-tabs, .deck-pdf-controls { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+      .deck-preview-tabs, .deck-pdf-toolbar { padding: .5rem .75rem; border-bottom: 1px solid var(--vscode-panel-border); }
+      .deck-pdf-toolbar { position: sticky; top: 0; background: var(--vscode-editor-background); }
+      .deck-pdf-status { display: block; margin-bottom: .5rem; overflow-wrap: anywhere; }
+      .deck-pdf-render-error { overflow-wrap: anywhere; }
+      .deck-preview-tabs button, .deck-pdf-controls button {
+        padding: .25rem .5rem; border: 1px solid var(--vscode-button-border, transparent);
+        color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground);
+        font: inherit;
+      }
+      .deck-preview-tabs button[aria-pressed="true"] { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+      .deck-pdf-controls button:disabled { opacity: .55; }
+      .deck-pdf-pages { padding: 1rem; }
+      .deck-pdf-pages canvas { display: block; margin: auto; max-width: 100%; height: auto; box-shadow: 0 1px 5px #0008; }
     </style>
   </head>
   <body>
@@ -291,6 +312,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly deleteCanvasElement: PreviewControllerOptions["deleteCanvasElement"];
   private readonly copyCanvasElement: PreviewControllerOptions["copyCanvasElement"];
   private readonly pasteCanvasElements: PreviewControllerOptions["pasteCanvasElements"];
+  private readonly pdfAction: NonNullable<PreviewControllerOptions["pdfAction"]>;
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   /** 最後に成功したレンダリング結果。VS-4(ソースジャンプ)・VS-5(診断)が参照する。 */
@@ -351,6 +373,7 @@ export class PreviewController implements vscode.Disposable {
     this.deleteCanvasElement = options.deleteCanvasElement;
     this.copyCanvasElement = options.copyCanvasElement;
     this.pasteCanvasElements = options.pasteCanvasElements;
+    this.pdfAction = options.pdfAction ?? (() => {});
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
       this.panel.onDidDispose(() => this.dispose()),
@@ -419,6 +442,12 @@ export class PreviewController implements vscode.Disposable {
     if (msg.type === "ready") {
       this.onWebviewReady();
       this.sendDeck();
+    } else if (msg.type === "openPdfConfirmation") {
+      this.pdfAction("open");
+    } else if (msg.type === "refreshPdfConfirmation") {
+      this.pdfAction("refresh");
+    } else if (msg.type === "saveDisplayedPdf") {
+      this.pdfAction("save", msg.artifactId);
     } else if (msg.type === "jumpToSource") {
       this.handleJump(msg.frameIndex, msg.version);
     } else if (msg.type === "resizeCanvasElement" || msg.type === "setCanvasFontSize") {
@@ -1086,6 +1115,25 @@ export class PreviewController implements vscode.Disposable {
   postRawImagesCleared(): void {
     if (this.disposed) return;
     const message: ExtensionToWebview = { type: "rawImagesCleared" };
+    void this.panel.webview.postMessage(message);
+  }
+
+  postPdfState(
+    status: "idle" | "compiling" | "ready" | "stale" | "failed" | "restricted",
+    revision: number,
+    options: { message?: string; pdf?: Uint8Array; artifactId?: number } = {},
+  ): void {
+    if (this.disposed) return;
+    const message: ExtensionToWebview = {
+      type: "pdfUpdated",
+      status,
+      revision,
+      ...(options.message === undefined ? {} : { message: options.message }),
+      ...(options.pdf === undefined
+        ? {}
+        : { pdfBase64: Buffer.from(options.pdf).toString("base64") }),
+      ...(options.artifactId === undefined ? {} : { artifactId: options.artifactId }),
+    };
     void this.panel.webview.postMessage(message);
   }
 

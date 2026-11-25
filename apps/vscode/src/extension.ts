@@ -2,9 +2,11 @@ import * as path from "node:path";
 import {
   buildFragmentDocument,
   compileFragment,
+  compilePdf,
   FRAGMENT_DOCUMENT_VERSION,
   fragmentDependencies,
   PdfExportError,
+  publishPdf,
 } from "@beamer-editor/compiler";
 import {
   canvasFontSizeReplacement,
@@ -47,6 +49,7 @@ import {
   ManagedPreviewLifecycle,
   needsLatexWorkshopIgnorePrompt,
 } from "./managed-files";
+import { PdfPublications } from "./pdf-publications";
 import { PreviewController } from "./preview-controller";
 import { executeHistoryCommand, PreviewHistory } from "./preview-history";
 import {
@@ -70,6 +73,7 @@ import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 
 let previewController: PreviewController | undefined;
 const previewLifecycle = new ManagedPreviewLifecycle<PreviewController, vscode.TextDocument>();
+const pdfConfirmationExports = new Map<string, (output: string) => (pdf?: Uint8Array) => void>();
 
 const LINT_SEVERITIES: Record<LintSeverity, vscode.DiagnosticSeverity> = {
   error: vscode.DiagnosticSeverity.Error,
@@ -328,6 +332,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         const normalized = Number.isFinite(seconds) ? Math.trunc(seconds) : 300;
         return Math.max(5, Math.min(1800, normalized)) * 1000;
       },
+      beginPdfExport: (document, output) =>
+        pdfConfirmationExports.get(document.uri.toString())?.(output.fsPath),
     },
     {
       htmlKatexAssetsPath: path.join(context.extensionPath, "media", "html-export", "katex"),
@@ -815,7 +821,153 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       vscode.workspace
         .getConfiguration("beamerEditor", document.uri)
         .get<boolean>("preview.compileRawBlocks", true);
-    const controller = new PreviewController(
+    let controller: PreviewController;
+    let pdfBytes: Uint8Array | undefined;
+    let pdfArtifactId = 0;
+    let pdfRevision = 0;
+    let pdfRequest = 0;
+    let pdfOpened = false;
+    let pdfDirty = document.isDirty;
+    let pdfFailure: string | undefined;
+    let pdfAbort: AbortController | undefined;
+    let pdfInputRevision = 0;
+    let pdfCompiledRevision = 0;
+    const pdfPublications = new PdfPublications();
+    const postPdf = (includeArtifact = false) => {
+      if (!pdfOpened) return;
+      const stale = pdfBytes !== undefined && pdfCompiledRevision !== pdfInputRevision;
+      const status = !vscode.workspace.isTrusted
+        ? "restricted"
+        : pdfAbort
+          ? "compiling"
+          : pdfFailure !== undefined
+            ? "failed"
+            : stale
+              ? "stale"
+              : pdfBytes
+                ? "ready"
+                : "idle";
+      const labels: string[] = [];
+      if (status === "compiling") labels.push("Tectonic で組版中です。");
+      if (status === "failed") labels.push(`組版に失敗しました。 ${pdfFailure}`);
+      if (status !== "restricted") {
+        if (stale) labels.push("要更新。");
+        if (pdfBytes) {
+          labels.push(
+            stale || pdfFailure !== undefined
+              ? "前回成功した保存済みの版を表示しています。"
+              : "保存済みの版を表示しています。",
+          );
+        }
+        if (pdfDirty) labels.push("未保存の編集があります。");
+      }
+      controller.postPdfState(status, ++pdfRevision, {
+        ...(labels.length ? { message: labels.join(" ") } : {}),
+        ...(includeArtifact && pdfBytes && status !== "restricted"
+          ? { pdf: pdfBytes, artifactId: pdfArtifactId }
+          : {}),
+      });
+    };
+    const markPdfStale = () => {
+      pdfInputRevision += 1;
+      postPdf();
+    };
+    const pdfSaveSubscription = vscode.workspace.onDidSaveTextDocument?.((saved) => {
+      if (saved.uri.toString() !== document.uri.toString()) return;
+      pdfDirty = saved.isDirty;
+      markPdfStale();
+    });
+    const pdfExternalChangeSubscription = vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.document.uri.toString() !== document.uri.toString()) return;
+      const wasDirty = pdfDirty;
+      pdfDirty = event.document.isDirty;
+      // A clean buffer can be reloaded from disk. Unsaved changes only affect the label.
+      if (!pdfDirty && !wasDirty && event.contentChanges.length) markPdfStale();
+      else if (wasDirty !== pdfDirty) postPdf();
+    });
+    const setCompiledPdf = (bytes: Uint8Array, inputRevision: number) => {
+      pdfBytes = bytes;
+      pdfArtifactId += 1;
+      pdfCompiledRevision = inputRevision;
+      pdfFailure = undefined;
+      postPdf(true);
+    };
+    const compilePdfConfirmation = async () => {
+      if (!vscode.workspace.isTrusted) {
+        postPdf();
+        return;
+      }
+      const request = ++pdfRequest;
+      const inputRevision = pdfInputRevision;
+      pdfAbort?.abort();
+      const abort = new AbortController();
+      pdfAbort = abort;
+      pdfFailure = undefined;
+      postPdf();
+      const config = vscode.workspace.getConfiguration("beamerEditor", document.uri);
+      const seconds = config.get<number>("pdfExport.timeoutSeconds", 300);
+      const normalized = Number.isFinite(seconds) ? Math.trunc(seconds) : 300;
+      const tectonicPath = tectonicPathFor(document.uri);
+      try {
+        const compiled = await compilePdf({
+          inputPath: document.uri.fsPath,
+          signal: abort.signal,
+          timeoutMs: Math.max(5, Math.min(1800, normalized)) * 1000,
+          ...(tectonicPath === undefined ? {} : { tectonicPath }),
+        });
+        if (request !== pdfRequest) return;
+        pdfAbort = undefined;
+        setCompiledPdf(compiled.pdf, inputRevision);
+      } catch (error) {
+        if (request !== pdfRequest) return;
+        pdfAbort = undefined;
+        pdfFailure = error instanceof Error ? error.message : String(error);
+        postPdf();
+      }
+    };
+    const saveDisplayedPdf = async (artifactId: number | undefined) => {
+      const displayed = pdfBytes;
+      if (!vscode.workspace.isTrusted || !displayed || artifactId !== pdfArtifactId) return;
+      const earlier = pdfCompiledRevision !== pdfInputRevision || pdfFailure !== undefined;
+      const output = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file(
+          path.join(
+            path.dirname(document.uri.fsPath),
+            `${path.basename(document.uri.fsPath, ".tex")}.pdf`,
+          ),
+        ),
+        filters: { PDF: ["pdf"] },
+        title: earlier ? "前回成功した PDF を保存" : "表示中の PDF を保存",
+      });
+      if (!output) return;
+      let overwrite = false;
+      try {
+        await vscode.workspace.fs.stat(output);
+        overwrite =
+          (await vscode.window.showWarningMessage("既存の PDF を上書きしますか？", "上書き")) ===
+          "上書き";
+        if (!overwrite) return;
+      } catch {
+        // The destination does not exist.
+      }
+      const finishPublication = pdfPublications.begin(output.fsPath);
+      try {
+        await publishPdf({
+          pdf: displayed,
+          outputPath: output.fsPath,
+          sourcePath: document.uri.fsPath,
+          overwrite,
+        });
+        finishPublication(displayed);
+        void vscode.window.showInformationMessage(`表示中の PDF を保存しました: ${output.fsPath}`);
+      } catch (error) {
+        finishPublication();
+        void vscode.window.showErrorMessage(
+          `PDF の保存に失敗しました: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    };
+    controller = new PreviewController(
       panel,
       {
         scriptUri: mediaUri("webview.js"),
@@ -827,6 +979,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         onDidChangeTextDocument: (listener) => vscode.workspace.onDidChangeTextDocument(listener),
       },
       () => {
+        pdfConfirmationExports.delete(document.uri.toString());
+        pdfRequest += 1;
+        pdfAbort?.abort();
+        pdfSaveSubscription?.dispose();
+        pdfExternalChangeSubscription.dispose();
         previewSources.delete(panel);
         rawBlockCompiler.dispose();
         rawBlockSettings.dispose();
@@ -846,6 +1003,19 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           );
         },
         onWebviewReady: () => rawBlockCompiler.forgetDelivered(),
+        pdfAction: (action, artifactId) => {
+          if (action === "save") {
+            void saveDisplayedPdf(artifactId);
+            return;
+          }
+          pdfOpened = true;
+          if (
+            action === "refresh" ||
+            (vscode.workspace.isTrusted && !pdfBytes && !pdfAbort && !pdfFailure)
+          )
+            void compilePdfConfirmation();
+          else postPdf(true);
+        },
         onError: (message) => {
           void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
         },
@@ -1023,11 +1193,35 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         },
       },
     );
-    const refreshTemplates = () => {
+    pdfConfirmationExports.set(document.uri.toString(), (output) => {
+      // A normal Export saves first. Its later result must outrank an older
+      // confirmation compile that happens to finish afterwards.
+      pdfRequest += 1;
+      const request = pdfRequest;
+      const inputRevision = pdfInputRevision;
+      pdfAbort?.abort();
+      pdfAbort = undefined;
+      postPdf();
+      const finishPublication = pdfPublications.begin(output);
+      return (bytes) => {
+        finishPublication(bytes);
+        if (bytes === undefined || request !== pdfRequest) return;
+        setCompiledPdf(bytes, inputRevision);
+      };
+    });
+    const refreshTemplates = (changed: vscode.Uri) => {
       // 画像や .sty が足されたり直ったりしたときは、失敗していた生ブロックも次の描画で再試行する。
       rawBlockCompiler.resetFailures();
       controller.refresh();
       lintController.refresh(vscode.workspace.textDocuments);
+      const ownChange = pdfPublications.ownChange(changed.fsPath, () =>
+        vscode.workspace.fs.readFile(changed),
+      );
+      if (!ownChange) markPdfStale();
+      else
+        void ownChange.then((matches) => {
+          if (!matches) markPdfStale();
+        });
     };
     templateWatcher.onDidChange(refreshTemplates);
     templateWatcher.onDidCreate(refreshTemplates);
@@ -1035,6 +1229,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     // Tectonic の場所や部分コンパイルの有効/無効が変わったら、エンジンの判定と失敗を捨てて描画し直す
     // (プレビューを開き直さずに再試行できる)。
     const rawBlockSettings = vscode.workspace.onDidChangeConfiguration((event) => {
+      if (
+        event.affectsConfiguration("beamerEditor.tectonicPath", document.uri) ||
+        event.affectsConfiguration("beamerEditor.pdfExport.timeoutSeconds", document.uri)
+      )
+        markPdfStale();
       if (!affectsRawBlockCompile((section) => event.affectsConfiguration(section, document.uri)))
         return;
       rawBlockCompiler.reset();

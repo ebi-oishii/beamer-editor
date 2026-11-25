@@ -3,12 +3,14 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  compilePdf,
   exportPdf,
   nodeProcessRunner,
   PdfExportError,
   type PdfExportProgress,
   type ProcessResult,
   type ProcessRunner,
+  publishPdf,
 } from "../src/index.ts";
 
 const directories: string[] = [];
@@ -676,6 +678,28 @@ describe("exportPdf", () => {
       expect(await readFile(value.outputPath, "utf8")).toContain("%PDF-");
     },
   );
+});
+
+describe("compilePdf and publishPdf", () => {
+  it("separates generation from byte-for-byte atomic publication", async () => {
+    const input = await source();
+    const output = join(input.dir, "published.pdf");
+    const compiled = await compilePdf({ inputPath: input.path }, { runner: successfulRunner([]) });
+    expect(Array.from(compiled.pdf)).toEqual(Array.from(Buffer.from("%PDF-1.7\n")));
+    await publishPdf({ pdf: compiled.pdf, outputPath: output });
+    expect(await readFile(output)).toEqual(Buffer.from("%PDF-1.7\n"));
+  });
+
+  it("publishes displayed PDF bytes without invoking Tectonic", async () => {
+    const dir = await directory();
+    const savedPdf = join(dir, "saved.pdf");
+    const bytes = Buffer.from("%PDF-1.7\nexact displayed artifact\n");
+    await expect(publishPdf({ pdf: bytes, outputPath: savedPdf })).resolves.toMatchObject({
+      outputPath: savedPdf,
+      overwritten: false,
+    });
+    expect(await readFile(savedPdf)).toEqual(bytes);
+  });
 });
 
 describe("PdfExportError", () => {
