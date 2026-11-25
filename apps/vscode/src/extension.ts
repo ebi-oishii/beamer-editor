@@ -78,11 +78,13 @@ import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 
 let previewController: PreviewController | undefined;
 const previewLifecycle = new ManagedPreviewLifecycle<PreviewController, vscode.TextDocument>();
-type FinishPdfExport = (review?: PdfExportResult["review"]) => void;
+type FinishPdfExport = (review?: PdfExportResult["review"], dependencyChanged?: boolean) => void;
 interface PendingPdfExport {
   output: string;
   /** True once the saved text changed after this Export accepted its input. */
   savedInputChanged: boolean;
+  tectonicSettingsChanged: boolean;
+  changedPaths: Set<string>;
   finishPanel?: FinishPdfExport;
   dispose(): void;
 }
@@ -357,6 +359,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         const operation: PendingPdfExport = {
           output: output.fsPath,
           savedInputChanged: false,
+          tectonicSettingsChanged: false,
+          changedPaths: new Set(),
           dispose: () => {},
         };
         const recordSavedInput = (saved: ExportDocument) => {
@@ -375,9 +379,37 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           if (!event.document.isDirty && event.contentChanges.length)
             recordSavedInput(event.document as ExportDocument);
         });
+        const settingsSubscription = vscode.workspace.onDidChangeConfiguration((event) => {
+          if (
+            event.affectsConfiguration("beamerEditor.tectonicPath", document.uri as vscode.Uri) ||
+            event.affectsConfiguration(
+              "beamerEditor.pdfExport.timeoutSeconds",
+              document.uri as vscode.Uri,
+            )
+          )
+            operation.tectonicSettingsChanged = true;
+        });
+        // Start observing dependencies with Export itself, even when no panel
+        // exists yet. This closes the compile-to-panel attachment window.
+        const dependencyWatcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(
+            vscode.Uri.file(path.dirname(document.uri.fsPath)),
+            "**/*.{sty,png,jpg,jpeg,pdf}",
+          ),
+        );
+        const recordDependency = (uri: vscode.Uri) =>
+          operation.changedPaths.add(path.resolve(uri.fsPath));
+        const dependencySubscriptions = [
+          dependencyWatcher.onDidChange(recordDependency),
+          dependencyWatcher.onDidCreate(recordDependency),
+          dependencyWatcher.onDidDelete(recordDependency),
+        ];
         operation.dispose = () => {
           saveSubscription.dispose();
           cleanReloadSubscription.dispose();
+          settingsSubscription.dispose();
+          for (const subscription of dependencySubscriptions) subscription.dispose();
+          dependencyWatcher.dispose();
         };
         pendingPdfExports.set(key, operation);
         const finishPanel = pdfConfirmationExports.get(key)?.(output.fsPath);
@@ -386,7 +418,15 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           finish: (review) => {
             pendingPdfExports.delete(key);
             operation.dispose();
-            operation.finishPanel?.(review);
+            const dependencyChanged =
+              operation.changedPaths.size > 0 &&
+              (review?.dependencyPaths === undefined ||
+                [...operation.changedPaths].some((changed) =>
+                  review.dependencyPaths?.some((dependency) => dependency === changed),
+                ));
+            if (operation.finishPanel)
+              operation.finishPanel(review, dependencyChanged || operation.tectonicSettingsChanged);
+            else void review?.content?.dispose();
           },
         };
       },
@@ -779,9 +819,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       groupLocked = true;
       void vscode.commands.executeCommand("workbench.action.lockEditorGroup");
     };
+    let previewViewStateChanged = (): void => {};
     const viewStateSubscription = panel.onDidChangeViewState(() => {
       lockGroupIfActive();
       if (panel.active) updateSlideOutline(isManaged(document) ? document : undefined);
+      previewViewStateChanged();
     });
     lockGroupIfActive();
 
@@ -812,6 +854,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         return null;
       }
     };
+    let pdfTabVisible = false;
+    let rawResultsPending = false;
+    let rawClearPending = false;
     const rawBlockCompiler = new RawBlockCompiler({
       cacheDir: rawCacheDir.fsPath,
       fs: {
@@ -869,8 +914,14 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         });
         return result.pdf;
       },
-      onReady: (key, pdf) => controller.postRawBlockReady(key, pdf),
-      onFailed: (key, message) => controller.postRawBlockFailed(key, message),
+      onReady: (key, pdf) => {
+        if (pdfTabVisible) rawResultsPending = true;
+        else controller.postRawBlockReady(key, pdf);
+      },
+      onFailed: (key, message) => {
+        if (pdfTabVisible) rawResultsPending = true;
+        else controller.postRawBlockFailed(key, message);
+      },
     });
     const rawBlocksEnabled = () =>
       vscode.workspace.isTrusted &&
@@ -892,13 +943,25 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     let pdfInputRevision = 0;
     let pdfCompiledRevision = 0;
     let pdfDependencyPaths: readonly string[] | undefined;
+    let pendingPdf:
+      | {
+          content: NonNullable<PdfReviewArtifact["content"]>;
+          inputRevision: number;
+          dependencyPaths: readonly string[] | undefined;
+          loading: boolean;
+        }
+      | undefined;
     const pdfPublications = new PdfPublications();
+    const requestRawBlocks = (outcome: ReturnType<typeof renderDocument>) => {
+      if (pdfTabVisible || !rawBlocksEnabled()) return;
+      rawBlockCompiler.request(outcome.deck.rawBlocks ?? [], outcome.deck.fragmentPreamble ?? "");
+    };
     const postPdf = () => {
       if (!pdfOpened) return;
       const stale = pdfBytes !== undefined && pdfCompiledRevision !== pdfInputRevision;
       const status = !vscode.workspace.isTrusted
         ? "restricted"
-        : pdfAbort || pdfExportRequest === pdfRequest
+        : pdfAbort || pdfExportRequest === pdfRequest || pendingPdf?.loading
           ? "compiling"
           : pdfFailure !== undefined || pdfTooLarge
             ? "failed"
@@ -908,7 +971,12 @@ export function activate(context: vscode.ExtensionContext): TestApi {
                 ? "ready"
                 : "idle";
       const labels: string[] = [];
-      if (status === "compiling") labels.push("Tectonic で組版中です。");
+      if (status === "compiling")
+        labels.push(
+          pdfAbort || pdfExportRequest === pdfRequest
+            ? "Tectonic で組版中です。"
+            : "PDF を読み込んでいます。",
+        );
       if (status === "failed")
         labels.push(
           pdfTooLarge
@@ -926,7 +994,12 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         }
         if (pdfDirty) labels.push("未保存の編集があります。");
       }
-      const deliver = pdfBytes && sentPdfArtifactId !== pdfArtifactId && status !== "restricted";
+      const deliver =
+        pdfTabVisible &&
+        panel.visible !== false &&
+        pdfBytes &&
+        sentPdfArtifactId !== pdfArtifactId &&
+        status !== "restricted";
       if (deliver) sentPdfArtifactId = pdfArtifactId;
       controller.postPdfState(status, ++pdfRevision, {
         ...(labels.length ? { message: labels.join(" ") } : {}),
@@ -950,19 +1023,58 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       if (!pdfDirty && !wasDirty && event.contentChanges.length) markPdfStale();
       else if (wasDirty !== pdfDirty) postPdf();
     });
+    const discardPendingPdfContent = () => {
+      const candidate = pendingPdf;
+      pendingPdf = undefined;
+      void candidate?.content.dispose();
+    };
     const setCompiledPdf = (artifact: PdfReviewArtifact, inputRevision: number) => {
       pdfFailure = undefined;
       pdfTooLarge = artifact.size > MAX_CONFIRMATION_PDF_BYTES;
-      if (artifact.pdf) {
-        pdfBytes = artifact.pdf;
-        pdfArtifactId += 1;
-        pdfCompiledRevision = inputRevision;
-        pdfDependencyPaths = artifact.dependencyPaths;
+      discardPendingPdfContent();
+      if (artifact.content) {
+        pendingPdf = {
+          content: artifact.content,
+          inputRevision,
+          dependencyPaths: artifact.dependencyPaths,
+          loading: false,
+        };
       } else if (!pdfTooLarge) {
         pdfFailure =
           "書き出した PDF を確認タブに読み込めませんでした。更新して再試行してください。";
       }
       postPdf();
+    };
+    const loadPendingPdf = async () => {
+      const candidate = pendingPdf;
+      if (
+        !candidate ||
+        candidate.loading ||
+        !pdfTabVisible ||
+        panel.visible === false ||
+        !vscode.workspace.isTrusted
+      )
+        return;
+      candidate.loading = true;
+      postPdf();
+      try {
+        const bytes = await candidate.content.read();
+        if (pendingPdf !== candidate) return;
+        pdfBytes = bytes;
+        pdfArtifactId += 1;
+        pdfCompiledRevision = candidate.inputRevision;
+        pdfDependencyPaths = candidate.dependencyPaths;
+      } catch {
+        if (pendingPdf !== candidate) return;
+        pdfFailure =
+          "書き出した PDF を確認タブに読み込めませんでした。更新して再試行してください。";
+      } finally {
+        if (pendingPdf === candidate) {
+          pendingPdf = undefined;
+          postPdf();
+        }
+        await candidate.content.dispose();
+      }
     };
     const compilePdfConfirmation = async () => {
       if (!vscode.workspace.isTrusted) {
@@ -991,7 +1103,14 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         });
         if (request !== pdfRequest) return;
         pdfAbort = undefined;
-        setCompiledPdf({ size: compiled.pdf.byteLength, ...compiled }, inputRevision);
+        discardPendingPdfContent();
+        pdfFailure = undefined;
+        // Confirmation compiles are already requested by a visible PDF tab.
+        pdfBytes = compiled.pdf;
+        pdfArtifactId += 1;
+        pdfCompiledRevision = inputRevision;
+        pdfDependencyPaths = compiled.dependencyPaths;
+        postPdf();
       } catch (error) {
         if (request !== pdfRequest) return;
         pdfAbort = undefined;
@@ -1084,6 +1203,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         if (operation) delete operation.finishPanel;
         pdfRequest += 1;
         pdfAbort?.abort();
+        discardPendingPdfContent();
         pdfSaveSubscription?.dispose();
         pdfExternalChangeSubscription.dispose();
         previewSources.delete(panel);
@@ -1095,36 +1215,53 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         if (previewController === controller) previewController = undefined;
       },
       {
+        previewTabChanged: (tab, retryPdfId, deckChanged) => {
+          pdfTabVisible = tab === "pdf";
+          if (!pdfTabVisible) {
+            if (retryPdfId !== undefined && retryPdfId === sentPdfArtifactId)
+              sentPdfArtifactId = undefined;
+            if (rawClearPending) controller.postRawImagesCleared();
+            rawClearPending = false;
+            if (rawResultsPending || deckChanged) {
+              rawResultsPending = false;
+              rawBlockCompiler.forgetDelivered();
+            }
+            const outcome = controller.latestOutcome;
+            if (outcome) requestRawBlocks(outcome);
+            return;
+          }
+        },
         render: (text, version) =>
           renderDocument(text, version, { baseStyle: (doc) => baseStyleOf(doc, templateFs) }),
-        onRendered: (outcome) => {
-          if (!rawBlocksEnabled()) return;
-          rawBlockCompiler.request(
-            outcome.deck.rawBlocks ?? [],
-            outcome.deck.fragmentPreamble ?? "",
-          );
-        },
+        onRendered: requestRawBlocks,
         onWebviewReady: () => {
           rawBlockCompiler.forgetDelivered();
           sentPdfArtifactId = undefined;
           pdfOpened = false;
+          pdfTabVisible = false;
+          rawResultsPending = false;
+          rawClearPending = false;
         },
         pdfAction: (action, artifactId) => {
           if (action === "save") {
             void saveDisplayedPdf(artifactId);
             return;
           }
+          if (!pdfTabVisible) return;
           pdfOpened = true;
           if (
             action === "refresh" ||
             (vscode.workspace.isTrusted &&
               !pdfBytes &&
+              !pendingPdf &&
               !pdfAbort &&
               !pdfFailure &&
               !pdfTooLarge &&
               pdfExportRequest !== pdfRequest)
           )
             void compilePdfConfirmation();
+          else if (pendingPdf && !pendingPdf.loading && panel.visible !== false)
+            void loadPendingPdf();
           else postPdf();
         },
         onError: (message) => {
@@ -1304,6 +1441,12 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         },
       },
     );
+    previewViewStateChanged = () => {
+      const visible = pdfOpened && pdfTabVisible && panel.visible;
+      if (!visible) return;
+      void loadPendingPdf();
+      postPdf();
+    };
     const beginPanelExport = (output: string, savedInputChanged = false): FinishPdfExport => {
       // A normal Export saves first. Its later result must outrank an older
       // confirmation compile that happens to finish afterwards.
@@ -1320,15 +1463,18 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       if (savedInputChanged) markPdfStale();
       postPdf();
       const finishPublication = pdfPublications.begin(output);
-      return (review) => {
+      return (review, dependencyChanged = false) => {
         finishPublication(review?.writtenFileIdentity);
         if (pdfExportRequest === request) pdfExportRequest = undefined;
         const shouldDisplay = request === pdfRequest;
-        const dependencies =
-          shouldDisplay && review?.pdf ? review.dependencyPaths : pdfDependencyPaths;
-        if (review && mayReadPdfOutput(output, dependencies)) pdfInputRevision += 1;
-        if (shouldDisplay && review) setCompiledPdf(review, inputRevision);
-        else {
+        const dependencies = shouldDisplay && review ? review.dependencyPaths : pdfDependencyPaths;
+        if (dependencyChanged || (review && mayReadPdfOutput(output, dependencies)))
+          pdfInputRevision += 1;
+        if (shouldDisplay && review) {
+          setCompiledPdf(review, inputRevision);
+          if (pdfTabVisible) void loadPendingPdf();
+        } else {
+          void review?.content?.dispose();
           if (shouldDisplay && pdfOpened && !pdfBytes)
             pdfFailure = "PDF 書き出しが完了しませんでした。更新して再試行できます。";
           postPdf();
@@ -1344,18 +1490,28 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         pendingPdfExport.savedInputChanged,
       );
     const refreshTemplates = (changed: vscode.Uri) => {
-      // 画像や .sty が足されたり直ったりしたときは、失敗していた生ブロックも次の描画で再試行する。
-      rawBlockCompiler.resetFailures();
-      controller.refresh();
-      lintController.refresh(vscode.workspace.textDocuments);
       const ownChange = pdfPublications.ownChange(changed.fsPath, () =>
         pdfFileIdentity(changed.fsPath),
       );
-      if (!ownChange) markPdfStale();
-      else
-        void ownChange.then((matches) => {
-          if (!matches || mayReadPdfOutput(changed.fsPath, pdfDependencyPaths)) markPdfStale();
-        });
+      const refresh = () => {
+        // 画像や .sty が足されたり直ったりしたときは、失敗していた生ブロックも次の描画で再試行する。
+        rawBlockCompiler.resetFailures();
+        controller.refresh();
+        lintController.refresh(vscode.workspace.textDocuments);
+        markPdfStale();
+      };
+      if (!ownChange) {
+        refresh();
+        return;
+      }
+      // Ignore our own unrelated publication before it can reset raw output,
+      // transfer hidden HTML, or refresh diagnostics.
+      void ownChange.then((matches) => {
+        const affectsDisplayed = pdfBytes && mayReadPdfOutput(changed.fsPath, pdfDependencyPaths);
+        const affectsPending =
+          pendingPdf && mayReadPdfOutput(changed.fsPath, pendingPdf.dependencyPaths);
+        if (!matches || affectsDisplayed || affectsPending || (!pdfBytes && !pendingPdf)) refresh();
+      });
     };
     templateWatcher.onDidChange(refreshTemplates);
     templateWatcher.onDidCreate(refreshTemplates);
@@ -1371,7 +1527,10 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       if (!affectsRawBlockCompile((section) => event.affectsConfiguration(section, document.uri)))
         return;
       rawBlockCompiler.reset();
-      if (!rawBlocksEnabled()) controller.postRawImagesCleared();
+      if (!rawBlocksEnabled()) {
+        if (pdfTabVisible) rawClearPending = true;
+        else controller.postRawImagesCleared();
+      }
       controller.refresh();
     });
     context.subscriptions.push(templateWatcher, rawBlockSettings);

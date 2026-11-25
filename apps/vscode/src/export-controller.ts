@@ -354,7 +354,9 @@ export class ExportController {
           this.activeAbortControllers.delete(abort);
         }
       });
-      pdfReview?.finish(result?.format === "pdf" && !this.disposed ? result.review : undefined);
+      const review = result?.format === "pdf" ? result.review : undefined;
+      if (this.disposed || !pdfReview) void review?.content?.dispose();
+      pdfReview?.finish(!this.disposed ? review : undefined);
       pdfReview = undefined;
       if (!result || this.disposed) return;
       const isHtml = result.format === "html";

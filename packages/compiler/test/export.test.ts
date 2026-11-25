@@ -722,7 +722,8 @@ describe("compilePdf and publishPdf", () => {
         },
       },
     );
-    expect(result.review?.pdf).toEqual(await readFile(output));
+    expect(await result.review?.content?.read()).toEqual(await readFile(output));
+    await result.review?.content?.dispose();
     expect(result.review?.writtenFileIdentity).toBe(await pdfFileIdentity(output));
     expect(result.review?.dependencyPaths).toEqual([
       ...new Set([
@@ -741,7 +742,10 @@ describe("compilePdf and publishPdf", () => {
       { inputPath: input.path, outputPath: output, review: { maxBytes: 64 } },
       { runner: successfulRunner([]) },
     );
-    expect(result.review?.pdf).toEqual(await readFile(output));
+    const published = await readFile(output);
+    await writeFile(output, "replaced by another process");
+    expect(await result.review?.content?.read()).toEqual(published);
+    await result.review?.content?.dispose();
   });
 
   it("keeps a symlink dependency name and its resolved target", async () => {
@@ -772,6 +776,7 @@ describe("compilePdf and publishPdf", () => {
     expect(result.review?.dependencyPaths).toEqual([
       ...new Set([input.path, await realpath(input.path), reference, await realpath(figure)]),
     ]);
+    await result.review?.content?.dispose();
   });
 
   it("rejects a large confirmation before loading bytes and can still write that PDF", async () => {
@@ -803,7 +808,7 @@ describe("compilePdf and publishPdf", () => {
       { runner: largeRunner },
     );
     expect(artifact.review?.size).toBe(size);
-    expect(artifact.review?.pdf).toBeUndefined();
+    expect(artifact.review?.content).toBeUndefined();
     expect((await stat(output)).size).toBe(size);
   });
 

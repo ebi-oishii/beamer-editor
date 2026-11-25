@@ -55,7 +55,7 @@ export type WebviewToExtension =
       width: number;
     }
   | { type: "ready" }
-  | { type: "openPdfConfirmation" }
+  | { type: "previewTabChanged"; tab: "edit" | "pdf"; retryPdfId?: number }
   | { type: "refreshPdfConfirmation" }
   | { type: "saveDisplayedPdf"; artifactId?: number }
   /** version はプレビューが表示中の deck の document version(古い版からのジャンプ検出に使う)。 */
@@ -192,7 +192,15 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
         : null;
     case "ready":
       return { type: "ready" };
-    case "openPdfConfirmation":
+    case "previewTabChanged":
+      if (raw.tab === "pdf") return { type: raw.type, tab: raw.tab };
+      if (raw.tab === "edit")
+        return {
+          type: raw.type,
+          tab: raw.tab,
+          ...(isNonNegativeInteger(raw.retryPdfId) ? { retryPdfId: raw.retryPdfId } : {}),
+        };
+      return null;
     case "refreshPdfConfirmation":
     case "saveDisplayedPdf":
       return isNonNegativeInteger(raw.artifactId)

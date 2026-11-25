@@ -338,6 +338,30 @@ describe("PreviewController", () => {
     expect(message.version).toBe(8);
   });
 
+  it("PDF確認中の HTML 更新を保留し、編集復帰時に最新版とジャンプを送る", () => {
+    const { panel, posted, fire } = makePanel();
+    const { events, change } = makeEvents();
+    const doc = makeDoc();
+    const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn());
+    fire({ type: "ready" });
+    fire({ type: "previewTabChanged", tab: "pdf" });
+    for (const title of ["first", "latest"]) {
+      doc.edit(`\\begin{document}\\begin{frame}{${title}}B\\end{frame}\\end{document}`);
+      change(doc);
+      vi.advanceTimersByTime(RENDER_DEBOUNCE_MS);
+    }
+    controller.revealSourceOffset(doc.getText().indexOf("\\begin{frame}"));
+    expect(posted).toHaveLength(1);
+    fire({ type: "previewTabChanged", tab: "edit" });
+    expect(posted.slice(1)).toMatchObject([
+      { type: "deckUpdated", version: 9 },
+      { type: "activeFrameChanged", version: 9, frameIndex: 0 },
+    ]);
+    fire({ type: "previewTabChanged", tab: "pdf" });
+    fire({ type: "previewTabChanged", tab: "edit" });
+    expect(posted).toHaveLength(3);
+  });
+
   it("連続入力は 1 回のレンダリングへまとめられ、最後の内容だけが送られる", () => {
     const { panel, posted } = makePanel();
     const { events, change } = makeEvents();

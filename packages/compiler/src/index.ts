@@ -64,10 +64,18 @@ export interface PdfExportResult {
 
 export interface PdfReviewArtifact {
   size: number;
-  /** The exact artifact, omitted when the review size limit is exceeded. */
-  pdf?: Uint8Array;
+  /**
+   * A bounded, compiler-owned immutable artifact. It is deliberately lazy:
+   * callers must dispose it when no confirmation panel consumes it.
+   */
+  content?: PdfReviewContent;
   /** Absent when the compiler did not produce a usable input list. */
   dependencyPaths?: readonly string[];
+}
+
+export interface PdfReviewContent {
+  read(): Promise<Uint8Array>;
+  dispose(): Promise<void>;
 }
 
 /** A full-deck TeX result before it is placed at a user-selected destination. */
@@ -500,6 +508,7 @@ interface TemporaryPdf {
   size: number;
   engineVersion: string;
   dependencyPaths?: readonly string[];
+  retain(): PdfReviewContent;
 }
 
 // Tectonic describes local inputs one per continued line, without escaping spaces.
@@ -564,6 +573,7 @@ async function withCompiledPdf<T>(
   const makeTemp =
     dependencies.temporaryDirectory ?? ((prefix: string) => mkdtemp(join(tmpdir(), prefix)));
   let tempDirectory: string | undefined;
+  let retained = false;
   try {
     tempDirectory = await makeTemp("beamer-editor-pdf-");
     const dependencyFile = join(tempDirectory, "inputs.mk");
@@ -641,11 +651,34 @@ async function withCompiledPdf<T>(
       }
     }
     throwIfCancelled(signal);
+    const retain = (): PdfReviewContent => {
+      if (retained) throw new Error("PDF review artifact was already retained");
+      retained = true;
+      let disposed = false;
+      let reading: Promise<Uint8Array> | undefined;
+      return {
+        read: () => {
+          if (disposed) return Promise.reject(new Error("PDF review artifact was disposed"));
+          reading ??= readFile(compiledPdf);
+          return reading;
+        },
+        dispose: async () => {
+          if (disposed) return;
+          disposed = true;
+          await reading?.catch(() => undefined);
+          const directory = tempDirectory;
+          tempDirectory = undefined;
+          if (directory)
+            await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+        },
+      };
+    };
     return await use({
       path: compiledPdf,
       size: info.size,
       engineVersion,
       ...(dependencyPaths === undefined ? {} : { dependencyPaths }),
+      retain,
     });
   } catch (error) {
     if (error instanceof PdfExportError) throw error;
@@ -653,7 +686,7 @@ async function withCompiledPdf<T>(
       throw new PdfExportError("E_CANCELLED", "PDF 書き出しはキャンセルされました", error);
     throw new PdfExportError("E_IO", `組版結果を読み込めません: ${String(error)}`, error);
   } finally {
-    if (tempDirectory)
+    if (tempDirectory && !retained)
       await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined);
   }
 }
@@ -805,14 +838,9 @@ export async function exportPdf(
       dependencies,
       (path) => copyFile(artifact.path, path, constants.COPYFILE_EXCL),
     );
-    // Use the immutable compiler output. The user's destination may be replaced at any time.
-    // This is read from the immutable compiler output, never the user-selected
-    // destination. Capture it whenever VS Code requested review data: a panel
-    // can attach after compilation has begun but before this Export completes.
-    const pdf =
-      review && artifact.size <= review.maxBytes
-        ? await readFile(artifact.path).catch(() => undefined)
-        : undefined;
+    // Keep the compiler output available through handoff without reading it.
+    // The user's destination may be replaced before confirmation opens.
+    const content = review && artifact.size <= review.maxBytes ? artifact.retain() : undefined;
     return {
       format: "pdf",
       inputPath,
@@ -824,7 +852,7 @@ export async function exportPdf(
         : {
             review: {
               size: artifact.size,
-              ...(pdf === undefined ? {} : { pdf }),
+              ...(content === undefined ? {} : { content }),
               ...(artifact.dependencyPaths === undefined
                 ? {}
                 : { dependencyPaths: artifact.dependencyPaths }),

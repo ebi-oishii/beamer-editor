@@ -28,16 +28,38 @@ declare function acquireVsCodeApi(): {
 document.documentElement.dataset.beamerEditor = "preview";
 
 const api = acquireVsCodeApi();
+const container = document.getElementById("app");
+const listeners = new Set<(message: ExtensionToWebview) => void>();
+const pendingHtml = new Map<string, ExtensionToWebview>();
+const dispatch = (message: ExtensionToWebview) => {
+  for (const listener of listeners) listener(message);
+};
+
+window.addEventListener("message", (event) => {
+  const msg = parseExtensionToWebview(event.data);
+  if (!msg) return;
+  if (container?.hidden && msg.type !== "pdfUpdated") {
+    const key =
+      msg.type === "rawBlockReady" || msg.type === "rawBlockFailed" ? `raw:${msg.key}` : msg.type;
+    if (msg.type === "rawImagesCleared") {
+      for (const [key, pending] of pendingHtml)
+        if (pending.type === "rawBlockReady" || pending.type === "rawBlockFailed")
+          pendingHtml.delete(key);
+    }
+    pendingHtml.delete(key);
+    pendingHtml.set(key, msg);
+    return;
+  }
+  dispatch(msg);
+});
 
 const transport: MessageTransport = {
   post: (msg: WebviewToExtension) => api.postMessage(msg),
   subscribe: (cb: (msg: ExtensionToWebview) => void) => {
-    const handler = (event: MessageEvent) => {
-      const msg = parseExtensionToWebview(event.data);
-      if (msg) cb(msg);
+    listeners.add(cb);
+    return () => {
+      listeners.delete(cb);
     };
-    window.addEventListener("message", handler);
-    return () => window.removeEventListener("message", handler);
   },
 };
 
@@ -46,7 +68,6 @@ const host = createMessageShellHost(transport, {
   getState: () => api.getState(),
   setState: (state) => api.setState(state),
 });
-const container = document.getElementById("app");
 
 const pdfWorker = container?.dataset.pdfWorker;
 let pdfWorkerBlob: Promise<string> | undefined;
@@ -169,6 +190,11 @@ function installPdfConfirmation(app: HTMLElement): void {
   let pageCount = 0;
   let busy = false;
   let restricted = false;
+  let pendingArtifact: { bytes: ArrayBuffer; id: number } | undefined;
+  let resumePage: (() => void) | undefined;
+  let loadingPdfId: number | undefined;
+  let cancelPdfLoad: (() => void) | undefined;
+  let restartActiveRender: (() => void) | undefined;
 
   const updateControls = () => {
     const canNavigate = !busy && !!pdfDocument && currentArtifactId === requestedArtifactId;
@@ -183,6 +209,8 @@ function installPdfConfirmation(app: HTMLElement): void {
   };
   const disposePdf = () => {
     rendering += 1;
+    resumePage = undefined;
+    restartActiveRender = undefined;
     pageRender?.cancel();
     pageRender = undefined;
     const session = pdfWorkerSession;
@@ -192,7 +220,10 @@ function installPdfConfirmation(app: HTMLElement): void {
     return closingSession;
   };
   const loadPdf = async (bytes: ArrayBuffer, artifactId: number) => {
+    cancelPdfLoad?.();
+    cancelPdfLoad = undefined;
     const loadRevision = ++pdfLoadRevision;
+    loadingPdfId = artifactId;
     requestedArtifactId = artifactId;
     busy = true;
     renderError.hidden = true;
@@ -202,8 +233,13 @@ function installPdfConfirmation(app: HTMLElement): void {
       if (loadRevision !== pdfLoadRevision) return;
       const workerUrl = await localPdfWorker();
       if (loadRevision !== pdfLoadRevision) return;
+      if (pane.hidden) {
+        pendingArtifact = { bytes, id: artifactId };
+        return;
+      }
       const port = new Worker(workerUrl, { type: "module" });
       const startupFailure = new AbortController();
+      cancelPdfLoad = () => startupFailure.abort();
       port.addEventListener(
         "error",
         (event) =>
@@ -253,10 +289,14 @@ function installPdfConfirmation(app: HTMLElement): void {
       };
       const loaded = await run(loading.promise);
       if (loadRevision !== pdfLoadRevision) return;
+      loadingPdfId = undefined;
+      cancelPdfLoad = undefined;
       pdfDocument = loaded;
       await renderPage(1, artifactId);
     } catch (error) {
       if (loadRevision !== pdfLoadRevision) return;
+      loadingPdfId = undefined;
+      cancelPdfLoad = undefined;
       void disposePdf();
       renderError.textContent = `PDF を表示できません。 ${String(error)}`;
       renderError.hidden = false;
@@ -269,13 +309,52 @@ function installPdfConfirmation(app: HTMLElement): void {
     pane.hidden = tab === "edit";
     edit.setAttribute("aria-pressed", String(tab === "edit"));
     pdfTab.setAttribute("aria-pressed", String(tab === "pdf"));
-    if (tab === "pdf") api.postMessage({ type: "openPdfConfirmation" });
+    const retryPdfId = tab === "edit" ? loadingPdfId : undefined;
+    if (retryPdfId !== undefined) {
+      // PDF.js owns the transferred bytes once loading begins. Ask the host
+      // to send the same artifact when the tab is next shown.
+      pdfLoadRevision += 1;
+      loadingPdfId = undefined;
+      requestedArtifactId = undefined;
+      cancelPdfLoad?.();
+      cancelPdfLoad = undefined;
+      void disposePdf();
+    } else if (tab === "edit" && pageRender) {
+      rendering += 1;
+      resumePage = restartActiveRender;
+      restartActiveRender = undefined;
+      pageRender.cancel();
+      pageRender = undefined;
+    }
+    api.postMessage({
+      type: "previewTabChanged",
+      tab,
+      ...(retryPdfId === undefined ? {} : { retryPdfId }),
+    });
+    if (tab === "pdf") {
+      const artifact = pendingArtifact;
+      pendingArtifact = undefined;
+      if (artifact) void loadPdf(artifact.bytes, artifact.id);
+      else {
+        const resume = resumePage;
+        resumePage = undefined;
+        resume?.();
+      }
+    } else {
+      for (const message of pendingHtml.values()) dispatch(message);
+      pendingHtml.clear();
+    }
   };
   const renderPage = async (requested: number, artifactId = currentArtifactId) => {
     const pdf = pdfDocument;
     const session = pdfWorkerSession;
     if (!pdf || !session || artifactId === undefined) return;
+    if (pane.hidden) {
+      resumePage = () => void renderPage(requested, artifactId);
+      return;
+    }
     const request = ++rendering;
+    restartActiveRender = () => void renderPage(requested, artifactId);
     busy = true;
     renderError.hidden = true;
     updateControls();
@@ -285,6 +364,10 @@ function installPdfConfirmation(app: HTMLElement): void {
       const number = Math.max(1, Math.min(requested, pdf.numPages));
       page = await session.run(pdf.getPage(number));
       if (request !== rendering) return;
+      if (pane.hidden) {
+        resumePage = () => void renderPage(requested, artifactId);
+        return;
+      }
       const base = page.getViewport({ scale: 1 });
       const scale = rasterScaleFor(base.width, base.height, 2);
       if (scale === null) throw new Error("PDF のページが大きすぎます。");
@@ -297,11 +380,16 @@ function installPdfConfirmation(app: HTMLElement): void {
       await session.run(task.promise);
       const result = { canvas, number, count: pdf.numPages };
       if (request !== rendering) return;
-      pageNumber = result.number;
-      pageCount = result.count;
-      currentArtifactId = artifactId;
-      result.canvas.setAttribute("aria-label", `PDF ページ ${pageNumber} / ${pageCount}`);
-      pages.replaceChildren(result.canvas);
+      const present = () => {
+        pageNumber = result.number;
+        pageCount = result.count;
+        currentArtifactId = artifactId;
+        result.canvas.setAttribute("aria-label", `PDF ページ ${pageNumber} / ${pageCount}`);
+        pages.replaceChildren(result.canvas);
+        updateControls();
+      };
+      if (pane.hidden) resumePage = present;
+      else present();
     } catch (error) {
       if (request !== rendering) return;
       renderError.textContent = `PDF を表示できません。 ${String(error)}`;
@@ -309,6 +397,7 @@ function installPdfConfirmation(app: HTMLElement): void {
     } finally {
       page?.cleanup();
       if (request === rendering) {
+        restartActiveRender = undefined;
         pageRender = undefined;
         busy = false;
         updateControls();
@@ -346,7 +435,12 @@ function installPdfConfirmation(app: HTMLElement): void {
       message.artifactId !== undefined &&
       message.artifactId !== requestedArtifactId
     ) {
-      void loadPdf(message.pdf, message.artifactId);
+      if (pane.hidden) {
+        // A message may already be queued when Edit is selected. Hold its
+        // bytes without starting PDF.js until the user returns.
+        pdfLoadRevision += 1;
+        pendingArtifact = { bytes: message.pdf, id: message.artifactId };
+      } else void loadPdf(message.pdf, message.artifactId);
     }
     updateControls();
   });
