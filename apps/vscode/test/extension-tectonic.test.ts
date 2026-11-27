@@ -31,6 +31,7 @@ const state = vi.hoisted(() => ({
   pdfIdentity: vi.fn<() => Promise<string | undefined>>(),
   saveDialog: vi.fn(),
   saveListeners: [] as Array<(document: vscode.TextDocument) => void>,
+  openListeners: [] as Array<(document: vscode.TextDocument) => void>,
   changeListeners: [] as Array<(event: vscode.TextDocumentChangeEvent) => void>,
   configurationListeners: [] as Array<(event: vscode.ConfigurationChangeEvent) => void>,
 }));
@@ -102,7 +103,9 @@ vi.mock("vscode", () => {
       isTrusted: true,
       textDocuments: [],
       getConfiguration: state.getConfiguration,
-      onDidOpenTextDocument: disposable,
+      getWorkspaceFolder: () => undefined,
+      onDidOpenTextDocument: (callback: (document: vscode.TextDocument) => void) =>
+        listener(state.openListeners, callback),
       onDidChangeTextDocument: (callback: (event: vscode.TextDocumentChangeEvent) => void) =>
         listener(state.changeListeners, callback),
       onDidSaveTextDocument: (callback: (document: vscode.TextDocument) => void) =>
@@ -131,6 +134,7 @@ vi.mock("vscode", () => {
     },
     languages: {
       createDiagnosticCollection: () => ({ ...disposable(), set: state.setDiagnostics }),
+      match: () => 1,
       registerCodeActionsProvider: disposable,
       registerFoldingRangeProvider: disposable,
       registerHoverProvider: disposable,
@@ -208,6 +212,7 @@ describe("extension の Tectonic 接続", () => {
     state.activeEditor = undefined;
     state.commands.clear();
     state.saveListeners.splice(0);
+    state.openListeners.splice(0);
     state.fileChanges.splice(0);
     state.fileCreates.splice(0);
     state.fileDeletes.splice(0);
@@ -317,6 +322,60 @@ describe("extension の Tectonic 接続", () => {
     expect(codes()).toEqual([]);
     onRendered(render(source, version), document);
     expect(codes()).toEqual(["P001"]);
+  });
+
+  it("Problems は展開後の画像参照を使い、一致する lint の修正候補を残す", () => {
+    openPdfTestDocument();
+    state.getConfiguration.mockImplementation(() => ({
+      get: (name: string, fallback: unknown) =>
+        name === "preview.compileRawBlocks" ? false : fallback,
+    }));
+    const directory = mkdtempSync(join(tmpdir(), "beamer-preview-image-macro-"));
+    state.temporaryDirectories.push(directory);
+    const file = join(directory, "deck.slide.tex");
+    const image = join(directory, "available.png");
+    writeFileSync(image, "exists");
+    writeFileSync(join(directory, "literal.png"), "exists");
+    const source = String.raw`%% macros:begin
+\newcommand{\asset}{available.png}
+%% macros:end
+\begin{document}
+\begin{frame}[label=images]{Images}
+  \includegraphics{\asset}
+  \includegraphics{literal}
+\end{frame}
+\end{document}`;
+    const document = {
+      uri: Uri.file(file),
+      fileName: file,
+      isDirty: false,
+      version: 1,
+      getText: () => source,
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    } as vscode.TextDocument;
+    state.activeEditor = { document } as vscode.TextEditor;
+    const imageProblems = () =>
+      state.setDiagnostics.mock.lastCall?.[1].filter((entry) => entry.code === "L004");
+    for (const listener of state.openListeners) listener(document);
+    expect(imageProblems()).toHaveLength(2);
+
+    state.commands.get("beamerEditor.openPreview")?.();
+    const { render, onRendered } = state.previewOptions ?? {};
+    if (!render || !onRendered) throw new Error("expected editing preview");
+    const available = render(source, document.version);
+    expect(available.deck.frames[0]?.html).toContain('src="available.png"');
+    onRendered(available, document);
+    expect(imageProblems()).toEqual([
+      expect.objectContaining({
+        source: "beamer-editor",
+        message: expect.stringContaining("literal.png"),
+      }),
+    ]);
+
+    rmSync(image);
+    state.fileDeletes.at(-1)?.(Uri.file(image));
+    onRendered(render(source, document.version), document);
+    expect(imageProblems()).toHaveLength(2);
   });
 
   it.each([

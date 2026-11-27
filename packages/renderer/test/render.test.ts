@@ -58,6 +58,55 @@ describe("renderDeck preview diagnostics", () => {
     expect(source.slice(diagnostic?.span.start, diagnostic?.span.end)).toContain("TeXOnlyCommand");
   });
 
+  it("reports math blocked by KaTeX trust without changing the HTML or treating authored red as an error", () => {
+    const link = String.raw`$\href{https://example.com}{x}$`;
+    const source = String.raw`\begin{document}
+\begin{frame}[label=link]{Link}${link}\end{frame}
+\begin{frame}[label=color]{Color}$\textcolor{#cc0000}{x}$ and $\texttt{color:var(--beamer-editor-katex-error);}$\end{frame}
+\end{document}`;
+    const { deck, diagnostics } = renderEditingPreview(source);
+
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        code: "P001",
+        severity: "info",
+        frame: { number: 1, label: "link" },
+        span: { start: source.indexOf(link), end: source.indexOf(link) + link.length },
+      }),
+    ]);
+    expect(deck.frames[0]?.html).toContain("color:#cc0000;");
+    expect(deck.frames[0]?.html).not.toMatch(/href=|beamer-editor-katex-error/);
+    expect(deck.frames[1]?.html).toContain("color:#cc0000;");
+    expect(deck.frames[1]?.html).toContain("color:var(--beamer-editor-katex-error);");
+  });
+
+  it("reports wrapped and canvas raw LaTeX exactly once per placeholder", () => {
+    const tikz = String.raw`\begin{tikzpicture}\draw (0,0) -- (1,1);\end{tikzpicture}`;
+    const wrapped = String.raw`\resizebox{0.5\textwidth}{!}{${tikz}}`;
+    const figure = String.raw`\begin{deckfigure}[x=0.1,y=0.2,w=0.3]${tikz}\end{deckfigure}`;
+    const source = String.raw`\begin{document}
+\begin{frame}[label=wrapped]{Wrapped}${wrapped}\end{frame}
+\begin{frame}[label=canvas]{Canvas}\begin{deckcanvas}${tikz}${figure}\end{deckcanvas}\end{frame}
+\end{document}`;
+    const { deck, diagnostics } = renderEditingPreview(source);
+
+    expect(
+      diagnostics.map(({ code, severity, frame, span }) => [
+        code,
+        severity,
+        frame?.label,
+        source.slice(span.start, span.end),
+      ]),
+    ).toEqual([
+      ["P003", "info", "wrapped", wrapped],
+      ["P003", "info", "canvas", tikz],
+      ["P003", "info", "canvas", figure],
+    ]);
+    expect(deck.frames[0]?.html).toContain('class="raw-block placeholder"');
+    expect(deck.frames[1]?.html).toContain('class="canvas-item raw-block placeholder"');
+    expect(deck.frames[1]?.html).toContain('class="canvas-item canvas-figure placeholder"');
+  });
+
   it("records a failed frame and keeps rendering later frames", () => {
     const source = String.raw`\begin{document}\begin{frame}{One}A\end{frame}\begin{frame}{Two}B\end{frame}\end{document}`;
     const doc = parseDeck(source);

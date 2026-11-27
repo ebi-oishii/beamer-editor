@@ -9,6 +9,7 @@ import {
   isCanvasFrame,
   type RawFrameNode,
   type SourceSpan,
+  type StyleEntry,
 } from "./ast.js";
 import type { FileExistsProbe, ImageFormat, ImageProbe } from "./image.js";
 import {
@@ -23,6 +24,7 @@ import {
   blankComments,
   graphicsPathsOf,
   joinImageSearchPath,
+  styleImageOverrides,
   type TemplateStatus,
 } from "./template.js";
 import { texTokens, VERBATIM_ENVS } from "./tex-scan.js";
@@ -806,6 +808,7 @@ function lintImageReferences(
   doc: DeckDocument,
   fileExists: FileExistsProbe | undefined,
   source: string | undefined,
+  styleEntries: readonly StyleEntry[] = doc.style.entries,
 ): LintDiagnostic[] {
   if (fileExists === undefined) return [];
   const diagnostics: LintDiagnostic[] = [];
@@ -827,7 +830,7 @@ function lintImageReferences(
     if (pathSpan !== null) entry.fix = { span: pathSpan, replacement: suggestion };
     diagnostics.push(entry);
   };
-  for (const entry of doc.style.entries) {
+  for (const entry of styleEntries) {
     if (entry.type === "styleLogo" || entry.type === "styleBackground") {
       check(entry.path, entry.span);
     }
@@ -979,8 +982,11 @@ export function previewImageDiagnostics(
   doc: DeckDocument,
   options: Pick<LintOptions, "fileExists" | "templates">,
 ) {
+  const styleEntries = Object.values(styleImageOverrides(doc)).filter(
+    (entry) => entry !== undefined,
+  );
   return [
-    ...lintImageReferences(doc, options.fileExists, undefined),
+    ...lintImageReferences(doc, options.fileExists, undefined, styleEntries),
     ...missingCanvasImageDiagnostics(doc, options.fileExists),
     ...lintTemplates(options.templates),
   ].filter(

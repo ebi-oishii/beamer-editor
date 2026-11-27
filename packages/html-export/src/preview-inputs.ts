@@ -8,6 +8,7 @@ import {
   joinImageSearchPath,
   mergePreviewStyles,
   type PreviewStyle,
+  styleImageOverrides,
   type TemplateReference,
   type TemplateStatus,
   templateImagePaths,
@@ -126,9 +127,10 @@ export function editingPreviewOptions(
 ): EditingPreviewOptions {
   const baseStyle = baseStyleOf(doc, fs);
   const preambleStyle = extractPreviewStyle(doc.preambleExtra.tex);
+  const overrides = styleImageOverrides(doc);
   const preamblePaths = new Set([
-    preambleStyle.logo && baseStyle.logo?.path,
-    preambleStyle.background && baseStyle.background?.path,
+    !overrides.logo && preambleStyle.logo && baseStyle.logo?.path,
+    !overrides.background && preambleStyle.background && baseStyle.background?.path,
   ]);
   const fileExists = (assetPath: string) => nonLocalImage(assetPath) || fs.isFile(assetPath);
   return {

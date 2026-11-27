@@ -14,7 +14,13 @@
  * だけを行い、ファイルの解決・読み込み・存在確認はホスト(VS Code 拡張・CLI)が担う。
  */
 
-import type { DeckDocument, SourceSpan, StyleColorRole } from "./ast.js";
+import type {
+  DeckDocument,
+  SourceSpan,
+  StyleBackgroundNode,
+  StyleColorRole,
+  StyleLogoNode,
+} from "./ast.js";
 
 // ---------------------------------------------------------------------------
 // 参照の抽出
@@ -193,6 +199,21 @@ export interface PreviewStyle {
    */
   imageSearchPaths?: string[];
   footer?: string;
+}
+
+/** The last declaration for each image slot overrides the base style and earlier declarations. */
+export function styleImageOverrides(doc: DeckDocument) {
+  let logo: StyleLogoNode | undefined;
+  let background: StyleBackgroundNode | undefined;
+  let titleBackground: StyleBackgroundNode | undefined;
+  for (const entry of doc.style.entries) {
+    if (entry.type === "styleLogo") logo = entry;
+    if (entry.type === "styleBackground") {
+      if (entry.slot === "title") titleBackground = entry;
+      else background = entry;
+    }
+  }
+  return { logo, background, titleBackground };
 }
 
 const XCOLOR_BASE: Record<string, string> = {

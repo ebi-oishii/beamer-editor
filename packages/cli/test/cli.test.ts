@@ -13,7 +13,7 @@ import {
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import {
   type CompileDeckFramesRequest,
   findDeckFrames,
@@ -346,6 +346,55 @@ describe("deck preview-check", () => {
     const result = runCli("preview-check", source.argvPath, "--frame", "absent", "--json");
     expect(result.status).toBe(EXIT_CODE.operationalFailure);
     expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "E_INPUT" } });
+  });
+
+  it("checks effective decorations and reports KaTeX and raw placeholders as information", async () => {
+    const source = await fixture(
+      "preview.tex",
+      String.raw`%% preamble-extra:begin
+\decklogo[x=0,y=0,w=0.1]{preamble-logo.png}
+\deckbackground{preamble-bg.png}
+%% preamble-extra:end
+%% style:begin
+\decklogo[x=0,y=0,w=0.1]{superseded-logo.png}
+\decklogo[x=0,y=0,w=0.1]{available.png}
+\deckbackground{available.png}
+\deckbackground[title]{available.png}
+%% style:end
+\begin{document}
+\begin{frame}[label=link]{Link}$\href{https://example.com}{x}$\end{frame}
+\begin{frame}[label=wrapped]{Wrapped}
+\resizebox{0.5\textwidth}{!}{\begin{tikzpicture}\end{tikzpicture}}
+\end{frame}
+\begin{frame}[label=raw]{Canvas}
+\begin{deckcanvas}\begin{tikzpicture}\end{tikzpicture}\end{deckcanvas}
+\end{frame}
+\end{document}`,
+    );
+    await writeFile(join(dirname(source.path), "available.png"), "exists");
+    const result = runCli("preview-check", source.argvPath, "--json");
+
+    expect(result.status).toBe(EXIT_CODE.success);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      diagnostics: [
+        { code: "P001", severity: "info", frame: { label: "link" }, location: { line: 12 } },
+        { code: "P003", severity: "info", frame: { label: "wrapped" }, location: { line: 14 } },
+        { code: "P003", severity: "info", frame: { label: "raw" }, location: { line: 17 } },
+      ],
+      summary: { errors: 0, warnings: 0, infos: 3 },
+    });
+
+    const text = await readFile(source.path, "utf8");
+    await writeFile(source.path, text.replace("\\deckbackground{available.png}\n", ""));
+    const titleOnlyOverride = runCli("preview-check", source.argvPath, "--json");
+    expect(titleOnlyOverride.status).toBe(EXIT_CODE.lintError);
+    const { diagnostics } = JSON.parse(titleOnlyOverride.stdout);
+    expect(diagnostics.filter((entry: { code: string }) => entry.code === "L004")).toEqual([
+      expect.objectContaining({
+        frame: null,
+        message: expect.stringContaining("preamble-bg.png"),
+      }),
+    ]);
   });
 
   it("reports missing canvas and template assets with the editor's local-path rules", async () => {

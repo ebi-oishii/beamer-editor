@@ -480,15 +480,22 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   function publishProblems(document: vscode.TextDocument): void {
     const lint = latestLint.get(document);
     const preview = latestPreview.get(document);
-    const diagnostics = lint?.version === document.version ? lint.diagnostics : [];
+    const rendered = preview?.version === document.version ? preview.diagnostics : undefined;
+    const byKey = new Map(
+      (rendered ?? []).map((diagnostic) => [diagnosticKey(diagnostic), diagnostic]),
+    );
+    // A current render resolves expanded image paths. Retain matching source
+    // lint entries so their existing Quick Fix remains available.
+    const diagnostics = (lint?.version === document.version ? lint.diagnostics : []).filter(
+      (diagnostic) =>
+        diagnostic.code !== "L004" || !rendered || byKey.has(diagnosticKey(diagnostic)),
+    );
     const existing = new Set(diagnostics.map(diagnosticKey));
-    const rendered = preview?.version === document.version ? (preview.diagnostics ?? []) : [];
-    const byKey = new Map(rendered.map((diagnostic) => [diagnosticKey(diagnostic), diagnostic]));
     diagnosticCollection.set(document.uri, [
       ...diagnostics.map((diagnostic) =>
         toVscodeDiagnostic(document, diagnostic, byKey.get(diagnosticKey(diagnostic))?.frame),
       ),
-      ...rendered
+      ...(rendered ?? [])
         .filter((diagnostic) => !existing.has(diagnosticKey(diagnostic)))
         .map((diagnostic) => toVscodeDiagnostic(document, diagnostic)),
     ]);

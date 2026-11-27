@@ -39,6 +39,7 @@ import {
   mapExpandedToSource,
   previewImageDiagnostics,
   rawFragmentKey,
+  styleImageOverrides,
 } from "@beamer-editor/core";
 import katex from "katex";
 import { MONO_FONT_FALLBACK } from "./font-stack.js";
@@ -204,6 +205,11 @@ const escapeHtml = (s: string) =>
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+
+const KATEX_ERROR_COLOR_NAME = "--beamer-editor-katex-error";
+const KATEX_ERROR_STYLE = new RegExp(
+  String.raw` style="(?:[^"]*;)?color:var\(${KATEX_ERROR_COLOR_NAME}\);`,
+);
 
 /**
  * コンパイルしないと描けないもの(生ブロック・PDF 画像)の代わりに置く箱(#93)。Overleaf のドラフトモードと
@@ -410,40 +416,47 @@ class FrameRenderer {
   ) {
     this.fragmentPreamble = fragmentPreambleOf(doc);
     // 土台(テンプレート / preamble-extra)を先に置き、%% style 領域で上書きする。
-    if (baseStyle?.logo) this.decorations.logo = baseStyle.logo;
-    if (baseStyle?.background) this.decorations.background = baseStyle.background.path;
+    const { logo, background, titleBackground } = styleImageOverrides(doc);
+    if (logo) {
+      const { x, y, width } = logo.position;
+      this.decorations.logo = { path: logo.path, placement: { kind: "canvas", x, y, width } };
+    } else {
+      this.decorations.logo = baseStyle?.logo ?? null;
+    }
+    this.decorations.background = background?.path ?? baseStyle?.background?.path ?? null;
+    this.decorations.titleBackground = titleBackground?.path ?? null;
     if (baseStyle?.footer !== undefined) this.decorations.footerHtml = escapeHtml(baseStyle.footer);
     for (const entry of doc.style.entries) {
-      if (entry.type === "styleLogo") {
-        const { x, y, width } = entry.position;
-        this.decorations.logo = { path: entry.path, placement: { kind: "canvas", x, y, width } };
-      } else if (entry.type === "styleBackground") {
-        if (entry.slot === "title") this.decorations.titleBackground = entry.path;
-        else this.decorations.background = entry.path;
-      } else if (entry.type === "styleFooter") {
+      if (entry.type === "styleFooter") {
         this.decorations.footerHtml = this.renderInlines(entry.text);
       }
     }
   }
 
   private math(tex: string, displayMode: boolean, span: SourceSpan): string {
+    const options = { displayMode, output: "html" as const };
     try {
-      // KaTeX's permissive output represents unknown commands with a red span,
-      // rather than the `katex-error` class. Parse strictly first so that case is
-      // visible to diagnostics, then retain the existing permissive HTML output.
       try {
-        return katex.renderToString(tex, { displayMode, throwOnError: true, output: "html" });
+        // Unknown commands can throw, but commands rejected by the default trust
+        // policy can render in errorColor even in strict mode. A marker separates
+        // these fallbacks from authored colors. Only ordinary KaTeX HTML is returned.
+        const html = katex.renderToString(tex, {
+          ...options,
+          throwOnError: true,
+          errorColor: `var(${KATEX_ERROR_COLOR_NAME})`,
+        });
+        if (!KATEX_ERROR_STYLE.test(html)) return html;
       } catch (error) {
         if (!(error instanceof katex.ParseError)) throw error;
-        this.diagnostics.push({
-          code: "P001",
-          severity: "info",
-          message: "KaTeX がこの数式命令を解釈できません。PDF で組版を確認してください",
-          frame: this.currentFrame,
-          span,
-        });
-        return katex.renderToString(tex, { displayMode, throwOnError: false, output: "html" });
       }
+      this.diagnostics.push({
+        code: "P001",
+        severity: "info",
+        message: "KaTeX がこの数式命令を描画できません。PDF で組版を確認してください",
+        frame: this.currentFrame,
+        span,
+      });
+      return katex.renderToString(tex, { ...options, throwOnError: false });
     } catch (error) {
       this.diagnostics.push({
         code: "P002",
@@ -706,12 +719,12 @@ class FrameRenderer {
       case "canvas":
         return this.renderCanvas(block);
       case "rawBlock": {
-        this.rawPreviewDiagnostic(block.span);
         const status = this.detachStatuses.get(block);
         const natural = this.naturalWidthAttrs(block.tex, status?.eligible === true);
         return this.rawBlockPlaceholder(
           block.tex,
           block.environment,
+          block.span,
           `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}${natural}`,
           status?.eligible ? "figure" : "raw",
         );
@@ -719,12 +732,14 @@ class FrameRenderer {
     }
   }
 
-  /** 生ブロックを部分コンパイルの対象として登録し、プレースホルダに付ける data-raw-key 属性を返す。 */
+  /** 生 LaTeX の箱を診断し、部分コンパイルに登録して data-raw-key 属性を返す。 */
   private rawKeyAttr(
     tex: string,
     environment: string | null,
+    span: SourceSpan,
     mode: "raw" | "figure" = "raw",
   ): string {
+    this.rawPreviewDiagnostic(span);
     const key = rawFragmentKey(tex, this.fragmentPreamble, mode);
     if (!this.rawBlocks.has(key)) this.rawBlocks.set(key, { key, tex, environment, mode });
     return ` data-raw-key="${key}"`;
@@ -752,6 +767,7 @@ class FrameRenderer {
   private rawBlockPlaceholder(
     tex: string,
     environment: string | null,
+    span: SourceSpan,
     attrs: string,
     mode: "raw" | "figure" = "raw",
   ): string {
@@ -762,7 +778,7 @@ class FrameRenderer {
       environment ?? "生 LaTeX",
       tex,
       placeholderStyle(width, aspectOf(width, this.lengthInLinewidth(size.height))),
-      `${attrs}${this.rawKeyAttr(tex, environment, mode)}`,
+      `${attrs}${this.rawKeyAttr(tex, environment, span, mode)}`,
     );
   }
 
@@ -785,6 +801,7 @@ class FrameRenderer {
     return this.rawBlockPlaceholder(
       figure.tex,
       environmentOf(figure.tex),
+      figure.span,
       `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}${natural}`,
       "figure",
     );
@@ -843,7 +860,7 @@ class FrameRenderer {
           environment ?? "deckfigure",
           item.tex,
           `${posStyle(item.position.x, item.position.y, item.position.width)};aspect-ratio:4 / 3`,
-          `${describe("figure", item.position)}${this.rawKeyAttr(item.tex, environment, "figure")}`,
+          `${describe("figure", item.position)}${this.rawKeyAttr(item.tex, environment, item.span, "figure")}`,
         );
       } else {
         html += placeholderHtml(
@@ -851,7 +868,7 @@ class FrameRenderer {
           environmentOf(item.tex) ?? "生 LaTeX",
           item.tex,
           "width:30%;aspect-ratio:4 / 3",
-          this.rawKeyAttr(item.tex, environmentOf(item.tex)),
+          this.rawKeyAttr(item.tex, environmentOf(item.tex), item.span),
         );
       }
     }
