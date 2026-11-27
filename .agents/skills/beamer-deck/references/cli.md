@@ -12,6 +12,7 @@ CLI 0.0.1 の実装済みコマンド（実際のヘルプから生成）:
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示
+  deck preview-check <file> [--frame <N|LABEL|label:LABEL>] [--json]  編集プレビューを検査
   deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査
   deck snapshot <file> -o <directory> [--frame <N|LABEL|label:LABEL>] [--tectonic <path>] [--json]
   deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]

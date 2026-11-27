@@ -900,6 +900,33 @@ function lintCanvasImages(doc: DeckDocument, probeImage: ImageProbe | undefined)
   return diagnostics;
 }
 
+/** Preview hosts can report a missing canvas asset without claiming to validate its bytes. */
+function missingCanvasImageDiagnostics(
+  doc: DeckDocument,
+  fileExists: FileExistsProbe | undefined,
+): LintDiagnostic[] {
+  if (fileExists === undefined) return [];
+  const diagnostics: LintDiagnostic[] = [];
+  for (const frame of framesOf(doc)) {
+    if (frame.type !== "frame") continue;
+    visitBlocks(frame.body, (block) => {
+      if (block.type !== "canvas") return;
+      for (const item of block.items) {
+        if (item.type === "canvasImage" && !fileExists(item.path))
+          diagnostics.push(
+            diagnostic(
+              "L015",
+              "error",
+              `deckimage の画像 ${item.path} が見つかりません`,
+              item.span,
+            ),
+          );
+      }
+    });
+  }
+  return diagnostics;
+}
+
 /**
  * テンプレート参照の解決結果を診断にする。
  * - `\usepackage{templates/...}` のようにパスで指す参照が見つからない → L022 warning
@@ -945,6 +972,21 @@ function lintTemplates(statuses: readonly TemplateStatus[] | undefined): LintDia
     }
   }
   return diagnostics;
+}
+
+/** Check image references used by the preview without validating image bytes or running other lint rules. */
+export function previewImageDiagnostics(
+  doc: DeckDocument,
+  options: Pick<LintOptions, "fileExists" | "templates">,
+) {
+  return [
+    ...lintImageReferences(doc, options.fileExists, undefined),
+    ...missingCanvasImageDiagnostics(doc, options.fileExists),
+    ...lintTemplates(options.templates),
+  ].filter(
+    (entry): entry is LintDiagnostic & { code: "L004" | "L015" | "L023" } =>
+      entry.code === "L004" || entry.code === "L015" || entry.code === "L023",
+  );
 }
 
 /** POSIX shell で1語として渡せる形にする(案内コマンドをそのまま実行できるように)。 */

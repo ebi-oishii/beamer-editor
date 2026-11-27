@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   compilePdf: vi.fn<typeof import("@beamer-editor/compiler").compilePdf>(),
   publishPdf: vi.fn<typeof import("@beamer-editor/compiler").publishPdf>(),
   postPdfState: vi.fn(),
+  setDiagnostics: vi.fn<(uri: vscode.Uri, diagnostics: readonly vscode.Diagnostic[]) => void>(),
   getConfiguration: vi.fn(),
   fileChanges: [] as Array<(uri: vscode.Uri) => void>,
   fileCreates: [] as Array<(uri: vscode.Uri) => void>,
@@ -64,6 +65,13 @@ vi.mock("vscode", () => {
     TreeItem: class {},
     RelativePattern: class {},
     DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2 },
+    Diagnostic: class {
+      constructor(
+        readonly range: unknown,
+        readonly message: string,
+        readonly severity: number,
+      ) {}
+    },
     CodeActionKind: { QuickFix: "quickfix" },
     DocumentDropOrPasteEditKind: {
       Empty: { append: (...parts: string[]) => ({ value: parts.join(".") }) },
@@ -122,7 +130,7 @@ vi.mock("vscode", () => {
       },
     },
     languages: {
-      createDiagnosticCollection: disposable,
+      createDiagnosticCollection: () => ({ ...disposable(), set: state.setDiagnostics }),
       registerCodeActionsProvider: disposable,
       registerFoldingRangeProvider: disposable,
       registerHoverProvider: disposable,
@@ -256,6 +264,59 @@ describe("extension の Tectonic 接続", () => {
       expect(state.exportHost?.tectonicPath(document as ExportDocument)).toBe(expected);
       expect(state.getConfiguration).toHaveBeenLastCalledWith("beamerEditor", document.uri);
     }
+  });
+
+  it("現在の描画だけを Problems に表示し、画像作成後に診断を更新する", () => {
+    openPdfTestDocument();
+    state.getConfiguration.mockImplementation(() => ({
+      get: (name: string, fallback: unknown) =>
+        name === "preview.compileRawBlocks" ? false : fallback,
+    }));
+    const directory = mkdtempSync(join(tmpdir(), "beamer-preview-problems-"));
+    state.temporaryDirectories.push(directory);
+    const file = join(directory, "deck.slide.tex");
+    const source = String.raw`\begin{document}
+\begin{frame}[label=intro]{Intro}
+  \includegraphics{figure.png}
+  $\TeXOnlyCommand{x}$
+\end{frame}
+\end{document}`;
+    let version = 1;
+    const document = {
+      uri: Uri.file(file),
+      fileName: file,
+      isDirty: false,
+      get version() {
+        return version;
+      },
+      getText: () => source,
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    } as vscode.TextDocument;
+    state.activeEditor = { document } as vscode.TextEditor;
+    state.commands.get("beamerEditor.openPreview")?.();
+    const { render, onRendered } = state.previewOptions ?? {};
+    if (!render || !onRendered) throw new Error("expected editing preview");
+    const codes = () => state.setDiagnostics.mock.lastCall?.[1].map((entry) => entry.code);
+
+    const first = render(source, version);
+    onRendered(first, document);
+    expect(codes()).toEqual(["L004", "P001"]);
+    expect(state.setDiagnostics.mock.lastCall?.[1][0]?.message).toContain("フレーム 1 [intro]");
+
+    version++;
+    state.setDiagnostics.mockClear();
+    onRendered(first, document);
+    expect(state.setDiagnostics).not.toHaveBeenCalled();
+    onRendered(render(source, version), document);
+    expect(codes()).toEqual(["L004", "P001"]);
+
+    const image = join(directory, "figure.png");
+    writeFileSync(image, "preview checks existence");
+    state.fileCreates.at(-1)?.(Uri.file(image));
+    expect(state.refreshPreview).toHaveBeenCalled();
+    expect(codes()).toEqual([]);
+    onRendered(render(source, version), document);
+    expect(codes()).toEqual(["P001"]);
   });
 
   it.each([

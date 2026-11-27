@@ -15,9 +15,11 @@ import type {
   BlockNode,
   CanvasNode,
   DeckDocument,
+  ExpansionMap,
   FrameNode,
   InlineNode,
   LengthSpec,
+  LintOptions,
   ListItemNode,
   ParagraphNode,
   PreviewLogo,
@@ -28,10 +30,14 @@ import type {
 import {
   type DetachStatus,
   detachStatusesOf,
+  expandDeck,
   figureLikeRawInline,
   fragmentPreambleOf,
   framesOf,
   frameTitleText,
+  mapExpandedRangeToSourceExact,
+  mapExpandedToSource,
+  previewImageDiagnostics,
   rawFragmentKey,
 } from "@beamer-editor/core";
 import katex from "katex";
@@ -76,6 +82,113 @@ export interface RenderedDeck {
   rawBlocks?: RawBlockRef[];
   /** 生ブロックを standalone でコンパイルするときに前置する定義(preamble-extra とマクロ)。 */
   fragmentPreamble?: string;
+  /** HTML 編集プレビューで検出した診断。span は renderDeck に渡された文書の座標。 */
+  diagnostics?: PreviewDiagnostic[];
+}
+
+/** ブラウザーを起動せずレンダラー自身が判定できる編集プレビューの診断。 */
+export interface PreviewDiagnostic {
+  /** KaTeX 未対応や描画例外を区別する安定したコード。 */
+  code: "P001" | "P002" | "P003";
+  severity: "error" | "info";
+  message: string;
+  /** 1 始まりのフレーム番号。文書全体に関わる場合は null。 */
+  frame: { number: number; label: string | null } | null;
+  span: SourceSpan;
+}
+
+export interface PreviewSourceDiagnostic {
+  category: "preview" | "image";
+  code: PreviewDiagnostic["code"] | "L004" | "L015" | "L023";
+  severity: "error" | "info" | "warning";
+  message: string;
+  frame: PreviewDiagnostic["frame"];
+  span: SourceSpan;
+}
+
+export interface EditingPreviewOptions extends Pick<LintOptions, "fileExists" | "templates"> {
+  baseStyle?: PreviewStyle;
+  preambleDiagnostics?: readonly Pick<
+    PreviewSourceDiagnostic,
+    "code" | "span" | "message" | "severity"
+  >[];
+}
+
+function mapPreviewSpan(map: ExpansionMap, span: SourceSpan): SourceSpan {
+  const exact = mapExpandedRangeToSourceExact(map, span);
+  if (exact !== null) return exact;
+  let start = Number.POSITIVE_INFINITY;
+  let end = Number.NEGATIVE_INFINITY;
+  for (const segment of map) {
+    if (segment.expandedEnd <= span.start) continue;
+    if (segment.expandedStart >= span.end) break;
+    const from = segment.exact
+      ? segment.sourceStart + Math.max(0, span.start - segment.expandedStart)
+      : segment.sourceStart;
+    const to = segment.exact
+      ? segment.sourceEnd - Math.max(0, segment.expandedEnd - span.end)
+      : segment.sourceEnd;
+    start = Math.min(start, from);
+    end = Math.max(end, to);
+  }
+  if (start <= end) return { start, end };
+  const offset = mapExpandedToSource(map, span.start);
+  return { start: offset, end: offset };
+}
+
+/** エディタと CLI で同じ展開、描画、位置付き診断を使う。 */
+export function renderEditingPreview(
+  source: string,
+  optionsFor: (doc: DeckDocument) => EditingPreviewOptions = () => ({}),
+) {
+  const expanded = expandDeck(source);
+  const options = optionsFor(expanded.doc);
+  const rendered = renderDeck(expanded.doc, undefined, {
+    ...(options.baseStyle ? { baseStyle: options.baseStyle } : {}),
+    recoverFrameErrors: true,
+  });
+  const renderingDiagnostics = (rendered.diagnostics ?? []).map((diagnostic) => ({
+    ...diagnostic,
+    span: mapPreviewSpan(expanded.map, diagnostic.span),
+  }));
+  const diagnostics: PreviewSourceDiagnostic[] = renderingDiagnostics.map((diagnostic) => ({
+    ...diagnostic,
+    category: "preview",
+  }));
+  const imageDiagnostics = [
+    ...previewImageDiagnostics(expanded.doc, options),
+    ...(options.preambleDiagnostics ?? []),
+  ];
+  const seenImages = new Set<string>();
+  for (const diagnostic of imageDiagnostics) {
+    const frame = rendered.frames.find(
+      (frame) =>
+        diagnostic.span.start >= frame.sourceSpan.start &&
+        diagnostic.span.start < frame.sourceSpan.end,
+    );
+    const span = mapPreviewSpan(expanded.map, diagnostic.span);
+    const key = `${diagnostic.code}:${span.start}:${span.end}:${diagnostic.message}`;
+    if (seenImages.has(key)) continue;
+    seenImages.add(key);
+    diagnostics.push({
+      category: "image",
+      code: diagnostic.code,
+      severity: diagnostic.severity,
+      message: diagnostic.message,
+      frame: frame ? { number: frame.index, label: frame.label } : null,
+      span,
+    });
+  }
+  diagnostics.sort(
+    (a, b) =>
+      a.span.start - b.span.start || a.span.end - b.span.end || a.code.localeCompare(b.code),
+  );
+  return {
+    deck: { ...rendered, diagnostics: renderingDiagnostics },
+    expansionMap: expanded.map,
+    expandDiagnostics: expanded.diagnostics,
+    diagnostics,
+  };
 }
 
 export interface RawBlockRef {
@@ -198,6 +311,8 @@ export interface RenderOptions {
    * これを上書きする(theme-design.md「テンプレートの読み込み」)。
    */
   baseStyle?: PreviewStyle;
+  /** 編集プレビューでは一部のフレームが壊れても他を表示し続ける。 */
+  recoverFrameErrors?: boolean;
 }
 
 /** フレーム装飾の集約結果(同種の指定が複数あれば後の指定を使う)。 */
@@ -263,14 +378,6 @@ export function styleCssOf(doc: DeckDocument, baseStyle?: PreviewStyle): string 
   return vars.length > 0 ? `.slide {\n  ${vars.join("\n  ")}\n}` : "";
 }
 
-function math(tex: string, displayMode: boolean): string {
-  try {
-    return katex.renderToString(tex, { displayMode, throwOnError: false, output: "html" });
-  } catch {
-    return `<code class="math-error">${escapeHtml(tex)}</code>`;
-  }
-}
-
 class FrameRenderer {
   /** 現在の \pause 通過数。要素の data-min に反映する。 */
   private pauseCount = 0;
@@ -293,6 +400,8 @@ class FrameRenderer {
   readonly rawBlocks = new Map<string, RawBlockRef>();
   /** 生ブロックの standalone 前置き。キャッシュキーにも入る(定義変更で古い画像が残らない)。 */
   readonly fragmentPreamble: string;
+  readonly diagnostics: PreviewDiagnostic[] = [];
+  private currentFrame: PreviewDiagnostic["frame"] = null;
 
   constructor(
     private readonly doc: DeckDocument,
@@ -315,6 +424,47 @@ class FrameRenderer {
         this.decorations.footerHtml = this.renderInlines(entry.text);
       }
     }
+  }
+
+  private math(tex: string, displayMode: boolean, span: SourceSpan): string {
+    try {
+      // KaTeX's permissive output represents unknown commands with a red span,
+      // rather than the `katex-error` class. Parse strictly first so that case is
+      // visible to diagnostics, then retain the existing permissive HTML output.
+      try {
+        return katex.renderToString(tex, { displayMode, throwOnError: true, output: "html" });
+      } catch (error) {
+        if (!(error instanceof katex.ParseError)) throw error;
+        this.diagnostics.push({
+          code: "P001",
+          severity: "info",
+          message: "KaTeX がこの数式命令を解釈できません。PDF で組版を確認してください",
+          frame: this.currentFrame,
+          span,
+        });
+        return katex.renderToString(tex, { displayMode, throwOnError: false, output: "html" });
+      }
+    } catch (error) {
+      this.diagnostics.push({
+        code: "P002",
+        severity: "error",
+        message: `数式の描画中に例外が発生しました: ${error instanceof Error ? error.message : String(error)}`,
+        frame: this.currentFrame,
+        span,
+      });
+      return `<code class="math-error">${escapeHtml(tex)}</code>`;
+    }
+  }
+
+  private rawPreviewDiagnostic(span: SourceSpan): void {
+    this.diagnostics.push({
+      code: "P003",
+      severity: "info",
+      message:
+        "この LaTeX は HTML 編集プレビューでは完全には表示できません。PDF で組版を確認してください",
+      frame: this.currentFrame,
+      span,
+    });
   }
 
   /**
@@ -400,9 +550,10 @@ class FrameRenderer {
           out += "<br>";
           break;
         case "inlineMath":
-          out += math(node.tex, false);
+          out += this.math(node.tex, false, node.span);
           break;
         case "rawInline":
+          this.rawPreviewDiagnostic(node.span);
           out += `<span class="raw-inline" title="サブセット外(生ブロック)">${escapeHtml(node.tex)}</span>`;
           break;
       }
@@ -542,7 +693,7 @@ class FrameRenderer {
           block.kind === "align" || block.kind === "align*"
             ? `\\begin{aligned}${block.tex}\n\\end{aligned}`
             : `${block.tex}\n`;
-        return `<div class="display-math"${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}>${math(tex, true)}</div>`;
+        return `<div class="display-math"${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}>${this.math(tex, true, block.span)}</div>`;
       }
       case "pause":
         this.pauseCount++;
@@ -555,6 +706,7 @@ class FrameRenderer {
       case "canvas":
         return this.renderCanvas(block);
       case "rawBlock": {
+        this.rawPreviewDiagnostic(block.span);
         const status = this.detachStatuses.get(block);
         const natural = this.naturalWidthAttrs(block.tex, status?.eligible === true);
         return this.rawBlockPlaceholder(
@@ -736,6 +888,7 @@ class FrameRenderer {
     frameIndex: number,
     frameTotal: number,
   ): { html: string; stepCount: number; canvasElements: RenderedCanvasElement[] } {
+    this.currentFrame = { number: frameIndex, label: frame.options.label };
     this.pauseCount = 0;
     this.maxStep = 1;
     this.linewidthFactor = 1;
@@ -755,6 +908,8 @@ class FrameRenderer {
   }
 
   renderRawFrame(frame: RawFrameNode, frameIndex: number, frameTotal: number): string {
+    this.currentFrame = { number: frameIndex, label: frame.label };
+    this.rawPreviewDiagnostic(frame.span);
     // 解釈不能フレームでも、\titlepage を含むなら表紙として背景を選ぶ。
     const isTitleFrame = /\\titlepage(?![A-Za-z@])/.test(frame.tex);
     return (
@@ -808,30 +963,51 @@ export function renderDeck(
   const allFrames = framesOf(doc);
   const total = allFrames.length;
   const frames: RenderedFrame[] = allFrames.map((frame, i) => {
-    if (frame.type === "rawFrame") {
+    try {
+      if (frame.type === "rawFrame") {
+        return {
+          index: i + 1,
+          label: frame.label,
+          titleText: frameTitleText(frame, i + 1),
+          html: renderer.renderRawFrame(frame, i + 1, total),
+          sourceSpan: frame.span,
+          stepCount: 1,
+          isRaw: true,
+          canvasElements: [],
+        };
+      }
+      const { html, stepCount, canvasElements } = renderer.renderFrame(frame, i + 1, total);
       return {
         index: i + 1,
-        label: frame.label,
+        label: frame.options.label,
         titleText: frameTitleText(frame, i + 1),
-        html: renderer.renderRawFrame(frame, i + 1, total),
+        html,
+        sourceSpan: frame.span,
+        stepCount,
+        isRaw: false,
+        canvasElements,
+      };
+    } catch (error) {
+      if (!options.recoverFrameErrors) throw error;
+      const label = frame.type === "rawFrame" ? frame.label : frame.options.label;
+      renderer.diagnostics.push({
+        code: "P002",
+        severity: "error",
+        message: `フレームの描画中に例外が発生しました: ${error instanceof Error ? error.message : String(error)}`,
+        frame: { number: i + 1, label },
+        span: frame.span,
+      });
+      return {
+        index: i + 1,
+        label,
+        titleText: frameTitleText(frame, i + 1),
+        html: `<div class="slide"><div class="slide-body"><code class="math-error">描画に失敗しました</code></div></div>`,
         sourceSpan: frame.span,
         stepCount: 1,
-        isRaw: true,
+        isRaw: frame.type === "rawFrame",
         canvasElements: [],
       };
     }
-    const { html, stepCount, canvasElements } = renderer.renderFrame(frame, i + 1, total);
-    const titleText = frameTitleText(frame, i + 1);
-    return {
-      index: i + 1,
-      label: frame.options.label,
-      titleText,
-      html,
-      sourceSpan: frame.span,
-      stepCount,
-      isRaw: false,
-      canvasElements,
-    };
   });
   return {
     title: doc.metadata.title ? inlineToPlain(doc.metadata.title.value) : "(無題のデッキ)",
@@ -839,5 +1015,6 @@ export function renderDeck(
     css: styleCssOf(doc, options.baseStyle),
     rawBlocks: [...renderer.rawBlocks.values()],
     fragmentPreamble: renderer.fragmentPreamble,
+    diagnostics: renderer.diagnostics,
   };
 }

@@ -27,6 +27,7 @@ import {
   exitCodeForError,
   parseCheckArgs,
   parseExportArgs,
+  parsePreviewCheckArgs,
   parseSnapshotArgs,
   run,
 } from "../src/cli.ts";
@@ -276,12 +277,106 @@ describe("deck lint", () => {
         "  deck lint <file> [--json]           デッキを検査\n" +
         "  deck format <file> [--write] [--json]  デッキを正規化\n" +
         "  deck outline <file> [--json]        フレーム一覧を表示\n" +
+        "  deck preview-check <file> [--frame <N|LABEL|label:LABEL>] [--json]  編集プレビューを検査\n" +
         "  deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査\n" +
         "  deck snapshot <file> -o <directory> [--frame <N|LABEL|label:LABEL>] [--tectonic <path>] [--json]\n" +
         "  deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]\n" +
         "  deck export <file> --format html [-o <directory>] [--overwrite] [--json]\n" +
         "  deck fonts status [--json]          フォントカタログ全 family の解決状態\n" +
         '  deck fonts fetch [family] [--json]  family(既定 "Noto Sans CJK JP")を取得・配置\n',
+    );
+  });
+});
+
+describe("deck preview-check", () => {
+  it("parses the existing frame address form", () => {
+    expect(parsePreviewCheckArgs(["talk.tex", "--frame", "label:42", "--json"])).toEqual({
+      input: "talk.tex",
+      frame: "label:42",
+      json: true,
+      error: undefined,
+    });
+  });
+
+  it("reports renderer diagnostics, missing images, and selected frames in JSON", async () => {
+    const source = await fixture(
+      "preview.tex",
+      String.raw`\begin{document}
+\begin{frame}[label=math]{Math}$\TeXOnlyCommand{x}$\end{frame}
+\begin{frame}[label=image]{Image}\includegraphics{missing.png}\end{frame}
+\end{document}`,
+    );
+    const all = runCli("preview-check", source.argvPath, "--json");
+    expect(all.status).toBe(EXIT_CODE.lintError);
+    expect(JSON.parse(all.stdout)).toMatchObject({
+      checks: ["renderer", "image-references"],
+      frames: [
+        { number: 1, label: "math" },
+        { number: 2, label: "image" },
+      ],
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({
+          code: "P001",
+          severity: "info",
+          frame: { number: 1, label: "math" },
+        }),
+        expect.objectContaining({
+          code: "L004",
+          severity: "error",
+          frame: { number: 2, label: "image" },
+        }),
+      ]),
+      summary: { errors: 1, warnings: 0, infos: 1 },
+    });
+
+    const frame = runCli("preview-check", source.argvPath, "--frame", "math", "--json");
+    expect(frame.status).toBe(EXIT_CODE.success);
+    expect(JSON.parse(frame.stdout)).toMatchObject({
+      frames: [{ number: 1, label: "math" }],
+      diagnostics: [expect.objectContaining({ code: "P001", frame: { number: 1, label: "math" } })],
+      summary: { errors: 0, infos: 1 },
+    });
+  });
+
+  it("returns an input error for an unknown frame selector", async () => {
+    const source = await fixture(
+      "preview.tex",
+      String.raw`\begin{document}\begin{frame}{One}A\end{frame}\end{document}`,
+    );
+    const result = runCli("preview-check", source.argvPath, "--frame", "absent", "--json");
+    expect(result.status).toBe(EXIT_CODE.operationalFailure);
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "E_INPUT" } });
+  });
+
+  it("reports missing canvas and template assets with the editor's local-path rules", async () => {
+    const directory = await temporaryDirectory();
+    const source = await fixture(
+      "preview-assets.tex",
+      String.raw`%% preamble-extra:begin
+\usepackage{templates/corp/beamerthemecorp}
+%% preamble-extra:end
+\begin{document}
+\begin{frame}[label=canvas]\begin{deckcanvas}\deckimage[x=0,y=0,w=1]{missing.png}\end{deckcanvas}\end{frame}
+\end{document}`,
+    );
+    await mkdir(`${directory}/templates/corp`, { recursive: true });
+    await writeFile(
+      `${directory}/templates/corp/beamerthemecorp.sty`,
+      String.raw`\logo{\includegraphics{templates/corp/missing-logo.png}}`,
+    );
+    const deck = `${directory}/preview-assets.tex`;
+    await writeFile(deck, await readFile(source.path));
+    const result = runCli("preview-check", relative(ROOT, deck), "--json");
+    expect(result.status).toBe(EXIT_CODE.lintError);
+    expect(JSON.parse(result.stdout).diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "L015",
+          severity: "error",
+          frame: { number: 1, label: "canvas" },
+        }),
+        expect.objectContaining({ code: "L023", severity: "warning", frame: null }),
+      ]),
     );
   });
 });

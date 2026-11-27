@@ -96,7 +96,7 @@ export interface PreviewControllerOptions {
    */
   navigate?: (offset: number) => void;
   /** 描画が成功するたびに呼ぶ(生ブロックの部分コンパイルの起点。#81)。 */
-  onRendered?: (outcome: RenderOutcome) => void;
+  onRendered?: (outcome: RenderOutcome, document: PreviewDocument) => void;
   /**
    * Webview が (再)生成されて ready を送ったとき。差し込み済み画像の再送のために done を捨てる。
    */
@@ -301,7 +301,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly resolveResource: ((path: string) => string) | undefined;
   private readonly setCanvasFontSize: PreviewControllerOptions["setCanvasFontSize"];
   private readonly resizeCanvasElement: PreviewControllerOptions["resizeCanvasElement"];
-  private readonly onRendered: (outcome: RenderOutcome) => void;
+  private readonly onRendered: NonNullable<PreviewControllerOptions["onRendered"]>;
   private readonly onWebviewReady: () => void;
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
   private readonly detachToCanvas: PreviewControllerOptions["detachToCanvas"];
@@ -1076,7 +1076,7 @@ export class PreviewController implements vscode.Disposable {
       const outcome = this.render(renderedDocument.getText(), renderedDocument.version);
       this.latest = outcome;
       this.latestDocument = renderedDocument;
-      this.onRendered(outcome);
+      this.onRendered(outcome, renderedDocument);
       if (this.editAwaitingVersion !== undefined && outcome.version !== this.editAwaitingVersion) {
         this.editAwaitingVersion = undefined;
       }

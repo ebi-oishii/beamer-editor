@@ -27,11 +27,17 @@ import {
   pasteCanvasObjects,
   removeCanvasObject,
 } from "@beamer-editor/core";
+import {
+  editingPreviewOptions,
+  nodeTemplateFileSystem,
+  templateStatuses,
+} from "@beamer-editor/html-export";
+import type { PreviewSourceDiagnostic } from "@beamer-editor/renderer";
 import { MAX_RAW_PDF_BYTES } from "@beamer-editor/ui";
 import * as vscode from "vscode";
 import { canvasHoverAt } from "./canvas-hover";
 import { LintController } from "./diagnostics";
-import { renderDocument } from "./document-controller";
+import { type RenderOutcome, renderDocument } from "./document-controller";
 import {
   ExportController,
   type ExportDocument,
@@ -73,7 +79,6 @@ import {
 } from "./slide-outline";
 import { resolveSourceViewColumn } from "./source-navigation";
 import { detectBundledTectonic, resolveTectonicPath } from "./tectonic";
-import { baseStyleOf, nodeTemplateFileSystem, templateStatuses } from "./templates";
 import { YenBackslashCodeActionProvider } from "./yen-code-actions";
 
 let previewController: PreviewController | undefined;
@@ -107,15 +112,18 @@ const LINT_SEVERITIES: Record<LintSeverity, vscode.DiagnosticSeverity> = {
 /** core の LintDiagnostic を VS Code の Diagnostic へ変換する(移植計画 VS-5)。 */
 function toVscodeDiagnostic(
   document: vscode.TextDocument,
-  lint: LintDiagnostic,
+  lint: LintDiagnostic | PreviewSourceDiagnostic,
+  frame: PreviewSourceDiagnostic["frame"] = "frame" in lint ? lint.frame : null,
 ): vscode.Diagnostic {
   const range = new vscode.Range(
     document.positionAt(lint.span.start),
     document.positionAt(lint.span.end),
   );
-  const diagnostic = new vscode.Diagnostic(range, lint.message, LINT_SEVERITIES[lint.severity]);
+  const label = frame?.label ? ` [${frame.label}]` : "";
+  const message = frame ? `${lint.message} (フレーム ${frame.number}${label})` : lint.message;
+  const diagnostic = new vscode.Diagnostic(range, message, LINT_SEVERITIES[lint.severity]);
   diagnostic.code = lint.code;
-  diagnostic.source = "beamer-editor";
+  diagnostic.source = "category" in lint ? "beamer-editor preview" : "beamer-editor";
   return diagnostic;
 }
 
@@ -129,11 +137,7 @@ function deckLintOptions(
 ): LintOptions {
   if (document.uri.scheme !== "file") return {};
   const files = nodeTemplateFileSystem(path.dirname(document.uri.fsPath));
-  return {
-    // 画像の存在(L004)。デッキのディレクトリ配下だけを見る(`..` や絶対パスは無いものとして扱う)。
-    fileExists: files.isFile,
-    templates: templateStatuses(parseDeck(text), files),
-  };
+  return { fileExists: files.isFile, templates: templateStatuses(parseDeck(text), files) };
 }
 
 /**
@@ -468,6 +472,30 @@ export function activate(context: vscode.ExtensionContext): TestApi {
 
   // lint → Problems パネル・波線(VS-5)。開いている .tex 文書ごとに独立管理する。
   const diagnosticCollection = vscode.languages.createDiagnosticCollection("beamer-editor");
+  const latestLint = new WeakMap<
+    vscode.TextDocument,
+    { version: number; diagnostics: LintDiagnostic[] }
+  >();
+  const latestPreview = new WeakMap<vscode.TextDocument, RenderOutcome>();
+  function publishProblems(document: vscode.TextDocument): void {
+    const lint = latestLint.get(document);
+    const preview = latestPreview.get(document);
+    const diagnostics = lint?.version === document.version ? lint.diagnostics : [];
+    const existing = new Set(diagnostics.map(diagnosticKey));
+    const rendered = preview?.version === document.version ? (preview.diagnostics ?? []) : [];
+    const byKey = new Map(rendered.map((diagnostic) => [diagnosticKey(diagnostic), diagnostic]));
+    diagnosticCollection.set(document.uri, [
+      ...diagnostics.map((diagnostic) =>
+        toVscodeDiagnostic(document, diagnostic, byKey.get(diagnosticKey(diagnostic))?.frame),
+      ),
+      ...rendered
+        .filter((diagnostic) => !existing.has(diagnosticKey(diagnostic)))
+        .map((diagnostic) => toVscodeDiagnostic(document, diagnostic)),
+    ]);
+  }
+  function diagnosticKey(diagnostic: LintDiagnostic | PreviewSourceDiagnostic): string {
+    return `${diagnostic.code}:${diagnostic.span.start}:${diagnostic.span.end}:${diagnostic.message}`;
+  }
   // L004(画像パス)・L025(管理プリアンブル)の Quick Fix は最新の lint 結果の fix を引く。
   const lintFixActions = new LintFixCodeActionProvider();
   const lintController = new LintController<vscode.TextDocument>(
@@ -479,13 +507,13 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     {
       set: (document, diagnostics) => {
         lintFixActions.record(document, diagnostics);
-        diagnosticCollection.set(
-          document.uri,
-          diagnostics.map((lint) => toVscodeDiagnostic(document, lint)),
-        );
+        latestLint.set(document, { version: document.version, diagnostics });
+        publishProblems(document);
       },
       delete: (document) => {
         lintFixActions.forget(document);
+        latestLint.delete(document);
+        latestPreview.delete(document);
         diagnosticCollection.delete(document.uri);
       },
     },
@@ -855,6 +883,14 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         .toString();
     // テンプレート(.sty)と preamble-extra から土台スタイルを取り、%% style で上書きする(#70)。
     const templateFs = nodeTemplateFileSystem(path.dirname(document.uri.fsPath));
+    let publishedPreview: { document: vscode.TextDocument; outcome: RenderOutcome } | undefined;
+    const clearPreviewProblems = () => {
+      const published = publishedPreview;
+      publishedPreview = undefined;
+      if (!published || latestPreview.get(published.document) !== published.outcome) return;
+      latestPreview.delete(published.document);
+      publishProblems(published.document);
+    };
     // .sty や画像が変わったらプレビューと診断を作り直す(キャッシュは持たない)。
     const templateWatcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(documentDir, "**/*.{sty,png,jpg,jpeg,pdf}"),
@@ -1356,6 +1392,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         pdfExternalChangeSubscription.dispose();
         previewSources.delete(panel);
         rawBlockCompiler.dispose();
+        clearPreviewProblems();
         rawBlockSettings.dispose();
         templateWatcher.dispose();
         viewStateSubscription.dispose();
@@ -1383,8 +1420,17 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           rawBlockCompiler.pause();
         },
         render: (text, version) =>
-          renderDocument(text, version, { baseStyle: (doc) => baseStyleOf(doc, templateFs) }),
-        onRendered: requestRawBlocks,
+          renderDocument(text, version, (doc) => editingPreviewOptions(doc, templateFs)),
+        onRendered: (outcome, source) => {
+          const current = source as vscode.TextDocument;
+          if (current.version === outcome.version) {
+            if (publishedPreview?.document !== current) clearPreviewProblems();
+            publishedPreview = { document: current, outcome };
+            latestPreview.set(current, outcome);
+            publishProblems(current);
+          }
+          requestRawBlocks(outcome);
+        },
         onWebviewReady: () => {
           rawBlockCompiler.forgetDelivered();
           sentPdfArtifactId = undefined;
@@ -1658,6 +1704,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       );
     const refreshEditingInputs = () => {
       editingInputsRevision += 1;
+      clearPreviewProblems();
       // 画像や .sty が足されたり直ったりしたときは、失敗していた生ブロックも次の描画で再試行する。
       rawBlockCompiler.resetFailures();
       controller.refresh();
