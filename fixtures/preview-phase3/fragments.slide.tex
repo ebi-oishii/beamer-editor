@@ -1,0 +1,35 @@
+\documentclass[aspectratio=169]{beamer}
+%% deck-source-version: 1
+\input{../../packages/core/resources/deck-managed-header}
+\input{../../packages/core/resources/deck-style-preamble}
+\input{../../packages/core/resources/deck-canvas-preamble}
+%% preamble-extra:begin
+\usepackage{tikz}
+\newcommand{\phaseFormula}{x^2 + \dfrac{1}{2}}
+%% preamble-extra:end
+\begin{document}
+\begin{frame}[label=local]{Local fragments}
+An inline formula $\phaseFormula$ followed by text.
+\[\phaseFormula\]
+\begin{tikzpicture}
+\draw[blue,thick] (0,0) rectangle (1,.6);
+\end{tikzpicture}
+\end{frame}
+\begin{frame}[label=editable]{Editable figure}
+\begin{deckcanvas}
+\begin{deckfigure}[x=0.150,y=0.150,w=0.300]
+\begin{tikzpicture}
+\draw[red,thick] (0,0) circle (1);
+\end{tikzpicture}
+\end{deckfigure}
+\end{deckcanvas}
+\end{frame}
+\begin{frame}[label=context]{Context-dependent fragments}
+\newcommand{\onlyInThisFrame}{y+1}
+\newcommand{\colorInThisFrame}{blue}
+\[\onlyInThisFrame\]
+\begin{tikzpicture}
+\draw[\colorInThisFrame] (0,0) circle (1);
+\end{tikzpicture}
+\end{frame}
+\end{document}

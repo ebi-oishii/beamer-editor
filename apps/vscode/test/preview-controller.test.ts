@@ -449,6 +449,19 @@ describe("PreviewController", () => {
     expect((posted[1] as DeckMessage).version).toBe(2);
   });
 
+  it("既存 panel を reopen された文書へ rebind すると version reset を新世代として送る", () => {
+    const { panel, posted, fire } = makePanel();
+    const { events } = makeEvents();
+    const original = makeDoc();
+    const controller = new PreviewController(panel, ASSETS, original, events, vi.fn());
+    fire({ type: "ready" });
+    const reopened = makeDoc();
+    reopened.version = 0;
+    controller.rebindDocument(reopened);
+    const message = posted.at(-1) as DeckMessage;
+    expect(message).toMatchObject({ type: "deckUpdated", version: 0, assetGeneration: 1 });
+  });
+
   it("別ファイルの変更ではプレビューを再計算しない", () => {
     const { panel, posted } = makePanel();
     const { events, change } = makeEvents();
@@ -1210,6 +1223,41 @@ describe("PreviewController", () => {
       expect(lastSrc()).toBe("vscode-webview://authority/templates/t/logo.png?v=1");
       controller.refresh();
       expect(lastSrc()).toBe("vscode-webview://authority/templates/t/logo.png?v=2");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("accepts layout only for the current document version and asset generation", () => {
+    vi.useFakeTimers();
+    try {
+      const { panel, fire } = makePanel();
+      const { events, change } = makeEvents();
+      const doc = makeDoc();
+      const onLayoutChecked = vi.fn();
+      const controller = new PreviewController(panel, ASSETS, doc, events, vi.fn(), {
+        onLayoutChecked,
+      });
+      const findings = [{ code: "B001", frame: 1 }];
+      const layout = (version: number, assetGeneration: number) =>
+        fire({ type: "layoutChecked", version, assetGeneration, findings });
+      fire({ type: "ready" });
+      layout(7, 0);
+      expect(onLayoutChecked).toHaveBeenCalledTimes(1);
+      controller.refresh();
+      layout(7, 0);
+      expect(onLayoutChecked).toHaveBeenCalledTimes(1);
+      layout(7, 1);
+      expect(onLayoutChecked).toHaveBeenCalledTimes(2);
+      doc.edit("Changed");
+      change(doc);
+      layout(7, 1);
+      vi.advanceTimersByTime(RENDER_DEBOUNCE_MS);
+      layout(7, 1);
+      expect(onLayoutChecked).toHaveBeenCalledTimes(2);
+      layout(8, 1);
+      expect(onLayoutChecked).toHaveBeenCalledTimes(3);
+      controller.dispose();
     } finally {
       vi.useRealTimers();
     }

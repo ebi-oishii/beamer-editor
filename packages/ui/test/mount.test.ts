@@ -1192,6 +1192,29 @@ describe("mountPreview", () => {
     expect(container.querySelector(".step-control")).toBeNull();
   });
 
+  it("CLI layout mount は全フレームを指定した overlay step で描画する", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const host = fakeHost();
+    const overlayDeck = {
+      ...DECK,
+      frames: DECK.frames.map((frame) => ({
+        ...frame,
+        html: frame.html.replace("<p>bye</p>", '<p data-min="2">bye</p>'),
+        stepCount: 2,
+      })),
+    };
+    act(() => {
+      mountPreview(container, host, { layoutOverlayStep: 1 });
+    });
+    act(() => {
+      host.push(overlayDeck);
+    });
+    const scales = container.querySelectorAll<HTMLElement>(".slide-scale");
+    expect(scales[0]?.querySelector("[data-min]")?.classList.contains("covered")).toBe(true);
+    expect(scales[1]?.querySelector("[data-min]")?.classList.contains("covered")).toBe(true);
+  });
+
   it("スクロールで上端に来たフレームが現在フレームになる", () => {
     const container = document.createElement("div");
     document.body.append(container);

@@ -8,7 +8,16 @@ import { type CanvasFontSize, isCanvasFontSize } from "@beamer-editor/core";
  *   存在・型のみを確認する（信頼できる送信元だが最低限のガードは張る）。
  */
 
-import type { RenderedDeck } from "@beamer-editor/renderer";
+import {
+  type LayoutFinding,
+  parseLayoutFindings,
+  type RenderedDeck,
+} from "@beamer-editor/renderer";
+
+export interface PdfFramePages {
+  frameIndex: number;
+  pages: number[];
+}
 
 export type ExtensionToWebview =
   | {
@@ -18,6 +27,7 @@ export type ExtensionToWebview =
       activeFrame: number;
       /** 元ソースに明示された frame の index。マクロ展開だけの仮想 frame は含めない。 */
       editableFrameIndexes?: number[];
+      assetGeneration?: number;
     }
   | { type: "activeFrameChanged"; frameIndex: number; version: number }
   /** 生ブロックの部分コンパイル結果(#81)。key はプレースホルダの data-raw-key。pdfBase64 は standalone の PDF。 */
@@ -35,7 +45,9 @@ export type ExtensionToWebview =
       /** Changes only when the actual PDF bytes change, never for status text. */
       artifactId?: number;
       revision: number;
+      framePages?: { artifactId: number; version: number; frames: PdfFramePages[] };
     }
+  | { type: "pdfJump"; artifactId?: number; page?: number }
   | { type: "error"; message: string };
 
 export type WebviewToExtension =
@@ -58,6 +70,8 @@ export type WebviewToExtension =
   | { type: "previewTabChanged"; tab: "edit" | "pdf"; retryPdfId?: number }
   | { type: "refreshPdfConfirmation" }
   | { type: "saveDisplayedPdf"; artifactId?: number }
+  | { type: "jumpToPdfPage"; version: number; frameIndex: number; artifactId: number; page: number }
+  | { type: "layoutChecked"; version: number; assetGeneration: number; findings: LayoutFinding[] }
   /** version はプレビューが表示中の deck の document version(古い版からのジャンプ検出に使う)。 */
   | { type: "jumpToSource"; frameIndex: number; version: number }
   | { type: "activeFrameChanged"; frameIndex: number }
@@ -126,6 +140,9 @@ export function parseExtensionToWebview(raw: unknown): ExtensionToWebview | null
           version: raw.version,
           activeFrame: raw.activeFrame,
           ...(editableFrameIndexes ? { editableFrameIndexes } : {}),
+          ...(isNonNegativeInteger(raw.assetGeneration)
+            ? { assetGeneration: raw.assetGeneration }
+            : {}),
         };
       }
       return null;
@@ -168,8 +185,31 @@ export function parseExtensionToWebview(raw: unknown): ExtensionToWebview | null
           ...(typeof raw.message === "string" ? { message: raw.message } : {}),
           ...(raw.pdf instanceof ArrayBuffer ? { pdf: raw.pdf } : {}),
           ...(isNonNegativeInteger(raw.artifactId) ? { artifactId: raw.artifactId } : {}),
+          ...(isRecord(raw.framePages) &&
+          isNonNegativeInteger(raw.framePages.artifactId) &&
+          isNonNegativeInteger(raw.framePages.version) &&
+          Array.isArray(raw.framePages.frames)
+            ? {
+                framePages: {
+                  artifactId: raw.framePages.artifactId,
+                  version: raw.framePages.version,
+                  frames: raw.framePages.frames.flatMap((frame) =>
+                    isRecord(frame) &&
+                    isNonNegativeInteger(frame.frameIndex) &&
+                    Array.isArray(frame.pages) &&
+                    frame.pages.every((page) => isNonNegativeInteger(page) && page > 0)
+                      ? [{ frameIndex: frame.frameIndex, pages: frame.pages as number[] }]
+                      : [],
+                  ),
+                },
+              }
+            : {}),
         };
       return null;
+    case "pdfJump":
+      if (isNonNegativeInteger(raw.artifactId) && isNonNegativeInteger(raw.page) && raw.page > 0)
+        return { type: "pdfJump", artifactId: raw.artifactId, page: raw.page };
+      return { type: "pdfJump" };
     case "error":
       if (typeof raw.message === "string") {
         return { type: "error", message: raw.message };
@@ -206,6 +246,37 @@ export function parseWebviewToExtension(raw: unknown): WebviewToExtension | null
       return isNonNegativeInteger(raw.artifactId)
         ? { type: raw.type, artifactId: raw.artifactId }
         : { type: raw.type };
+    case "jumpToPdfPage":
+      if (
+        isNonNegativeInteger(raw.version) &&
+        isNonNegativeInteger(raw.frameIndex) &&
+        isNonNegativeInteger(raw.artifactId) &&
+        isNonNegativeInteger(raw.page) &&
+        raw.page > 0
+      )
+        return {
+          type: "jumpToPdfPage",
+          version: raw.version,
+          frameIndex: raw.frameIndex,
+          artifactId: raw.artifactId,
+          page: raw.page,
+        };
+      return null;
+    case "layoutChecked": {
+      const findings = parseLayoutFindings(raw.findings);
+      if (
+        !findings ||
+        !isNonNegativeInteger(raw.version) ||
+        !isNonNegativeInteger(raw.assetGeneration)
+      )
+        return null;
+      return {
+        type: "layoutChecked",
+        findings,
+        version: raw.version,
+        assetGeneration: raw.assetGeneration,
+      };
+    }
     case "jumpToSource":
       if (typeof raw.frameIndex === "number" && typeof raw.version === "number") {
         return { type: "jumpToSource", frameIndex: raw.frameIndex, version: raw.version };

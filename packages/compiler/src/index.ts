@@ -16,6 +16,13 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { lineSplitter } from "./line-splitter.js";
+import {
+  type PdfSourcePages,
+  readPdfSourceDigest,
+  readPdfSourcePages,
+} from "./pdf-source-pages.js";
+
+export { type PdfSourcePages, pdfSourceDigest } from "./pdf-source-pages.js";
 
 const MAX_PROCESS_OUTPUT = 1024 * 1024;
 const DEFAULT_COMPILE_TIMEOUT_MS = 300_000;
@@ -71,6 +78,7 @@ export interface PdfReviewArtifact {
   content?: PdfReviewContent;
   /** Absent when the compiler did not produce a usable input list. */
   dependencyPaths?: readonly string[];
+  sourcePages?: PdfSourcePages;
 }
 
 export interface PdfReviewContent {
@@ -84,6 +92,7 @@ export interface CompiledPdf {
   engineVersion: string;
   pdf: Uint8Array;
   dependencyPaths?: readonly string[];
+  sourcePages?: PdfSourcePages;
 }
 
 export interface PdfPublishResult {
@@ -508,6 +517,7 @@ interface TemporaryPdf {
   size: number;
   engineVersion: string;
   dependencyPaths?: readonly string[];
+  sourcePages?: PdfSourcePages;
   retain(): PdfReviewContent;
 }
 
@@ -577,6 +587,7 @@ async function withCompiledPdf<T>(
   try {
     tempDirectory = await makeTemp("beamer-editor-pdf-");
     const dependencyFile = join(tempDirectory, "inputs.mk");
+    const sourceDigest = collectDependencies ? await readPdfSourceDigest(inputPath) : undefined;
     throwIfCancelled(signal);
     const onProgress = request.onProgress;
     let downloads = 0;
@@ -588,6 +599,7 @@ async function withCompiledPdf<T>(
           "-X",
           "compile",
           ...(collectDependencies ? ["--makefile-rules", dependencyFile] : []),
+          ...(sourceDigest ? ["--synctex"] : []),
           "--outdir",
           tempDirectory,
           inputPath,
@@ -650,6 +662,7 @@ async function withCompiledPdf<T>(
         if (paths !== undefined) dependencyPaths = await dependencyPathAliases(paths);
       }
     }
+    const sourcePages = await readPdfSourcePages(compiledPdf, inputPath, sourceDigest);
     throwIfCancelled(signal);
     const retain = (): PdfReviewContent => {
       if (retained) throw new Error("PDF review artifact was already retained");
@@ -678,6 +691,7 @@ async function withCompiledPdf<T>(
       size: info.size,
       engineVersion,
       ...(dependencyPaths === undefined ? {} : { dependencyPaths }),
+      ...(sourcePages === undefined ? {} : { sourcePages }),
       retain,
     });
   } catch (error) {
@@ -708,6 +722,7 @@ export async function compilePdf(
       ...(artifact.dependencyPaths === undefined
         ? {}
         : { dependencyPaths: artifact.dependencyPaths }),
+      ...(artifact.sourcePages === undefined ? {} : { sourcePages: artifact.sourcePages }),
     };
   });
 }
@@ -856,6 +871,7 @@ export async function exportPdf(
               ...(artifact.dependencyPaths === undefined
                 ? {}
                 : { dependencyPaths: artifact.dependencyPaths }),
+              ...(artifact.sourcePages === undefined ? {} : { sourcePages: artifact.sourcePages }),
               ...(published.writtenFileIdentity === undefined
                 ? {}
                 : { writtenFileIdentity: published.writtenFileIdentity }),

@@ -44,6 +44,7 @@ import {
 } from "@beamer-editor/core";
 import katex from "katex";
 import { MONO_FONT_FALLBACK } from "./font-stack.js";
+import type { LayoutCode } from "./layout-findings.js";
 import { DEFAULT_THEME, type Theme } from "./theme.js";
 
 export interface RenderedFrame {
@@ -56,6 +57,7 @@ export interface RenderedFrame {
   /** オーバーレイの総ステップ数(1 なら段階表示なし)。 */
   stepCount: number;
   isRaw: boolean;
+  allowFrameBreaks?: boolean;
   /** deckcanvas 直下の画像・テキスト・図。ID はこの描画 version の frame 内だけで有効。 */
   canvasElements?: RenderedCanvasElement[];
 }
@@ -101,7 +103,7 @@ export interface PreviewDiagnostic {
 
 export interface PreviewSourceDiagnostic {
   category: "preview" | "image";
-  code: PreviewDiagnostic["code"] | "L004" | "L015" | "L023";
+  code: PreviewDiagnostic["code"] | LayoutCode | "L004" | "L015" | "L023";
   severity: "error" | "info" | "warning";
   message: string;
   frame: PreviewDiagnostic["frame"];
@@ -189,7 +191,7 @@ function decorationDiagnostics(
   return [...diagnostics.values()];
 }
 
-function mapPreviewSpan(map: ExpansionMap, span: SourceSpan): SourceSpan {
+export function mapPreviewSpan(map: ExpansionMap, span: SourceSpan): SourceSpan {
   const exact = mapExpandedRangeToSourceExact(map, span);
   if (exact !== null) return exact;
   let start = Number.POSITIVE_INFINITY;
@@ -307,8 +309,11 @@ export interface RawBlockRef {
   key: string;
   tex: string;
   environment: string | null;
-  mode?: "raw" | "figure";
+  mode?: "raw" | "figure" | "inline-math" | "display-math";
 }
+
+const DOCUMENT_CONTEXT_COMMAND =
+  /\\(?:ref|eqref|pageref|autoref|cref|Cref|nameref|cite[a-zA-Z]*|label|tag|notag|nonumber|value|the(?:page|equation|framenumber)|insert[a-zA-Z]*|only|onslide|uncover|visible|invisible|alt|temporal|pause|framebreak|tableofcontents|titlepage|beamer[a-zA-Z]*)\b/;
 
 const escapeHtml = (s: string) =>
   s
@@ -570,7 +575,9 @@ class FrameRenderer {
         frame: this.currentFrame,
         span,
       });
-      return katex.renderToString(tex, { ...options, throwOnError: false });
+      const fallback = katex.renderToString(tex, { ...options, throwOnError: false });
+      const mode = displayMode ? "display-math" : "inline-math";
+      return `<span class="math-fragment" title="KaTeX 未対応の数式"${this.fragmentAttrs(tex, null, mode)}>${fallback}</span>`;
     } catch (error) {
       this.diagnostics.push({
         code: "P002",
@@ -861,9 +868,18 @@ class FrameRenderer {
     mode: "raw" | "figure" = "raw",
   ): string {
     this.rawPreviewDiagnostic(span);
+    return this.fragmentAttrs(tex, environment, mode);
+  }
+
+  private fragmentAttrs(
+    tex: string,
+    environment: string | null,
+    mode: NonNullable<RawBlockRef["mode"]>,
+  ): string {
+    if (DOCUMENT_CONTEXT_COMMAND.test(tex)) return ' data-raw-context="true"';
     const key = rawFragmentKey(tex, this.fragmentPreamble, mode);
     if (!this.rawBlocks.has(key)) this.rawBlocks.set(key, { key, tex, environment, mode });
-    return ` data-raw-key="${key}"`;
+    return ` data-raw-key="${key}"${mode === "inline-math" ? ' data-raw-inline="true"' : ""}`;
   }
 
   /**
@@ -1123,6 +1139,7 @@ export function renderDeck(
         sourceSpan: frame.span,
         stepCount,
         isRaw: false,
+        ...(frame.options.allowframebreaks ? { allowFrameBreaks: true } : {}),
         canvasElements,
       };
     } catch (error) {

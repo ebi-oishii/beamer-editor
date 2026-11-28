@@ -5,8 +5,13 @@ import {
   normalizeCanvasWidth,
   roundCanvasCoordinate,
 } from "@beamer-editor/core";
-import { DEFAULT_THEME, type RenderedCanvasElement } from "@beamer-editor/renderer";
-import type { ExtensionToWebview } from "@beamer-editor/ui";
+import {
+  DEFAULT_THEME,
+  type LayoutFinding,
+  type RenderedCanvasElement,
+  rewriteImageSources,
+} from "@beamer-editor/renderer";
+import type { ExtensionToWebview, WebviewToExtension } from "@beamer-editor/ui";
 import { parseWebviewToExtension } from "@beamer-editor/ui";
 import type * as vscode from "vscode";
 import { type RenderOutcome, renderDocument } from "./document-controller";
@@ -97,6 +102,11 @@ export interface PreviewControllerOptions {
   navigate?: (offset: number) => void;
   /** 描画が成功するたびに呼ぶ(生ブロックの部分コンパイルの起点。#81)。 */
   onRendered?: (outcome: RenderOutcome, document: PreviewDocument) => void;
+  onLayoutChecked?: (
+    findings: LayoutFinding[],
+    outcome: RenderOutcome,
+    document: PreviewDocument,
+  ) => void;
   /**
    * Webview が (再)生成されて ready を送ったとき。差し込み済み画像の再送のために done を捨てる。
    */
@@ -187,41 +197,10 @@ export interface PreviewControllerOptions {
   }) => Promise<PasteResult>;
   /** PDF確認の操作。PDF の生成は extension host が所有する。 */
   pdfAction?: (action: "open" | "refresh" | "save", artifactId?: number) => void;
+  jumpToPdfPage?: (request: Extract<WebviewToExtension, { type: "jumpToPdfPage" }>) => void;
 }
 
-const HTML_ESCAPES: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;",
-};
-
-function escapeAttr(value: string): string {
-  return value.replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch] as string);
-}
-
-function unescapeAttr(value: string): string {
-  return value
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&");
-}
-
-/**
- * deck HTML 内の <img src> をローカルリソース変換にかける(移植計画 VS-8 の
- * 「ローカルファイルは asWebviewUri で URL へ変換する」)。renderer は
- * includegraphics / deckimage / logo をエスケープ済みの生パスで出すため、
- * http(s) / data / vscode-webview 系以外を resolve へ通す。
- */
-export function rewriteImageSources(html: string, resolve: (path: string) => string): string {
-  return html.replace(/(<img\b[^>]*\bsrc=")([^"]*)(")/g, (whole, pre, src, post) => {
-    if (/^(?:https?:|data:|vscode-webview|vscode-resource:)/i.test(src)) return whole;
-    return `${pre}${escapeAttr(resolve(unescapeAttr(src)))}${post}`;
-  });
-}
+export { rewriteImageSources } from "@beamer-editor/renderer";
 
 /** 画像 URL に再読込世代を付ける(0 = 初期状態では付けない)。同じ HTML でも src が変わり再取得される。 */
 export function withAssetGeneration(url: string, generation: number): string {
@@ -302,6 +281,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly setCanvasFontSize: PreviewControllerOptions["setCanvasFontSize"];
   private readonly resizeCanvasElement: PreviewControllerOptions["resizeCanvasElement"];
   private readonly onRendered: NonNullable<PreviewControllerOptions["onRendered"]>;
+  private readonly onLayoutChecked: NonNullable<PreviewControllerOptions["onLayoutChecked"]>;
   private readonly onWebviewReady: () => void;
   private readonly moveCanvasElement: PreviewControllerOptions["moveCanvasElement"];
   private readonly detachToCanvas: PreviewControllerOptions["detachToCanvas"];
@@ -315,6 +295,7 @@ export class PreviewController implements vscode.Disposable {
   private readonly copyCanvasElement: PreviewControllerOptions["copyCanvasElement"];
   private readonly pasteCanvasElements: PreviewControllerOptions["pasteCanvasElements"];
   private readonly pdfAction: NonNullable<PreviewControllerOptions["pdfAction"]>;
+  private readonly jumpToPdfPage: NonNullable<PreviewControllerOptions["jumpToPdfPage"]>;
   private readonly previewTabChanged: NonNullable<PreviewControllerOptions["previewTabChanged"]>;
   private webviewTab: "edit" | "pdf" = "edit";
   /** PDF タブ中に変更された。編集へ戻るまで HTML 化・asset URL 化を遅延する。 */
@@ -371,6 +352,7 @@ export class PreviewController implements vscode.Disposable {
     this.setCanvasFontSize = options.setCanvasFontSize;
     this.resizeCanvasElement = options.resizeCanvasElement;
     this.onRendered = options.onRendered ?? (() => {});
+    this.onLayoutChecked = options.onLayoutChecked ?? (() => {});
     this.onWebviewReady = options.onWebviewReady ?? (() => {});
     this.moveCanvasElement = options.moveCanvasElement;
     this.detachToCanvas = options.detachToCanvas;
@@ -380,6 +362,7 @@ export class PreviewController implements vscode.Disposable {
     this.copyCanvasElement = options.copyCanvasElement;
     this.pasteCanvasElements = options.pasteCanvasElements;
     this.pdfAction = options.pdfAction ?? (() => {});
+    this.jumpToPdfPage = options.jumpToPdfPage ?? (() => {});
     this.previewTabChanged = options.previewTabChanged ?? (() => {});
     this.panel.webview.html = emptyPreviewHtml(assets, this.panel.webview.cspSource, createNonce());
     this.disposables = [
@@ -392,6 +375,17 @@ export class PreviewController implements vscode.Disposable {
   /** 最後に成功したレンダリング結果(未成功なら undefined)。 */
   get latestOutcome(): RenderOutcome | undefined {
     return this.latest;
+  }
+
+  /** Pair an existing panel with a reopened TextDocument of the same URI. */
+  rebindDocument(document: PreviewDocument, render = true): void {
+    if (this.disposed || document === this.document) return;
+    if (document.uri.toString() !== this.document.uri.toString()) return;
+    this.pendingMovedSlide = undefined;
+    this.document = document;
+    this.assetGeneration += 1;
+    if (this.webviewTab === "pdf") this.pendingDeckRender = true;
+    else if (render) this.sendDeck();
   }
 
   /**
@@ -473,6 +467,17 @@ export class PreviewController implements vscode.Disposable {
       this.pdfAction("refresh");
     } else if (msg.type === "saveDisplayedPdf") {
       this.pdfAction("save", msg.artifactId);
+    } else if (msg.type === "jumpToPdfPage") {
+      this.jumpToPdfPage(msg);
+    } else if (msg.type === "layoutChecked") {
+      if (
+        this.webviewTab === "edit" &&
+        this.latestDocument === this.document &&
+        this.latest?.version === msg.version &&
+        this.document.version === msg.version &&
+        this.assetGeneration === msg.assetGeneration
+      )
+        this.onLayoutChecked(msg.findings, this.latest, this.document);
     } else if (msg.type === "jumpToSource") {
       this.handleJump(msg.frameIndex, msg.version);
     } else if (msg.type === "resizeCanvasElement" || msg.type === "setCanvasFontSize") {
@@ -1043,9 +1048,7 @@ export class PreviewController implements vscode.Disposable {
   private handleDocumentChange(event: PreviewDocumentChangeEvent): void {
     if (this.disposed) return;
     if (event.document.uri.toString() !== this.document.uri.toString()) return;
-    if (event.document !== this.document) this.pendingMovedSlide = undefined;
-    // close → 再オープンで新しい TextDocument になっても追従できるよう差し替える。
-    this.document = event.document;
+    this.rebindDocument(event.document, false);
     if (event.contentChanges.length === 0) return;
     if (this.webviewTab === "pdf") {
       this.pendingDeckRender = true;
@@ -1098,6 +1101,7 @@ export class PreviewController implements vscode.Disposable {
         deck,
         version: outcome.version,
         activeFrame: 0,
+        ...(generation === 0 ? {} : { assetGeneration: generation }),
         editableFrameIndexes: outcome.deck.frames.flatMap((_, index) => {
           const offset = resolveJumpOffset(outcome, index);
           return offset !== null &&
@@ -1164,7 +1168,12 @@ export class PreviewController implements vscode.Disposable {
   postPdfState(
     status: "idle" | "compiling" | "ready" | "stale" | "failed" | "restricted",
     revision: number,
-    options: { message?: string; pdf?: Uint8Array; artifactId?: number } = {},
+    options: {
+      message?: string;
+      pdf?: Uint8Array;
+      artifactId?: number;
+      framePages?: Extract<ExtensionToWebview, { type: "pdfUpdated" }>["framePages"];
+    } = {},
   ): void {
     if (this.disposed) return;
     const pdf = options.pdf;
@@ -1184,8 +1193,17 @@ export class PreviewController implements vscode.Disposable {
       // allocate two additional full-size strings for every confirmation.
       ...(bytes === undefined ? {} : { pdf: bytes as ArrayBuffer }),
       ...(options.artifactId === undefined ? {} : { artifactId: options.artifactId }),
+      ...(options.framePages === undefined ? {} : { framePages: options.framePages }),
     };
     void this.panel.webview.postMessage(message);
+  }
+
+  postPdfJump(artifactId?: number, page?: number): void {
+    const message: ExtensionToWebview =
+      artifactId === undefined || page === undefined
+        ? { type: "pdfJump" }
+        : { type: "pdfJump", artifactId, page };
+    if (!this.disposed) void this.panel.webview.postMessage(message);
   }
 
   /**

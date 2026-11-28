@@ -16,6 +16,36 @@ function placeholderRoot(key: string): HTMLElement {
 }
 
 describe("RawImageStore / applyRawImages", () => {
+  it("replaces inline math only with measured boxes and restores the fallback", async () => {
+    const image = { dataUrl: "data:image/png;base64,AAAA", width: 20, height: 10 };
+    const store = new RawImageStore(async () => image);
+    const root = document.createElement("div");
+    root.innerHTML =
+      '<div class="slide-card" data-index="0"><span class="math-fragment" data-raw-key="math" data-raw-inline="true"><code>original</code></span></div>';
+    const open = vi.fn();
+    store.receive("math", { pdfBase64: PDF_B64 });
+    await vi.waitFor(() => expect(store.get("math")?.status).toBe("ready"));
+    applyRawImages(root, store, open);
+    expect(root.querySelector("img")).toBeNull();
+    expect(root.querySelector("code")?.textContent).toBe("original");
+    root.querySelector("button")?.click();
+    expect(open).toHaveBeenCalledWith(0);
+
+    const measured = new RawImageStore(async () => ({
+      ...image,
+      mathBox: { width: 20, height: 8, depth: 2 },
+    }));
+    measured.receive("math", { pdfBase64: PDF_B64 });
+    await vi.waitFor(() => expect(measured.get("math")?.status).toBe("ready"));
+    applyRawImages(root, measured, open);
+    const img = root.querySelector("img");
+    expect(img?.style.width).toBe("2em");
+    expect(img?.style.height).toBe("1em");
+    expect(img?.style.verticalAlign).toBe("-0.2em");
+    measured.clear();
+    applyRawImages(root, measured);
+    expect(root.querySelector("code")?.textContent).toBe("original");
+  });
   it("PDF を受け取るとラスタライズして ready になり、箱の中身が画像になる", async () => {
     const rasterize = vi.fn(async (pdf: Uint8Array) => {
       expect(Array.from(pdf)).toEqual(Array.from(new TextEncoder().encode("%PDF-1.7 fake")));

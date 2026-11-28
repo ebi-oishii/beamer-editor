@@ -8,6 +8,18 @@ import { buildFragmentDocument, fragmentDependencies } from "../src/fragment.js"
 import { compileFragment, type ProcessRunner } from "../src/index.js";
 
 describe("buildFragmentDocument", () => {
+  it("records dimensions and baseline for inline math and loads TikZ only once", () => {
+    const math = buildFragmentDocument("\\phaseFormula", "", "inline-math");
+    expect(math).toContain("\\documentclass[10pt,preview,border=0pt]{standalone}");
+    expect(math).toContain("\\number\\wd\\deckPreviewMathBox");
+    expect(math).toContain("\\number\\ht\\deckPreviewMathBox");
+    expect(math).toContain("\\number\\dp\\deckPreviewMathBox");
+    const picture = "\\begin{tikzpicture}\\end{tikzpicture}";
+    expect(buildFragmentDocument(picture, "")).toContain("\\usepackage{tikz}");
+    expect(buildFragmentDocument(picture, "\\usepackage{xcolor, tikz}")).not.toContain(
+      "\\usepackage{tikz}",
+    );
+  });
   it("figure mode removes standalone border and keeps raw mode's 2pt border", () => {
     expect(buildFragmentDocument("x", "")).toContain("border=2pt");
     const figure = buildFragmentDocument("\\begin{tikzpicture}\\end{tikzpicture}", "", "figure");

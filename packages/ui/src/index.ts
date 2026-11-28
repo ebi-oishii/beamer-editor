@@ -5,11 +5,13 @@
 
 export {
   type ExtensionToWebview,
+  type PdfFramePages,
   parseExtensionToWebview,
   parseWebviewToExtension,
   type WebviewToExtension,
 } from "./messages.js";
 export { DeckPreview } from "./preview/DeckPreview.js";
+export { inspectPreviewLayout } from "./preview/inspect-layout.js";
 export { mountPreview } from "./preview/mount.js";
 export { applyOverlay, isVisibleAtStep } from "./preview/overlay.js";
 export {

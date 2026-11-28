@@ -7,7 +7,7 @@ import type { CanvasFontSize } from "@beamer-editor/core";
  * webview グローバルを ui に持ち込まずに Extension と通信する。
  */
 
-import type { RenderedDeck } from "@beamer-editor/renderer";
+import type { LayoutFinding, RenderedDeck } from "@beamer-editor/renderer";
 import type { ExtensionToWebview, WebviewToExtension } from "./messages.js";
 import { parseZoom, type ZoomState } from "./preview/zoom.js";
 
@@ -34,12 +34,19 @@ export interface RasterImage {
   /** PDF.js viewport(scale=1) の PDF point。自然幅をフロー図へ反映するために使う。 */
   widthPt?: number;
   heightPt?: number;
+  /** Inline math box dimensions in TeX points, measured in a 10pt document. */
+  mathBox?: { width: number; height: number; depth: number };
 }
 
 export interface ShellHost {
   /** ホストからの deck 更新を購読する。unsubscribe を返す。 */
   subscribe(
-    listener: (deck: RenderedDeck, version: number, editableFrameIndexes?: number[]) => void,
+    listener: (
+      deck: RenderedDeck,
+      version: number,
+      editableFrameIndexes?: number[],
+      assetGeneration?: number,
+    ) => void,
   ): () => void;
   /**
    * ホスト → ui: 指定フレームを表示する要求(ソース側の CodeLens・コマンド・カーソル追従)。
@@ -59,6 +66,8 @@ export interface ShellHost {
    * PDF のバイト列を画像にする(pdf.js などホスト固有の実装)。無いホストでは箱のまま残す。
    */
   rasterizePdf?(pdf: Uint8Array): Promise<RasterImage>;
+  openPdfForFrame?(frameIndex: number, version: number): void;
+  layoutChecked?(version: number, assetGeneration: number, findings: LayoutFinding[]): void;
   /** 前回のナビ状態(パネル再表示時の復元用)。無ければ undefined。 */
   loadNavState?(): NavState | undefined;
   /** ナビ状態の保存。current / step 以外を渡さない。 */
@@ -147,16 +156,24 @@ export function createMessageShellHost(
   transport: MessageTransport,
   state?: WebviewStateStore,
 ): ShellHost & { ready(): void } {
-  // 非同期処理の完了順が入れ替わっても古いプレビューへ戻らないよう、
-  // 現在値より古い document version の deckUpdated は捨てる(移植計画 §6)。
+  // 同じ document identity 内では古い version を捨てる。VS Code は close/reopen で
+  // version を 0 から振り直すため、host が asset generation を進めた場合だけ新しい
+  // identity として受け入れる。
   let lastVersion = Number.NEGATIVE_INFINITY;
+  let lastAssetGeneration = 0;
   return {
     subscribe(listener) {
       return transport.subscribe((msg) => {
         if (msg.type === "deckUpdated") {
-          if (msg.version < lastVersion) return;
+          const generation = msg.assetGeneration ?? 0;
+          if (
+            generation < lastAssetGeneration ||
+            (generation === lastAssetGeneration && msg.version < lastVersion)
+          )
+            return;
           lastVersion = msg.version;
-          listener(msg.deck, msg.version, msg.editableFrameIndexes);
+          lastAssetGeneration = generation;
+          listener(msg.deck, msg.version, msg.editableFrameIndexes, msg.assetGeneration);
         }
       });
     },

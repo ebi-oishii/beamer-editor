@@ -3,18 +3,14 @@
  * (移植計画 VS-3 手順 1)。`vscode` API には依存せず、PreviewController から使う。
  */
 
-import {
-  type DeckDocument,
-  type ExpandDiagnostic,
-  type ExpansionMap,
-  mapExpandedRangeToSourceExact,
-} from "@beamer-editor/core";
+import type { DeckDocument, ExpandDiagnostic, ExpansionMap } from "@beamer-editor/core";
 import {
   type EditingPreviewOptions,
   type PreviewSourceDiagnostic,
   type RenderedDeck,
   renderEditingPreview,
   type TemplateImageDiagnostic,
+  withEditableCanvasElements,
 } from "@beamer-editor/renderer";
 
 export interface RenderOutcome {
@@ -43,16 +39,7 @@ export function renderDocument(
   const { deck, expansionMap, expandDiagnostics, diagnostics, suppressedTemplateDiagnostics } =
     renderEditingPreview(text, optionsFor);
   return {
-    deck: {
-      ...deck,
-      frames: deck.frames.map((frame) => ({
-        ...frame,
-        canvasElements: (frame.canvasElements ?? []).map((element) => {
-          const sourceSpan = mapExpandedRangeToSourceExact(expansionMap, element.sourceSpan);
-          return sourceSpan === null ? element : { ...element, sourceSpan, editable: true };
-        }),
-      })),
-    },
+    deck: withEditableCanvasElements(deck, expansionMap),
     version,
     expansionMap,
     expandDiagnostics,

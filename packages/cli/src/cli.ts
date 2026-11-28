@@ -51,7 +51,12 @@ import {
   type HtmlExportResult,
   nodeTemplateFileSystem,
 } from "@beamer-editor/html-export";
-import { previewDiagnosticMessage, renderEditingPreview } from "@beamer-editor/renderer";
+import {
+  layoutSourceDiagnostics,
+  previewDiagnosticMessage,
+  renderEditingPreview,
+  withEditableCanvasElements,
+} from "@beamer-editor/renderer";
 import { createNodeFileProbes } from "./file-probes.ts";
 import {
   defaultFontPaths,
@@ -64,6 +69,7 @@ import {
 } from "./fonts.ts";
 import { InitError, initDeck, updateManagedPreamble } from "./init.ts";
 import { nodePdfRasterizer } from "./pdf-rasterizer.ts";
+import type { inspectSavedPreview } from "./preview-layout.ts";
 import { skillLintOptions } from "./skill.ts";
 
 /** 既定で取得する標準フォント(theme-design.md §4)。 */
@@ -246,7 +252,7 @@ export const USAGE = `使い方: deck <command> ...
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示
-  deck preview-check <file> [--frame <N|LABEL|label:LABEL>] [--json]  編集プレビューを検査
+  deck preview-check <file> [--frame <N|LABEL|label:LABEL>] [--layout] [--json]  編集プレビューを検査
   deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査
   deck snapshot <file> -o <directory> [--frame <N|LABEL|label:LABEL>] [--tectonic <path>] [--json]
   deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]
@@ -417,6 +423,7 @@ async function runOutline(file: string, json: boolean): Promise<number> {
 export interface ParsedPreviewCheckArgs {
   input: string | undefined;
   frame: string | undefined;
+  layout: boolean;
   json: boolean;
   error: string | undefined;
 }
@@ -425,6 +432,7 @@ export interface ParsedPreviewCheckArgs {
 export function parsePreviewCheckArgs(argv: readonly string[]): ParsedPreviewCheckArgs {
   let input: string | undefined;
   let frame: string | undefined;
+  let layout = false;
   let json = false;
   let error: string | undefined;
   const seen = new Set<string>();
@@ -440,16 +448,17 @@ export function parsePreviewCheckArgs(argv: readonly string[]): ParsedPreviewChe
         frame = value;
         index++;
       }
-    } else if (arg === "--json") {
-      if (seen.has(arg)) error ??= "オプションを重複して指定できません: --json";
+    } else if (arg === "--json" || arg === "--layout") {
+      if (seen.has(arg)) error ??= `オプションを重複して指定できません: ${arg}`;
       seen.add(arg);
-      json = true;
+      if (arg === "--json") json = true;
+      else layout = true;
     } else if (arg?.startsWith("-")) error ??= `不明なオプション: ${arg}`;
     else if (input === undefined) input = arg;
     else error ??= "preview-check には入力ファイルを 1 つ指定してください";
   }
   if (!error && input === undefined) error = "preview-check には入力ファイルを指定してください";
-  return { input, frame, json, error };
+  return { input, frame, layout, json, error };
 }
 
 interface PreviewCheckDiagnostic {
@@ -481,7 +490,10 @@ function previewCheckLocation(source: string, start: number, end: number) {
   return { line: from.line, column: from.column, endLine: to.line, endColumn: to.column };
 }
 
-async function runPreviewCheck(parsed: ParsedPreviewCheckArgs): Promise<number> {
+async function runPreviewCheck(
+  parsed: ParsedPreviewCheckArgs,
+  dependencies: CliDependencies,
+): Promise<number> {
   if (parsed.error) return usageError(parsed.error, parsed.json);
   const input = parsed.input as string;
   let source: string;
@@ -513,43 +525,77 @@ async function runPreviewCheck(parsed: ParsedPreviewCheckArgs): Promise<number> 
   }
   const includeFrame = (diagnostic: (typeof preview.diagnostics)[number]) =>
     selected === undefined || (diagnostic.frame !== null && selected.has(diagnostic.frame.number));
-  const diagnostics: PreviewCheckDiagnostic[] = preview.diagnostics
-    .filter((diagnostic) => {
-      if (selected === undefined || diagnostic.frame !== null) return includeFrame(diagnostic);
-      return (
-        diagnostic.affectedFrames === undefined ||
-        diagnostic.affectedFrames.some((number) => selected.has(number))
+  const sourceDiagnostics = preview.diagnostics.filter((diagnostic) => {
+    if (selected === undefined || diagnostic.frame !== null) return includeFrame(diagnostic);
+    return (
+      diagnostic.affectedFrames === undefined ||
+      diagnostic.affectedFrames.some((number) => selected.has(number))
+    );
+  });
+  let checks: string[] | { name: string; status: "completed" | "unavailable"; message?: string }[] =
+    ["renderer", "image-references"];
+  let layoutUnavailable: string | undefined;
+  if (parsed.layout) {
+    const { BROWSER_CHECKS, inspectSavedPreview } = await import("./preview-layout.ts");
+    const deck = withEditableCanvasElements(
+      {
+        ...preview.deck,
+        frames: preview.deck.frames.filter(
+          (frame) => selected === undefined || selected.has(frame.index),
+        ),
+      },
+      preview.expansionMap,
+    );
+    const layout = await (dependencies.inspectSavedPreview ?? inspectSavedPreview)(input, deck);
+    checks = [
+      { name: "renderer", status: "completed" },
+      { name: "image-references", status: "completed" },
+      ...BROWSER_CHECKS.map((name) => ({
+        name,
+        status: layout.status,
+        ...(layout.status === "unavailable" ? { message: layout.message } : {}),
+      })),
+    ];
+    if (layout.status === "completed")
+      sourceDiagnostics.push(
+        ...layoutSourceDiagnostics(deck, preview.expansionMap, layout.findings),
       );
-    })
-    .map((diagnostic) => {
-      return {
-        category: diagnostic.category,
-        code: diagnostic.code,
-        severity: diagnostic.severity,
-        message: diagnostic.message,
-        frame: diagnostic.frame,
-        location: previewCheckLocation(source, diagnostic.span.start, diagnostic.span.end),
-        ...(diagnostic.reference ? { reference: diagnostic.reference } : {}),
-        ...(diagnostic.affectedFrames ? { affectedFrames: diagnostic.affectedFrames } : {}),
-      };
-    });
+    else layoutUnavailable = layout.message;
+  }
+  const diagnostics: PreviewCheckDiagnostic[] = sourceDiagnostics.map((diagnostic) => {
+    return {
+      category: diagnostic.category,
+      code: diagnostic.code,
+      severity: diagnostic.severity,
+      message: diagnostic.message,
+      frame: diagnostic.frame,
+      location: previewCheckLocation(source, diagnostic.span.start, diagnostic.span.end),
+      ...(diagnostic.reference ? { reference: diagnostic.reference } : {}),
+      ...(diagnostic.affectedFrames ? { affectedFrames: diagnostic.affectedFrames } : {}),
+    };
+  });
   const summary = previewCheckSummary(diagnostics);
   const selectedFrames = frames.filter(
     (frame) => selected === undefined || selected.has(frame.number),
   );
   if (parsed.json) {
     process.stdout.write(
-      `${JSON.stringify({ file: input, checks: ["renderer", "image-references"], frames: selectedFrames, diagnostics, summary }, null, 2)}\n`,
+      `${JSON.stringify({ file: input, checks, frames: selectedFrames, diagnostics, summary }, null, 2)}\n`,
     );
-  } else if (diagnostics.length === 0) {
-    process.stdout.write(`${input}: 編集プレビューは問題ありません\n`);
   } else {
+    if (layoutUnavailable !== undefined)
+      process.stdout.write(
+        `${input}: ブラウザー検査を実行できませんでした。 ${layoutUnavailable}\n`,
+      );
+    else if (diagnostics.length === 0)
+      process.stdout.write(`${input}: 編集プレビューは問題ありません\n`);
     for (const diagnostic of diagnostics) {
       process.stdout.write(
         `${input}:${diagnostic.location.line}:${diagnostic.location.column}: ${diagnostic.severity} ${diagnostic.code}: ${previewDiagnosticMessage(diagnostic)}${checkFrame(diagnostic.frame)}\n`,
       );
     }
   }
+  if (layoutUnavailable !== undefined) return EXIT_CODE.operationalFailure;
   if (summary.errors > 0) return EXIT_CODE.lintError;
   return summary.warnings > 0 ? EXIT_CODE.lintWarning : EXIT_CODE.success;
 }
@@ -905,6 +951,7 @@ export function parseExportArgs(argv: readonly string[]): ParsedExportArgs {
 }
 
 export interface CliDependencies {
+  inspectSavedPreview?: typeof inspectSavedPreview;
   compileDeckFrames?: (request: CompileDeckFramesRequest) => Promise<DeckFramesResult>;
   exportPdf?: (request: {
     inputPath: string;
@@ -1283,7 +1330,8 @@ export async function run(
   if (argv[0] === "export") return runExport(parseExportArgs(argv.slice(1)), dependencies);
   if (argv[0] === "check") return runCheck(parseCheckArgs(argv.slice(1)), dependencies);
   if (argv[0] === "snapshot") return runSnapshot(parseSnapshotArgs(argv.slice(1)), dependencies);
-  if (argv[0] === "preview-check") return runPreviewCheck(parsePreviewCheckArgs(argv.slice(1)));
+  if (argv[0] === "preview-check")
+    return runPreviewCheck(parsePreviewCheckArgs(argv.slice(1)), dependencies);
   const { command, sub, family, json, write, updateSkill, updatePreamble, unknownOptions } =
     parseArgs(argv);
   if (unknownOptions.length > 0) return usageError(`不明なオプション: ${unknownOptions[0]}`, json);

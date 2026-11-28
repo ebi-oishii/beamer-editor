@@ -478,6 +478,18 @@ export const PREVIEW_CSS = `
   display: block;
   font-size: 6.5pt;
 }
+.slide .math-fragment .raw-image {
+  display: inline-block;
+}
+.slide .math-fragment[data-raw-inline] .raw-image {
+  max-width: none;
+}
+.slide .raw-pdf {
+  font: inherit;
+  font-size: .75em;
+  margin-inline: .25em;
+  cursor: pointer;
+}
 
 /* ---- キャンバス（subset-spec §2.8）---- */
 .slide .canvas {
