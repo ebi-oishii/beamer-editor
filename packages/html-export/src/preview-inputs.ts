@@ -8,13 +8,12 @@ import {
   joinImageSearchPath,
   mergePreviewStyles,
   type PreviewStyle,
-  styleImageOverrides,
   type TemplateReference,
   type TemplateStatus,
   templateImagePaths,
   templateReferencesOf,
 } from "@beamer-editor/core";
-import type { EditingPreviewOptions } from "@beamer-editor/renderer";
+import type { EditingPreviewOptions, PreviewAsset } from "@beamer-editor/renderer";
 
 export interface TemplateFileSystem {
   isFile(relativePath: string): boolean;
@@ -99,11 +98,33 @@ export function templateStatuses(doc: DeckDocument, fs: TemplateFileSystem): Tem
   }));
 }
 
-export function baseStyleOf(doc: DeckDocument, fs: TemplateFileSystem): PreviewStyle {
-  const templates = resolveTemplates(doc, fs).flatMap(({ resolved }) =>
-    resolved === null ? [] : [extractPreviewStyle(resolved.text)],
-  );
-  const merged = mergePreviewStyles(...templates, extractPreviewStyle(doc.preambleExtra.tex));
+function baseStyleAndAssetsOf(
+  doc: DeckDocument,
+  fs: TemplateFileSystem,
+): {
+  baseStyle: PreviewStyle;
+  baseAssets: NonNullable<EditingPreviewOptions["baseAssets"]>;
+} {
+  const layers = [
+    ...resolveTemplates(doc, fs).flatMap(({ reference, resolved }) =>
+      resolved === null
+        ? []
+        : [
+            {
+              style: extractPreviewStyle(resolved.text),
+              source: "template" as const,
+              span: reference.span,
+              templatePath: resolved.path,
+            },
+          ],
+    ),
+    {
+      style: extractPreviewStyle(doc.preambleExtra.tex),
+      source: "preamble" as const,
+      span: doc.preambleExtra.span,
+    },
+  ];
+  const merged = mergePreviewStyles(...layers.map((layer) => layer.style));
   const searchPaths = merged.imageSearchPaths ?? [];
   if (merged.logo)
     merged.logo = {
@@ -114,7 +135,35 @@ export function baseStyleOf(doc: DeckDocument, fs: TemplateFileSystem): PreviewS
     merged.background = {
       path: resolveImagePath(merged.background.path, fs, searchPaths) ?? merged.background.path,
     };
-  return merged;
+  const selected: Partial<Record<"logo" | "background", (typeof layers)[number]>> = {};
+  for (const layer of layers) {
+    if (layer.style.logo) selected.logo = layer;
+    if (layer.style.background) selected.background = layer;
+  }
+  const asset = (slot: "logo" | "background"): PreviewAsset | undefined => {
+    const layer = selected[slot];
+    const value = merged[slot];
+    if (!layer || !value) return undefined;
+    const path = value.path;
+    return {
+      path,
+      exists: nonLocalImage(path) || fs.isFile(path),
+      source: layer.source,
+      span: layer.span,
+      ...(layer.source === "template" ? { templatePath: layer.templatePath } : {}),
+    };
+  };
+  const logo = asset("logo");
+  const background = asset("background");
+  const baseAssets = {
+    ...(logo ? { logo } : {}),
+    ...(background ? { background } : {}),
+  };
+  return { baseStyle: merged, baseAssets };
+}
+
+export function baseStyleOf(doc: DeckDocument, fs: TemplateFileSystem): PreviewStyle {
+  return baseStyleAndAssetsOf(doc, fs).baseStyle;
 }
 
 const nonLocalImage = (assetPath: string) =>
@@ -125,30 +174,12 @@ export function editingPreviewOptions(
   doc: DeckDocument,
   fs: TemplateFileSystem,
 ): EditingPreviewOptions {
-  const baseStyle = baseStyleOf(doc, fs);
-  const preambleStyle = extractPreviewStyle(doc.preambleExtra.tex);
-  const overrides = styleImageOverrides(doc);
-  const preamblePaths = new Set([
-    !overrides.logo && preambleStyle.logo && baseStyle.logo?.path,
-    !overrides.background && preambleStyle.background && baseStyle.background?.path,
-  ]);
+  const { baseStyle, baseAssets } = baseStyleAndAssetsOf(doc, fs);
   const fileExists = (assetPath: string) => nonLocalImage(assetPath) || fs.isFile(assetPath);
   return {
     baseStyle,
+    baseAssets,
     fileExists,
-    templates: templateStatuses(doc, fs),
-    preambleDiagnostics: [...preamblePaths].flatMap((assetPath) =>
-      assetPath && !fileExists(assetPath)
-        ? [
-            {
-              code: "L004",
-              severity: "error",
-              message: `プリアンブルが参照する画像 ${assetPath} が見つかりません`,
-              span: doc.preambleExtra.span,
-            },
-          ]
-        : [],
-    ),
   };
 }
 

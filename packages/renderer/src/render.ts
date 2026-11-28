@@ -105,14 +105,60 @@ export interface PreviewSourceDiagnostic {
   message: string;
   frame: PreviewDiagnostic["frame"];
   span: SourceSpan;
+  reference?: string;
 }
 
-export interface EditingPreviewOptions extends Pick<LintOptions, "fileExists" | "templates"> {
+export interface EditingPreviewOptions extends Pick<LintOptions, "fileExists"> {
   baseStyle?: PreviewStyle;
-  preambleDiagnostics?: readonly Pick<
-    PreviewSourceDiagnostic,
-    "code" | "span" | "message" | "severity"
-  >[];
+  /** Node/VS Code host が解決した、土台スタイルのアセットと診断元。 */
+  baseAssets?: Partial<Record<"logo" | "background", PreviewAsset>>;
+}
+
+export interface PreviewAsset {
+  path: string;
+  exists: boolean;
+  /** テンプレート由来は L023、preamble-extra 由来は L004 として通知する。 */
+  source: "template" | "preamble";
+  span: SourceSpan;
+  templatePath?: string;
+}
+
+function decorationDiagnostics(
+  doc: DeckDocument,
+  options: EditingPreviewOptions,
+  map: ExpansionMap,
+  usedSlots: ReadonlySet<"logo" | "background" | "titleBackground">,
+): PreviewSourceDiagnostic[] {
+  const overrides = styleImageOverrides(doc);
+  // %% style assets are already emitted through lintImageReferences with their
+  // literal source spans (and therefore retain its extension Quick Fix).
+  const logo = overrides.logo ? null : (options.baseAssets?.logo ?? null);
+  const background = overrides.background ? null : (options.baseAssets?.background ?? null);
+  const diagnostics: PreviewSourceDiagnostic[] = [];
+  const seen = new Set<string>();
+  for (const [slot, asset] of [
+    ["logo", logo],
+    ["background", background],
+  ] as const) {
+    if (!usedSlots.has(slot) || asset === null || asset.exists) continue;
+    const identity = `${asset.source}:${asset.span.start}:${asset.span.end}:${asset.path}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    const template = asset.source === "template";
+    diagnostics.push({
+      category: "image",
+      code: template ? "L023" : "L004",
+      severity: template ? "warning" : "error",
+      message: template
+        ? `テンプレート ${asset.templatePath} が参照する画像 ${asset.path} が見つかりません(デッキのディレクトリ基準)`
+        : `プリアンブルが参照する画像 ${asset.path} が見つかりません`,
+      // A decoration applies to the document rather than one source frame.
+      frame: null,
+      span: mapPreviewSpan(map, asset.span),
+      reference: asset.path,
+    });
+  }
+  return diagnostics;
 }
 
 function mapPreviewSpan(map: ExpansionMap, span: SourceSpan): SourceSpan {
@@ -144,9 +190,11 @@ export function renderEditingPreview(
 ) {
   const expanded = expandDeck(source);
   const options = optionsFor(expanded.doc);
+  const usedDecorationSlots = new Set<"logo" | "background" | "titleBackground">();
   const rendered = renderDeck(expanded.doc, undefined, {
     ...(options.baseStyle ? { baseStyle: options.baseStyle } : {}),
     recoverFrameErrors: true,
+    onDecoration: (slot) => usedDecorationSlots.add(slot),
   });
   const renderingDiagnostics = (rendered.diagnostics ?? []).map((diagnostic) => ({
     ...diagnostic,
@@ -156,10 +204,13 @@ export function renderEditingPreview(
     ...diagnostic,
     category: "preview",
   }));
-  const imageDiagnostics = [
-    ...previewImageDiagnostics(expanded.doc, options),
-    ...(options.preambleDiagnostics ?? []),
-  ];
+  const overrides = styleImageOverrides(expanded.doc);
+  const selectedStyleEntries = [
+    usedDecorationSlots.has("logo") ? overrides.logo : undefined,
+    usedDecorationSlots.has("background") ? overrides.background : undefined,
+    usedDecorationSlots.has("titleBackground") ? overrides.titleBackground : undefined,
+  ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  const imageDiagnostics = previewImageDiagnostics(expanded.doc, options, selectedStyleEntries);
   const seenImages = new Set<string>();
   for (const diagnostic of imageDiagnostics) {
     const frame = rendered.frames.find(
@@ -168,7 +219,14 @@ export function renderEditingPreview(
         diagnostic.span.start < frame.sourceSpan.end,
     );
     const span = mapPreviewSpan(expanded.map, diagnostic.span);
-    const key = `${diagnostic.code}:${span.start}:${span.end}:${diagnostic.message}`;
+    // Different frames and image paths can map back to the same macro call.
+    const key = JSON.stringify([
+      diagnostic.code,
+      frame?.index ?? null,
+      span.start,
+      span.end,
+      diagnostic.reference ?? diagnostic.message,
+    ]);
     if (seenImages.has(key)) continue;
     seenImages.add(key);
     diagnostics.push({
@@ -178,8 +236,12 @@ export function renderEditingPreview(
       message: diagnostic.message,
       frame: frame ? { number: frame.index, label: frame.label } : null,
       span,
+      ...(diagnostic.reference ? { reference: diagnostic.reference } : {}),
     });
   }
+  diagnostics.push(
+    ...decorationDiagnostics(expanded.doc, options, expanded.map, usedDecorationSlots),
+  );
   diagnostics.sort(
     (a, b) =>
       a.span.start - b.span.start || a.span.end - b.span.end || a.code.localeCompare(b.code),
@@ -319,6 +381,8 @@ export interface RenderOptions {
   baseStyle?: PreviewStyle;
   /** 編集プレビューでは一部のフレームが壊れても他を表示し続ける。 */
   recoverFrameErrors?: boolean;
+  /** 実際に選んだ装飾スロット。preview-check の診断だけが利用する。 */
+  onDecoration?: (slot: "logo" | "background" | "titleBackground") => void;
 }
 
 /** フレーム装飾の集約結果(同種の指定が複数あれば後の指定を使う)。 */
@@ -413,6 +477,7 @@ class FrameRenderer {
     private readonly doc: DeckDocument,
     private readonly theme: Theme,
     baseStyle?: PreviewStyle,
+    private readonly onDecoration?: RenderOptions["onDecoration"],
   ) {
     this.fragmentPreamble = fragmentPreambleOf(doc);
     // 土台(テンプレート / preamble-extra)を先に置き、%% style 領域で上書きする。
@@ -491,11 +556,17 @@ class FrameRenderer {
     // 表紙では表紙用の背景があればそちらを優先する(TeX 側の \deckbackground[title] と同じ)。
     const background =
       (isTitleFrame ? this.decorations.titleBackground : null) ?? this.decorations.background;
-    if (background && !background.toLowerCase().endsWith(".pdf")) {
-      out += `<img class="deck-background" src="${escapeHtml(background)}">`;
+    if (background) {
+      this.onDecoration?.(
+        isTitleFrame && this.decorations.titleBackground ? "titleBackground" : "background",
+      );
+      if (!background.toLowerCase().endsWith(".pdf")) {
+        out += `<img class="deck-background" src="${escapeHtml(background)}">`;
+      }
     }
     const logo = this.decorations.logo;
     if (logo) {
+      this.onDecoration?.("logo");
       let pos: string;
       if (logo.placement.kind === "canvas") {
         const { x, y, width } = logo.placement;
@@ -976,7 +1047,7 @@ export function renderDeck(
   theme: Theme = DEFAULT_THEME,
   options: RenderOptions = {},
 ): RenderedDeck {
-  const renderer = new FrameRenderer(doc, theme, options.baseStyle);
+  const renderer = new FrameRenderer(doc, theme, options.baseStyle, options.onDecoration);
   const allFrames = framesOf(doc);
   const total = allFrames.length;
   const frames: RenderedFrame[] = allFrames.map((frame, i) => {

@@ -79,14 +79,14 @@ stdout が空で、エラーは stderr に出る(`--json` のときは `error.co
 
 ### 編集プレビュー検査
 
-`deck preview-check` は保存済みの入力を HTML 編集プレビューと同じレンダラーで検査します。組版や成果物の書き出しを伴わない検査です。KaTeX が解釈できない数式 (`P001`)、生 LaTeX (`P003`)、描画例外 (`P002`)、ローカル画像の欠落 (`L004`、`L015`、`L023`) を、フレームと分かる範囲のソース位置付きで返します。VS Code では編集中の描画診断を Problems に表示します。
+`deck preview-check` は保存済みの入力を HTML 編集プレビューと同じレンダラーで検査します。組版や成果物の書き出しを伴わない検査です。KaTeX が解釈できない数式 (`P001`)、生 LaTeX (`P003`)、描画例外 (`P002`)、ローカル画像の欠落 (`L004`、`L015`、`L023`) とキャンバス画像の拡張子 (`L015`) を、フレームと分かる範囲のソース位置付きで返します。ロゴと背景は描画時に選ばれる画像を検査します。VS Code では編集中の描画診断を Problems に表示します。
 
 ```bash
 pnpm --dir packages/cli deck preview-check talk.slide.tex
 pnpm --dir packages/cli deck preview-check talk.slide.tex --frame intro --json
 ```
 
-`--frame` は `deck snapshot` と同じ `N`、label、`label:LABEL` を受け取ります。JSON は対象フレーム、診断コード、重大度、元ソースの行・列（1 始まり）、実行した検査と集計を stdout に出します。文書全体に関わる診断の `frame` は `null` で、フレーム指定時にも報告します。終了コードは診断なし・情報のみが 0、警告が 1、診断エラーが 2、入出力・使用法のエラーが 3 です。操作エラーの JSON は stderr に出ます。
+`--frame` は `deck snapshot` と同じ `N`、label、`label:LABEL` を受け取ります。JSON は対象フレーム、診断コード、重大度、元ソースの行・列（1 始まり）、実行した検査と集計を stdout に出します。画像診断の `reference` は検査した画像パスです。文書全体に関わる診断の `frame` は `null` で、フレーム指定時にも報告します。終了コードは診断なし・情報のみが 0、警告が 1、診断エラーが 2、入出力・使用法のエラーが 3 です。操作エラーの JSON は stderr に出ます。
 
 ### デッキ編集スキルの生成
 

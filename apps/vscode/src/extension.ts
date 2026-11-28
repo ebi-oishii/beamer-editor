@@ -487,8 +487,11 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     // A current render resolves expanded image paths. Retain matching source
     // lint entries so their existing Quick Fix remains available.
     const diagnostics = (lint?.version === document.version ? lint.diagnostics : []).filter(
-      (diagnostic) =>
-        diagnostic.code !== "L004" || !rendered || byKey.has(diagnosticKey(diagnostic)),
+      (diagnostic) => {
+        const previewImageCode =
+          diagnostic.code === "L004" || diagnostic.code === "L015" || diagnostic.code === "L023";
+        return !previewImageCode || !rendered || byKey.has(diagnosticKey(diagnostic));
+      },
     );
     const existing = new Set(diagnostics.map(diagnosticKey));
     diagnosticCollection.set(document.uri, [

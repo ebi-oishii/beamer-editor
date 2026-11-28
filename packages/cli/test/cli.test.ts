@@ -428,6 +428,123 @@ describe("deck preview-check", () => {
       ]),
     );
   });
+
+  it("uses expanded frames and only the decorations selected by the renderer", async () => {
+    const generated = await fixture(
+      "generated-preview.tex",
+      String.raw`%% macros:begin
+\newcommand{\twoslides}{\begin{frame}[label=one]{One}\includegraphics{missing-one.png}\end{frame}\begin{frame}[label=two]{Two}\includegraphics{missing-two.png}\includegraphics{missing-three.png}\end{frame}}
+%% macros:end
+\begin{document}\twoslides\end{document}`,
+    );
+    const all = runCli("preview-check", generated.argvPath, "--json");
+    expect(all.status).toBe(EXIT_CODE.lintError);
+    const generatedDiagnostics = JSON.parse(all.stdout).diagnostics.filter(
+      (entry: { code: string }) => entry.code === "L004",
+    );
+    expect(generatedDiagnostics).toHaveLength(3);
+    expect(generatedDiagnostics.map((entry: { reference: string }) => entry.reference)).toEqual([
+      "missing-one.png",
+      "missing-two.png",
+      "missing-three.png",
+    ]);
+    const second = runCli("preview-check", generated.argvPath, "--frame", "two", "--json");
+    expect(second.status).toBe(EXIT_CODE.lintError);
+    expect(JSON.parse(second.stdout).diagnostics).toEqual([
+      expect.objectContaining({ code: "L004", frame: { number: 2, label: "two" } }),
+      expect.objectContaining({ code: "L004", frame: { number: 2, label: "two" } }),
+    ]);
+
+    const directory = await temporaryDirectory();
+    await mkdir(`${directory}/templates`, { recursive: true });
+    const template = `${directory}/templates/theme.sty`;
+    await writeFile(
+      template,
+      String.raw`\deckbackground{missing-template.png}
+\decklogo[x=0,y=0,w=0.1]{missing-template.png}`,
+    );
+    await writeFile(`${directory}/available.png`, "exists");
+    const active = `${directory}/active.tex`;
+    await writeFile(
+      active,
+      String.raw`%% preamble-extra:begin
+\usepackage{templates/theme}
+%% preamble-extra:end
+\begin{document}\begin{frame}{Visible}x\end{frame}\end{document}`,
+    );
+    const activeResult = runCli("preview-check", relative(ROOT, active), "--json");
+    expect(activeResult.status).toBe(EXIT_CODE.lintWarning);
+    expect(JSON.parse(activeResult.stdout).diagnostics).toEqual([
+      expect.objectContaining({ code: "L023", frame: null, reference: "missing-template.png" }),
+    ]);
+
+    await writeFile(
+      template,
+      String.raw`\setbeamertemplate{background}{\includegraphics{missing-template.png}}`,
+    );
+    const shadowed = `${directory}/shadowed.tex`;
+    await writeFile(
+      shadowed,
+      String.raw`%% preamble-extra:begin
+\usepackage{templates/theme}
+%% preamble-extra:end
+%% style:begin
+\deckbackground{available.png}
+%% style:end
+\begin{document}\begin{frame}{Visible}x\end{frame}\end{document}`,
+    );
+    expect(runCli("preview-check", relative(ROOT, shadowed), "--json").status).toBe(
+      EXIT_CODE.success,
+    );
+
+    const titleOnly = `${directory}/title-only.tex`;
+    await writeFile(
+      titleOnly,
+      String.raw`%% style:begin
+\deckbackground{missing-unused.png}
+\deckbackground[title]{available.png}
+%% style:end
+\begin{document}\begin{frame}\titlepage\end{frame}\end{document}`,
+    );
+    expect(runCli("preview-check", relative(ROOT, titleOnly), "--json").status).toBe(
+      EXIT_CODE.success,
+    );
+
+    const noTitle = `${directory}/no-title.tex`;
+    await writeFile(
+      noTitle,
+      String.raw`%% style:begin
+\deckbackground[title]{missing-unused.png}
+%% style:end
+\begin{document}\begin{frame}{Body}x\end{frame}\end{document}`,
+    );
+    expect(runCli("preview-check", relative(ROOT, noTitle), "--json").status).toBe(
+      EXIT_CODE.success,
+    );
+  });
+
+  it("validates deckimage paths after macro expansion", async () => {
+    const directory = await temporaryDirectory();
+    await writeFile(`${directory}/available.png`, "exists");
+    const source = `${directory}/canvas.tex`;
+    await writeFile(
+      source,
+      String.raw`%% macros:begin
+\newcommand{\asset}{available.png}
+%% macros:end
+\begin{document}\begin{frame}[label=canvas]{Canvas}\begin{deckcanvas}\deckimage[x=0,y=0,w=1]{\asset}\end{deckcanvas}\end{frame}\end{document}`,
+    );
+    expect(runCli("preview-check", relative(ROOT, source), "--json").status).toBe(
+      EXIT_CODE.success,
+    );
+    const invalid = await readFile(source, "utf8");
+    await writeFile(source, invalid.replace("available.png", "unsupported.svg"));
+    const result = runCli("preview-check", relative(ROOT, source), "--json");
+    expect(result.status).toBe(EXIT_CODE.lintError);
+    expect(JSON.parse(result.stdout).diagnostics).toEqual([
+      expect.objectContaining({ code: "L015", frame: { number: 1, label: "canvas" } }),
+    ]);
+  });
 });
 
 describe("deck outline", () => {

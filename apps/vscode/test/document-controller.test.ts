@@ -107,6 +107,7 @@ describe("renderDocument", () => {
           start.column,
           end.line,
           end.column,
+          diagnostic.reference ?? null,
         ];
       });
       const cli = spawnSync(
@@ -115,20 +116,15 @@ describe("renderDocument", () => {
         { cwd: ROOT, encoding: "utf8" },
       );
       expect(cli.status).toBe(2);
-      expect(editor.map(([code]) => code).sort()).toEqual([
-        "L004",
-        "L004",
-        "L015",
-        "L023",
-        "L023",
-        "P001",
-      ]);
+      // The theme's unused pgf image is not part of the rendered deck.
+      expect(editor.map(([code]) => code).sort()).toEqual(["L004", "L004", "L015", "L023", "P001"]);
       const diagnostics = JSON.parse(cli.stdout).diagnostics.map(
         (diagnostic: {
           code: string;
           severity: string;
           frame: { number: number } | null;
           location: { line: number; column: number; endLine: number; endColumn: number };
+          reference?: string;
         }) => [
           diagnostic.code,
           diagnostic.severity,
@@ -137,6 +133,7 @@ describe("renderDocument", () => {
           diagnostic.location.column,
           diagnostic.location.endLine,
           diagnostic.location.endColumn,
+          diagnostic.reference ?? null,
         ],
       );
       expect(diagnostics).toEqual(editor);

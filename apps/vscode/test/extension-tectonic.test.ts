@@ -343,14 +343,19 @@ describe("extension の Tectonic 接続", () => {
 \begin{frame}[label=images]{Images}
   \includegraphics{\asset}
   \includegraphics{literal}
+  \begin{deckcanvas}\deckimage[x=0,y=0,w=1]{\asset}\end{deckcanvas}
 \end{frame}
 \end{document}`;
+    let currentSource = source;
+    let version = 1;
     const document = {
       uri: Uri.file(file),
       fileName: file,
       isDirty: false,
-      version: 1,
-      getText: () => source,
+      get version() {
+        return version;
+      },
+      getText: () => currentSource,
       positionAt: (offset: number) => ({ line: 0, character: offset }),
     } as vscode.TextDocument;
     state.activeEditor = { document } as vscode.TextEditor;
@@ -371,10 +376,24 @@ describe("extension の Tectonic 接続", () => {
         message: expect.stringContaining("literal.png"),
       }),
     ]);
+    expect(
+      state.setDiagnostics.mock.lastCall?.[1].filter((entry) => entry.code === "L015"),
+    ).toEqual([]);
 
+    currentSource = source.replace("available.png", "unsupported.svg");
+    version++;
+    for (const listener of state.openListeners) listener(document);
+    onRendered(render(currentSource, version), document);
+    expect(state.setDiagnostics.mock.lastCall?.[1]).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "L015" })]),
+    );
+
+    currentSource = source;
+    version++;
+    for (const listener of state.openListeners) listener(document);
     rmSync(image);
     state.fileDeletes.at(-1)?.(Uri.file(image));
-    onRendered(render(source, document.version), document);
+    onRendered(render(currentSource, version), document);
     expect(imageProblems()).toHaveLength(2);
   });
 

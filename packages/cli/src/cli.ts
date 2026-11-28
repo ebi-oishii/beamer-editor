@@ -459,6 +459,7 @@ interface PreviewCheckDiagnostic {
   message: string;
   frame: CheckFrame | null;
   location: { line: number; column: number; endLine: number; endColumn: number };
+  reference?: string;
 }
 
 function previewCheckSummary(diagnostics: readonly PreviewCheckDiagnostic[]) {
@@ -521,6 +522,7 @@ async function runPreviewCheck(parsed: ParsedPreviewCheckArgs): Promise<number> 
         message: diagnostic.message,
         frame: diagnostic.frame,
         location: previewCheckLocation(source, diagnostic.span.start, diagnostic.span.end),
+        ...(diagnostic.reference ? { reference: diagnostic.reference } : {}),
       };
     });
   const summary = previewCheckSummary(diagnostics);
