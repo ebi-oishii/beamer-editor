@@ -523,6 +523,50 @@ describe("deck preview-check", () => {
     );
   });
 
+  it("filters document decoration diagnostics by the frames that actually select them", async () => {
+    const source = await fixture(
+      "preview-decoration-frames.tex",
+      String.raw`%% style:begin
+\deckbackground{missing-body.png}
+\deckbackground[title]{missing-cover.png}
+%% style:end
+\begin{document}
+\begin{frame}[label=cover]\titlepage\end{frame}
+\begin{frame}[label=introduction]{Introduction}x\end{frame}
+\end{document}`,
+    );
+    const body = runCli("preview-check", source.argvPath, "--frame", "introduction", "--json");
+    expect(body.status).toBe(EXIT_CODE.lintError);
+    expect(JSON.parse(body.stdout).diagnostics).toEqual([
+      expect.objectContaining({ reference: "missing-body.png", frame: null, affectedFrames: [2] }),
+    ]);
+    const cover = runCli("preview-check", source.argvPath, "--frame", "cover", "--json");
+    expect(cover.status).toBe(EXIT_CODE.lintError);
+    expect(JSON.parse(cover.stdout).diagnostics).toEqual([
+      expect.objectContaining({ reference: "missing-cover.png", frame: null, affectedFrames: [1] }),
+    ]);
+
+    const input = await readFile(source.path, "utf8");
+    await writeFile(source.path, input.replace("\\deckbackground{missing-body.png}\n", ""));
+    const cleanBody = runCli("preview-check", source.argvPath, "--frame", "introduction", "--json");
+    expect(cleanBody.status).toBe(EXIT_CODE.success);
+    expect(JSON.parse(cleanBody.stdout).diagnostics).toEqual([]);
+  });
+
+  it("prints expanded image references in human-readable output", async () => {
+    const source = await fixture(
+      "preview-human-reference.tex",
+      String.raw`%% macros:begin
+\newcommand{\pairimages}{\includegraphics{画像}\includegraphics{参照先}}
+%% macros:end
+\begin{document}\begin{frame}{Images}\pairimages\end{frame}\end{document}`,
+    );
+    const result = runCli("preview-check", source.argvPath);
+    expect(result.status).toBe(EXIT_CODE.lintError);
+    expect(result.stdout).toContain("画像: 画像");
+    expect(result.stdout).toContain("画像: 参照先");
+  });
+
   it("validates deckimage paths after macro expansion", async () => {
     const directory = await temporaryDirectory();
     await writeFile(`${directory}/available.png`, "exists");

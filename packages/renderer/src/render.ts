@@ -37,6 +37,7 @@ import {
   frameTitleText,
   mapExpandedRangeToSourceExact,
   mapExpandedToSource,
+  missingTemplateImageMessage,
   previewImageDiagnostics,
   rawFragmentKey,
   styleImageOverrides,
@@ -106,13 +107,34 @@ export interface PreviewSourceDiagnostic {
   frame: PreviewDiagnostic["frame"];
   span: SourceSpan;
   reference?: string;
+  /** 文書全体の装飾が実際に選ばれたフレーム。--frame の絞り込みにだけ使う。 */
+  affectedFrames?: readonly number[];
+}
+
+/** 人間向け出力では、同じ場所から展開された画像参照も区別できるようにする。 */
+export function previewDiagnosticMessage(
+  diagnostic: Pick<PreviewSourceDiagnostic, "message" | "reference">,
+): string {
+  return diagnostic.reference &&
+    !diagnostic.message.includes(`画像 ${diagnostic.reference} が見つかりません`)
+    ? `${diagnostic.message} (画像: ${diagnostic.reference})`
+    : diagnostic.message;
 }
 
 export interface EditingPreviewOptions extends Pick<LintOptions, "fileExists"> {
   baseStyle?: PreviewStyle;
   /** Node/VS Code host が解決した、土台スタイルのアセットと診断元。 */
   baseAssets?: Partial<Record<"logo" | "background", PreviewAsset>>;
+  replacedTemplateDiagnostics?: readonly TemplateImageDiagnostic[];
 }
+
+export interface TemplateImageDiagnostic {
+  code: "L023";
+  span: SourceSpan;
+  message: string;
+}
+
+type DecorationSlot = "logo" | "background" | "titleBackground";
 
 export interface PreviewAsset {
   path: string;
@@ -127,38 +149,44 @@ function decorationDiagnostics(
   doc: DeckDocument,
   options: EditingPreviewOptions,
   map: ExpansionMap,
-  usedSlots: ReadonlySet<"logo" | "background" | "titleBackground">,
+  usedSlots: ReadonlyMap<DecorationSlot, ReadonlySet<number>>,
 ): PreviewSourceDiagnostic[] {
   const overrides = styleImageOverrides(doc);
   // %% style assets are already emitted through lintImageReferences with their
   // literal source spans (and therefore retain its extension Quick Fix).
   const logo = overrides.logo ? null : (options.baseAssets?.logo ?? null);
   const background = overrides.background ? null : (options.baseAssets?.background ?? null);
-  const diagnostics: PreviewSourceDiagnostic[] = [];
-  const seen = new Set<string>();
+  const diagnostics = new Map<string, PreviewSourceDiagnostic>();
   for (const [slot, asset] of [
     ["logo", logo],
     ["background", background],
   ] as const) {
-    if (!usedSlots.has(slot) || asset === null || asset.exists) continue;
+    const frames = usedSlots.get(slot);
+    if (!frames || asset === null || asset.exists) continue;
     const identity = `${asset.source}:${asset.span.start}:${asset.span.end}:${asset.path}`;
-    if (seen.has(identity)) continue;
-    seen.add(identity);
+    const prior = diagnostics.get(identity);
+    if (prior) {
+      prior.affectedFrames = [...new Set([...(prior.affectedFrames ?? []), ...frames])].sort(
+        (a, b) => a - b,
+      );
+      continue;
+    }
     const template = asset.source === "template";
-    diagnostics.push({
+    diagnostics.set(identity, {
       category: "image",
       code: template ? "L023" : "L004",
       severity: template ? "warning" : "error",
       message: template
-        ? `テンプレート ${asset.templatePath} が参照する画像 ${asset.path} が見つかりません(デッキのディレクトリ基準)`
+        ? missingTemplateImageMessage(asset.templatePath ?? "", asset.path)
         : `プリアンブルが参照する画像 ${asset.path} が見つかりません`,
       // A decoration applies to the document rather than one source frame.
       frame: null,
       span: mapPreviewSpan(map, asset.span),
       reference: asset.path,
+      affectedFrames: [...frames].sort((a, b) => a - b),
     });
   }
-  return diagnostics;
+  return [...diagnostics.values()];
 }
 
 function mapPreviewSpan(map: ExpansionMap, span: SourceSpan): SourceSpan {
@@ -190,11 +218,15 @@ export function renderEditingPreview(
 ) {
   const expanded = expandDeck(source);
   const options = optionsFor(expanded.doc);
-  const usedDecorationSlots = new Set<"logo" | "background" | "titleBackground">();
+  const usedDecorationSlots = new Map<DecorationSlot, Set<number>>();
   const rendered = renderDeck(expanded.doc, undefined, {
     ...(options.baseStyle ? { baseStyle: options.baseStyle } : {}),
     recoverFrameErrors: true,
-    onDecoration: (slot) => usedDecorationSlots.add(slot),
+    onDecoration: (slot, frameIndex) => {
+      const frames = usedDecorationSlots.get(slot) ?? new Set<number>();
+      frames.add(frameIndex);
+      usedDecorationSlots.set(slot, frames);
+    },
   });
   const renderingDiagnostics = (rendered.diagnostics ?? []).map((diagnostic) => ({
     ...diagnostic,
@@ -206,11 +238,17 @@ export function renderEditingPreview(
   }));
   const overrides = styleImageOverrides(expanded.doc);
   const selectedStyleEntries = [
-    usedDecorationSlots.has("logo") ? overrides.logo : undefined,
-    usedDecorationSlots.has("background") ? overrides.background : undefined,
-    usedDecorationSlots.has("titleBackground") ? overrides.titleBackground : undefined,
-  ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
-  const imageDiagnostics = previewImageDiagnostics(expanded.doc, options, selectedStyleEntries);
+    ["logo", usedDecorationSlots.has("logo") ? overrides.logo : undefined],
+    ["background", usedDecorationSlots.has("background") ? overrides.background : undefined],
+    [
+      "titleBackground",
+      usedDecorationSlots.has("titleBackground") ? overrides.titleBackground : undefined,
+    ],
+  ] as const;
+  const activeStyleEntries = selectedStyleEntries
+    .map(([, entry]) => entry)
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  const imageDiagnostics = previewImageDiagnostics(expanded.doc, options, activeStyleEntries);
   const seenImages = new Set<string>();
   for (const diagnostic of imageDiagnostics) {
     const frame = rendered.frames.find(
@@ -229,6 +267,10 @@ export function renderEditingPreview(
     ]);
     if (seenImages.has(key)) continue;
     seenImages.add(key);
+    const styleSlot = selectedStyleEntries.find(
+      ([, entry]) =>
+        entry?.span.start === diagnostic.span.start && entry.span.end === diagnostic.span.end,
+    )?.[0];
     diagnostics.push({
       category: "image",
       code: diagnostic.code,
@@ -237,6 +279,9 @@ export function renderEditingPreview(
       frame: frame ? { number: frame.index, label: frame.label } : null,
       span,
       ...(diagnostic.reference ? { reference: diagnostic.reference } : {}),
+      ...(styleSlot
+        ? { affectedFrames: [...(usedDecorationSlots.get(styleSlot) ?? [])].sort((a, b) => a - b) }
+        : {}),
     });
   }
   diagnostics.push(
@@ -246,11 +291,15 @@ export function renderEditingPreview(
     (a, b) =>
       a.span.start - b.span.start || a.span.end - b.span.end || a.code.localeCompare(b.code),
   );
+  const suppressedTemplateDiagnostics = (options.replacedTemplateDiagnostics ?? []).map(
+    (diagnostic) => ({ ...diagnostic, span: mapPreviewSpan(expanded.map, diagnostic.span) }),
+  );
   return {
     deck: { ...rendered, diagnostics: renderingDiagnostics },
     expansionMap: expanded.map,
     expandDiagnostics: expanded.diagnostics,
     diagnostics,
+    suppressedTemplateDiagnostics,
   };
 }
 
@@ -382,7 +431,7 @@ export interface RenderOptions {
   /** 編集プレビューでは一部のフレームが壊れても他を表示し続ける。 */
   recoverFrameErrors?: boolean;
   /** 実際に選んだ装飾スロット。preview-check の診断だけが利用する。 */
-  onDecoration?: (slot: "logo" | "background" | "titleBackground") => void;
+  onDecoration?: (slot: DecorationSlot, frameIndex: number) => void;
 }
 
 /** フレーム装飾の集約結果(同種の指定が複数あれば後の指定を使う)。 */
@@ -559,6 +608,7 @@ class FrameRenderer {
     if (background) {
       this.onDecoration?.(
         isTitleFrame && this.decorations.titleBackground ? "titleBackground" : "background",
+        frameIndex,
       );
       if (!background.toLowerCase().endsWith(".pdf")) {
         out += `<img class="deck-background" src="${escapeHtml(background)}">`;
@@ -566,7 +616,7 @@ class FrameRenderer {
     }
     const logo = this.decorations.logo;
     if (logo) {
-      this.onDecoration?.("logo");
+      this.onDecoration?.("logo", frameIndex);
       let pos: string;
       if (logo.placement.kind === "canvas") {
         const { x, y, width } = logo.placement;

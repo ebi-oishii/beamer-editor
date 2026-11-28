@@ -7,9 +7,12 @@ import {
   graphicsPathsOf,
   joinImageSearchPath,
   mergePreviewStyles,
+  missingTemplateImageMessage,
   type PreviewStyle,
+  styleImageOverrides,
   type TemplateReference,
   type TemplateStatus,
+  templateBackgroundImagePaths,
   templateImagePaths,
   templateReferencesOf,
 } from "@beamer-editor/core";
@@ -104,6 +107,7 @@ function baseStyleAndAssetsOf(
 ): {
   baseStyle: PreviewStyle;
   baseAssets: NonNullable<EditingPreviewOptions["baseAssets"]>;
+  replacedTemplateDiagnostics: NonNullable<EditingPreviewOptions["replacedTemplateDiagnostics"]>;
 } {
   const layers = [
     ...resolveTemplates(doc, fs).flatMap(({ reference, resolved }) =>
@@ -115,6 +119,7 @@ function baseStyleAndAssetsOf(
               source: "template" as const,
               span: reference.span,
               templatePath: resolved.path,
+              templateText: resolved.text,
             },
           ],
     ),
@@ -159,7 +164,21 @@ function baseStyleAndAssetsOf(
     ...(logo ? { logo } : {}),
     ...(background ? { background } : {}),
   };
-  return { baseStyle: merged, baseAssets };
+  const override = styleImageOverrides(doc).background;
+  // The managed \deckbackground replaces Beamer's background only after the
+  // template has been loaded. Other template references may still matter to TeX.
+  const replacedTemplateDiagnostics = override
+    ? layers.flatMap((layer) =>
+        layer.source === "template" && layer.span.end <= override.span.start
+          ? templateBackgroundImagePaths(layer.templateText).map((image) => ({
+              code: "L023" as const,
+              message: missingTemplateImageMessage(layer.templatePath, image),
+              span: layer.span,
+            }))
+          : [],
+      )
+    : [];
+  return { baseStyle: merged, baseAssets, replacedTemplateDiagnostics };
 }
 
 export function baseStyleOf(doc: DeckDocument, fs: TemplateFileSystem): PreviewStyle {
@@ -174,11 +193,10 @@ export function editingPreviewOptions(
   doc: DeckDocument,
   fs: TemplateFileSystem,
 ): EditingPreviewOptions {
-  const { baseStyle, baseAssets } = baseStyleAndAssetsOf(doc, fs);
+  const inputs = baseStyleAndAssetsOf(doc, fs);
   const fileExists = (assetPath: string) => nonLocalImage(assetPath) || fs.isFile(assetPath);
   return {
-    baseStyle,
-    baseAssets,
+    ...inputs,
     fileExists,
   };
 }

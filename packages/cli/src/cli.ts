@@ -51,7 +51,7 @@ import {
   type HtmlExportResult,
   nodeTemplateFileSystem,
 } from "@beamer-editor/html-export";
-import { renderEditingPreview } from "@beamer-editor/renderer";
+import { previewDiagnosticMessage, renderEditingPreview } from "@beamer-editor/renderer";
 import { createNodeFileProbes } from "./file-probes.ts";
 import {
   defaultFontPaths,
@@ -460,6 +460,7 @@ interface PreviewCheckDiagnostic {
   frame: CheckFrame | null;
   location: { line: number; column: number; endLine: number; endColumn: number };
   reference?: string;
+  affectedFrames?: readonly number[];
 }
 
 function previewCheckSummary(diagnostics: readonly PreviewCheckDiagnostic[]) {
@@ -510,10 +511,16 @@ async function runPreviewCheck(parsed: ParsedPreviewCheckArgs): Promise<number> 
     }
     selected = new Set(matches.map((frame) => frame.number));
   }
-  const includeFrame = (frame: CheckFrame | null) =>
-    frame === null || selected === undefined || selected.has(frame.number);
+  const includeFrame = (diagnostic: (typeof preview.diagnostics)[number]) =>
+    selected === undefined || (diagnostic.frame !== null && selected.has(diagnostic.frame.number));
   const diagnostics: PreviewCheckDiagnostic[] = preview.diagnostics
-    .filter((diagnostic) => includeFrame(diagnostic.frame))
+    .filter((diagnostic) => {
+      if (selected === undefined || diagnostic.frame !== null) return includeFrame(diagnostic);
+      return (
+        diagnostic.affectedFrames === undefined ||
+        diagnostic.affectedFrames.some((number) => selected.has(number))
+      );
+    })
     .map((diagnostic) => {
       return {
         category: diagnostic.category,
@@ -523,6 +530,7 @@ async function runPreviewCheck(parsed: ParsedPreviewCheckArgs): Promise<number> 
         frame: diagnostic.frame,
         location: previewCheckLocation(source, diagnostic.span.start, diagnostic.span.end),
         ...(diagnostic.reference ? { reference: diagnostic.reference } : {}),
+        ...(diagnostic.affectedFrames ? { affectedFrames: diagnostic.affectedFrames } : {}),
       };
     });
   const summary = previewCheckSummary(diagnostics);
@@ -538,7 +546,7 @@ async function runPreviewCheck(parsed: ParsedPreviewCheckArgs): Promise<number> 
   } else {
     for (const diagnostic of diagnostics) {
       process.stdout.write(
-        `${input}:${diagnostic.location.line}:${diagnostic.location.column}: ${diagnostic.severity} ${diagnostic.code}: ${diagnostic.message}${checkFrame(diagnostic.frame)}\n`,
+        `${input}:${diagnostic.location.line}:${diagnostic.location.column}: ${diagnostic.severity} ${diagnostic.code}: ${previewDiagnosticMessage(diagnostic)}${checkFrame(diagnostic.frame)}\n`,
       );
     }
   }

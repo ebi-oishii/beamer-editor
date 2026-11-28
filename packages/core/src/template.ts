@@ -21,6 +21,7 @@ import type {
   StyleColorRole,
   StyleLogoNode,
 } from "./ast.js";
+import { texTokens } from "./tex-scan.js";
 
 // ---------------------------------------------------------------------------
 // 参照の抽出
@@ -164,6 +165,10 @@ export interface TemplateStatus {
   missingImages: string[];
 }
 
+export function missingTemplateImageMessage(templatePath: string, image: string): string {
+  return `テンプレート ${templatePath} が参照する画像 ${image} が見つかりません(デッキのディレクトリ基準)`;
+}
+
 // ---------------------------------------------------------------------------
 // プレビュー用スタイルの抽出(標準の Beamer 記法から、近似できるものだけ)
 // ---------------------------------------------------------------------------
@@ -304,10 +309,13 @@ function widthOption(options: string | undefined): LengthSpec | null {
 }
 
 /** `\includegraphics[opts]{path}` を全て返す。 */
-function includeGraphics(text: string): { path: string; options: string | undefined }[] {
+function includeGraphics(
+  text: string,
+): { path: string; options: string | undefined; index: number }[] {
   return [...text.matchAll(/\\includegraphics\*?\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}/g)].map((m) => ({
     path: (m[2] as string).trim(),
     options: m[1],
+    index: m.index ?? 0,
   }));
 }
 
@@ -349,7 +357,7 @@ function* commandGroups(
   text: string,
   command: string,
   count: number,
-): Generator<{ index: number; options: string | undefined; groups: string[] }> {
+): Generator<{ index: number; end: number; options: string | undefined; groups: string[] }> {
   const pattern = new RegExp(`\\\\${command}\\*?(?=\\s*[\\[{])`, "g");
   for (const match of text.matchAll(pattern)) {
     const index = match.index ?? 0;
@@ -371,7 +379,7 @@ function* commandGroups(
       groups.push(group.body);
       cursor = group.next;
     }
-    if (groups.length === count) yield { index, options, groups };
+    if (groups.length === count) yield { index, end: cursor, options, groups };
   }
 }
 
@@ -605,4 +613,47 @@ export function templateImagePaths(source: string): string[] {
     paths.add(expandMacroPath((groups[1] as string).trim(), text));
   }
   return [...paths];
+}
+
+/** Paths used exclusively by a simple, top-level Beamer background declaration. */
+export function templateBackgroundImagePaths(source: string): string[] {
+  const text = blankComments(source);
+  const live = new Set(
+    [...texTokens(text)].flatMap((token) =>
+      token.kind === "command" && token.name === "setbeamertemplate" ? [token.start] : [],
+    ),
+  );
+  // Arguments to commands such as \AtBeginDocument are not immediate declarations.
+  const topLevel = new Set<number>();
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\\") {
+      if (live.has(i)) topLevel.add(i);
+      i++;
+    } else if (text[i] === "{") {
+      const group = balancedGroup(text, i);
+      if (!group) break;
+      i = group.next - 1;
+    }
+  }
+  const ranges: { start: number; end: number }[] = [];
+  for (const entry of commandGroups(text, "setbeamertemplate", 2)) {
+    const name = (entry.groups[0] as string).trim();
+    const simpleImage = /^\s*\\includegraphics\*?\s*(?:\[[^\]]*\])?\s*\{[^{}]+\}\s*$/.test(
+      entry.groups[1] as string,
+    );
+    // \deckbackground only replaces background, leaving background canvas and native logos intact.
+    if (topLevel.has(entry.index) && name === "background" && simpleImage)
+      ranges.push({ start: entry.index, end: entry.end });
+  }
+  const decoration = new Set<string>();
+  const opaque = new Set<string>();
+  for (const image of includeGraphics(text)) {
+    const path = expandMacroPath(image.path, text);
+    if (ranges.some((range) => image.index >= range.start && image.index < range.end))
+      decoration.add(path);
+    else opaque.add(path);
+  }
+  for (const { groups } of commandGroups(text, "pgfdeclareimage", 2))
+    opaque.add(expandMacroPath((groups[1] as string).trim(), text));
+  return [...decoration].filter((path) => !opaque.has(path));
 }

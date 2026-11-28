@@ -86,7 +86,7 @@ pnpm --dir packages/cli deck preview-check talk.slide.tex
 pnpm --dir packages/cli deck preview-check talk.slide.tex --frame intro --json
 ```
 
-`--frame` は `deck snapshot` と同じ `N`、label、`label:LABEL` を受け取ります。JSON は対象フレーム、診断コード、重大度、元ソースの行・列（1 始まり）、実行した検査と集計を stdout に出します。画像診断の `reference` は検査した画像パスです。文書全体に関わる診断の `frame` は `null` で、フレーム指定時にも報告します。終了コードは診断なし・情報のみが 0、警告が 1、診断エラーが 2、入出力・使用法のエラーが 3 です。操作エラーの JSON は stderr に出ます。
+`--frame` は `deck snapshot` と同じ `N`、label、`label:LABEL` を受け取ります。JSON は対象フレーム、診断コード、重大度、元ソースの行・列（1 始まり）、実行した検査と集計を stdout に出します。画像診断の `reference` は検査した画像パスです。文書全体に関わる診断の `frame` は `null` ですが、装飾画像には実際に選ばれたフレーム番号の `affectedFrames` を含め、`--frame` 時はそのフレームに使われるものだけを報告します。終了コードは診断なし・情報のみが 0、警告が 1、診断エラーが 2、入出力・使用法のエラーが 3 です。操作エラーの JSON は stderr に出ます。
 
 ### デッキ編集スキルの生成
 

@@ -32,7 +32,7 @@ import {
   nodeTemplateFileSystem,
   templateStatuses,
 } from "@beamer-editor/html-export";
-import type { PreviewSourceDiagnostic } from "@beamer-editor/renderer";
+import { type PreviewSourceDiagnostic, previewDiagnosticMessage } from "@beamer-editor/renderer";
 import { MAX_RAW_PDF_BYTES } from "@beamer-editor/ui";
 import * as vscode from "vscode";
 import { canvasHoverAt } from "./canvas-hover";
@@ -120,7 +120,8 @@ function toVscodeDiagnostic(
     document.positionAt(lint.span.end),
   );
   const label = frame?.label ? ` [${frame.label}]` : "";
-  const message = frame ? `${lint.message} (フレーム ${frame.number}${label})` : lint.message;
+  const text = previewDiagnosticMessage(lint);
+  const message = frame ? `${text} (フレーム ${frame.number}${label})` : text;
   const diagnostic = new vscode.Diagnostic(range, message, LINT_SEVERITIES[lint.severity]);
   diagnostic.code = lint.code;
   diagnostic.source = "category" in lint ? "beamer-editor preview" : "beamer-editor";
@@ -480,7 +481,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   function publishProblems(document: vscode.TextDocument): void {
     const lint = latestLint.get(document);
     const preview = latestPreview.get(document);
-    const rendered = preview?.version === document.version ? preview.diagnostics : undefined;
+    const current = preview?.version === document.version ? preview : undefined;
+    const rendered = current?.diagnostics;
+    const suppressed = new Set(current?.suppressedTemplateDiagnostics?.map(diagnosticKey));
     const byKey = new Map(
       (rendered ?? []).map((diagnostic) => [diagnosticKey(diagnostic), diagnostic]),
     );
@@ -488,22 +491,29 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     // lint entries so their existing Quick Fix remains available.
     const diagnostics = (lint?.version === document.version ? lint.diagnostics : []).filter(
       (diagnostic) => {
-        const previewImageCode =
-          diagnostic.code === "L004" || diagnostic.code === "L015" || diagnostic.code === "L023";
+        if (suppressed.has(diagnosticKey(diagnostic))) return false;
+        const previewImageCode = diagnostic.code === "L004" || diagnostic.code === "L015";
         return !previewImageCode || !rendered || byKey.has(diagnosticKey(diagnostic));
       },
     );
     const existing = new Set(diagnostics.map(diagnosticKey));
     diagnosticCollection.set(document.uri, [
-      ...diagnostics.map((diagnostic) =>
-        toVscodeDiagnostic(document, diagnostic, byKey.get(diagnosticKey(diagnostic))?.frame),
-      ),
+      ...diagnostics.map((diagnostic) => {
+        const matching = byKey.get(diagnosticKey(diagnostic));
+        return toVscodeDiagnostic(
+          document,
+          matching?.reference ? { ...diagnostic, reference: matching.reference } : diagnostic,
+          matching?.frame,
+        );
+      }),
       ...(rendered ?? [])
         .filter((diagnostic) => !existing.has(diagnosticKey(diagnostic)))
         .map((diagnostic) => toVscodeDiagnostic(document, diagnostic)),
     ]);
   }
-  function diagnosticKey(diagnostic: LintDiagnostic | PreviewSourceDiagnostic): string {
+  function diagnosticKey(
+    diagnostic: Pick<LintDiagnostic | PreviewSourceDiagnostic, "code" | "span" | "message">,
+  ): string {
     return `${diagnostic.code}:${diagnostic.span.start}:${diagnostic.span.end}:${diagnostic.message}`;
   }
   // L004(画像パス)・L025(管理プリアンブル)の Quick Fix は最新の lint 結果の fix を引く。

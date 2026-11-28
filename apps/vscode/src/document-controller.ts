@@ -14,6 +14,7 @@ import {
   type PreviewSourceDiagnostic,
   type RenderedDeck,
   renderEditingPreview,
+  type TemplateImageDiagnostic,
 } from "@beamer-editor/renderer";
 
 export interface RenderOutcome {
@@ -29,6 +30,8 @@ export interface RenderOutcome {
   expandDiagnostics: ExpandDiagnostic[];
   /** 編集プレビューと CLI が共有する位置付き診断。 */
   diagnostics?: PreviewSourceDiagnostic[];
+  /** 後続のスタイル指定で置き換わるテンプレート背景に関する静的 L023。 */
+  suppressedTemplateDiagnostics?: readonly TemplateImageDiagnostic[];
 }
 
 /** 全文をマクロ展開し、展開後 AST を HTML デッキへレンダリングする。 */
@@ -37,10 +40,8 @@ export function renderDocument(
   version: number,
   optionsFor?: (doc: DeckDocument) => EditingPreviewOptions,
 ): RenderOutcome {
-  const { deck, expansionMap, expandDiagnostics, diagnostics } = renderEditingPreview(
-    text,
-    optionsFor,
-  );
+  const { deck, expansionMap, expandDiagnostics, diagnostics, suppressedTemplateDiagnostics } =
+    renderEditingPreview(text, optionsFor);
   return {
     deck: {
       ...deck,
@@ -56,5 +57,6 @@ export function renderDocument(
     expansionMap,
     expandDiagnostics,
     diagnostics,
+    suppressedTemplateDiagnostics,
   };
 }

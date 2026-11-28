@@ -24,6 +24,7 @@ import {
   blankComments,
   graphicsPathsOf,
   joinImageSearchPath,
+  missingTemplateImageMessage,
   type TemplateStatus,
 } from "./template.js";
 import { texTokens, VERBATIM_ENVS } from "./tex-scan.js";
@@ -943,7 +944,7 @@ function lintTemplates(statuses: readonly TemplateStatus[] | undefined): LintDia
         diagnostic(
           "L023",
           "warning",
-          `テンプレート ${resolvedPath} が参照する画像 ${image} が見つかりません(デッキのディレクトリ基準)`,
+          missingTemplateImageMessage(resolvedPath, image),
           reference.span,
         ),
       );

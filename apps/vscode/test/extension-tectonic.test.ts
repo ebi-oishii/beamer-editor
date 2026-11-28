@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { compileFragment, PdfReviewContent } from "@beamer-editor/compiler";
@@ -395,6 +395,66 @@ describe("extension の Tectonic 接続", () => {
     state.fileDeletes.at(-1)?.(Uri.file(image));
     onRendered(render(currentSource, version), document);
     expect(imageProblems()).toHaveLength(2);
+  });
+
+  it("Problems keeps opaque template L023 but suppresses a superseded simple decoration", () => {
+    openPdfTestDocument();
+    state.getConfiguration.mockImplementation(() => ({
+      get: (name: string, fallback: unknown) =>
+        name === "preview.compileRawBlocks" ? false : fallback,
+    }));
+    const directory = mkdtempSync(join(tmpdir(), "beamer-preview-template-problems-"));
+    state.temporaryDirectories.push(directory);
+    mkdirSync(join(directory, "templates"));
+    writeFileSync(join(directory, "available.png"), "exists");
+    writeFileSync(
+      join(directory, "templates", "theme.sty"),
+      String.raw`\setbeamertemplate{background}{\includegraphics{missing-superseded.png}}
+\setbeamertemplate{background}{\includegraphics{missing-shared.png}}
+\setbeamertemplate{title page}{\includegraphics{missing-shared.png}}
+\setbeamertemplate{background canvas}{\includegraphics{missing-canvas.png}}
+\AtBeginDocument{\setbeamertemplate{background}{\includegraphics{missing-hook.png}}}`,
+    );
+    const file = join(directory, "deck.slide.tex");
+    const source = String.raw`%% preamble-extra:begin
+\usepackage{templates/theme}
+%% preamble-extra:end
+%% style:begin
+\deckbackground{available.png}
+%% style:end
+%% macros:begin
+\newcommand{\pairimages}{\includegraphics{one.png}\includegraphics{two.png}}
+%% macros:end
+\begin{document}
+\begin{frame}{Cover}\titlepage\end{frame}
+\begin{frame}{Body}\pairimages\end{frame}
+\end{document}`;
+    const document = {
+      uri: Uri.file(file),
+      fileName: file,
+      isDirty: false,
+      version: 1,
+      getText: () => source,
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    } as vscode.TextDocument;
+    state.activeEditor = { document } as vscode.TextEditor;
+    for (const listener of state.openListeners) listener(document);
+    const problems = (code: string) =>
+      state.setDiagnostics.mock.lastCall?.[1].filter((entry) => entry.code === code);
+    expect(problems("L023")).toHaveLength(4);
+    state.commands.get("beamerEditor.openPreview")?.();
+    const { render, onRendered } = state.previewOptions ?? {};
+    if (!render || !onRendered) throw new Error("expected editing preview");
+    onRendered(render(source, document.version), document);
+    expect(problems("L023")).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("missing-shared.png") }),
+      expect.objectContaining({ message: expect.stringContaining("missing-canvas.png") }),
+      expect.objectContaining({ message: expect.stringContaining("missing-hook.png") }),
+    ]);
+    expect(problems("L004")).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("画像: one.png") }),
+      expect.objectContaining({ message: expect.stringContaining("画像: two.png") }),
+    ]);
   });
 
   it.each([
