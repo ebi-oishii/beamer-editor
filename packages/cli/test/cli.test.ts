@@ -277,7 +277,7 @@ describe("deck lint", () => {
         "  deck lint <file> [--json]           デッキを検査\n" +
         "  deck format <file> [--write] [--json]  デッキを正規化\n" +
         "  deck outline <file> [--json]        フレーム一覧を表示\n" +
-        "  deck preview-check <file> [--frame <N|LABEL|label:LABEL>] [--json]  編集プレビューを検査\n" +
+        "  deck preview-check <file> [--frame <N|LABEL|label:LABEL>] [--layout] [--json]  編集プレビューを検査\n" +
         "  deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査\n" +
         "  deck snapshot <file> -o <directory> [--frame <N|LABEL|label:LABEL>] [--tectonic <path>] [--json]\n" +
         "  deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]\n" +
@@ -290,9 +290,12 @@ describe("deck lint", () => {
 
 describe("deck preview-check", () => {
   it("parses the existing frame address form", () => {
-    expect(parsePreviewCheckArgs(["talk.tex", "--frame", "label:42", "--json"])).toEqual({
+    expect(
+      parsePreviewCheckArgs(["talk.tex", "--frame", "label:42", "--layout", "--json"]),
+    ).toEqual({
       input: "talk.tex",
       frame: "label:42",
+      layout: true,
       json: true,
       error: undefined,
     });
@@ -337,6 +340,178 @@ describe("deck preview-check", () => {
       summary: { errors: 0, infos: 1 },
     });
   });
+
+  it("reports a requested layout inspection as unavailable, distinct from a clean renderer", async () => {
+    const source = await fixture(
+      "preview-layout.tex",
+      String.raw`\begin{document}\begin{frame}{One}A\end{frame}\end{document}`,
+    );
+    vi.stubEnv("DECK_PREVIEW_BROWSER", join(source.path, "nonexistent-browser"));
+    try {
+      const result = runCli("preview-check", source.argvPath, "--layout", "--json");
+      expect(result.status).toBe(EXIT_CODE.operationalFailure);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        checks: [
+          { name: "renderer", status: "completed" },
+          { name: "image-references", status: "completed" },
+          ...["layout", "image-load", "overflow", "editable-elements"].map((name) => ({
+            name,
+            status: "unavailable",
+          })),
+        ],
+        diagnostics: [],
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("limits browser inspection to the requested frame and maps findings to original source locations", async () => {
+    const input = join(ROOT, "fixtures/preview-phase3/layout.slide.tex");
+    const inspectSavedPreview = vi.fn<CliDependencies["inspectSavedPreview"] & {}>(
+      async (_input, deck) => {
+        expect(deck.frames.map((frame) => frame.index)).toEqual([3]);
+        expect(deck.frames[0]?.canvasElements?.[0]?.editable).toBe(true);
+        return {
+          status: "completed",
+          findings: [{ code: "B003", frame: 3, elementId: "canvas-image-0" }],
+        };
+      },
+    );
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exit = await run(
+        ["preview-check", input, "--frame", "label:overflow", "--layout", "--json"],
+        {
+          inspectSavedPreview,
+        },
+      );
+      expect(exit).toBe(EXIT_CODE.lintError);
+      expect(inspectSavedPreview).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({
+        frames: [{ number: 3, label: "overflow" }],
+        checks: expect.arrayContaining([{ name: "editable-elements", status: "completed" }]),
+        diagnostics: [
+          {
+            code: "B003",
+            severity: "error",
+            frame: { number: 3, label: "overflow" },
+            location: { line: 16, column: 11 },
+          },
+        ],
+      });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it("aggregates broken decorations at their effective declaration and reports inspected frames", async () => {
+    const source = await fixture(
+      "decoration.slide.tex",
+      String.raw`%% preamble-extra:begin
+\usepackage{beamerthemecorporate}
+
+\decklogo[x=0.05,y=0.05,w=0.1]{broken-logo.png}
+%% preamble-extra:end
+%% style:begin
+\deckbackground{broken.png}
+\deckbackground[title]{broken-title.png}
+%% style:end
+\begin{document}
+\begin{frame}[label=cover]\titlepage\end{frame}
+\begin{frame}[label=first]First\end{frame}
+\begin{frame}[label=second]Second\end{frame}
+\end{document}`,
+    );
+    const dir = dirname(source.path);
+    await writeFile(
+      join(dir, "beamerthemecorporate.sty"),
+      String.raw`\deckbackground{overridden.png}`,
+    );
+    for (const file of ["broken.png", "broken-logo.png", "broken-title.png", "overridden.png"])
+      await writeFile(join(dir, file), "exists");
+    const inspectSavedPreview: NonNullable<CliDependencies["inspectSavedPreview"]> = async (
+      _input,
+      deck,
+    ) => ({
+      status: "completed",
+      findings: deck.frames.flatMap(({ index }) => [
+        { code: "B001", frame: index, decoration: index === 1 ? "titleBackground" : "background" },
+        { code: "B001", frame: index, decoration: "logo" },
+      ]),
+    });
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const check = async (filter: string[]) => {
+        stdout.mockClear();
+        expect(
+          await run(["preview-check", source.path, "--layout", "--json", ...filter], {
+            inspectSavedPreview,
+          }),
+        ).toBe(EXIT_CODE.lintError);
+        return JSON.parse(String(stdout.mock.calls[0]?.[0])).diagnostics;
+      };
+      expect(await check([])).toMatchObject([
+        {
+          code: "B001",
+          frame: null,
+          reference: "broken-title.png",
+          location: { line: 8 },
+          affectedFrames: [1],
+        },
+        {
+          code: "B001",
+          frame: null,
+          reference: "broken-logo.png",
+          location: { line: 4 },
+          affectedFrames: [1, 2, 3],
+        },
+        {
+          code: "B001",
+          frame: null,
+          reference: "broken.png",
+          location: { line: 7 },
+          affectedFrames: [2, 3],
+        },
+      ]);
+      expect(await check(["--frame", "second"])).toMatchObject([
+        { code: "B001", reference: "broken.png", location: { line: 7 }, affectedFrames: [3] },
+        { code: "B001", reference: "broken-logo.png", location: { line: 4 }, affectedFrames: [3] },
+      ]);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  // Chrome is opt-in so tests never start a local GUI process without the
+  // repository's test launch approval, including on macOS in headless mode.
+  it.skipIf(!process.env.DECK_TEST_LAYOUT_BROWSER)(
+    "decodes real images and measures browser overflow",
+    () => {
+      vi.stubEnv("DECK_PREVIEW_BROWSER", process.env.DECK_TEST_LAYOUT_BROWSER);
+      const input = join(ROOT, "fixtures/preview-phase3/layout.slide.tex");
+      try {
+        const all = runCli("preview-check", input, "--layout", "--json");
+        expect(all.status, all.stderr || all.stdout).toBe(EXIT_CODE.lintError);
+        expect(JSON.parse(all.stdout)).toMatchObject({
+          diagnostics: [
+            { code: "B001", frame: { label: "damaged" }, location: { line: 12 } },
+            { code: "B002", frame: { label: "overflow" }, location: { line: 16 } },
+          ],
+        });
+        const clean = runCli("preview-check", input, "--frame", "clean", "--layout", "--json");
+        expect(clean.status, clean.stderr || clean.stdout).toBe(EXIT_CODE.success);
+        expect(JSON.parse(clean.stdout)).toMatchObject({
+          frames: [{ number: 1, label: "clean" }],
+          checks: expect.arrayContaining([{ name: "layout", status: "completed" }]),
+          diagnostics: [],
+        });
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+    60_000,
+  );
 
   it("returns an input error for an unknown frame selector", async () => {
     const source = await fixture(

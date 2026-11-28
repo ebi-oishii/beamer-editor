@@ -12,7 +12,11 @@ import { PREVIEW_CSS } from "./styles.js";
 const STYLE_ID = "beamer-preview-styles";
 
 /** container へ DeckPreview をマウントし、unmount 関数を返す。 */
-export function mountPreview(container: HTMLElement, host: ShellHost): () => void {
+export function mountPreview(
+  container: HTMLElement,
+  host: ShellHost,
+  options: { layoutOverlayStep?: number } = {},
+): () => void {
   const doc = container.ownerDocument;
   if (!doc.getElementById(STYLE_ID)) {
     const style = doc.createElement("style");
@@ -22,6 +26,13 @@ export function mountPreview(container: HTMLElement, host: ShellHost): () => voi
   }
 
   const root = createRoot(container);
-  root.render(createElement(DeckPreview, { host }));
+  root.render(
+    createElement(DeckPreview, {
+      host,
+      ...(options.layoutOverlayStep === undefined
+        ? {}
+        : { layoutOverlayStep: options.layoutOverlayStep }),
+    }),
+  );
   return () => root.unmount();
 }

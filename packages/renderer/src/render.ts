@@ -28,6 +28,7 @@ import type {
   SourceSpan,
 } from "@beamer-editor/core";
 import {
+  blankComments,
   type DetachStatus,
   detachStatusesOf,
   expandDeck,
@@ -44,6 +45,7 @@ import {
 } from "@beamer-editor/core";
 import katex from "katex";
 import { MONO_FONT_FALLBACK } from "./font-stack.js";
+import type { LayoutCode } from "./layout-findings.js";
 import { DEFAULT_THEME, type Theme } from "./theme.js";
 
 export interface RenderedFrame {
@@ -56,6 +58,7 @@ export interface RenderedFrame {
   /** オーバーレイの総ステップ数(1 なら段階表示なし)。 */
   stepCount: number;
   isRaw: boolean;
+  allowFrameBreaks?: boolean;
   /** deckcanvas 直下の画像・テキスト・図。ID はこの描画 version の frame 内だけで有効。 */
   canvasElements?: RenderedCanvasElement[];
 }
@@ -86,6 +89,13 @@ export interface RenderedDeck {
   fragmentPreamble?: string;
   /** HTML 編集プレビューで検出した診断。span は renderDeck に渡された文書の座標。 */
   diagnostics?: PreviewDiagnostic[];
+  /** Shared browser checks use these original declarations for common assets. */
+  decorationAssets?: {
+    slot: DecorationSlot;
+    span: SourceSpan;
+    reference: string;
+    frames: number[];
+  }[];
 }
 
 /** ブラウザーを起動せずレンダラー自身が判定できる編集プレビューの診断。 */
@@ -101,7 +111,7 @@ export interface PreviewDiagnostic {
 
 export interface PreviewSourceDiagnostic {
   category: "preview" | "image";
-  code: PreviewDiagnostic["code"] | "L004" | "L015" | "L023";
+  code: PreviewDiagnostic["code"] | LayoutCode | "L004" | "L015" | "L023";
   severity: "error" | "info" | "warning";
   message: string;
   frame: PreviewDiagnostic["frame"];
@@ -113,12 +123,18 @@ export interface PreviewSourceDiagnostic {
 
 /** 人間向け出力では、同じ場所から展開された画像参照も区別できるようにする。 */
 export function previewDiagnosticMessage(
-  diagnostic: Pick<PreviewSourceDiagnostic, "message" | "reference">,
+  diagnostic: Pick<PreviewSourceDiagnostic, "message" | "reference" | "affectedFrames"> & {
+    code?: string;
+  },
 ): string {
-  return diagnostic.reference &&
+  const message =
+    diagnostic.reference &&
     !diagnostic.message.includes(`画像 ${diagnostic.reference} が見つかりません`)
-    ? `${diagnostic.message} (画像: ${diagnostic.reference})`
-    : diagnostic.message;
+      ? `${diagnostic.message} (画像: ${diagnostic.reference})`
+      : diagnostic.message;
+  return diagnostic.code === "B001" && diagnostic.affectedFrames?.length
+    ? `${message} (影響フレーム: ${diagnostic.affectedFrames.join(", ")})`
+    : message;
 }
 
 export interface EditingPreviewOptions extends Pick<LintOptions, "fileExists"> {
@@ -134,7 +150,7 @@ export interface TemplateImageDiagnostic {
   message: string;
 }
 
-type DecorationSlot = "logo" | "background" | "titleBackground";
+export type DecorationSlot = "logo" | "background" | "titleBackground";
 
 export interface PreviewAsset {
   path: string;
@@ -143,6 +159,8 @@ export interface PreviewAsset {
   source: "template" | "preamble";
   span: SourceSpan;
   templatePath?: string;
+  /** An exact declaration in the deck preamble, when known. */
+  layoutSpan?: SourceSpan;
 }
 
 function decorationDiagnostics(
@@ -189,7 +207,7 @@ function decorationDiagnostics(
   return [...diagnostics.values()];
 }
 
-function mapPreviewSpan(map: ExpansionMap, span: SourceSpan): SourceSpan {
+export function mapPreviewSpan(map: ExpansionMap, span: SourceSpan): SourceSpan {
   const exact = mapExpandedRangeToSourceExact(map, span);
   if (exact !== null) return exact;
   let start = Number.POSITIVE_INFINITY;
@@ -295,7 +313,25 @@ export function renderEditingPreview(
     (diagnostic) => ({ ...diagnostic, span: mapPreviewSpan(expanded.map, diagnostic.span) }),
   );
   return {
-    deck: { ...rendered, diagnostics: renderingDiagnostics },
+    deck: {
+      ...rendered,
+      diagnostics: renderingDiagnostics,
+      decorationAssets: selectedStyleEntries.flatMap(([slot, override]) => {
+        const frames = usedDecorationSlots.get(slot);
+        const asset =
+          override ?? (slot === "titleBackground" ? undefined : options.baseAssets?.[slot]);
+        if (!asset || !frames) return [];
+        const span = "layoutSpan" in asset ? (asset.layoutSpan ?? asset.span) : asset.span;
+        return [
+          {
+            slot,
+            span: mapPreviewSpan(expanded.map, span),
+            reference: asset.path,
+            frames: [...frames],
+          },
+        ];
+      }),
+    },
     expansionMap: expanded.map,
     expandDiagnostics: expanded.diagnostics,
     diagnostics,
@@ -307,8 +343,11 @@ export interface RawBlockRef {
   key: string;
   tex: string;
   environment: string | null;
-  mode?: "raw" | "figure";
+  mode?: "raw" | "figure" | "inline-math" | "display-math";
 }
+
+const DOCUMENT_CONTEXT_COMMAND =
+  /\\(?:ref|eqref|pageref|autoref|cref|Cref|nameref|cite[a-zA-Z]*|label|tag|notag|nonumber|value|the(?:page|equation|framenumber)|insert[a-zA-Z]*|only|onslide|uncover|visible|invisible|alt|temporal|pause|framebreak|tableofcontents|titlepage|beamer[a-zA-Z]*)\b/;
 
 const escapeHtml = (s: string) =>
   s
@@ -570,7 +609,9 @@ class FrameRenderer {
         frame: this.currentFrame,
         span,
       });
-      return katex.renderToString(tex, { ...options, throwOnError: false });
+      const fallback = katex.renderToString(tex, { ...options, throwOnError: false });
+      const mode = displayMode ? "display-math" : "inline-math";
+      return `<span class="math-fragment" title="KaTeX 未対応の数式"${this.fragmentAttrs(tex, null, mode)}>${fallback}</span>`;
     } catch (error) {
       this.diagnostics.push({
         code: "P002",
@@ -611,7 +652,8 @@ class FrameRenderer {
         frameIndex,
       );
       if (!background.toLowerCase().endsWith(".pdf")) {
-        out += `<img class="deck-background" src="${escapeHtml(background)}">`;
+        const title = isTitleFrame && this.decorations.titleBackground;
+        out += `<img class="deck-background" src="${escapeHtml(background)}"${title ? ' data-layout-decoration="titleBackground"' : ""}>`;
       }
     }
     const logo = this.decorations.logo;
@@ -861,9 +903,18 @@ class FrameRenderer {
     mode: "raw" | "figure" = "raw",
   ): string {
     this.rawPreviewDiagnostic(span);
+    return this.fragmentAttrs(tex, environment, mode);
+  }
+
+  private fragmentAttrs(
+    tex: string,
+    environment: string | null,
+    mode: NonNullable<RawBlockRef["mode"]>,
+  ): string {
+    if (DOCUMENT_CONTEXT_COMMAND.test(blankComments(tex))) return ' data-raw-context="true"';
     const key = rawFragmentKey(tex, this.fragmentPreamble, mode);
     if (!this.rawBlocks.has(key)) this.rawBlocks.set(key, { key, tex, environment, mode });
-    return ` data-raw-key="${key}"`;
+    return ` data-raw-key="${key}"${mode === "inline-math" ? ' data-raw-inline="true"' : ""}`;
   }
 
   /**
@@ -1123,6 +1174,7 @@ export function renderDeck(
         sourceSpan: frame.span,
         stepCount,
         isRaw: false,
+        ...(frame.options.allowframebreaks ? { allowFrameBreaks: true } : {}),
         canvasElements,
       };
     } catch (error) {

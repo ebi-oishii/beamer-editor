@@ -12,6 +12,7 @@ import {
   mergePreviewStyles,
   missingTemplateImageMessage,
   type PreviewStyle,
+  type SourceSpan,
   styleImageOverrides,
   type TemplateReference,
   type TemplateStatus,
@@ -130,6 +131,7 @@ function baseStyleAndAssetsOf(
   baseAssets: NonNullable<EditingPreviewOptions["baseAssets"]>;
   replacedTemplateDiagnostics: NonNullable<EditingPreviewOptions["replacedTemplateDiagnostics"]>;
 } {
+  const preambleImageSpans: Partial<Record<"logo" | "background", SourceSpan>> = {};
   const layers = [
     ...resolveTemplates(doc, fs).flatMap(({ reference, resolved }) =>
       resolved === null
@@ -145,7 +147,7 @@ function baseStyleAndAssetsOf(
           ],
     ),
     {
-      style: extractPreviewStyle(doc.preambleExtra.tex),
+      style: extractPreviewStyle(doc.preambleExtra.tex, preambleImageSpans),
       source: "preamble" as const,
       span: doc.preambleExtra.span,
     },
@@ -171,11 +173,20 @@ function baseStyleAndAssetsOf(
     const value = merged[slot];
     if (!layer || !value) return undefined;
     const path = value.path;
+    const declaration = layer.source === "preamble" ? preambleImageSpans[slot] : undefined;
     return {
       path,
       exists: nonLocalImage(path) || fs.isFile(path),
       source: layer.source,
       span: layer.span,
+      ...(declaration === undefined
+        ? {}
+        : {
+            layoutSpan: {
+              start: layer.span.start + declaration.start,
+              end: layer.span.start + declaration.end,
+            },
+          }),
       ...(layer.source === "template" ? { templatePath: layer.templatePath } : {}),
     };
   };

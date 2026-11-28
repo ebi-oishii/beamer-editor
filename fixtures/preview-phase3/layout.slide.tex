@@ -1,0 +1,19 @@
+\documentclass[aspectratio=169]{beamer}
+%% deck-source-version: 1
+\input{../../packages/core/resources/deck-managed-header}
+\input{../../packages/core/resources/deck-canvas-preamble}
+\begin{document}
+\begin{frame}[label=clean]{Clean}
+\begin{deckcanvas}
+\deckimage[x=0.100,y=0.100,w=0.250]{valid.png}
+\end{deckcanvas}
+\end{frame}
+\begin{frame}[label=damaged]{Damaged image}
+\includegraphics[width=0.2\textwidth]{damaged.png}
+\end{frame}
+\begin{frame}[label=overflow]{Canvas overflow}
+\begin{deckcanvas}
+\deckimage[x=1.200,y=0.100,w=0.250]{valid.png}
+\end{deckcanvas}
+\end{frame}
+\end{document}

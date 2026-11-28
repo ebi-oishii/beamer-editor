@@ -183,6 +183,7 @@ vi.mock("../src/raw-block-compiler", async (original) => ({
     resume() {}
     forgetDelivered() {}
     resetFailures() {}
+    reset() {}
   },
 }));
 vi.mock("../src/preview-controller", () => ({
@@ -198,6 +199,7 @@ vi.mock("../src/preview-controller", () => ({
       state.previewOptions = options;
     }
     postPdfState = state.postPdfState;
+    postRawImagesCleared() {}
     refresh = state.refreshPreview;
   },
 }));

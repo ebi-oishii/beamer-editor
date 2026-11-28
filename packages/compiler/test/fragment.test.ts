@@ -8,6 +8,18 @@ import { buildFragmentDocument, fragmentDependencies } from "../src/fragment.js"
 import { compileFragment, type ProcessRunner } from "../src/index.js";
 
 describe("buildFragmentDocument", () => {
+  it("records dimensions and baseline for inline math and loads TikZ only once", () => {
+    const math = buildFragmentDocument("\\phaseFormula", "", "inline-math");
+    expect(math).toContain("\\documentclass[10pt,preview,border=0pt]{standalone}");
+    expect(math).toContain("\\number\\wd\\deckPreviewMathBox");
+    expect(math).toContain("\\number\\ht\\deckPreviewMathBox");
+    expect(math).toContain("\\number\\dp\\deckPreviewMathBox");
+    const picture = "\\begin{tikzpicture}\\end{tikzpicture}";
+    expect(buildFragmentDocument(picture, "")).toContain("\\usepackage{tikz}");
+    expect(buildFragmentDocument(picture, "\\usepackage{xcolor, tikz}")).not.toContain(
+      "\\usepackage{tikz}",
+    );
+  });
   it("figure mode removes standalone border and keeps raw mode's 2pt border", () => {
     expect(buildFragmentDocument("x", "")).toContain("border=2pt");
     const figure = buildFragmentDocument("\\begin{tikzpicture}\\end{tikzpicture}", "", "figure");
@@ -76,6 +88,21 @@ describe("buildFragmentDocument", () => {
 });
 
 describe("figure fragment integration", () => {
+  it.runIf(process.env.TECTONIC_INTEGRATION === "1")(
+    "rejects the final PDF when an inline macro expands to an unresolved reference",
+    async () => {
+      const document = buildFragmentDocument(
+        String.raw`\showEqA`,
+        String.raw`\newcommand{\showEqA}{\eqref{eq:a}}`,
+        "inline-math",
+      );
+      await expect(compileFragment({ document })).rejects.toMatchObject({
+        code: "E_COMPILE",
+        message: expect.stringContaining("未解決"),
+      });
+    },
+  );
+
   it.runIf(process.env.TECTONIC_INTEGRATION === "1")(
     "keeps a 3cm figure fragment at its natural PDF width",
     async () => {
@@ -166,6 +193,7 @@ describe("compileFragment", () => {
           return { exitCode: 0, stdout: "tectonic 0.16.9\n", stderr: "" };
         const outdir = args[args.indexOf("--outdir") + 1] as string;
         await writeFile(join(outdir, "fragment.pdf"), FAKE_PDF);
+        await writeFile(join(outdir, "fragment.log"), "ok\n");
         return { exitCode: 0, stdout: "", stderr: "" };
       },
     };
@@ -190,10 +218,29 @@ describe("compileFragment", () => {
     expect(compile?.cwd).toBe("/deck");
     expect(compile?.restartTimeoutOn?.("note: downloading standalone.cls")).toBe(true);
     expect(calls[0]?.restartTimeoutOn).toBeUndefined();
-    expect(compile?.args.slice(1, 4)).toEqual(["compile", "--outdir", temps[0]]);
-    expect(compile?.args[4]).toBe(join(temps[0] as string, "fragment.tex"));
+    expect(compile?.args.slice(1, 5)).toEqual(["compile", "--keep-logs", "--outdir", temps[0]]);
+    expect(compile?.args[5]).toBe(join(temps[0] as string, "fragment.tex"));
     await expect(readFile(join(temps[0] as string, "fragment.tex"))).rejects.toMatchObject({
       code: "ENOENT",
+    });
+  });
+
+  it("successful PDF with unresolved references falls back instead of showing ??", async () => {
+    const unresolved: ProcessRunner = {
+      run: async (_command, args) => {
+        if (args[0] === "--version") return { exitCode: 0, stdout: "tectonic 0.17.0", stderr: "" };
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        await writeFile(join(outdir, "fragment.pdf"), FAKE_PDF);
+        await writeFile(
+          join(outdir, "fragment.log"),
+          "LaTeX Warning: Reference `eq:a' on page 1 undefined on input line 8.\nLaTeX Warning: There were undefined references.\n",
+        );
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    await expect(compileFragment({ document: "x" }, { runner: unresolved })).rejects.toMatchObject({
+      code: "E_COMPILE",
+      message: expect.stringContaining("未解決"),
     });
   });
 

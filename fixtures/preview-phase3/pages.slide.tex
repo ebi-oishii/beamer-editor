@@ -1,0 +1,36 @@
+\documentclass[aspectratio=169]{beamer}
+\newcommand\sourcelessframe{\begin{frame}[label=generated]{Generated}Page without main source body\end{frame}}
+\AtBeginSection[]{\begin{frame}{Section opening}Theme-generated page\end{frame}}
+\begin{document}
+\begin{frame}[label=overlay]{Overlay}
+First overlay.
+\pause
+Second overlay.
+\end{frame}
+\section{Section}
+\begin{frame}[allowframebreaks]{Automatic page breaks}
+Paragraph 1 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 2 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 3 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 4 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 5 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 6 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 7 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 8 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 9 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 10 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 11 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 12 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 13 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 14 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 15 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+Paragraph 16 with sufficient text for a normal Beamer paragraph.\par\vskip 9mm plus 1mm
+\end{frame}
+\begin{frame}<0>[label=hidden]{Not emitted}
+This frame does not produce a page.
+\end{frame}
+\sourcelessframe
+\begin{frame}[label=last]{Last}
+Last slide.
+\end{frame}
+\end{document}

@@ -32,7 +32,11 @@ import {
   nodeTemplateFileSystem,
   templateStatuses,
 } from "@beamer-editor/html-export";
-import { type PreviewSourceDiagnostic, previewDiagnosticMessage } from "@beamer-editor/renderer";
+import {
+  layoutSourceDiagnostics,
+  type PreviewSourceDiagnostic,
+  previewDiagnosticMessage,
+} from "@beamer-editor/renderer";
 import { MAX_RAW_PDF_BYTES } from "@beamer-editor/ui";
 import * as vscode from "vscode";
 import { canvasHoverAt } from "./canvas-hover";
@@ -60,6 +64,7 @@ import {
   ManagedPreviewLifecycle,
   needsLatexWorkshopIgnorePrompt,
 } from "./managed-files";
+import { matchPdfFramePages } from "./pdf-frame-pages";
 import { PdfPublications } from "./pdf-publications";
 import { PreviewController } from "./preview-controller";
 import { executeHistoryCommand, PreviewHistory } from "./preview-history";
@@ -478,11 +483,21 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     { version: number; diagnostics: LintDiagnostic[] }
   >();
   const latestPreview = new WeakMap<vscode.TextDocument, RenderOutcome>();
+  const latestLayout = new WeakMap<
+    vscode.TextDocument,
+    {
+      outcome: RenderOutcome;
+      diagnostics: PreviewSourceDiagnostic[];
+    }
+  >();
   function publishProblems(document: vscode.TextDocument): void {
     const lint = latestLint.get(document);
     const preview = latestPreview.get(document);
     const current = preview?.version === document.version ? preview : undefined;
-    const rendered = current?.diagnostics;
+    const layout = latestLayout.get(document);
+    const rendered = current
+      ? [...(current.diagnostics ?? []), ...(layout?.outcome === current ? layout.diagnostics : [])]
+      : undefined;
     const suppressed = new Set(current?.suppressedTemplateDiagnostics?.map(diagnosticKey));
     const byKey = new Map(
       (rendered ?? []).map((diagnostic) => [diagnosticKey(diagnostic), diagnostic]),
@@ -843,6 +858,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
   ): void {
     const prepared = previewLifecycle.prepareOpen(document.uri, automatic);
     if (prepared.kind === "existing") {
+      prepared.controller.rebindDocument(document);
       if (!automatic) {
         // 同じグループの別タブの後ろに隠れていても表示する。preserveFocus ならフォーカスはソースに残す。
         prepared.controller.reveal(preserveFocus);
@@ -909,6 +925,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       publishedPreview = undefined;
       if (!published || latestPreview.get(published.document) !== published.outcome) return;
       latestPreview.delete(published.document);
+      latestLayout.delete(published.document);
       publishProblems(published.document);
     };
     // .sty や画像が変わったらプレビューと診断を作り直す(キャッシュは持たない)。
@@ -935,6 +952,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     let pdfTabVisible = false;
     let rawResultsPending = false;
     let rawClearPending = false;
+    let rawUnavailable: string | undefined;
     const rawBlockCompiler = new RawBlockCompiler({
       cacheDir: rawCacheDir.fsPath,
       fs: {
@@ -963,6 +981,8 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         error instanceof PdfExportError &&
         (error.code === "E_TECTONIC_NOT_FOUND" || error.code === "E_TECTONIC_VERSION"),
       onUnavailable: (message) => {
+        rawUnavailable = `部分コンパイルを利用できません。 ${message}`;
+        if (controller.latestOutcome) requestRawBlocks(controller.latestOutcome);
         void vscode.window
           .showWarningMessage(
             `Beamer preview: 生ブロックの部分コンパイルを止めました。${message}`,
@@ -1026,17 +1046,67 @@ export function activate(context: vscode.ExtensionContext): TestApi {
     let editingDependencyPaths: readonly string[] | undefined;
     let panelDisposed = false;
     let pdfDependencyPaths: readonly string[] | undefined;
+    let pdfSourcePages: PdfReviewArtifact["sourcePages"];
     let pendingPdf:
       | {
           content: NonNullable<PdfReviewArtifact["content"]>;
           inputRevision: number;
           dependencyPaths: readonly string[] | undefined;
+          sourcePages: PdfReviewArtifact["sourcePages"];
           loading: boolean;
         }
       | undefined;
     const pdfPublications = new PdfPublications();
+    const currentFramePages = () => {
+      // The original TextDocument can be closed and later reopened with the
+      // same URI but a reset version. Pair the retained PDF only with the
+      // document that is currently open and the controller's latest outcome.
+      const currentDocument = vscode.workspace.textDocuments.find(
+        (candidate) => candidate.uri.toString() === document.uri.toString(),
+      );
+      const outcome = controller.latestOutcome;
+      const published = publishedPreview;
+      if (
+        !vscode.workspace.isTrusted ||
+        !currentDocument ||
+        currentDocument.isDirty ||
+        !pdfBytes ||
+        !pdfSourcePages ||
+        pdfAbort ||
+        pdfExportRequest === pdfRequest ||
+        pendingPdf ||
+        pdfFailure !== undefined ||
+        pdfCompiledRevision !== pdfInputRevision ||
+        published?.document !== currentDocument ||
+        published.outcome !== outcome ||
+        outcome?.version !== currentDocument.version
+      )
+        return undefined;
+      return {
+        artifactId: pdfArtifactId,
+        version: outcome.version,
+        frames: matchPdfFramePages(
+          currentDocument.getText(),
+          (offset) => currentDocument.positionAt(offset).line + 1,
+          outcome,
+          pdfSourcePages,
+        ),
+      };
+    };
     const requestRawBlocks = (outcome: ReturnType<typeof renderDocument>) => {
-      if (pdfTabVisible || !rawBlocksEnabled()) return;
+      if (pdfTabVisible) return;
+      const unavailable =
+        rawUnavailable ??
+        (!rawBlocksEnabled() ? "部分コンパイルはこのプレビューで無効です。" : undefined);
+      if (unavailable) {
+        // Publish the new deck before sending statuses for its fragment keys.
+        queueMicrotask(() => {
+          if (controller.latestOutcome !== outcome || pdfTabVisible) return;
+          for (const block of outcome.deck.rawBlocks ?? [])
+            controller.postRawBlockFailed(block.key, unavailable);
+        });
+        return;
+      }
       rawBlockCompiler.request(outcome.deck.rawBlocks ?? [], outcome.deck.fragmentPreamble ?? "");
       // request が pause 中の最後の本文を置き換えてから再開する。
       rawBlockCompiler.resume();
@@ -1089,6 +1159,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       controller.postPdfState(status, ++pdfRevision, {
         ...(labels.length ? { message: labels.join(" ") } : {}),
         ...(deliver && pdfBytes ? { pdf: pdfBytes, artifactId: pdfArtifactId } : {}),
+        ...(status === "ready" ? { framePages: currentFramePages() } : {}),
       });
     };
     const markPdfStale = (editingInputsChanged = true) => {
@@ -1127,6 +1198,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           content: artifact.content,
           inputRevision,
           dependencyPaths: artifact.dependencyPaths,
+          sourcePages: artifact.sourcePages,
           loading: false,
         };
       } else if (!pdfTooLarge) {
@@ -1158,6 +1230,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         pdfArtifactId += 1;
         pdfCompiledRevision = candidate.inputRevision;
         pdfDependencyPaths = candidate.dependencyPaths;
+        pdfSourcePages = candidate.sourcePages;
       } catch {
         if (pendingPdf !== candidate) return;
         pdfFailure =
@@ -1205,6 +1278,7 @@ export function activate(context: vscode.ExtensionContext): TestApi {
         pdfArtifactId += 1;
         pdfCompiledRevision = inputRevision;
         pdfDependencyPaths = compiled.dependencyPaths;
+        pdfSourcePages = compiled.sourcePages;
         if (compiledEditingRevision === editingInputsRevision) {
           compiledEditingInputsRevision = compiledEditingRevision;
           editingDependencyPaths = compiled.dependencyPaths;
@@ -1450,6 +1524,16 @@ export function activate(context: vscode.ExtensionContext): TestApi {
             publishProblems(current);
           }
           requestRawBlocks(outcome);
+          postPdf();
+        },
+        onLayoutChecked: (findings, outcome, source) => {
+          const current = source as vscode.TextDocument;
+          if (latestPreview.get(current) !== outcome) return;
+          latestLayout.set(current, {
+            outcome,
+            diagnostics: layoutSourceDiagnostics(outcome.deck, outcome.expansionMap, findings),
+          });
+          publishProblems(current);
         },
         onWebviewReady: () => {
           rawBlockCompiler.forgetDelivered();
@@ -1480,6 +1564,18 @@ export function activate(context: vscode.ExtensionContext): TestApi {
           else if (pendingPdf && !pendingPdf.loading && panel.visible !== false)
             void loadPendingPdf();
           else postPdf();
+        },
+        jumpToPdfPage: ({ version, frameIndex, artifactId, page }) => {
+          const mapping = currentFramePages();
+          if (
+            mapping?.artifactId === artifactId &&
+            mapping.version === version &&
+            mapping.frames.some(
+              (frame) => frame.frameIndex === frameIndex && frame.pages.includes(page),
+            )
+          )
+            controller.postPdfJump(artifactId, page);
+          else controller.postPdfJump();
         },
         onError: (message) => {
           void vscode.window.showErrorMessage(`Beamer preview: ${message}`);
@@ -1726,7 +1822,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       editingInputsRevision += 1;
       clearPreviewProblems();
       // 画像や .sty が足されたり直ったりしたときは、失敗していた生ブロックも次の描画で再試行する。
-      rawBlockCompiler.resetFailures();
+      rawBlockCompiler.reset();
+      if (pdfTabVisible) rawClearPending = true;
+      else controller.postRawImagesCleared();
       controller.refresh();
       lintController.refresh(vscode.workspace.textDocuments);
     };
@@ -1853,10 +1951,9 @@ export function activate(context: vscode.ExtensionContext): TestApi {
       if (!affectsRawBlockCompile((section) => event.affectsConfiguration(section, document.uri)))
         return;
       rawBlockCompiler.reset();
-      if (!rawBlocksEnabled()) {
-        if (pdfTabVisible) rawClearPending = true;
-        else controller.postRawImagesCleared();
-      }
+      rawUnavailable = undefined;
+      if (pdfTabVisible) rawClearPending = true;
+      else controller.postRawImagesCleared();
       controller.refresh();
     });
     context.subscriptions.push(templateWatcher, rawBlockSettings);

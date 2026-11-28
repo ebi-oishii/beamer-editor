@@ -29,7 +29,7 @@ function fnv1a(text: string, seed: number): string {
 export function rawFragmentKey(
   tex: string,
   preamble: string,
-  mode: "raw" | "figure" = "raw",
+  mode: "raw" | "figure" | "inline-math" | "display-math" = "raw",
 ): string {
   const body = tex.replace(/\r\n/g, "\n").trim();
   const head = preamble.replace(/\r\n/g, "\n").trim();

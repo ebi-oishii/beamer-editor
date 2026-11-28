@@ -176,6 +176,7 @@ export function SlideScroll({
   frames,
   current,
   step,
+  layoutOverlayStep,
   zoom,
   version,
   reveal,
@@ -197,6 +198,8 @@ export function SlideScroll({
   frames: RenderedFrame[];
   current: number;
   step: number;
+  /** Used only by the noninteractive CLI layout harness. */
+  layoutOverlayStep?: number;
   zoom: ZoomState;
   version: number;
   reveal: RevealRequest | undefined;
@@ -469,7 +472,7 @@ export function SlideScroll({
           frame={frame}
           index={i}
           active={i === current}
-          step={i === current ? step : ALL_STEPS}
+          step={layoutOverlayStep ?? (i === current ? step : ALL_STEPS)}
           scale={scale}
           slideSize={slideSize}
           version={version}

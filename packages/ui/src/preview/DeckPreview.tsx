@@ -8,6 +8,7 @@
 import type { RenderedDeck } from "@beamer-editor/renderer";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ShellHost } from "../shell-host.js";
+import { inspectPreviewLayout } from "./inspect-layout.js";
 import { applyRawImages, RawImageStore } from "./raw-images.js";
 import { type RevealRequest, SlideScroll } from "./SlideScroll.js";
 import { type PreviewAction, type PreviewState, previewReducer } from "./state.js";
@@ -16,10 +17,18 @@ import { roundZoom, stepZoom, wheelDeltaPixels, wheelZoom, type ZoomState } from
 const EMPTY_DECK: RenderedDeck = { title: "", frames: [], css: "" };
 const INITIAL_STATE: PreviewState = { current: 0, step: 1 };
 
-export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
+export function DeckPreview({
+  host,
+  layoutOverlayStep,
+}: {
+  host: ShellHost;
+  /** CLI inspection mounts every card at a deterministic overlay. */
+  layoutOverlayStep?: number;
+}): JSX.Element {
   const [deck, setDeck] = useState<RenderedDeck>(EMPTY_DECK);
   // 表示中 deck の document version。jumpToSource に添えて古い版からのジャンプを検出させる。
   const [version, setVersion] = useState(Number.NEGATIVE_INFINITY);
+  const [assetGeneration, setAssetGeneration] = useState(0);
   const [editableFrameIndexes, setEditableFrameIndexes] = useState<number[]>([]);
   const [restoredNav] = useState(() => host.loadNavState?.());
   // 生ブロックの部分コンパイル画像(#81)。ホストから届いた PDF を画像にして箱にはめ込む。
@@ -97,7 +106,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   const versionRef = useRef(Number.NEGATIVE_INFINITY);
   useEffect(
     () =>
-      host.subscribe((next, nextVersion, editable) => {
+      host.subscribe((next, nextVersion, editable, nextGeneration) => {
         select(null);
         versionRef.current = nextVersion;
         const requestedVersion = reorderFocusRequestVersion.current;
@@ -107,6 +116,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         }
         setDeck(next);
         setVersion(nextVersion);
+        setAssetGeneration(nextGeneration ?? 0);
         setEditableFrameIndexes(editable ?? []);
       }),
     [host, select],
@@ -233,8 +243,49 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
   useEffect(() => {
     if (deck.rawBlocks) rawImages.retain(new Set(deck.rawBlocks.map((block) => block.key)));
     const preview = previewRef.current;
-    if (preview) applyRawImages(preview, rawImages);
-  }, [deck, rawImages, rawImagesVersion]);
+    if (preview) {
+      const openPdf = host.openPdfForFrame;
+      applyRawImages(
+        preview,
+        rawImages,
+        openPdf ? (frameIndex) => openPdf(frameIndex, version) : undefined,
+      );
+    }
+  }, [deck, host.openPdfForFrame, rawImages, rawImagesVersion, version]);
+
+  // Inspect after the Stage effects and fragment replacement have changed the DOM.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: overlay, scale and fragments change rendered rectangles.
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview || !host.layoutChecked || !Number.isFinite(version)) return;
+    let cancelled = false;
+    const paint = requestAnimationFrame(() => {
+      if (preview.closest("[hidden]")) return;
+      void inspectPreviewLayout(preview, deck).then(
+        (findings) => {
+          if (!cancelled && !preview.closest("[hidden]"))
+            host.layoutChecked?.(version, assetGeneration, findings);
+        },
+        () => {
+          // A hidden or replaced webview will be inspected again on its next render.
+        },
+      );
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(paint);
+    };
+  }, [
+    host,
+    deck,
+    version,
+    assetGeneration,
+    rawImagesVersion,
+    state.step,
+    state.current,
+    fitScale,
+    zoom,
+  ]);
 
   // Webview が開かれた直後にも動くよう、フォーカスを強制せず ownerDocument で扱う。
   // プレビュー内か document 自身に発生したキーだけを受け、他の UI の入力を奪わない。
@@ -348,6 +399,7 @@ export function DeckPreview({ host }: { host: ShellHost }): JSX.Element {
         frames={deck.frames}
         current={state.current}
         step={state.step}
+        {...(layoutOverlayStep === undefined ? {} : { layoutOverlayStep })}
         zoom={zoom}
         version={version}
         reveal={reveal}

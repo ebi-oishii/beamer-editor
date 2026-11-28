@@ -36,8 +36,9 @@ describe("createMessageShellHost", () => {
       version: 1,
       activeFrame: 0,
       editableFrameIndexes: [1],
+      assetGeneration: 3,
     });
-    expect(listener).toHaveBeenLastCalledWith(expect.anything(), 1, [1]);
+    expect(listener).toHaveBeenLastCalledWith(expect.anything(), 1, [1], 3);
     host.editSlide?.("moveDown", 1, 1);
     expect(posted).toContainEqual({
       type: "editSlide",
@@ -62,6 +63,23 @@ describe("createMessageShellHost", () => {
       "v2b",
       "v3",
     ]);
+  });
+
+  it("asset generation が進んだ reopen の version reset を受け入れる", () => {
+    const { transport, receive } = makeTransport();
+    const host = createMessageShellHost(transport);
+    const seen: string[] = [];
+    host.subscribe((next) => seen.push(next.title));
+    receive({ type: "deckUpdated", deck: deck("old"), version: 9, activeFrame: 0 });
+    receive({
+      type: "deckUpdated",
+      deck: deck("reopened"),
+      version: 0,
+      activeFrame: 0,
+      assetGeneration: 1,
+    });
+    receive({ type: "deckUpdated", deck: deck("stale"), version: 8, activeFrame: 0 });
+    expect(seen).toEqual(["old", "reopened"]);
   });
 
   it("ナビ状態を WebviewStateStore へ保存・復元し、旧 state と不正 zoom を fit として扱う", () => {

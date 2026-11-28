@@ -39,7 +39,28 @@ function keepPreambleLine(line: string): string | null {
  * 頼りがちなもの(amsmath / amssymb / graphicx / xcolor / booktabs)と、beamer 既定のサンセリフ本文を前置し、
  * その後に preamble-extra とマクロ定義(beamer 専用の行は除く)、最後に生ブロック本文を置く。
  */
-export type FragmentMode = "raw" | "figure";
+export type FragmentMode = "raw" | "figure" | "inline-math" | "display-math";
+
+function fragmentBody(body: string, mode: FragmentMode): string {
+  const tex = body.trim();
+  switch (mode) {
+    case "inline-math":
+      return [
+        "\\newsavebox{\\deckPreviewMathBox}",
+        `\\sbox{\\deckPreviewMathBox}{\\(${tex}\n\\)}`,
+        "\\special{pdf:docinfo << /Subject (DeckEditorInlineMath " +
+          "\\number\\wd\\deckPreviewMathBox\\space\\number\\ht\\deckPreviewMathBox\\space" +
+          "\\number\\dp\\deckPreviewMathBox) >>}",
+        "\\noindent\\usebox{\\deckPreviewMathBox}",
+      ].join("\n");
+    case "display-math":
+      return `\\noindent\\(\\displaystyle ${tex}\n\\)`;
+    case "figure":
+      return `\\begin{varwidth}{\\maxdimen}\n${tex}\n\\end{varwidth}`;
+    default:
+      return tex;
+  }
+}
 
 export function buildFragmentDocument(
   body: string,
@@ -52,15 +73,19 @@ export function buildFragmentDocument(
     .filter((line): line is string => line !== null)
     .join("\n")
     .trim();
+  const needsTikz =
+    /\\begin\s*\{tikzpicture\}/.test(body) &&
+    ![...kept.matchAll(PACKAGES)].some((match) =>
+      match[1]?.split(",").some((name) => name.trim() === "tikz"),
+    );
   return [
-    `\\documentclass[preview,border=${mode === "figure" ? "0pt" : "2pt"}]{standalone}`,
+    `\\documentclass[${mode === "inline-math" ? "10pt," : ""}preview,border=${mode === "raw" ? "2pt" : "0pt"}]{standalone}`,
     "\\usepackage{amsmath,amssymb,graphicx,xcolor,booktabs,varwidth}",
     "\\renewcommand{\\familydefault}{\\sfdefault}",
     kept,
+    needsTikz ? "\\usepackage{tikz}" : "",
     "\\begin{document}",
-    mode === "figure"
-      ? `\\begin{varwidth}{\\maxdimen}\n${body.trim()}\n\\end{varwidth}`
-      : body.trim(),
+    fragmentBody(body, mode),
     "\\end{document}",
     "",
   ]
@@ -72,7 +97,7 @@ export function buildFragmentDocument(
  * standalone 文書の組み立て方の版。buildFragmentDocument の前置きを変えたら上げる。
  * 画像キャッシュの置き場に入り、古い組み立て方で作った PDF を使い続けない。
  */
-export const FRAGMENT_DOCUMENT_VERSION = 4;
+export const FRAGMENT_DOCUMENT_VERSION = 6;
 
 const FILE_ARGUMENT =
   /\\(?:includegraphics|includepdf|includesvg|includestandalone|input|include|InputIfFileExists|lstinputlisting|verbatiminput|pgfplotstableread)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;

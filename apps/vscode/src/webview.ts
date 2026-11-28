@@ -15,7 +15,7 @@ import {
   type WebviewToExtension,
 } from "@beamer-editor/ui";
 import * as pdfjs from "pdfjs-dist";
-import { rasterScaleFor } from "./raster-scale";
+import { inlineMathBox, rasterScaleFor } from "./raster-scale";
 // KaTeX の数式 CSS とフォント。esbuild が media/webview.css + フォントへ抽出する。
 import "katex/dist/katex.min.css";
 
@@ -38,7 +38,7 @@ const dispatch = (message: ExtensionToWebview) => {
 window.addEventListener("message", (event) => {
   const msg = parseExtensionToWebview(event.data);
   if (!msg) return;
-  if (container?.hidden && msg.type !== "pdfUpdated") {
+  if (container?.hidden && msg.type !== "pdfUpdated" && msg.type !== "pdfJump") {
     const key =
       msg.type === "rawBlockReady" || msg.type === "rawBlockFailed" ? `raw:${msg.key}` : msg.type;
     if (msg.type === "rawImagesCleared") {
@@ -53,8 +53,12 @@ window.addEventListener("message", (event) => {
   dispatch(msg);
 });
 
+let onSelectedFrame: ((frameIndex: number) => void) | undefined;
 const transport: MessageTransport = {
-  post: (msg: WebviewToExtension) => api.postMessage(msg),
+  post: (msg: WebviewToExtension) => {
+    if (msg.type === "activeFrameChanged") onSelectedFrame?.(msg.frameIndex);
+    api.postMessage(msg);
+  },
   subscribe: (cb: (msg: ExtensionToWebview) => void) => {
     listeners.add(cb);
     return () => {
@@ -121,14 +125,16 @@ async function readPdf<T>(
   }
 }
 
-function installPdfConfirmation(app: HTMLElement): void {
+function installPdfConfirmation(app: HTMLElement) {
   const toolbar = document.createElement("header");
   toolbar.className = "deck-preview-tabs";
   toolbar.setAttribute("role", "group");
   toolbar.setAttribute("aria-label", "プレビュー表示");
   toolbar.innerHTML = `
     <button type="button" data-tab="edit" aria-controls="app">編集</button>
-    <button type="button" data-tab="pdf" aria-controls="deck-pdf-confirmation">PDF確認</button>`;
+    <button type="button" data-tab="pdf" aria-controls="deck-pdf-confirmation">PDF確認</button>
+    <select class="deck-pdf-frame-pages" aria-label="このフレームに対応する PDF ページ" hidden></select>
+    <button type="button" data-action="jump-to-pdf" hidden>このフレームを PDF で表示</button>`;
   app.before(toolbar);
 
   const pane = document.createElement("section");
@@ -150,6 +156,8 @@ function installPdfConfirmation(app: HTMLElement): void {
   app.after(pane);
 
   const [edit, pdfTab] = toolbar.querySelectorAll("button");
+  const jump = toolbar.querySelector<HTMLButtonElement>('[data-action="jump-to-pdf"]');
+  const framePages = toolbar.querySelector<HTMLSelectElement>(".deck-pdf-frame-pages");
   const status = pane.querySelector<HTMLElement>(".deck-pdf-status");
   const renderError = pane.querySelector<HTMLElement>(".deck-pdf-render-error");
   const pages = pane.querySelector<HTMLElement>(".deck-pdf-pages");
@@ -161,6 +169,8 @@ function installPdfConfirmation(app: HTMLElement): void {
   if (
     !edit ||
     !pdfTab ||
+    !jump ||
+    !framePages ||
     !status ||
     !renderError ||
     !pages ||
@@ -195,6 +205,26 @@ function installPdfConfirmation(app: HTMLElement): void {
   let loadingPdfId: number | undefined;
   let cancelPdfLoad: (() => void) | undefined;
   let restartActiveRender: (() => void) | undefined;
+  let deckVersion: number | undefined;
+  let activeFrame = 0;
+  let jumpMap: Extract<ExtensionToWebview, { type: "pdfUpdated" }>["framePages"];
+  let jumpTarget: { artifactId: number; page: number } | undefined;
+
+  const updateFrameJump = () => {
+    const matching = jumpMap?.version === deckVersion ? jumpMap : undefined;
+    const pages = matching?.frames.find((frame) => frame.frameIndex === activeFrame)?.pages ?? [];
+    const selected = Number(framePages.value);
+    framePages.replaceChildren(
+      ...pages.map((page) => new Option(`${String(page)} ページ`, String(page))),
+    );
+    if (pages.includes(selected)) framePages.value = String(selected);
+    jump.hidden = app.hidden || pages.length === 0;
+    framePages.hidden = jump.hidden || pages.length === 1;
+  };
+  onSelectedFrame = (frameIndex) => {
+    activeFrame = frameIndex;
+    updateFrameJump();
+  };
 
   const updateControls = () => {
     const canNavigate = !busy && !!pdfDocument && currentArtifactId === requestedArtifactId;
@@ -292,7 +322,11 @@ function installPdfConfirmation(app: HTMLElement): void {
       loadingPdfId = undefined;
       cancelPdfLoad = undefined;
       pdfDocument = loaded;
-      await renderPage(1, artifactId);
+      const target = jumpTarget;
+      jumpTarget = undefined;
+      const page =
+        target?.artifactId === artifactId && target.page <= loaded.numPages ? target.page : 1;
+      await renderPage(page, artifactId);
     } catch (error) {
       if (loadRevision !== pdfLoadRevision) return;
       loadingPdfId = undefined;
@@ -305,8 +339,10 @@ function installPdfConfirmation(app: HTMLElement): void {
     }
   };
   const showTab = (tab: "edit" | "pdf") => {
+    if (tab === "edit") jumpTarget = undefined;
     app.hidden = tab === "pdf";
     pane.hidden = tab === "edit";
+    updateFrameJump();
     edit.setAttribute("aria-pressed", String(tab === "edit"));
     pdfTab.setAttribute("aria-pressed", String(tab === "pdf"));
     const retryPdfId = tab === "edit" ? loadingPdfId : undefined;
@@ -407,6 +443,29 @@ function installPdfConfirmation(app: HTMLElement): void {
 
   edit.addEventListener("click", () => showTab("edit"));
   pdfTab.addEventListener("click", () => showTab("pdf"));
+  const openPdfForFrame = (frameIndex: number, version: number, page?: number) => {
+    const mapping = jumpMap;
+    const pages = mapping?.frames.find((frame) => frame.frameIndex === frameIndex)?.pages;
+    const requested = page ?? pages?.[0];
+    if (
+      mapping?.version === version &&
+      version === deckVersion &&
+      requested &&
+      pages?.includes(requested)
+    ) {
+      api.postMessage({
+        type: "jumpToPdfPage",
+        version,
+        frameIndex,
+        artifactId: mapping.artifactId,
+        page: requested,
+      } satisfies WebviewToExtension);
+    } else showTab("pdf");
+  };
+  jump.addEventListener("click", () => {
+    if (!jumpMap || jumpMap.version !== deckVersion || jump.hidden) return;
+    openPdfForFrame(activeFrame, jumpMap.version, Number(framePages.value));
+  });
   refresh.addEventListener("click", () => api.postMessage({ type: "refreshPdfConfirmation" }));
   save.addEventListener("click", () => {
     if (currentArtifactId !== undefined)
@@ -416,9 +475,39 @@ function installPdfConfirmation(app: HTMLElement): void {
   next.addEventListener("click", () => void renderPage(pageNumber + 1));
 
   transport.subscribe((message) => {
+    if (message.type === "deckUpdated") {
+      deckVersion = message.version;
+      updateFrameJump();
+      return;
+    }
+    if (message.type === "pdfJump") {
+      const { artifactId, page } = message;
+      if (
+        artifactId !== undefined &&
+        page !== undefined &&
+        jumpMap?.artifactId === artifactId &&
+        jumpMap.version === deckVersion
+      )
+        jumpTarget = { artifactId, page };
+      showTab("pdf");
+      if (
+        jumpTarget &&
+        pdfDocument &&
+        requestedArtifactId === jumpTarget.artifactId &&
+        !loadingPdfId
+      ) {
+        const target = jumpTarget;
+        jumpTarget = undefined;
+        if (target.page <= pdfDocument.numPages) void renderPage(target.page, target.artifactId);
+      }
+      return;
+    }
     if (message.type !== "pdfUpdated" || message.revision < revision) return;
     revision = message.revision;
     restricted = message.status === "restricted";
+    jumpMap = message.framePages;
+    if (message.status !== "ready") jumpTarget = undefined;
+    updateFrameJump();
     status.textContent =
       message.message ??
       {
@@ -454,12 +543,18 @@ function installPdfConfirmation(app: HTMLElement): void {
     },
     { once: true },
   );
+  return openPdfForFrame;
 }
 
 async function rasterizePdf(pdf: Uint8Array): Promise<RasterImage> {
   return readPdf(pdf, async (loaded) => {
     const page = await loaded.getPage(1);
     const base = page.getViewport({ scale: 1 });
+    const metadata = await loaded.getMetadata().catch(() => undefined);
+    const subject =
+      metadata?.info && "Subject" in metadata.info ? metadata.info.Subject : undefined;
+    const mathBox =
+      loaded.numPages === 1 ? inlineMathBox(subject, base.width, base.height) : undefined;
     const scale = rasterScaleFor(base.width, base.height);
     if (scale === null)
       throw new Error(
@@ -471,19 +566,31 @@ async function rasterizePdf(pdf: Uint8Array): Promise<RasterImage> {
     canvas.height = Math.ceil(viewport.height);
     const context = canvas.getContext("2d");
     if (!context) throw new Error("canvas 2D context を取得できません");
-    await page.render({ canvas, canvasContext: context, viewport }).promise;
+    await page.render({
+      canvas,
+      canvasContext: context,
+      viewport,
+      ...(mathBox === undefined ? {} : { background: "rgba(0, 0, 0, 0)" }),
+    }).promise;
     return {
       dataUrl: canvas.toDataURL("image/png"),
       width: canvas.width,
       height: canvas.height,
       widthPt: base.width,
       heightPt: base.height,
+      ...(mathBox === undefined ? {} : { mathBox }),
     };
   });
 }
 
 if (container) {
-  mountPreview(container, { ...host, rasterizePdf });
-  installPdfConfirmation(container);
+  const openPdfForFrame = installPdfConfirmation(container);
+  mountPreview(container, {
+    ...host,
+    rasterizePdf,
+    ...(openPdfForFrame ? { openPdfForFrame } : {}),
+    layoutChecked: (version, assetGeneration, findings) =>
+      transport.post({ type: "layoutChecked", version, assetGeneration, findings }),
+  });
   host.ready();
 }
