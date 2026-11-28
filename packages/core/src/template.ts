@@ -443,7 +443,10 @@ function expandMacroPath(imagePath: string, text: string): string {
  * \pgfdeclareimage + \pgfuseimage、\usebackgroundtemplate / \setbeamertemplate{background canvas}。
  * ツールの語彙(\deckcolor 等)が書かれていればそれも読む。それ以外は PDF 専用。
  */
-export function extractPreviewStyle(source: string): PreviewStyle {
+export function extractPreviewStyle(
+  source: string,
+  imageSpans?: Partial<Record<"logo" | "background", SourceSpan>>,
+): PreviewStyle {
   const text = blankComments(source);
   const style: PreviewStyle = { colors: {}, fonts: {} };
 
@@ -505,35 +508,42 @@ export function extractPreviewStyle(source: string): PreviewStyle {
   };
 
   // ロゴ(既定テーマは右下に置く)
-  for (const { groups } of commandGroups(text, "logo", 1)) {
+  for (const { index, end, groups } of commandGroups(text, "logo", 1)) {
     const image = imageIn(groups[0] as string);
-    if (image) style.logo = { path: image.path, placement: { kind: "corner", width: image.width } };
+    if (image) {
+      style.logo = { path: image.path, placement: { kind: "corner", width: image.width } };
+      if (imageSpans) imageSpans.logo = { start: index, end };
+    }
   }
 
   // 背景画像。TeX では後の指定が勝つので、コマンドの種類をまたいでソース順に並べて最後を採る。
-  const backgrounds: { index: number; path: string }[] = [];
-  for (const { index, groups } of commandGroups(text, "usebackgroundtemplate", 1)) {
+  const backgrounds: { index: number; end: number; path: string }[] = [];
+  for (const { index, end, groups } of commandGroups(text, "usebackgroundtemplate", 1)) {
     const image = imageIn(groups[0] as string);
-    if (image) backgrounds.push({ index, path: image.path });
+    if (image) backgrounds.push({ index, end, path: image.path });
   }
-  for (const { index, groups } of commandGroups(text, "setbeamertemplate", 2)) {
+  for (const { index, end, groups } of commandGroups(text, "setbeamertemplate", 2)) {
     const [key, body] = groups as [string, string];
     const name = key.trim();
     if (name !== "background canvas" && name !== "background") continue;
     const image = imageIn(body);
-    if (image) backgrounds.push({ index, path: image.path });
+    if (image) backgrounds.push({ index, end, path: image.path });
   }
   // \addtobeamertemplate{background}{前}{後}: 前後どちらかに画像があれば背景とみなす(後を優先)。
-  for (const { index, groups } of commandGroups(text, "addtobeamertemplate", 3)) {
+  for (const { index, end, groups } of commandGroups(text, "addtobeamertemplate", 3)) {
     const [key, pre, post] = groups as [string, string, string];
     const name = key.trim();
     if (name !== "background canvas" && name !== "background") continue;
     const image = imageIn(post) ?? imageIn(pre);
-    if (image) backgrounds.push({ index, path: image.path });
+    if (image) backgrounds.push({ index, end, path: image.path });
   }
   backgrounds.sort((a, b) => a.index - b.index);
   const lastBackground = backgrounds.at(-1);
-  if (lastBackground) style.background = { path: lastBackground.path };
+  if (lastBackground) {
+    style.background = { path: lastBackground.path };
+    if (imageSpans)
+      imageSpans.background = { start: lastBackground.index, end: lastBackground.end };
+  }
 
   // ツールの語彙が .sty に書かれている場合(theme-design.md §2)
   for (const { groups } of commandGroups(text, "deckcolor", 2)) {
@@ -549,7 +559,7 @@ export function extractPreviewStyle(source: string): PreviewStyle {
       style.fonts[slot.trim() as "main" | "mono"] = family.trim();
     }
   }
-  for (const { options, groups } of commandGroups(text, "decklogo", 1)) {
+  for (const { index, end, options, groups } of commandGroups(text, "decklogo", 1)) {
     const position = { x: 0, y: 0, width: 0.1 };
     for (const part of (options ?? "").split(",")) {
       const [k, v] = part.split("=").map((s) => s.trim());
@@ -562,10 +572,14 @@ export function extractPreviewStyle(source: string): PreviewStyle {
       path: (groups[0] as string).trim(),
       placement: { kind: "canvas", ...position },
     };
+    if (imageSpans) imageSpans.logo = { start: index, end };
   }
-  for (const { options, groups } of commandGroups(text, "deckbackground", 1)) {
+  for (const { index, end, options, groups } of commandGroups(text, "deckbackground", 1)) {
     // [title](表紙だけの背景)は土台スタイルでは扱わない(全スライドの背景だけを持つ)。
-    if ((options ?? "").trim() === "") style.background = { path: (groups[0] as string).trim() };
+    if ((options ?? "").trim() === "") {
+      style.background = { path: (groups[0] as string).trim() };
+      if (imageSpans) imageSpans.background = { start: index, end };
+    }
   }
   for (const { groups } of commandGroups(text, "deckfooter", 1)) {
     style.footer = (groups[0] as string).trim();

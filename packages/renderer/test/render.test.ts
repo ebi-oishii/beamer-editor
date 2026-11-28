@@ -107,6 +107,21 @@ describe("renderDeck preview diagnostics", () => {
     expect(deck.frames[1]?.html).toContain('class="canvas-item canvas-figure placeholder"');
   });
 
+  it("does not require document context for commands that occur only in TeX comments", () => {
+    const source = String.raw`\begin{document}\begin{frame}
+\begin{tikzpicture}% \label{fig:sample}
+\draw (0,0) -- (1,1);\end{tikzpicture}
+\end{frame}\end{document}`;
+    const { deck } = renderEditingPreview(source);
+    expect(deck.frames[0]?.html).toContain("data-raw-key");
+    expect(deck.frames[0]?.html).not.toContain("data-raw-context");
+    const escaped = source.replace(
+      String.raw`% \label{fig:sample}`,
+      String.raw`\node {100\%}; \label{fig:sample}`,
+    );
+    expect(renderEditingPreview(escaped).deck.frames[0]?.html).toContain("data-raw-context");
+  });
+
   it("records a failed frame and keeps rendering later frames", () => {
     const source = String.raw`\begin{document}\begin{frame}{One}A\end{frame}\begin{frame}{Two}B\end{frame}\end{document}`;
     const doc = parseDeck(source);

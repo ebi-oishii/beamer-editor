@@ -23,7 +23,18 @@ async function within<T>(promise: Promise<T>, milliseconds: number, fallback: T)
   }
 }
 
-function location(element: Element): Pick<LayoutFinding, "elementId" | "expandedSpan"> {
+function location(
+  element: Element,
+): Pick<LayoutFinding, "elementId" | "expandedSpan" | "decoration"> {
+  if (element.classList.contains("deck-logo")) return { decoration: "logo" };
+  if (element.classList.contains("deck-background")) {
+    return {
+      decoration:
+        element.getAttribute("data-layout-decoration") === "titleBackground"
+          ? "titleBackground"
+          : "background",
+    };
+  }
   const canvas = element.closest<HTMLElement>("[data-canvas-element-id]");
   const elementId = canvas?.dataset.canvasElementId;
   if (elementId !== undefined) return { elementId };
@@ -37,6 +48,10 @@ function location(element: Element): Pick<LayoutFinding, "elementId" | "expanded
 function firstOverflow(slide: HTMLElement, frame: RenderedFrame): HTMLElement | undefined {
   if (frame.isRaw) return undefined;
   const slideBounds = slide.getBoundingClientRect();
+  // getBoundingClientRect is post-transform. Compare in the slide's logical
+  // coordinate system so fit/manual zoom cannot change B002.
+  const logicalWidth = slide.offsetWidth;
+  const scale = logicalWidth > 0 ? slideBounds.width / logicalWidth : 1;
   const candidates = slide.querySelectorAll<HTMLElement>(
     ".frametitle, .slide-body > :not(.canvas), [data-flow-block], .canvas-item",
   );
@@ -45,14 +60,14 @@ function firstOverflow(slide: HTMLElement, frame: RenderedFrame): HTMLElement | 
     const canvas = element.closest<HTMLElement>(".canvas");
     const bounds = canvas?.getBoundingClientRect() ?? slideBounds;
     const rect = element.getBoundingClientRect();
-    const dx = OVERFLOW_TOLERANCE;
+    const dx = OVERFLOW_TOLERANCE * scale;
     const horizontalScroll =
-      element.clientWidth > 0 && element.scrollWidth > element.clientWidth + dx;
+      element.clientWidth > 0 && element.scrollWidth > element.clientWidth + OVERFLOW_TOLERANCE;
     if (rect.left < bounds.left - dx || rect.right > bounds.right + dx || horizontalScroll)
       return true;
     if (frame.allowFrameBreaks && !canvas) return false;
     const verticalScroll =
-      element.clientHeight > 0 && element.scrollHeight > element.clientHeight + dx;
+      element.clientHeight > 0 && element.scrollHeight > element.clientHeight + OVERFLOW_TOLERANCE;
     return rect.top < bounds.top - dx || rect.bottom > bounds.bottom + dx || verticalScroll;
   });
 }
@@ -87,7 +102,7 @@ export async function inspectPreviewLayout(
       const slide = cards[index]?.querySelector<HTMLElement>(".slide-scale > .slide");
       const finding = (
         code: LayoutCode,
-        loc: Pick<LayoutFinding, "elementId" | "expandedSpan"> = {},
+        loc: Pick<LayoutFinding, "elementId" | "expandedSpan" | "decoration"> = {},
       ): LayoutFinding => ({ code, frame: frame.index, ...loc });
       if (!slide) return [finding("B003")];
       const images = [...slide.querySelectorAll("img")];

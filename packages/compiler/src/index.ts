@@ -1785,7 +1785,7 @@ export async function compileFragment(
     try {
       compileResult = await runner.run(
         tectonic,
-        ["-X", "compile", "--outdir", tempDirectory, inputPath],
+        ["-X", "compile", "--keep-logs", "--outdir", tempDirectory, inputPath],
         compileRunnerOptions(request.cwd ?? tempDirectory, signal, timeoutMs),
       );
     } catch (error) {
@@ -1811,6 +1811,19 @@ export async function compileFragment(
       throw compileFailure(
         compileResult,
         `部分コンパイルに失敗しました${processDetail(compileResult)}`,
+      );
+    const log = await readCompilationLog(
+      join(tempDirectory, compiledLogName(inputPath)),
+      DEFAULT_DECK_LOG_BYTES_LIMIT,
+    );
+    if (
+      /LaTeX Warning: (?:Reference|Citation) `[^']+' .*undefined|LaTeX Warning: There were undefined (?:references|citations)/.test(
+        log,
+      )
+    )
+      throw new PdfExportError(
+        "E_COMPILE",
+        "部分コンパイルで未解決の参照または引用があります。PDF で文書全体を確認してください",
       );
     const { size } = await stat(compiledPdf);
     if (request.maxOutputBytes !== undefined && size > request.maxOutputBytes)

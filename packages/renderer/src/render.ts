@@ -28,6 +28,7 @@ import type {
   SourceSpan,
 } from "@beamer-editor/core";
 import {
+  blankComments,
   type DetachStatus,
   detachStatusesOf,
   expandDeck,
@@ -88,6 +89,13 @@ export interface RenderedDeck {
   fragmentPreamble?: string;
   /** HTML 編集プレビューで検出した診断。span は renderDeck に渡された文書の座標。 */
   diagnostics?: PreviewDiagnostic[];
+  /** Shared browser checks use these original declarations for common assets. */
+  decorationAssets?: {
+    slot: DecorationSlot;
+    span: SourceSpan;
+    reference: string;
+    frames: number[];
+  }[];
 }
 
 /** ブラウザーを起動せずレンダラー自身が判定できる編集プレビューの診断。 */
@@ -115,12 +123,18 @@ export interface PreviewSourceDiagnostic {
 
 /** 人間向け出力では、同じ場所から展開された画像参照も区別できるようにする。 */
 export function previewDiagnosticMessage(
-  diagnostic: Pick<PreviewSourceDiagnostic, "message" | "reference">,
+  diagnostic: Pick<PreviewSourceDiagnostic, "message" | "reference" | "affectedFrames"> & {
+    code?: string;
+  },
 ): string {
-  return diagnostic.reference &&
+  const message =
+    diagnostic.reference &&
     !diagnostic.message.includes(`画像 ${diagnostic.reference} が見つかりません`)
-    ? `${diagnostic.message} (画像: ${diagnostic.reference})`
-    : diagnostic.message;
+      ? `${diagnostic.message} (画像: ${diagnostic.reference})`
+      : diagnostic.message;
+  return diagnostic.code === "B001" && diagnostic.affectedFrames?.length
+    ? `${message} (影響フレーム: ${diagnostic.affectedFrames.join(", ")})`
+    : message;
 }
 
 export interface EditingPreviewOptions extends Pick<LintOptions, "fileExists"> {
@@ -136,7 +150,7 @@ export interface TemplateImageDiagnostic {
   message: string;
 }
 
-type DecorationSlot = "logo" | "background" | "titleBackground";
+export type DecorationSlot = "logo" | "background" | "titleBackground";
 
 export interface PreviewAsset {
   path: string;
@@ -145,6 +159,8 @@ export interface PreviewAsset {
   source: "template" | "preamble";
   span: SourceSpan;
   templatePath?: string;
+  /** An exact declaration in the deck preamble, when known. */
+  layoutSpan?: SourceSpan;
 }
 
 function decorationDiagnostics(
@@ -297,7 +313,25 @@ export function renderEditingPreview(
     (diagnostic) => ({ ...diagnostic, span: mapPreviewSpan(expanded.map, diagnostic.span) }),
   );
   return {
-    deck: { ...rendered, diagnostics: renderingDiagnostics },
+    deck: {
+      ...rendered,
+      diagnostics: renderingDiagnostics,
+      decorationAssets: selectedStyleEntries.flatMap(([slot, override]) => {
+        const frames = usedDecorationSlots.get(slot);
+        const asset =
+          override ?? (slot === "titleBackground" ? undefined : options.baseAssets?.[slot]);
+        if (!asset || !frames) return [];
+        const span = "layoutSpan" in asset ? (asset.layoutSpan ?? asset.span) : asset.span;
+        return [
+          {
+            slot,
+            span: mapPreviewSpan(expanded.map, span),
+            reference: asset.path,
+            frames: [...frames],
+          },
+        ];
+      }),
+    },
     expansionMap: expanded.map,
     expandDiagnostics: expanded.diagnostics,
     diagnostics,
@@ -618,7 +652,8 @@ class FrameRenderer {
         frameIndex,
       );
       if (!background.toLowerCase().endsWith(".pdf")) {
-        out += `<img class="deck-background" src="${escapeHtml(background)}">`;
+        const title = isTitleFrame && this.decorations.titleBackground;
+        out += `<img class="deck-background" src="${escapeHtml(background)}"${title ? ' data-layout-decoration="titleBackground"' : ""}>`;
       }
     }
     const logo = this.decorations.logo;
@@ -876,7 +911,7 @@ class FrameRenderer {
     environment: string | null,
     mode: NonNullable<RawBlockRef["mode"]>,
   ): string {
-    if (DOCUMENT_CONTEXT_COMMAND.test(tex)) return ' data-raw-context="true"';
+    if (DOCUMENT_CONTEXT_COMMAND.test(blankComments(tex))) return ' data-raw-context="true"';
     const key = rawFragmentKey(tex, this.fragmentPreamble, mode);
     if (!this.rawBlocks.has(key)) this.rawBlocks.set(key, { key, tex, environment, mode });
     return ` data-raw-key="${key}"${mode === "inline-math" ? ' data-raw-inline="true"' : ""}`;

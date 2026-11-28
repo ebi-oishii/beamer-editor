@@ -112,6 +112,7 @@ const originals = new WeakMap<
   HTMLElement,
   { html: string; aspect: string; width: string; title: string }
 >();
+const pdfOpeners = new WeakMap<HTMLElement, ((frameIndex: number) => void) | undefined>();
 
 function rememberPlaceholder(element: HTMLElement): void {
   originals.set(element, {
@@ -125,6 +126,7 @@ function rememberPlaceholder(element: HTMLElement): void {
 /** Restore the renderer's own fallback, including inline KaTeX and figure dimensions. */
 function restorePlaceholder(element: HTMLElement): void {
   const original = originals.get(element);
+  pdfOpeners.delete(element);
   if (original) {
     element.innerHTML = original.html;
     element.style.aspectRatio = original.aspect;
@@ -148,8 +150,9 @@ function markFragment(
   if (status === "ready") return;
   element.dataset.rawError = message;
   if (!openPdf) return;
-  const frameIndex = Number(element.closest<HTMLElement>(".slide-card")?.dataset.index);
-  if (!Number.isSafeInteger(frameIndex)) return;
+  pdfOpeners.set(element, openPdf);
+  if (!element.closest(".slide-card[data-index]")) return;
+  if (element.querySelector(".raw-pdf")) return;
   const button = element.ownerDocument.createElement("button");
   button.type = "button";
   button.className = "raw-pdf";
@@ -158,7 +161,8 @@ function markFragment(
   button.addEventListener("pointerdown", (event) => event.stopPropagation());
   button.addEventListener("click", (event) => {
     event.stopPropagation();
-    openPdf(frameIndex);
+    const frameIndex = Number(element.closest<HTMLElement>(".slide-card")?.dataset.index);
+    if (Number.isSafeInteger(frameIndex)) pdfOpeners.get(element)?.(frameIndex);
   });
   element.append(button);
 }
@@ -181,7 +185,7 @@ export function applyRawImages(
       if (element.dataset.rawStatus !== "context") {
         rememberPlaceholder(element);
         markFragment(element, "context", "文書全体の組版が必要です。", openPdf);
-      }
+      } else if (openPdf) pdfOpeners.set(element, openPdf);
       continue;
     }
     if (!state || state.status === "pending") {
@@ -198,7 +202,10 @@ export function applyRawImages(
           ? "インライン数式の寸法とベースラインを取得できませんでした。"
           : undefined;
     const status = failure === undefined ? "ready" : "failed";
-    if (element.dataset.rawStatus === status && element.dataset.rawError === failure) continue;
+    if (element.dataset.rawStatus === status && element.dataset.rawError === failure) {
+      if (openPdf) pdfOpeners.set(element, openPdf);
+      continue;
+    }
     restorePlaceholder(element);
     rememberPlaceholder(element);
     if (failure !== undefined) {

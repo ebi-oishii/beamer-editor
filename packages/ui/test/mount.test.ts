@@ -2,7 +2,7 @@
 import type { RenderedDeck } from "@beamer-editor/renderer";
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavState, ShellHost } from "../src/shell-host.js";
+import type { NavState, RawBlockImageResult, ShellHost } from "../src/shell-host.js";
 
 // React の act() を有効化する（createRoot の flush を同期させる）。
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -104,6 +104,60 @@ function fakeHost(): ShellHost & {
     },
   };
 }
+
+it.each([
+  "context",
+  "failed",
+])("a reused %s PDF button uses the current rendered version", (status) => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const base = fakeHost();
+  const openPdfForFrame = vi.fn();
+  let onFragment: ((key: string, result: RawBlockImageResult) => void) | undefined;
+  const host: ShellHost = {
+    ...base,
+    openPdfForFrame,
+    onRawBlockImage(listener) {
+      onFragment = listener;
+      return () => {
+        onFragment = undefined;
+      };
+    },
+  };
+  const [first, second] = DECK.frames;
+  if (!first || !second) throw new Error("Missing frames");
+  const fragment = status === "context" ? 'data-raw-context="true"' : 'data-raw-key="fragment"';
+  const firstFrame = {
+    ...first,
+    html: `<div class="slide"><span ${fragment}>original</span></div>`,
+  };
+  const deck: RenderedDeck = {
+    ...DECK,
+    rawBlocks: [{ key: "fragment", tex: "x", environment: null }],
+    frames: [firstFrame, second],
+  };
+  let unmount = () => {};
+  try {
+    act(() => {
+      unmount = mountPreview(container, host);
+    });
+    act(() => base.push(deck, 1));
+    if (status === "failed") act(() => onFragment?.("fragment", { error: "Unresolved reference" }));
+    const button = container.querySelector<HTMLButtonElement>(".raw-pdf");
+    if (!button) throw new Error("Missing PDF button");
+    act(() => button.click());
+    expect(openPdfForFrame).toHaveBeenLastCalledWith(0, 1);
+    act(() =>
+      base.push({ ...deck, frames: [firstFrame, { ...second, html: "<div>Edited</div>" }] }, 2),
+    );
+    expect(container.querySelector(".raw-pdf")).toBe(button);
+    act(() => button.click());
+    expect(openPdfForFrame).toHaveBeenLastCalledWith(0, 2);
+  } finally {
+    act(() => unmount());
+    container.remove();
+  }
+});
 
 it("slide order is available only through the caption context menu, not persistent controls or the stage", () => {
   const container = document.createElement("div");

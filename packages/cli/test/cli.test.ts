@@ -405,6 +405,84 @@ describe("deck preview-check", () => {
     }
   });
 
+  it("aggregates broken decorations at their effective declaration and reports inspected frames", async () => {
+    const source = await fixture(
+      "decoration.slide.tex",
+      String.raw`%% preamble-extra:begin
+\usepackage{beamerthemecorporate}
+
+\decklogo[x=0.05,y=0.05,w=0.1]{broken-logo.png}
+%% preamble-extra:end
+%% style:begin
+\deckbackground{broken.png}
+\deckbackground[title]{broken-title.png}
+%% style:end
+\begin{document}
+\begin{frame}[label=cover]\titlepage\end{frame}
+\begin{frame}[label=first]First\end{frame}
+\begin{frame}[label=second]Second\end{frame}
+\end{document}`,
+    );
+    const dir = dirname(source.path);
+    await writeFile(
+      join(dir, "beamerthemecorporate.sty"),
+      String.raw`\deckbackground{overridden.png}`,
+    );
+    for (const file of ["broken.png", "broken-logo.png", "broken-title.png", "overridden.png"])
+      await writeFile(join(dir, file), "exists");
+    const inspectSavedPreview: NonNullable<CliDependencies["inspectSavedPreview"]> = async (
+      _input,
+      deck,
+    ) => ({
+      status: "completed",
+      findings: deck.frames.flatMap(({ index }) => [
+        { code: "B001", frame: index, decoration: index === 1 ? "titleBackground" : "background" },
+        { code: "B001", frame: index, decoration: "logo" },
+      ]),
+    });
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const check = async (filter: string[]) => {
+        stdout.mockClear();
+        expect(
+          await run(["preview-check", source.path, "--layout", "--json", ...filter], {
+            inspectSavedPreview,
+          }),
+        ).toBe(EXIT_CODE.lintError);
+        return JSON.parse(String(stdout.mock.calls[0]?.[0])).diagnostics;
+      };
+      expect(await check([])).toMatchObject([
+        {
+          code: "B001",
+          frame: null,
+          reference: "broken-title.png",
+          location: { line: 8 },
+          affectedFrames: [1],
+        },
+        {
+          code: "B001",
+          frame: null,
+          reference: "broken-logo.png",
+          location: { line: 4 },
+          affectedFrames: [1, 2, 3],
+        },
+        {
+          code: "B001",
+          frame: null,
+          reference: "broken.png",
+          location: { line: 7 },
+          affectedFrames: [2, 3],
+        },
+      ]);
+      expect(await check(["--frame", "second"])).toMatchObject([
+        { code: "B001", reference: "broken.png", location: { line: 7 }, affectedFrames: [3] },
+        { code: "B001", reference: "broken-logo.png", location: { line: 4 }, affectedFrames: [3] },
+      ]);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   // Chrome is opt-in so tests never start a local GUI process without the
   // repository's test launch approval, including on macOS in headless mode.
   it.skipIf(!process.env.DECK_TEST_LAYOUT_BROWSER)(

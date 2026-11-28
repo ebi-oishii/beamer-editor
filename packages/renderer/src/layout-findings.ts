@@ -3,7 +3,12 @@ import {
   mapExpandedRangeToSourceExact,
   type SourceSpan,
 } from "@beamer-editor/core";
-import { mapPreviewSpan, type PreviewSourceDiagnostic, type RenderedDeck } from "./render.js";
+import {
+  type DecorationSlot,
+  mapPreviewSpan,
+  type PreviewSourceDiagnostic,
+  type RenderedDeck,
+} from "./render.js";
 
 const diagnostics = {
   B001: { severity: "error", message: "ブラウザーが画像を読み込めませんでした。" },
@@ -18,6 +23,7 @@ export interface LayoutFinding {
   code: LayoutCode;
   frame: number;
   elementId?: string;
+  decoration?: DecorationSlot;
   expandedSpan?: SourceSpan;
 }
 
@@ -50,10 +56,19 @@ export function parseLayoutFindings(value: unknown): LayoutFinding[] | undefined
     )
       return undefined;
     if (item.elementId !== undefined && typeof item.elementId !== "string") return undefined;
+    const { decoration } = item;
+    if (
+      decoration !== undefined &&
+      decoration !== "logo" &&
+      decoration !== "background" &&
+      decoration !== "titleBackground"
+    )
+      return undefined;
     findings.push({
       code: item.code,
       frame: item.frame,
       ...(typeof item.elementId === "string" ? { elementId: item.elementId } : {}),
+      ...(decoration === undefined ? {} : { decoration }),
       ...(span === undefined ? {} : { expandedSpan: span as unknown as SourceSpan }),
     });
   }
@@ -82,9 +97,39 @@ export function layoutSourceDiagnostics(
   findings: readonly LayoutFinding[],
 ): PreviewSourceDiagnostic[] {
   const frames = new Map(deck.frames.map((frame) => [frame.index, frame]));
-  return findings.flatMap((finding) => {
+  const shared = new Map<string, PreviewSourceDiagnostic & { affectedFrames: number[] }>();
+  const result: PreviewSourceDiagnostic[] = [];
+  for (const finding of findings) {
     const frame = frames.get(finding.frame);
-    if (!frame) return [];
+    if (!frame) continue;
+    const decoration =
+      finding.code === "B001" && finding.decoration
+        ? deck.decorationAssets?.find(
+            (asset) => asset.slot === finding.decoration && asset.frames.includes(frame.index),
+          )
+        : undefined;
+    if (decoration) {
+      const { span, reference } = decoration;
+      const key = JSON.stringify([span.start, span.end, reference]);
+      const previous = shared.get(key);
+      if (previous) {
+        if (!previous.affectedFrames.includes(frame.index))
+          previous.affectedFrames.push(frame.index);
+      } else {
+        const diagnostic = {
+          category: "preview" as const,
+          code: "B001" as const,
+          ...diagnostics.B001,
+          frame: null,
+          span,
+          reference,
+          affectedFrames: [frame.index],
+        };
+        shared.set(key, diagnostic);
+        result.push(diagnostic);
+      }
+      continue;
+    }
     const { sourceSpan } = frame;
     const { expandedSpan } = finding;
     const element = frame.canvasElements?.find((item) => item.id === finding.elementId);
@@ -92,16 +137,16 @@ export function layoutSourceDiagnostics(
       expandedSpan && expandedSpan.start >= sourceSpan.start && expandedSpan.end <= sourceSpan.end
         ? expandedSpan
         : sourceSpan;
-    return [
-      {
-        category: "preview",
-        code: finding.code,
-        ...diagnostics[finding.code],
-        frame: { number: frame.index, label: frame.label },
-        span: element?.editable
-          ? element.sourceSpan
-          : mapPreviewSpan(expansionMap, element?.sourceSpan ?? expanded),
-      },
-    ];
-  });
+    result.push({
+      category: "preview",
+      code: finding.code,
+      ...diagnostics[finding.code],
+      frame: { number: frame.index, label: frame.label },
+      span: element?.editable
+        ? element.sourceSpan
+        : mapPreviewSpan(expansionMap, element?.sourceSpan ?? expanded),
+    });
+  }
+  for (const value of shared.values()) value.affectedFrames.sort((a, b) => a - b);
+  return result;
 }

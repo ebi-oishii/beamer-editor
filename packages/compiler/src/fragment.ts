@@ -97,7 +97,7 @@ export function buildFragmentDocument(
  * standalone 文書の組み立て方の版。buildFragmentDocument の前置きを変えたら上げる。
  * 画像キャッシュの置き場に入り、古い組み立て方で作った PDF を使い続けない。
  */
-export const FRAGMENT_DOCUMENT_VERSION = 5;
+export const FRAGMENT_DOCUMENT_VERSION = 6;
 
 const FILE_ARGUMENT =
   /\\(?:includegraphics|includepdf|includesvg|includestandalone|input|include|InputIfFileExists|lstinputlisting|verbatiminput|pgfplotstableread)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g;

@@ -57,3 +57,31 @@ it("distinguishes image decode, overflow, missing editables and successful frame
     { frame: 4, code: "B003", elementId: "canvas-image-0" },
   ]);
 });
+
+it.each([0.5, 1, 2])("measures logical overflow at scale %s", async (scale) => {
+  const deck = renderEditingPreview(
+    String.raw`\begin{document}\begin{frame}A\end{frame}\end{document}`,
+  ).deck;
+  const root = document.createElement("div");
+  root.innerHTML =
+    '<div class="slide-card"><div class="slide-scale"><div class="slide"><div class="slide-body"><p>Text</p></div></div></div></div>';
+  const slide = root.querySelector<HTMLElement>(".slide");
+  const paragraph = root.querySelector("p");
+  if (!slide || !paragraph) throw new Error("Missing fixture");
+  Object.defineProperty(slide, "offsetWidth", { value: 300 });
+  Object.defineProperty(paragraph, "clientWidth", { value: 80 });
+  Object.defineProperty(paragraph, "scrollWidth", { value: 82 });
+  vi.spyOn(slide, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(0, 0, 300 * scale, 200 * scale),
+  );
+  const rects = vi.spyOn(paragraph, "getBoundingClientRect");
+  const setRight = (right: number) => {
+    const rect = new DOMRect(0, 0, right * scale, 10 * scale);
+    rects.mockReturnValue(rect);
+    vi.spyOn(paragraph, "getClientRects").mockReturnValue([rect] as unknown as DOMRectList);
+  };
+  setRight(301);
+  expect(await inspectPreviewLayout(root, deck)).toEqual([]);
+  setRight(303);
+  expect(await inspectPreviewLayout(root, deck)).toEqual([{ frame: 1, code: "B002" }]);
+});
