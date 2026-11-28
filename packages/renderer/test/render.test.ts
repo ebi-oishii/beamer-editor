@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { framesOf, parseDeck } from "@beamer-editor/core";
 import { describe, expect, it } from "vitest";
 import { MONO_FONT_FALLBACK } from "../src/font-stack.js";
-import { frameTitleText, renderDeck } from "../src/render.js";
+import { frameTitleText, renderDeck, renderEditingPreview } from "../src/render.js";
 import { DEFAULT_THEME } from "../src/theme.js";
 
 const fixture = (name: string) => readFileSync(join(__dirname, "../../../fixtures", name), "utf8");
@@ -45,6 +45,109 @@ describe("renderDeck: basic.slide.tex", () => {
     expect(source.slice(first.sourceSpan.start, first.sourceSpan.end)).toBe(
       "\\begin{frame}\n  \\titlepage\n\\end{frame}",
     );
+  });
+});
+
+describe("renderDeck preview diagnostics", () => {
+  it("reports KaTeX red error output as an informational diagnostic with the math span", () => {
+    const source = String.raw`\begin{document}\begin{frame}{Math}$\TeXOnlyCommand{x}$\end{frame}\end{document}`;
+    const rendered = renderDeck(parseDeck(source));
+    const diagnostic = rendered.diagnostics?.find((entry) => entry.code === "P001");
+
+    expect(diagnostic).toMatchObject({ severity: "info", frame: { number: 1, label: null } });
+    expect(source.slice(diagnostic?.span.start, diagnostic?.span.end)).toContain("TeXOnlyCommand");
+  });
+
+  it("reports math blocked by KaTeX trust without changing the HTML or treating authored red as an error", () => {
+    const link = String.raw`$\href{https://example.com}{x}$`;
+    const source = String.raw`\begin{document}
+\begin{frame}[label=link]{Link}${link}\end{frame}
+\begin{frame}[label=color]{Color}$\textcolor{#cc0000}{x}$ and $\texttt{color:var(--beamer-editor-katex-error);}$\end{frame}
+\end{document}`;
+    const { deck, diagnostics } = renderEditingPreview(source);
+
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        code: "P001",
+        severity: "info",
+        frame: { number: 1, label: "link" },
+        span: { start: source.indexOf(link), end: source.indexOf(link) + link.length },
+      }),
+    ]);
+    expect(deck.frames[0]?.html).toContain("color:#cc0000;");
+    expect(deck.frames[0]?.html).not.toMatch(/href=|beamer-editor-katex-error/);
+    expect(deck.frames[1]?.html).toContain("color:#cc0000;");
+    expect(deck.frames[1]?.html).toContain("color:var(--beamer-editor-katex-error);");
+  });
+
+  it("reports wrapped and canvas raw LaTeX exactly once per placeholder", () => {
+    const tikz = String.raw`\begin{tikzpicture}\draw (0,0) -- (1,1);\end{tikzpicture}`;
+    const wrapped = String.raw`\resizebox{0.5\textwidth}{!}{${tikz}}`;
+    const figure = String.raw`\begin{deckfigure}[x=0.1,y=0.2,w=0.3]${tikz}\end{deckfigure}`;
+    const source = String.raw`\begin{document}
+\begin{frame}[label=wrapped]{Wrapped}${wrapped}\end{frame}
+\begin{frame}[label=canvas]{Canvas}\begin{deckcanvas}${tikz}${figure}\end{deckcanvas}\end{frame}
+\end{document}`;
+    const { deck, diagnostics } = renderEditingPreview(source);
+
+    expect(
+      diagnostics.map(({ code, severity, frame, span }) => [
+        code,
+        severity,
+        frame?.label,
+        source.slice(span.start, span.end),
+      ]),
+    ).toEqual([
+      ["P003", "info", "wrapped", wrapped],
+      ["P003", "info", "canvas", tikz],
+      ["P003", "info", "canvas", figure],
+    ]);
+    expect(deck.frames[0]?.html).toContain('class="raw-block placeholder"');
+    expect(deck.frames[1]?.html).toContain('class="canvas-item raw-block placeholder"');
+    expect(deck.frames[1]?.html).toContain('class="canvas-item canvas-figure placeholder"');
+  });
+
+  it("records a failed frame and keeps rendering later frames", () => {
+    const source = String.raw`\begin{document}\begin{frame}{One}A\end{frame}\begin{frame}{Two}B\end{frame}\end{document}`;
+    const doc = parseDeck(source);
+    const first = framesOf(doc)[0];
+    if (first?.type !== "frame") throw new Error("expected frame");
+    Object.defineProperty(first, "body", {
+      get: () => {
+        throw new Error("forced renderer failure");
+      },
+    });
+    const rendered = renderDeck(doc, undefined, { recoverFrameErrors: true });
+
+    expect(rendered.frames).toHaveLength(2);
+    expect(rendered.frames[1]?.html).toContain("B");
+    expect(rendered.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "P002",
+          severity: "error",
+          frame: { number: 1, label: null },
+        }),
+      ]),
+    );
+  });
+
+  it("maps diagnostics from an expanded macro and reuses image validation", () => {
+    const source = String.raw`%% macros:begin
+\newcommand{\mathmacro}{\TeXOnlyCommand{x}}
+\newcommand{\imagemacro}{\includegraphics{missing.png}}
+%% macros:end
+\begin{document}\begin{frame}[label=one]{$\mathmacro$}\imagemacro\end{frame}\end{document}`;
+    const result = renderEditingPreview(source, () => ({ fileExists: () => false }));
+
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "P001", frame: { number: 1, label: "one" } }),
+        expect.objectContaining({ code: "L004", frame: { number: 1, label: "one" } }),
+      ]),
+    );
+    const math = result.diagnostics.find((diagnostic) => diagnostic.code === "P001");
+    expect(source.slice(math?.span.start, math?.span.end)).toContain("mathmacro");
   });
 });
 

@@ -14,7 +14,13 @@
  * だけを行い、ファイルの解決・読み込み・存在確認はホスト(VS Code 拡張・CLI)が担う。
  */
 
-import type { DeckDocument, SourceSpan, StyleColorRole } from "./ast.js";
+import type {
+  DeckDocument,
+  SourceSpan,
+  StyleBackgroundNode,
+  StyleColorRole,
+  StyleLogoNode,
+} from "./ast.js";
 
 // ---------------------------------------------------------------------------
 // 参照の抽出
@@ -158,6 +164,10 @@ export interface TemplateStatus {
   missingImages: string[];
 }
 
+export function missingTemplateImageMessage(templatePath: string, image: string): string {
+  return `テンプレート ${templatePath} が参照する画像 ${image} が見つかりません(デッキのディレクトリ基準)`;
+}
+
 // ---------------------------------------------------------------------------
 // プレビュー用スタイルの抽出(標準の Beamer 記法から、近似できるものだけ)
 // ---------------------------------------------------------------------------
@@ -193,6 +203,21 @@ export interface PreviewStyle {
    */
   imageSearchPaths?: string[];
   footer?: string;
+}
+
+/** The last declaration for each image slot overrides the base style and earlier declarations. */
+export function styleImageOverrides(doc: DeckDocument) {
+  let logo: StyleLogoNode | undefined;
+  let background: StyleBackgroundNode | undefined;
+  let titleBackground: StyleBackgroundNode | undefined;
+  for (const entry of doc.style.entries) {
+    if (entry.type === "styleLogo") logo = entry;
+    if (entry.type === "styleBackground") {
+      if (entry.slot === "title") titleBackground = entry;
+      else background = entry;
+    }
+  }
+  return { logo, background, titleBackground };
 }
 
 const XCOLOR_BASE: Record<string, string> = {
@@ -283,10 +308,13 @@ function widthOption(options: string | undefined): LengthSpec | null {
 }
 
 /** `\includegraphics[opts]{path}` を全て返す。 */
-function includeGraphics(text: string): { path: string; options: string | undefined }[] {
+function includeGraphics(
+  text: string,
+): { path: string; options: string | undefined; index: number }[] {
   return [...text.matchAll(/\\includegraphics\*?\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}/g)].map((m) => ({
     path: (m[2] as string).trim(),
     options: m[1],
+    index: m.index ?? 0,
   }));
 }
 
@@ -328,7 +356,7 @@ function* commandGroups(
   text: string,
   command: string,
   count: number,
-): Generator<{ index: number; options: string | undefined; groups: string[] }> {
+): Generator<{ index: number; end: number; options: string | undefined; groups: string[] }> {
   const pattern = new RegExp(`\\\\${command}\\*?(?=\\s*[\\[{])`, "g");
   for (const match of text.matchAll(pattern)) {
     const index = match.index ?? 0;
@@ -350,7 +378,7 @@ function* commandGroups(
       groups.push(group.body);
       cursor = group.next;
     }
-    if (groups.length === count) yield { index, options, groups };
+    if (groups.length === count) yield { index, end: cursor, options, groups };
   }
 }
 
@@ -584,4 +612,26 @@ export function templateImagePaths(source: string): string[] {
     paths.add(expandMacroPath((groups[1] as string).trim(), text));
   }
   return [...paths];
+}
+
+/** Paths used exclusively by direct background declarations in a declarative theme. */
+export function templateBackgroundImagePaths(source: string): string[] {
+  if (source.includes("^^")) return [];
+  const text = blankComments(source);
+  const declarations =
+    /(?:(\\AtBeginDocument)\s*\{\s*)?\\setbeamertemplate\s*\{(background(?: canvas)?|title page)\}\s*\{\s*\\includegraphics\*?\s*(?:\[[^\]{}]*\]\s*)?\{([^{}\\#]+)\}\s*\}(\s*\})?/g;
+  const decoration = new Set<string>();
+  const opaque = new Set<string>();
+  // Only recognize commands that store a template. Any other command could use
+  // the background during package loading, including through another macro.
+  let end = 0;
+  for (const match of text.matchAll(declarations)) {
+    const [declaration, hook, slot, path, hookEnd] = match;
+    if (text.slice(end, match.index).trim() !== "" || Boolean(hook) !== Boolean(hookEnd)) return [];
+    end = match.index + declaration.length;
+    const target = slot === "background" && !hook ? decoration : opaque;
+    target.add((path ?? "").trim());
+  }
+  if (text.slice(end).trim() !== "") return [];
+  return [...decoration].filter((path) => !opaque.has(path));
 }

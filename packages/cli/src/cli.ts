@@ -45,10 +45,13 @@ import {
   sourceLocation,
 } from "@beamer-editor/core";
 import {
+  editingPreviewOptions,
   exportHtml,
   type HtmlExportErrorCode,
   type HtmlExportResult,
+  nodeTemplateFileSystem,
 } from "@beamer-editor/html-export";
+import { previewDiagnosticMessage, renderEditingPreview } from "@beamer-editor/renderer";
 import { createNodeFileProbes } from "./file-probes.ts";
 import {
   defaultFontPaths,
@@ -243,6 +246,7 @@ export const USAGE = `使い方: deck <command> ...
   deck lint <file> [--json]           デッキを検査
   deck format <file> [--write] [--json]  デッキを正規化
   deck outline <file> [--json]        フレーム一覧を表示
+  deck preview-check <file> [--frame <N|LABEL|label:LABEL>] [--json]  編集プレビューを検査
   deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査
   deck snapshot <file> -o <directory> [--frame <N|LABEL|label:LABEL>] [--tectonic <path>] [--json]
   deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]
@@ -408,6 +412,146 @@ async function runOutline(file: string, json: boolean): Promise<number> {
     }
   }
   return EXIT_CODE.success;
+}
+
+export interface ParsedPreviewCheckArgs {
+  input: string | undefined;
+  frame: string | undefined;
+  json: boolean;
+  error: string | undefined;
+}
+
+/** preview-check は成果物を作らないため、frame 指定と JSON だけを受け取る。 */
+export function parsePreviewCheckArgs(argv: readonly string[]): ParsedPreviewCheckArgs {
+  let input: string | undefined;
+  let frame: string | undefined;
+  let json = false;
+  let error: string | undefined;
+  const seen = new Set<string>();
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg === "--frame") {
+      if (seen.has(arg)) error ??= "オプションを重複して指定できません: --frame";
+      seen.add(arg);
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith("-"))
+        error ??= "オプションには値が必要です: --frame";
+      else {
+        frame = value;
+        index++;
+      }
+    } else if (arg === "--json") {
+      if (seen.has(arg)) error ??= "オプションを重複して指定できません: --json";
+      seen.add(arg);
+      json = true;
+    } else if (arg?.startsWith("-")) error ??= `不明なオプション: ${arg}`;
+    else if (input === undefined) input = arg;
+    else error ??= "preview-check には入力ファイルを 1 つ指定してください";
+  }
+  if (!error && input === undefined) error = "preview-check には入力ファイルを指定してください";
+  return { input, frame, json, error };
+}
+
+interface PreviewCheckDiagnostic {
+  category: "preview" | "image";
+  code: string;
+  severity: "error" | "info" | "warning";
+  message: string;
+  frame: CheckFrame | null;
+  location: { line: number; column: number; endLine: number; endColumn: number };
+  reference?: string;
+  affectedFrames?: readonly number[];
+}
+
+function previewCheckSummary(diagnostics: readonly PreviewCheckDiagnostic[]) {
+  let errors = 0;
+  let infos = 0;
+  let warnings = 0;
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.severity === "error") errors++;
+    else if (diagnostic.severity === "warning") warnings++;
+    else infos++;
+  }
+  return { errors, warnings, infos };
+}
+
+function previewCheckLocation(source: string, start: number, end: number) {
+  const from = sourceLocation(source, start);
+  const to = sourceLocation(source, end);
+  return { line: from.line, column: from.column, endLine: to.line, endColumn: to.column };
+}
+
+async function runPreviewCheck(parsed: ParsedPreviewCheckArgs): Promise<number> {
+  if (parsed.error) return usageError(parsed.error, parsed.json);
+  const input = parsed.input as string;
+  let source: string;
+  try {
+    source = await readFile(resolve(input), "utf8");
+  } catch (error) {
+    writeError("E_IO", `読み込みに失敗しました: ${input}: ${errorMessage(error)}`, parsed.json);
+    return exitCodeForError("E_IO");
+  }
+
+  const files = nodeTemplateFileSystem(dirname(resolve(input)));
+  const preview = renderEditingPreview(source, (doc) => editingPreviewOptions(doc, files));
+  const frames = preview.deck.frames.map((frame) => ({
+    number: frame.index,
+    label: frame.label,
+    title: frame.titleText,
+  }));
+  let selected: Set<number> | undefined;
+  if (parsed.frame !== undefined) {
+    const selector = frameSelectorFromAddress(parsed.frame);
+    const matches = frames.filter((frame) =>
+      selector.kind === "number" ? frame.number === selector.value : frame.label === selector.value,
+    );
+    if (matches.length !== 1) {
+      writeError("E_INPUT", `指定された frame selector が不正です: ${selector.value}`, parsed.json);
+      return exitCodeForError("E_INPUT");
+    }
+    selected = new Set(matches.map((frame) => frame.number));
+  }
+  const includeFrame = (diagnostic: (typeof preview.diagnostics)[number]) =>
+    selected === undefined || (diagnostic.frame !== null && selected.has(diagnostic.frame.number));
+  const diagnostics: PreviewCheckDiagnostic[] = preview.diagnostics
+    .filter((diagnostic) => {
+      if (selected === undefined || diagnostic.frame !== null) return includeFrame(diagnostic);
+      return (
+        diagnostic.affectedFrames === undefined ||
+        diagnostic.affectedFrames.some((number) => selected.has(number))
+      );
+    })
+    .map((diagnostic) => {
+      return {
+        category: diagnostic.category,
+        code: diagnostic.code,
+        severity: diagnostic.severity,
+        message: diagnostic.message,
+        frame: diagnostic.frame,
+        location: previewCheckLocation(source, diagnostic.span.start, diagnostic.span.end),
+        ...(diagnostic.reference ? { reference: diagnostic.reference } : {}),
+        ...(diagnostic.affectedFrames ? { affectedFrames: diagnostic.affectedFrames } : {}),
+      };
+    });
+  const summary = previewCheckSummary(diagnostics);
+  const selectedFrames = frames.filter(
+    (frame) => selected === undefined || selected.has(frame.number),
+  );
+  if (parsed.json) {
+    process.stdout.write(
+      `${JSON.stringify({ file: input, checks: ["renderer", "image-references"], frames: selectedFrames, diagnostics, summary }, null, 2)}\n`,
+    );
+  } else if (diagnostics.length === 0) {
+    process.stdout.write(`${input}: 編集プレビューは問題ありません\n`);
+  } else {
+    for (const diagnostic of diagnostics) {
+      process.stdout.write(
+        `${input}:${diagnostic.location.line}:${diagnostic.location.column}: ${diagnostic.severity} ${diagnostic.code}: ${previewDiagnosticMessage(diagnostic)}${checkFrame(diagnostic.frame)}\n`,
+      );
+    }
+  }
+  if (summary.errors > 0) return EXIT_CODE.lintError;
+  return summary.warnings > 0 ? EXIT_CODE.lintWarning : EXIT_CODE.success;
 }
 
 export interface ParsedCheckArgs {
@@ -1139,6 +1283,7 @@ export async function run(
   if (argv[0] === "export") return runExport(parseExportArgs(argv.slice(1)), dependencies);
   if (argv[0] === "check") return runCheck(parseCheckArgs(argv.slice(1)), dependencies);
   if (argv[0] === "snapshot") return runSnapshot(parseSnapshotArgs(argv.slice(1)), dependencies);
+  if (argv[0] === "preview-check") return runPreviewCheck(parsePreviewCheckArgs(argv.slice(1)));
   const { command, sub, family, json, write, updateSkill, updatePreamble, unknownOptions } =
     parseArgs(argv);
   if (unknownOptions.length > 0) return usageError(`不明なオプション: ${unknownOptions[0]}`, json);

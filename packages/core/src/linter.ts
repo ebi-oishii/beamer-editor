@@ -9,6 +9,7 @@ import {
   isCanvasFrame,
   type RawFrameNode,
   type SourceSpan,
+  type StyleEntry,
 } from "./ast.js";
 import type { FileExistsProbe, ImageFormat, ImageProbe } from "./image.js";
 import {
@@ -23,6 +24,7 @@ import {
   blankComments,
   graphicsPathsOf,
   joinImageSearchPath,
+  missingTemplateImageMessage,
   type TemplateStatus,
 } from "./template.js";
 import { texTokens, VERBATIM_ENVS } from "./tex-scan.js";
@@ -58,6 +60,8 @@ export interface LintDiagnostic {
   severity: LintSeverity;
   message: string;
   span: SourceSpan;
+  /** 展開後に同一の元ソース位置へ戻る画像参照を区別するための実パス。 */
+  reference?: string;
   /**
    * 機械的に直せる診断の修正案。診断の `span`(コマンド全体など)とは別に、
    * 直す箇所だけを元ソースの UTF-16 オフセットで指す。
@@ -806,6 +810,8 @@ function lintImageReferences(
   doc: DeckDocument,
   fileExists: FileExistsProbe | undefined,
   source: string | undefined,
+  styleEntries: readonly StyleEntry[] = doc.style.entries,
+  includeReference = false,
 ): LintDiagnostic[] {
   if (fileExists === undefined) return [];
   const diagnostics: LintDiagnostic[] = [];
@@ -813,21 +819,22 @@ function lintImageReferences(
   const check = (path: string, span: SourceSpan): void => {
     if (fileExists(path)) return;
     const suggestion = suggestImagePath(path, graphicsPaths, fileExists);
-    if (suggestion === null) {
-      diagnostics.push(diagnostic("L004", "error", MISSING_IMAGE_MESSAGE, span));
-      return;
-    }
     const entry = diagnostic(
       "L004",
       "error",
-      `${MISSING_IMAGE_MESSAGE}。デッキのディレクトリ基準で拡張子まで書いてください: ${suggestion}`,
+      suggestion === null
+        ? MISSING_IMAGE_MESSAGE
+        : `${MISSING_IMAGE_MESSAGE}。デッキのディレクトリ基準で拡張子まで書いてください: ${suggestion}`,
       span,
     );
-    const pathSpan = source === undefined ? null : imagePathSpan(source, span, path);
-    if (pathSpan !== null) entry.fix = { span: pathSpan, replacement: suggestion };
+    if (includeReference) entry.reference = path;
+    if (source !== undefined && suggestion !== null) {
+      const pathSpan = imagePathSpan(source, span, path);
+      if (pathSpan !== null) entry.fix = { span: pathSpan, replacement: suggestion };
+    }
     diagnostics.push(entry);
   };
-  for (const entry of doc.style.entries) {
+  for (const entry of styleEntries) {
     if (entry.type === "styleLogo" || entry.type === "styleBackground") {
       check(entry.path, entry.span);
     }
@@ -857,7 +864,11 @@ function validDimensions(value: { width: number; height: number }): boolean {
   );
 }
 
-function lintCanvasImages(doc: DeckDocument, probeImage: ImageProbe | undefined): LintDiagnostic[] {
+function lintCanvasImages(
+  doc: DeckDocument,
+  probeImage: ImageProbe | undefined,
+  preview?: Pick<LintOptions, "fileExists">,
+): LintDiagnostic[] {
   const diagnostics: LintDiagnostic[] = [];
   for (const frame of framesOf(doc)) {
     if (frame.type !== "frame") continue;
@@ -866,34 +877,29 @@ function lintCanvasImages(doc: DeckDocument, probeImage: ImageProbe | undefined)
       for (const item of block.items) {
         if (item.type !== "canvasImage") continue;
         const extension = item.path.match(/\.([^.\\/]+)$/)?.[1]?.toLowerCase();
-        const expectedFormat = extension === undefined ? undefined : IMAGE_FORMATS[extension];
+        const expectedFormat =
+          extension && Object.hasOwn(IMAGE_FORMATS, extension)
+            ? IMAGE_FORMATS[extension]
+            : undefined;
+        let message: string | undefined;
         if (expectedFormat === undefined) {
-          diagnostics.push(
-            diagnostic(
-              "L015",
-              "error",
-              "deckimage は PNG / JPEG / PDF のみ対応しています",
-              item.span,
-            ),
-          );
-          continue;
+          message = "deckimage は PNG / JPEG / PDF のみ対応しています";
+        } else if (preview?.fileExists && !preview.fileExists(item.path)) {
+          message = `deckimage の画像 ${item.path} が見つかりません`;
+        } else if (probeImage) {
+          const result = probeImage(item.path);
+          if (
+            !result.ok ||
+            result.metadata.format !== expectedFormat ||
+            !validDimensions(result.metadata.dimensions)
+          ) {
+            message = "deckimage の画像形式または寸法を確認できません";
+          }
         }
-        if (probeImage === undefined) continue;
-        const result = probeImage(item.path);
-        if (
-          !result.ok ||
-          result.metadata.format !== expectedFormat ||
-          !validDimensions(result.metadata.dimensions)
-        ) {
-          diagnostics.push(
-            diagnostic(
-              "L015",
-              "error",
-              "deckimage の画像形式または寸法を確認できません",
-              item.span,
-            ),
-          );
-        }
+        if (!message) continue;
+        const entry = diagnostic("L015", "error", message, item.span);
+        if (preview) entry.reference = item.path;
+        diagnostics.push(entry);
       }
     });
   }
@@ -938,13 +944,30 @@ function lintTemplates(statuses: readonly TemplateStatus[] | undefined): LintDia
         diagnostic(
           "L023",
           "warning",
-          `テンプレート ${resolvedPath} が参照する画像 ${image} が見つかりません(デッキのディレクトリ基準)`,
+          missingTemplateImageMessage(resolvedPath, image),
           reference.span,
         ),
       );
     }
   }
   return diagnostics;
+}
+
+/** Check image references used by the preview without validating image bytes or running other lint rules. */
+export function previewImageDiagnostics(
+  doc: DeckDocument,
+  options: Pick<LintOptions, "fileExists">,
+  selectedStyleEntries: readonly StyleEntry[] = [],
+) {
+  return [
+    // Decorations are checked by the renderer after its per-frame precedence has
+    // selected the asset. A blanket style/template walk reports inactive slots.
+    ...lintImageReferences(doc, options.fileExists, undefined, selectedStyleEntries, true),
+    ...lintCanvasImages(doc, undefined, options),
+  ].filter(
+    (entry): entry is LintDiagnostic & { code: "L004" | "L015" } =>
+      entry.code === "L004" || entry.code === "L015",
+  );
 }
 
 /** POSIX shell で1語として渡せる形にする(案内コマンドをそのまま実行できるように)。 */

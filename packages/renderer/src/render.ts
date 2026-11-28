@@ -15,9 +15,11 @@ import type {
   BlockNode,
   CanvasNode,
   DeckDocument,
+  ExpansionMap,
   FrameNode,
   InlineNode,
   LengthSpec,
+  LintOptions,
   ListItemNode,
   ParagraphNode,
   PreviewLogo,
@@ -28,11 +30,17 @@ import type {
 import {
   type DetachStatus,
   detachStatusesOf,
+  expandDeck,
   figureLikeRawInline,
   fragmentPreambleOf,
   framesOf,
   frameTitleText,
+  mapExpandedRangeToSourceExact,
+  mapExpandedToSource,
+  missingTemplateImageMessage,
+  previewImageDiagnostics,
   rawFragmentKey,
+  styleImageOverrides,
 } from "@beamer-editor/core";
 import katex from "katex";
 import { MONO_FONT_FALLBACK } from "./font-stack.js";
@@ -76,6 +84,223 @@ export interface RenderedDeck {
   rawBlocks?: RawBlockRef[];
   /** 生ブロックを standalone でコンパイルするときに前置する定義(preamble-extra とマクロ)。 */
   fragmentPreamble?: string;
+  /** HTML 編集プレビューで検出した診断。span は renderDeck に渡された文書の座標。 */
+  diagnostics?: PreviewDiagnostic[];
+}
+
+/** ブラウザーを起動せずレンダラー自身が判定できる編集プレビューの診断。 */
+export interface PreviewDiagnostic {
+  /** KaTeX 未対応や描画例外を区別する安定したコード。 */
+  code: "P001" | "P002" | "P003";
+  severity: "error" | "info";
+  message: string;
+  /** 1 始まりのフレーム番号。文書全体に関わる場合は null。 */
+  frame: { number: number; label: string | null } | null;
+  span: SourceSpan;
+}
+
+export interface PreviewSourceDiagnostic {
+  category: "preview" | "image";
+  code: PreviewDiagnostic["code"] | "L004" | "L015" | "L023";
+  severity: "error" | "info" | "warning";
+  message: string;
+  frame: PreviewDiagnostic["frame"];
+  span: SourceSpan;
+  reference?: string;
+  /** 文書全体の装飾が実際に選ばれたフレーム。--frame の絞り込みにだけ使う。 */
+  affectedFrames?: readonly number[];
+}
+
+/** 人間向け出力では、同じ場所から展開された画像参照も区別できるようにする。 */
+export function previewDiagnosticMessage(
+  diagnostic: Pick<PreviewSourceDiagnostic, "message" | "reference">,
+): string {
+  return diagnostic.reference &&
+    !diagnostic.message.includes(`画像 ${diagnostic.reference} が見つかりません`)
+    ? `${diagnostic.message} (画像: ${diagnostic.reference})`
+    : diagnostic.message;
+}
+
+export interface EditingPreviewOptions extends Pick<LintOptions, "fileExists"> {
+  baseStyle?: PreviewStyle;
+  /** Node/VS Code host が解決した、土台スタイルのアセットと診断元。 */
+  baseAssets?: Partial<Record<"logo" | "background", PreviewAsset>>;
+  replacedTemplateDiagnostics?: readonly TemplateImageDiagnostic[];
+}
+
+export interface TemplateImageDiagnostic {
+  code: "L023";
+  span: SourceSpan;
+  message: string;
+}
+
+type DecorationSlot = "logo" | "background" | "titleBackground";
+
+export interface PreviewAsset {
+  path: string;
+  exists: boolean;
+  /** テンプレート由来は L023、preamble-extra 由来は L004 として通知する。 */
+  source: "template" | "preamble";
+  span: SourceSpan;
+  templatePath?: string;
+}
+
+function decorationDiagnostics(
+  doc: DeckDocument,
+  options: EditingPreviewOptions,
+  map: ExpansionMap,
+  usedSlots: ReadonlyMap<DecorationSlot, ReadonlySet<number>>,
+): PreviewSourceDiagnostic[] {
+  const overrides = styleImageOverrides(doc);
+  // %% style assets are already emitted through lintImageReferences with their
+  // literal source spans (and therefore retain its extension Quick Fix).
+  const logo = overrides.logo ? null : (options.baseAssets?.logo ?? null);
+  const background = overrides.background ? null : (options.baseAssets?.background ?? null);
+  const diagnostics = new Map<string, PreviewSourceDiagnostic>();
+  for (const [slot, asset] of [
+    ["logo", logo],
+    ["background", background],
+  ] as const) {
+    const frames = usedSlots.get(slot);
+    if (!frames || asset === null || asset.exists) continue;
+    const identity = `${asset.source}:${asset.span.start}:${asset.span.end}:${asset.path}`;
+    const prior = diagnostics.get(identity);
+    if (prior) {
+      prior.affectedFrames = [...new Set([...(prior.affectedFrames ?? []), ...frames])].sort(
+        (a, b) => a - b,
+      );
+      continue;
+    }
+    const template = asset.source === "template";
+    diagnostics.set(identity, {
+      category: "image",
+      code: template ? "L023" : "L004",
+      severity: template ? "warning" : "error",
+      message: template
+        ? missingTemplateImageMessage(asset.templatePath ?? "", asset.path)
+        : `プリアンブルが参照する画像 ${asset.path} が見つかりません`,
+      // A decoration applies to the document rather than one source frame.
+      frame: null,
+      span: mapPreviewSpan(map, asset.span),
+      reference: asset.path,
+      affectedFrames: [...frames].sort((a, b) => a - b),
+    });
+  }
+  return [...diagnostics.values()];
+}
+
+function mapPreviewSpan(map: ExpansionMap, span: SourceSpan): SourceSpan {
+  const exact = mapExpandedRangeToSourceExact(map, span);
+  if (exact !== null) return exact;
+  let start = Number.POSITIVE_INFINITY;
+  let end = Number.NEGATIVE_INFINITY;
+  for (const segment of map) {
+    if (segment.expandedEnd <= span.start) continue;
+    if (segment.expandedStart >= span.end) break;
+    const from = segment.exact
+      ? segment.sourceStart + Math.max(0, span.start - segment.expandedStart)
+      : segment.sourceStart;
+    const to = segment.exact
+      ? segment.sourceEnd - Math.max(0, segment.expandedEnd - span.end)
+      : segment.sourceEnd;
+    start = Math.min(start, from);
+    end = Math.max(end, to);
+  }
+  if (start <= end) return { start, end };
+  const offset = mapExpandedToSource(map, span.start);
+  return { start: offset, end: offset };
+}
+
+/** エディタと CLI で同じ展開、描画、位置付き診断を使う。 */
+export function renderEditingPreview(
+  source: string,
+  optionsFor: (doc: DeckDocument) => EditingPreviewOptions = () => ({}),
+) {
+  const expanded = expandDeck(source);
+  const options = optionsFor(expanded.doc);
+  const usedDecorationSlots = new Map<DecorationSlot, Set<number>>();
+  const rendered = renderDeck(expanded.doc, undefined, {
+    ...(options.baseStyle ? { baseStyle: options.baseStyle } : {}),
+    recoverFrameErrors: true,
+    onDecoration: (slot, frameIndex) => {
+      const frames = usedDecorationSlots.get(slot) ?? new Set<number>();
+      frames.add(frameIndex);
+      usedDecorationSlots.set(slot, frames);
+    },
+  });
+  const renderingDiagnostics = (rendered.diagnostics ?? []).map((diagnostic) => ({
+    ...diagnostic,
+    span: mapPreviewSpan(expanded.map, diagnostic.span),
+  }));
+  const diagnostics: PreviewSourceDiagnostic[] = renderingDiagnostics.map((diagnostic) => ({
+    ...diagnostic,
+    category: "preview",
+  }));
+  const overrides = styleImageOverrides(expanded.doc);
+  const selectedStyleEntries = [
+    ["logo", usedDecorationSlots.has("logo") ? overrides.logo : undefined],
+    ["background", usedDecorationSlots.has("background") ? overrides.background : undefined],
+    [
+      "titleBackground",
+      usedDecorationSlots.has("titleBackground") ? overrides.titleBackground : undefined,
+    ],
+  ] as const;
+  const activeStyleEntries = selectedStyleEntries
+    .map(([, entry]) => entry)
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  const imageDiagnostics = previewImageDiagnostics(expanded.doc, options, activeStyleEntries);
+  const seenImages = new Set<string>();
+  for (const diagnostic of imageDiagnostics) {
+    const frame = rendered.frames.find(
+      (frame) =>
+        diagnostic.span.start >= frame.sourceSpan.start &&
+        diagnostic.span.start < frame.sourceSpan.end,
+    );
+    const span = mapPreviewSpan(expanded.map, diagnostic.span);
+    // Different frames and image paths can map back to the same macro call.
+    const key = JSON.stringify([
+      diagnostic.code,
+      frame?.index ?? null,
+      span.start,
+      span.end,
+      diagnostic.reference ?? diagnostic.message,
+    ]);
+    if (seenImages.has(key)) continue;
+    seenImages.add(key);
+    const styleSlot = selectedStyleEntries.find(
+      ([, entry]) =>
+        entry?.span.start === diagnostic.span.start && entry.span.end === diagnostic.span.end,
+    )?.[0];
+    diagnostics.push({
+      category: "image",
+      code: diagnostic.code,
+      severity: diagnostic.severity,
+      message: diagnostic.message,
+      frame: frame ? { number: frame.index, label: frame.label } : null,
+      span,
+      ...(diagnostic.reference ? { reference: diagnostic.reference } : {}),
+      ...(styleSlot
+        ? { affectedFrames: [...(usedDecorationSlots.get(styleSlot) ?? [])].sort((a, b) => a - b) }
+        : {}),
+    });
+  }
+  diagnostics.push(
+    ...decorationDiagnostics(expanded.doc, options, expanded.map, usedDecorationSlots),
+  );
+  diagnostics.sort(
+    (a, b) =>
+      a.span.start - b.span.start || a.span.end - b.span.end || a.code.localeCompare(b.code),
+  );
+  const suppressedTemplateDiagnostics = (options.replacedTemplateDiagnostics ?? []).map(
+    (diagnostic) => ({ ...diagnostic, span: mapPreviewSpan(expanded.map, diagnostic.span) }),
+  );
+  return {
+    deck: { ...rendered, diagnostics: renderingDiagnostics },
+    expansionMap: expanded.map,
+    expandDiagnostics: expanded.diagnostics,
+    diagnostics,
+    suppressedTemplateDiagnostics,
+  };
 }
 
 export interface RawBlockRef {
@@ -91,6 +316,11 @@ const escapeHtml = (s: string) =>
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+
+const KATEX_ERROR_COLOR_NAME = "--beamer-editor-katex-error";
+const KATEX_ERROR_STYLE = new RegExp(
+  String.raw` style="(?:[^"]*;)?color:var\(${KATEX_ERROR_COLOR_NAME}\);`,
+);
 
 /**
  * コンパイルしないと描けないもの(生ブロック・PDF 画像)の代わりに置く箱(#93)。Overleaf のドラフトモードと
@@ -198,6 +428,10 @@ export interface RenderOptions {
    * これを上書きする(theme-design.md「テンプレートの読み込み」)。
    */
   baseStyle?: PreviewStyle;
+  /** 編集プレビューでは一部のフレームが壊れても他を表示し続ける。 */
+  recoverFrameErrors?: boolean;
+  /** 実際に選んだ装飾スロット。preview-check の診断だけが利用する。 */
+  onDecoration?: (slot: DecorationSlot, frameIndex: number) => void;
 }
 
 /** フレーム装飾の集約結果(同種の指定が複数あれば後の指定を使う)。 */
@@ -263,14 +497,6 @@ export function styleCssOf(doc: DeckDocument, baseStyle?: PreviewStyle): string 
   return vars.length > 0 ? `.slide {\n  ${vars.join("\n  ")}\n}` : "";
 }
 
-function math(tex: string, displayMode: boolean): string {
-  try {
-    return katex.renderToString(tex, { displayMode, throwOnError: false, output: "html" });
-  } catch {
-    return `<code class="math-error">${escapeHtml(tex)}</code>`;
-  }
-}
-
 class FrameRenderer {
   /** 現在の \pause 通過数。要素の data-min に反映する。 */
   private pauseCount = 0;
@@ -293,28 +519,79 @@ class FrameRenderer {
   readonly rawBlocks = new Map<string, RawBlockRef>();
   /** 生ブロックの standalone 前置き。キャッシュキーにも入る(定義変更で古い画像が残らない)。 */
   readonly fragmentPreamble: string;
+  readonly diagnostics: PreviewDiagnostic[] = [];
+  private currentFrame: PreviewDiagnostic["frame"] = null;
 
   constructor(
     private readonly doc: DeckDocument,
     private readonly theme: Theme,
     baseStyle?: PreviewStyle,
+    private readonly onDecoration?: RenderOptions["onDecoration"],
   ) {
     this.fragmentPreamble = fragmentPreambleOf(doc);
     // 土台(テンプレート / preamble-extra)を先に置き、%% style 領域で上書きする。
-    if (baseStyle?.logo) this.decorations.logo = baseStyle.logo;
-    if (baseStyle?.background) this.decorations.background = baseStyle.background.path;
+    const { logo, background, titleBackground } = styleImageOverrides(doc);
+    if (logo) {
+      const { x, y, width } = logo.position;
+      this.decorations.logo = { path: logo.path, placement: { kind: "canvas", x, y, width } };
+    } else {
+      this.decorations.logo = baseStyle?.logo ?? null;
+    }
+    this.decorations.background = background?.path ?? baseStyle?.background?.path ?? null;
+    this.decorations.titleBackground = titleBackground?.path ?? null;
     if (baseStyle?.footer !== undefined) this.decorations.footerHtml = escapeHtml(baseStyle.footer);
     for (const entry of doc.style.entries) {
-      if (entry.type === "styleLogo") {
-        const { x, y, width } = entry.position;
-        this.decorations.logo = { path: entry.path, placement: { kind: "canvas", x, y, width } };
-      } else if (entry.type === "styleBackground") {
-        if (entry.slot === "title") this.decorations.titleBackground = entry.path;
-        else this.decorations.background = entry.path;
-      } else if (entry.type === "styleFooter") {
+      if (entry.type === "styleFooter") {
         this.decorations.footerHtml = this.renderInlines(entry.text);
       }
     }
+  }
+
+  private math(tex: string, displayMode: boolean, span: SourceSpan): string {
+    const options = { displayMode, output: "html" as const };
+    try {
+      try {
+        // Unknown commands can throw, but commands rejected by the default trust
+        // policy can render in errorColor even in strict mode. A marker separates
+        // these fallbacks from authored colors. Only ordinary KaTeX HTML is returned.
+        const html = katex.renderToString(tex, {
+          ...options,
+          throwOnError: true,
+          errorColor: `var(${KATEX_ERROR_COLOR_NAME})`,
+        });
+        if (!KATEX_ERROR_STYLE.test(html)) return html;
+      } catch (error) {
+        if (!(error instanceof katex.ParseError)) throw error;
+      }
+      this.diagnostics.push({
+        code: "P001",
+        severity: "info",
+        message: "KaTeX がこの数式命令を描画できません。PDF で組版を確認してください",
+        frame: this.currentFrame,
+        span,
+      });
+      return katex.renderToString(tex, { ...options, throwOnError: false });
+    } catch (error) {
+      this.diagnostics.push({
+        code: "P002",
+        severity: "error",
+        message: `数式の描画中に例外が発生しました: ${error instanceof Error ? error.message : String(error)}`,
+        frame: this.currentFrame,
+        span,
+      });
+      return `<code class="math-error">${escapeHtml(tex)}</code>`;
+    }
+  }
+
+  private rawPreviewDiagnostic(span: SourceSpan): void {
+    this.diagnostics.push({
+      code: "P003",
+      severity: "info",
+      message:
+        "この LaTeX は HTML 編集プレビューでは完全には表示できません。PDF で組版を確認してください",
+      frame: this.currentFrame,
+      span,
+    });
   }
 
   /**
@@ -328,11 +605,18 @@ class FrameRenderer {
     // 表紙では表紙用の背景があればそちらを優先する(TeX 側の \deckbackground[title] と同じ)。
     const background =
       (isTitleFrame ? this.decorations.titleBackground : null) ?? this.decorations.background;
-    if (background && !background.toLowerCase().endsWith(".pdf")) {
-      out += `<img class="deck-background" src="${escapeHtml(background)}">`;
+    if (background) {
+      this.onDecoration?.(
+        isTitleFrame && this.decorations.titleBackground ? "titleBackground" : "background",
+        frameIndex,
+      );
+      if (!background.toLowerCase().endsWith(".pdf")) {
+        out += `<img class="deck-background" src="${escapeHtml(background)}">`;
+      }
     }
     const logo = this.decorations.logo;
     if (logo) {
+      this.onDecoration?.("logo", frameIndex);
       let pos: string;
       if (logo.placement.kind === "canvas") {
         const { x, y, width } = logo.placement;
@@ -400,9 +684,10 @@ class FrameRenderer {
           out += "<br>";
           break;
         case "inlineMath":
-          out += math(node.tex, false);
+          out += this.math(node.tex, false, node.span);
           break;
         case "rawInline":
+          this.rawPreviewDiagnostic(node.span);
           out += `<span class="raw-inline" title="サブセット外(生ブロック)">${escapeHtml(node.tex)}</span>`;
           break;
       }
@@ -542,7 +827,7 @@ class FrameRenderer {
           block.kind === "align" || block.kind === "align*"
             ? `\\begin{aligned}${block.tex}\n\\end{aligned}`
             : `${block.tex}\n`;
-        return `<div class="display-math"${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}>${math(tex, true)}</div>`;
+        return `<div class="display-math"${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}>${this.math(tex, true, block.span)}</div>`;
       }
       case "pause":
         this.pauseCount++;
@@ -560,6 +845,7 @@ class FrameRenderer {
         return this.rawBlockPlaceholder(
           block.tex,
           block.environment,
+          block.span,
           `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}${natural}`,
           status?.eligible ? "figure" : "raw",
         );
@@ -567,12 +853,14 @@ class FrameRenderer {
     }
   }
 
-  /** 生ブロックを部分コンパイルの対象として登録し、プレースホルダに付ける data-raw-key 属性を返す。 */
+  /** 生 LaTeX の箱を診断し、部分コンパイルに登録して data-raw-key 属性を返す。 */
   private rawKeyAttr(
     tex: string,
     environment: string | null,
+    span: SourceSpan,
     mode: "raw" | "figure" = "raw",
   ): string {
+    this.rawPreviewDiagnostic(span);
     const key = rawFragmentKey(tex, this.fragmentPreamble, mode);
     if (!this.rawBlocks.has(key)) this.rawBlocks.set(key, { key, tex, environment, mode });
     return ` data-raw-key="${key}"`;
@@ -600,6 +888,7 @@ class FrameRenderer {
   private rawBlockPlaceholder(
     tex: string,
     environment: string | null,
+    span: SourceSpan,
     attrs: string,
     mode: "raw" | "figure" = "raw",
   ): string {
@@ -610,7 +899,7 @@ class FrameRenderer {
       environment ?? "生 LaTeX",
       tex,
       placeholderStyle(width, aspectOf(width, this.lengthInLinewidth(size.height))),
-      `${attrs}${this.rawKeyAttr(tex, environment, mode)}`,
+      `${attrs}${this.rawKeyAttr(tex, environment, span, mode)}`,
     );
   }
 
@@ -633,6 +922,7 @@ class FrameRenderer {
     return this.rawBlockPlaceholder(
       figure.tex,
       environmentOf(figure.tex),
+      figure.span,
       `${this.flowBlockAttrs(block)}${this.overlayAttrs(null)}${natural}`,
       "figure",
     );
@@ -691,7 +981,7 @@ class FrameRenderer {
           environment ?? "deckfigure",
           item.tex,
           `${posStyle(item.position.x, item.position.y, item.position.width)};aspect-ratio:4 / 3`,
-          `${describe("figure", item.position)}${this.rawKeyAttr(item.tex, environment, "figure")}`,
+          `${describe("figure", item.position)}${this.rawKeyAttr(item.tex, environment, item.span, "figure")}`,
         );
       } else {
         html += placeholderHtml(
@@ -699,7 +989,7 @@ class FrameRenderer {
           environmentOf(item.tex) ?? "生 LaTeX",
           item.tex,
           "width:30%;aspect-ratio:4 / 3",
-          this.rawKeyAttr(item.tex, environmentOf(item.tex)),
+          this.rawKeyAttr(item.tex, environmentOf(item.tex), item.span),
         );
       }
     }
@@ -736,6 +1026,7 @@ class FrameRenderer {
     frameIndex: number,
     frameTotal: number,
   ): { html: string; stepCount: number; canvasElements: RenderedCanvasElement[] } {
+    this.currentFrame = { number: frameIndex, label: frame.options.label };
     this.pauseCount = 0;
     this.maxStep = 1;
     this.linewidthFactor = 1;
@@ -755,6 +1046,8 @@ class FrameRenderer {
   }
 
   renderRawFrame(frame: RawFrameNode, frameIndex: number, frameTotal: number): string {
+    this.currentFrame = { number: frameIndex, label: frame.label };
+    this.rawPreviewDiagnostic(frame.span);
     // 解釈不能フレームでも、\titlepage を含むなら表紙として背景を選ぶ。
     const isTitleFrame = /\\titlepage(?![A-Za-z@])/.test(frame.tex);
     return (
@@ -804,34 +1097,55 @@ export function renderDeck(
   theme: Theme = DEFAULT_THEME,
   options: RenderOptions = {},
 ): RenderedDeck {
-  const renderer = new FrameRenderer(doc, theme, options.baseStyle);
+  const renderer = new FrameRenderer(doc, theme, options.baseStyle, options.onDecoration);
   const allFrames = framesOf(doc);
   const total = allFrames.length;
   const frames: RenderedFrame[] = allFrames.map((frame, i) => {
-    if (frame.type === "rawFrame") {
+    try {
+      if (frame.type === "rawFrame") {
+        return {
+          index: i + 1,
+          label: frame.label,
+          titleText: frameTitleText(frame, i + 1),
+          html: renderer.renderRawFrame(frame, i + 1, total),
+          sourceSpan: frame.span,
+          stepCount: 1,
+          isRaw: true,
+          canvasElements: [],
+        };
+      }
+      const { html, stepCount, canvasElements } = renderer.renderFrame(frame, i + 1, total);
       return {
         index: i + 1,
-        label: frame.label,
+        label: frame.options.label,
         titleText: frameTitleText(frame, i + 1),
-        html: renderer.renderRawFrame(frame, i + 1, total),
+        html,
+        sourceSpan: frame.span,
+        stepCount,
+        isRaw: false,
+        canvasElements,
+      };
+    } catch (error) {
+      if (!options.recoverFrameErrors) throw error;
+      const label = frame.type === "rawFrame" ? frame.label : frame.options.label;
+      renderer.diagnostics.push({
+        code: "P002",
+        severity: "error",
+        message: `フレームの描画中に例外が発生しました: ${error instanceof Error ? error.message : String(error)}`,
+        frame: { number: i + 1, label },
+        span: frame.span,
+      });
+      return {
+        index: i + 1,
+        label,
+        titleText: frameTitleText(frame, i + 1),
+        html: `<div class="slide"><div class="slide-body"><code class="math-error">描画に失敗しました</code></div></div>`,
         sourceSpan: frame.span,
         stepCount: 1,
-        isRaw: true,
+        isRaw: frame.type === "rawFrame",
         canvasElements: [],
       };
     }
-    const { html, stepCount, canvasElements } = renderer.renderFrame(frame, i + 1, total);
-    const titleText = frameTitleText(frame, i + 1);
-    return {
-      index: i + 1,
-      label: frame.options.label,
-      titleText,
-      html,
-      sourceSpan: frame.span,
-      stepCount,
-      isRaw: false,
-      canvasElements,
-    };
   });
   return {
     title: doc.metadata.title ? inlineToPlain(doc.metadata.title.value) : "(無題のデッキ)",
@@ -839,5 +1153,6 @@ export function renderDeck(
     css: styleCssOf(doc, options.baseStyle),
     rawBlocks: [...renderer.rawBlocks.values()],
     fragmentPreamble: renderer.fragmentPreamble,
+    diagnostics: renderer.diagnostics,
   };
 }

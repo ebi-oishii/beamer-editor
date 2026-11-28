@@ -77,6 +77,17 @@ TeX のエラーでない `E_COMPILE` には添えず、3 のまま。終了コ�
 stdout が空で、エラーは stderr に出る(`--json` のときは `error.code` が `E_COMPILE`、lint エラーが
 `error.diagnostics` の JSON)。`--json` では、stdout が空で stderr の JSON に `error` があるかで見分ける。
 
+### 編集プレビュー検査
+
+`deck preview-check` は保存済みの入力を HTML 編集プレビューと同じレンダラーで検査します。組版や成果物の書き出しを伴わない検査です。KaTeX が解釈できない数式 (`P001`)、生 LaTeX (`P003`)、描画例外 (`P002`)、ローカル画像の欠落 (`L004`、`L015`、`L023`) とキャンバス画像の拡張子 (`L015`) を、フレームと分かる範囲のソース位置付きで返します。ロゴと背景は描画時に選ばれる画像を検査します。VS Code では編集中の描画診断を Problems に表示します。
+
+```bash
+pnpm --dir packages/cli deck preview-check talk.slide.tex
+pnpm --dir packages/cli deck preview-check talk.slide.tex --frame intro --json
+```
+
+`--frame` は `deck snapshot` と同じ `N`、label、`label:LABEL` を受け取ります。JSON は対象フレーム、診断コード、重大度、元ソースの行・列（1 始まり）、実行した検査と集計を stdout に出します。画像診断の `reference` は検査した画像パスです。文書全体に関わる診断の `frame` は `null` ですが、装飾画像には実際に選ばれたフレーム番号の `affectedFrames` を含め、`--frame` 時はそのフレームに使われるものだけを報告します。終了コードは診断なし・情報のみが 0、警告が 1、診断エラーが 2、入出力・使用法のエラーが 3 です。操作エラーの JSON は stderr に出ます。
+
 ### デッキ編集スキルの生成
 
 AI による通常のスライド作成・編集は、正本の `.tex` の作成・更新と必要な検証・報告で完了します。通常フローと canvas は依頼の意図と内容に応じて選び、既存フレームを触っただけで変換せず適切な構造を保ちます。HTML・PDF は、その形式の出力を明示的に依頼した場合だけ書き出します。`deck check` による実コンパイル検証や、必要な `deck snapshot` の画像確認は書き出しとは別に行います。

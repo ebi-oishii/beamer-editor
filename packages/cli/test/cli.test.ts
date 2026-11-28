@@ -13,7 +13,7 @@ import {
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import {
   type CompileDeckFramesRequest,
   findDeckFrames,
@@ -27,6 +27,7 @@ import {
   exitCodeForError,
   parseCheckArgs,
   parseExportArgs,
+  parsePreviewCheckArgs,
   parseSnapshotArgs,
   run,
 } from "../src/cli.ts";
@@ -276,6 +277,7 @@ describe("deck lint", () => {
         "  deck lint <file> [--json]           デッキを検査\n" +
         "  deck format <file> [--write] [--json]  デッキを正規化\n" +
         "  deck outline <file> [--json]        フレーム一覧を表示\n" +
+        "  deck preview-check <file> [--frame <N|LABEL|label:LABEL>] [--json]  編集プレビューを検査\n" +
         "  deck check <file> [--tectonic <path>] [--json]  実コンパイルで検査\n" +
         "  deck snapshot <file> -o <directory> [--frame <N|LABEL|label:LABEL>] [--tectonic <path>] [--json]\n" +
         "  deck export <file> --format pdf [-o <file>] [--overwrite] [--tectonic <path>] [--json]\n" +
@@ -283,6 +285,309 @@ describe("deck lint", () => {
         "  deck fonts status [--json]          フォントカタログ全 family の解決状態\n" +
         '  deck fonts fetch [family] [--json]  family(既定 "Noto Sans CJK JP")を取得・配置\n',
     );
+  });
+});
+
+describe("deck preview-check", () => {
+  it("parses the existing frame address form", () => {
+    expect(parsePreviewCheckArgs(["talk.tex", "--frame", "label:42", "--json"])).toEqual({
+      input: "talk.tex",
+      frame: "label:42",
+      json: true,
+      error: undefined,
+    });
+  });
+
+  it("reports renderer diagnostics, missing images, and selected frames in JSON", async () => {
+    const source = await fixture(
+      "preview.tex",
+      String.raw`\begin{document}
+\begin{frame}[label=math]{Math}$\TeXOnlyCommand{x}$\end{frame}
+\begin{frame}[label=image]{Image}\includegraphics{missing.png}\end{frame}
+\end{document}`,
+    );
+    const all = runCli("preview-check", source.argvPath, "--json");
+    expect(all.status).toBe(EXIT_CODE.lintError);
+    expect(JSON.parse(all.stdout)).toMatchObject({
+      checks: ["renderer", "image-references"],
+      frames: [
+        { number: 1, label: "math" },
+        { number: 2, label: "image" },
+      ],
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({
+          code: "P001",
+          severity: "info",
+          frame: { number: 1, label: "math" },
+        }),
+        expect.objectContaining({
+          code: "L004",
+          severity: "error",
+          frame: { number: 2, label: "image" },
+        }),
+      ]),
+      summary: { errors: 1, warnings: 0, infos: 1 },
+    });
+
+    const frame = runCli("preview-check", source.argvPath, "--frame", "math", "--json");
+    expect(frame.status).toBe(EXIT_CODE.success);
+    expect(JSON.parse(frame.stdout)).toMatchObject({
+      frames: [{ number: 1, label: "math" }],
+      diagnostics: [expect.objectContaining({ code: "P001", frame: { number: 1, label: "math" } })],
+      summary: { errors: 0, infos: 1 },
+    });
+  });
+
+  it("returns an input error for an unknown frame selector", async () => {
+    const source = await fixture(
+      "preview.tex",
+      String.raw`\begin{document}\begin{frame}{One}A\end{frame}\end{document}`,
+    );
+    const result = runCli("preview-check", source.argvPath, "--frame", "absent", "--json");
+    expect(result.status).toBe(EXIT_CODE.operationalFailure);
+    expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "E_INPUT" } });
+  });
+
+  it("checks effective decorations and reports KaTeX and raw placeholders as information", async () => {
+    const source = await fixture(
+      "preview.tex",
+      String.raw`%% preamble-extra:begin
+\decklogo[x=0,y=0,w=0.1]{preamble-logo.png}
+\deckbackground{preamble-bg.png}
+%% preamble-extra:end
+%% style:begin
+\decklogo[x=0,y=0,w=0.1]{superseded-logo.png}
+\decklogo[x=0,y=0,w=0.1]{available.png}
+\deckbackground{available.png}
+\deckbackground[title]{available.png}
+%% style:end
+\begin{document}
+\begin{frame}[label=link]{Link}$\href{https://example.com}{x}$\end{frame}
+\begin{frame}[label=wrapped]{Wrapped}
+\resizebox{0.5\textwidth}{!}{\begin{tikzpicture}\end{tikzpicture}}
+\end{frame}
+\begin{frame}[label=raw]{Canvas}
+\begin{deckcanvas}\begin{tikzpicture}\end{tikzpicture}\end{deckcanvas}
+\end{frame}
+\end{document}`,
+    );
+    await writeFile(join(dirname(source.path), "available.png"), "exists");
+    const result = runCli("preview-check", source.argvPath, "--json");
+
+    expect(result.status).toBe(EXIT_CODE.success);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      diagnostics: [
+        { code: "P001", severity: "info", frame: { label: "link" }, location: { line: 12 } },
+        { code: "P003", severity: "info", frame: { label: "wrapped" }, location: { line: 14 } },
+        { code: "P003", severity: "info", frame: { label: "raw" }, location: { line: 17 } },
+      ],
+      summary: { errors: 0, warnings: 0, infos: 3 },
+    });
+
+    const text = await readFile(source.path, "utf8");
+    await writeFile(source.path, text.replace("\\deckbackground{available.png}\n", ""));
+    const titleOnlyOverride = runCli("preview-check", source.argvPath, "--json");
+    expect(titleOnlyOverride.status).toBe(EXIT_CODE.lintError);
+    const { diagnostics } = JSON.parse(titleOnlyOverride.stdout);
+    expect(diagnostics.filter((entry: { code: string }) => entry.code === "L004")).toEqual([
+      expect.objectContaining({
+        frame: null,
+        message: expect.stringContaining("preamble-bg.png"),
+      }),
+    ]);
+  });
+
+  it("reports missing canvas and template assets with the editor's local-path rules", async () => {
+    const directory = await temporaryDirectory();
+    const source = await fixture(
+      "preview-assets.tex",
+      String.raw`%% preamble-extra:begin
+\usepackage{templates/corp/beamerthemecorp}
+%% preamble-extra:end
+\begin{document}
+\begin{frame}[label=canvas]\begin{deckcanvas}\deckimage[x=0,y=0,w=1]{missing.png}\end{deckcanvas}\end{frame}
+\end{document}`,
+    );
+    await mkdir(`${directory}/templates/corp`, { recursive: true });
+    await writeFile(
+      `${directory}/templates/corp/beamerthemecorp.sty`,
+      String.raw`\logo{\includegraphics{templates/corp/missing-logo.png}}`,
+    );
+    const deck = `${directory}/preview-assets.tex`;
+    await writeFile(deck, await readFile(source.path));
+    const result = runCli("preview-check", relative(ROOT, deck), "--json");
+    expect(result.status).toBe(EXIT_CODE.lintError);
+    expect(JSON.parse(result.stdout).diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "L015",
+          severity: "error",
+          frame: { number: 1, label: "canvas" },
+        }),
+        expect.objectContaining({ code: "L023", severity: "warning", frame: null }),
+      ]),
+    );
+  });
+
+  it("uses expanded frames and only the decorations selected by the renderer", async () => {
+    const generated = await fixture(
+      "generated-preview.tex",
+      String.raw`%% macros:begin
+\newcommand{\twoslides}{\begin{frame}[label=one]{One}\includegraphics{missing-one.png}\end{frame}\begin{frame}[label=two]{Two}\includegraphics{missing-two.png}\includegraphics{missing-three.png}\end{frame}}
+%% macros:end
+\begin{document}\twoslides\end{document}`,
+    );
+    const all = runCli("preview-check", generated.argvPath, "--json");
+    expect(all.status).toBe(EXIT_CODE.lintError);
+    const generatedDiagnostics = JSON.parse(all.stdout).diagnostics.filter(
+      (entry: { code: string }) => entry.code === "L004",
+    );
+    expect(generatedDiagnostics).toHaveLength(3);
+    expect(generatedDiagnostics.map((entry: { reference: string }) => entry.reference)).toEqual([
+      "missing-one.png",
+      "missing-two.png",
+      "missing-three.png",
+    ]);
+    const second = runCli("preview-check", generated.argvPath, "--frame", "two", "--json");
+    expect(second.status).toBe(EXIT_CODE.lintError);
+    expect(JSON.parse(second.stdout).diagnostics).toEqual([
+      expect.objectContaining({ code: "L004", frame: { number: 2, label: "two" } }),
+      expect.objectContaining({ code: "L004", frame: { number: 2, label: "two" } }),
+    ]);
+
+    const directory = await temporaryDirectory();
+    await mkdir(`${directory}/templates`, { recursive: true });
+    const template = `${directory}/templates/theme.sty`;
+    await writeFile(
+      template,
+      String.raw`\deckbackground{missing-template.png}
+\decklogo[x=0,y=0,w=0.1]{missing-template.png}`,
+    );
+    await writeFile(`${directory}/available.png`, "exists");
+    const active = `${directory}/active.tex`;
+    await writeFile(
+      active,
+      String.raw`%% preamble-extra:begin
+\usepackage{templates/theme}
+%% preamble-extra:end
+\begin{document}\begin{frame}{Visible}x\end{frame}\end{document}`,
+    );
+    const activeResult = runCli("preview-check", relative(ROOT, active), "--json");
+    expect(activeResult.status).toBe(EXIT_CODE.lintWarning);
+    expect(JSON.parse(activeResult.stdout).diagnostics).toEqual([
+      expect.objectContaining({ code: "L023", frame: null, reference: "missing-template.png" }),
+    ]);
+
+    await writeFile(
+      template,
+      String.raw`\setbeamertemplate{background}{\includegraphics{missing-template.png}}`,
+    );
+    const shadowed = `${directory}/shadowed.tex`;
+    await writeFile(
+      shadowed,
+      String.raw`%% preamble-extra:begin
+\usepackage{templates/theme}
+%% preamble-extra:end
+%% style:begin
+\deckbackground{available.png}
+%% style:end
+\begin{document}\begin{frame}{Visible}x\end{frame}\end{document}`,
+    );
+    expect(runCli("preview-check", relative(ROOT, shadowed), "--json").status).toBe(
+      EXIT_CODE.success,
+    );
+
+    const titleOnly = `${directory}/title-only.tex`;
+    await writeFile(
+      titleOnly,
+      String.raw`%% style:begin
+\deckbackground{missing-unused.png}
+\deckbackground[title]{available.png}
+%% style:end
+\begin{document}\begin{frame}\titlepage\end{frame}\end{document}`,
+    );
+    expect(runCli("preview-check", relative(ROOT, titleOnly), "--json").status).toBe(
+      EXIT_CODE.success,
+    );
+
+    const noTitle = `${directory}/no-title.tex`;
+    await writeFile(
+      noTitle,
+      String.raw`%% style:begin
+\deckbackground[title]{missing-unused.png}
+%% style:end
+\begin{document}\begin{frame}{Body}x\end{frame}\end{document}`,
+    );
+    expect(runCli("preview-check", relative(ROOT, noTitle), "--json").status).toBe(
+      EXIT_CODE.success,
+    );
+  });
+
+  it("filters document decoration diagnostics by the frames that actually select them", async () => {
+    const source = await fixture(
+      "preview-decoration-frames.tex",
+      String.raw`%% style:begin
+\deckbackground{missing-body.png}
+\deckbackground[title]{missing-cover.png}
+%% style:end
+\begin{document}
+\begin{frame}[label=cover]\titlepage\end{frame}
+\begin{frame}[label=introduction]{Introduction}x\end{frame}
+\end{document}`,
+    );
+    const body = runCli("preview-check", source.argvPath, "--frame", "introduction", "--json");
+    expect(body.status).toBe(EXIT_CODE.lintError);
+    expect(JSON.parse(body.stdout).diagnostics).toEqual([
+      expect.objectContaining({ reference: "missing-body.png", frame: null, affectedFrames: [2] }),
+    ]);
+    const cover = runCli("preview-check", source.argvPath, "--frame", "cover", "--json");
+    expect(cover.status).toBe(EXIT_CODE.lintError);
+    expect(JSON.parse(cover.stdout).diagnostics).toEqual([
+      expect.objectContaining({ reference: "missing-cover.png", frame: null, affectedFrames: [1] }),
+    ]);
+
+    const input = await readFile(source.path, "utf8");
+    await writeFile(source.path, input.replace("\\deckbackground{missing-body.png}\n", ""));
+    const cleanBody = runCli("preview-check", source.argvPath, "--frame", "introduction", "--json");
+    expect(cleanBody.status).toBe(EXIT_CODE.success);
+    expect(JSON.parse(cleanBody.stdout).diagnostics).toEqual([]);
+  });
+
+  it("prints expanded image references in human-readable output", async () => {
+    const source = await fixture(
+      "preview-human-reference.tex",
+      String.raw`%% macros:begin
+\newcommand{\pairimages}{\includegraphics{画像}\includegraphics{参照先}}
+%% macros:end
+\begin{document}\begin{frame}{Images}\pairimages\end{frame}\end{document}`,
+    );
+    const result = runCli("preview-check", source.argvPath);
+    expect(result.status).toBe(EXIT_CODE.lintError);
+    expect(result.stdout).toContain("画像: 画像");
+    expect(result.stdout).toContain("画像: 参照先");
+  });
+
+  it("validates deckimage paths after macro expansion", async () => {
+    const directory = await temporaryDirectory();
+    await writeFile(`${directory}/available.png`, "exists");
+    const source = `${directory}/canvas.tex`;
+    await writeFile(
+      source,
+      String.raw`%% macros:begin
+\newcommand{\asset}{available.png}
+%% macros:end
+\begin{document}\begin{frame}[label=canvas]{Canvas}\begin{deckcanvas}\deckimage[x=0,y=0,w=1]{\asset}\end{deckcanvas}\end{frame}\end{document}`,
+    );
+    expect(runCli("preview-check", relative(ROOT, source), "--json").status).toBe(
+      EXIT_CODE.success,
+    );
+    const invalid = await readFile(source, "utf8");
+    await writeFile(source, invalid.replace("available.png", "unsupported.svg"));
+    const result = runCli("preview-check", relative(ROOT, source), "--json");
+    expect(result.status).toBe(EXIT_CODE.lintError);
+    expect(JSON.parse(result.stdout).diagnostics).toEqual([
+      expect.objectContaining({ code: "L015", frame: { number: 1, label: "canvas" } }),
+    ]);
   });
 });
 

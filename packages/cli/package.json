@@ -14,6 +14,7 @@
     "@beamer-editor/compiler": "workspace:*",
     "@beamer-editor/core": "workspace:*",
     "@beamer-editor/html-export": "workspace:*",
+    "@beamer-editor/renderer": "workspace:*",
     "pdfjs-dist": "6.3.289"
   },
   "devDependencies": {

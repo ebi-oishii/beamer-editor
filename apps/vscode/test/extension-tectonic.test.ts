@@ -1,7 +1,8 @@
-import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { compileFragment, PdfReviewContent } from "@beamer-editor/compiler";
+import { managedPreambleBlock } from "@beamer-editor/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as vscode from "vscode";
 import type { ExportDocument, ExportHost } from "../src/export-controller";
@@ -20,6 +21,7 @@ const state = vi.hoisted(() => ({
   compilePdf: vi.fn<typeof import("@beamer-editor/compiler").compilePdf>(),
   publishPdf: vi.fn<typeof import("@beamer-editor/compiler").publishPdf>(),
   postPdfState: vi.fn(),
+  setDiagnostics: vi.fn<(uri: vscode.Uri, diagnostics: readonly vscode.Diagnostic[]) => void>(),
   getConfiguration: vi.fn(),
   fileChanges: [] as Array<(uri: vscode.Uri) => void>,
   fileCreates: [] as Array<(uri: vscode.Uri) => void>,
@@ -30,6 +32,7 @@ const state = vi.hoisted(() => ({
   pdfIdentity: vi.fn<() => Promise<string | undefined>>(),
   saveDialog: vi.fn(),
   saveListeners: [] as Array<(document: vscode.TextDocument) => void>,
+  openListeners: [] as Array<(document: vscode.TextDocument) => void>,
   changeListeners: [] as Array<(event: vscode.TextDocumentChangeEvent) => void>,
   configurationListeners: [] as Array<(event: vscode.ConfigurationChangeEvent) => void>,
 }));
@@ -64,6 +67,13 @@ vi.mock("vscode", () => {
     TreeItem: class {},
     RelativePattern: class {},
     DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2 },
+    Diagnostic: class {
+      constructor(
+        readonly range: unknown,
+        readonly message: string,
+        readonly severity: number,
+      ) {}
+    },
     CodeActionKind: { QuickFix: "quickfix" },
     DocumentDropOrPasteEditKind: {
       Empty: { append: (...parts: string[]) => ({ value: parts.join(".") }) },
@@ -94,7 +104,9 @@ vi.mock("vscode", () => {
       isTrusted: true,
       textDocuments: [],
       getConfiguration: state.getConfiguration,
-      onDidOpenTextDocument: disposable,
+      getWorkspaceFolder: () => undefined,
+      onDidOpenTextDocument: (callback: (document: vscode.TextDocument) => void) =>
+        listener(state.openListeners, callback),
       onDidChangeTextDocument: (callback: (event: vscode.TextDocumentChangeEvent) => void) =>
         listener(state.changeListeners, callback),
       onDidSaveTextDocument: (callback: (document: vscode.TextDocument) => void) =>
@@ -122,7 +134,8 @@ vi.mock("vscode", () => {
       },
     },
     languages: {
-      createDiagnosticCollection: disposable,
+      createDiagnosticCollection: () => ({ ...disposable(), set: state.setDiagnostics }),
+      match: () => 1,
       registerCodeActionsProvider: disposable,
       registerFoldingRangeProvider: disposable,
       registerHoverProvider: disposable,
@@ -200,6 +213,7 @@ describe("extension の Tectonic 接続", () => {
     state.activeEditor = undefined;
     state.commands.clear();
     state.saveListeners.splice(0);
+    state.openListeners.splice(0);
     state.fileChanges.splice(0);
     state.fileCreates.splice(0);
     state.fileDeletes.splice(0);
@@ -256,6 +270,229 @@ describe("extension の Tectonic 接続", () => {
       expect(state.exportHost?.tectonicPath(document as ExportDocument)).toBe(expected);
       expect(state.getConfiguration).toHaveBeenLastCalledWith("beamerEditor", document.uri);
     }
+  });
+
+  it("現在の描画だけを Problems に表示し、画像作成後に診断を更新する", () => {
+    openPdfTestDocument();
+    state.getConfiguration.mockImplementation(() => ({
+      get: (name: string, fallback: unknown) =>
+        name === "preview.compileRawBlocks" ? false : fallback,
+    }));
+    const directory = mkdtempSync(join(tmpdir(), "beamer-preview-problems-"));
+    state.temporaryDirectories.push(directory);
+    const file = join(directory, "deck.slide.tex");
+    const source = String.raw`\begin{document}
+\begin{frame}[label=intro]{Intro}
+  \includegraphics{figure.png}
+  $\TeXOnlyCommand{x}$
+\end{frame}
+\end{document}`;
+    let version = 1;
+    const document = {
+      uri: Uri.file(file),
+      fileName: file,
+      isDirty: false,
+      get version() {
+        return version;
+      },
+      getText: () => source,
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    } as vscode.TextDocument;
+    state.activeEditor = { document } as vscode.TextEditor;
+    state.commands.get("beamerEditor.openPreview")?.();
+    const { render, onRendered } = state.previewOptions ?? {};
+    if (!render || !onRendered) throw new Error("expected editing preview");
+    const codes = () => state.setDiagnostics.mock.lastCall?.[1].map((entry) => entry.code);
+
+    const first = render(source, version);
+    onRendered(first, document);
+    expect(codes()).toEqual(["L004", "P001"]);
+    expect(state.setDiagnostics.mock.lastCall?.[1][0]?.message).toContain("フレーム 1 [intro]");
+
+    version++;
+    state.setDiagnostics.mockClear();
+    onRendered(first, document);
+    expect(state.setDiagnostics).not.toHaveBeenCalled();
+    onRendered(render(source, version), document);
+    expect(codes()).toEqual(["L004", "P001"]);
+
+    const image = join(directory, "figure.png");
+    writeFileSync(image, "preview checks existence");
+    state.fileCreates.at(-1)?.(Uri.file(image));
+    expect(state.refreshPreview).toHaveBeenCalled();
+    expect(codes()).toEqual([]);
+    onRendered(render(source, version), document);
+    expect(codes()).toEqual(["P001"]);
+  });
+
+  it("Problems は展開後の画像参照を使い、一致する lint の修正候補を残す", () => {
+    openPdfTestDocument();
+    state.getConfiguration.mockImplementation(() => ({
+      get: (name: string, fallback: unknown) =>
+        name === "preview.compileRawBlocks" ? false : fallback,
+    }));
+    const directory = mkdtempSync(join(tmpdir(), "beamer-preview-image-macro-"));
+    state.temporaryDirectories.push(directory);
+    const file = join(directory, "deck.slide.tex");
+    const image = join(directory, "available.png");
+    writeFileSync(image, "exists");
+    writeFileSync(join(directory, "literal.png"), "exists");
+    const source = String.raw`%% macros:begin
+\newcommand{\asset}{available.png}
+%% macros:end
+\begin{document}
+\begin{frame}[label=images]{Images}
+  \includegraphics{\asset}
+  \includegraphics{literal}
+  \begin{deckcanvas}\deckimage[x=0,y=0,w=1]{\asset}\end{deckcanvas}
+\end{frame}
+\end{document}`;
+    let currentSource = source;
+    let version = 1;
+    const document = {
+      uri: Uri.file(file),
+      fileName: file,
+      isDirty: false,
+      get version() {
+        return version;
+      },
+      getText: () => currentSource,
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    } as vscode.TextDocument;
+    state.activeEditor = { document } as vscode.TextEditor;
+    const imageProblems = () =>
+      state.setDiagnostics.mock.lastCall?.[1].filter((entry) => entry.code === "L004");
+    for (const listener of state.openListeners) listener(document);
+    expect(imageProblems()).toHaveLength(2);
+
+    state.commands.get("beamerEditor.openPreview")?.();
+    const { render, onRendered } = state.previewOptions ?? {};
+    if (!render || !onRendered) throw new Error("expected editing preview");
+    const available = render(source, document.version);
+    expect(available.deck.frames[0]?.html).toContain('src="available.png"');
+    onRendered(available, document);
+    expect(imageProblems()).toEqual([
+      expect.objectContaining({
+        source: "beamer-editor",
+        message: expect.stringContaining("literal.png"),
+      }),
+    ]);
+    expect(
+      state.setDiagnostics.mock.lastCall?.[1].filter((entry) => entry.code === "L015"),
+    ).toEqual([]);
+
+    currentSource = source.replace("available.png", "unsupported.svg");
+    version++;
+    for (const listener of state.openListeners) listener(document);
+    onRendered(render(currentSource, version), document);
+    expect(state.setDiagnostics.mock.lastCall?.[1]).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "L015" })]),
+    );
+
+    currentSource = source;
+    version++;
+    for (const listener of state.openListeners) listener(document);
+    rmSync(image);
+    state.fileDeletes.at(-1)?.(Uri.file(image));
+    onRendered(render(currentSource, version), document);
+    expect(imageProblems()).toHaveLength(2);
+  });
+
+  it.each([
+    { name: "declarative theme", themeCode: "", afterLoad: "", beforeManaged: "", keep: false },
+    {
+      name: "theme saves its background in a box",
+      themeCode: String.raw`\newsavebox{\ThemeBackgroundBox}
+\sbox{\ThemeBackgroundBox}{\usebeamertemplate{background}}`,
+      afterLoad: "",
+      beforeManaged: "",
+      keep: true,
+    },
+    {
+      name: "preamble uses the background before overriding it",
+      themeCode: "",
+      afterLoad: String.raw`\usebeamertemplate{background}`,
+      beforeManaged: "",
+      keep: true,
+    },
+    {
+      name: "preamble installs a package hook before loading the theme",
+      themeCode: "",
+      afterLoad: "",
+      beforeManaged: String.raw`\AddToHook{package/templates/theme/after}{\usebeamertemplate{background}}`,
+      keep: true,
+    },
+  ])("Problems preserves the appropriate template L023 for $name", ({
+    themeCode,
+    afterLoad,
+    beforeManaged,
+    keep,
+  }) => {
+    openPdfTestDocument();
+    state.getConfiguration.mockImplementation(() => ({
+      get: (name: string, fallback: unknown) =>
+        name === "preview.compileRawBlocks" ? false : fallback,
+    }));
+    const directory = mkdtempSync(join(tmpdir(), "beamer-preview-template-problems-"));
+    state.temporaryDirectories.push(directory);
+    mkdirSync(join(directory, "templates"));
+    writeFileSync(join(directory, "available.png"), "exists");
+    writeFileSync(
+      join(directory, "templates", "theme.sty"),
+      String.raw`\setbeamertemplate{background}{\includegraphics{missing-shared.png}}
+\setbeamertemplate{title page}{\includegraphics{missing-shared.png}}
+\setbeamertemplate{background canvas}{\includegraphics{missing-canvas.png}}
+\AtBeginDocument{\setbeamertemplate{background}{\includegraphics{missing-hook.png}}}
+\setbeamertemplate{background}{\includegraphics{missing-superseded.png}}
+${themeCode}`,
+    );
+    const file = join(directory, "deck.slide.tex");
+    const source = String.raw`\documentclass[aspectratio=169]{beamer}
+${beforeManaged}
+${managedPreambleBlock()}
+%% preamble-extra:begin
+\usepackage{templates/theme}
+${afterLoad}
+%% preamble-extra:end
+%% style:begin
+\deckbackground{available.png}
+%% style:end
+%% macros:begin
+\newcommand{\pairimages}{\includegraphics{one.png}\includegraphics{two.png}}
+%% macros:end
+\begin{document}
+\begin{frame}{Cover}\titlepage\end{frame}
+\begin{frame}{Body}\pairimages\end{frame}
+\end{document}`;
+    const document = {
+      uri: Uri.file(file),
+      fileName: file,
+      isDirty: false,
+      version: 1,
+      getText: () => source,
+      positionAt: (offset: number) => ({ line: 0, character: offset }),
+    } as vscode.TextDocument;
+    state.activeEditor = { document } as vscode.TextEditor;
+    for (const listener of state.openListeners) listener(document);
+    const problems = (code: string) =>
+      state.setDiagnostics.mock.lastCall?.[1].filter((entry) => entry.code === code);
+    expect(problems("L023")).toHaveLength(4);
+    state.commands.get("beamerEditor.openPreview")?.();
+    const { render, onRendered } = state.previewOptions ?? {};
+    if (!render || !onRendered) throw new Error("expected editing preview");
+    onRendered(render(source, document.version), document);
+    expect(problems("L023")).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("missing-shared.png") }),
+      expect.objectContaining({ message: expect.stringContaining("missing-canvas.png") }),
+      expect.objectContaining({ message: expect.stringContaining("missing-hook.png") }),
+      ...(keep
+        ? [expect.objectContaining({ message: expect.stringContaining("missing-superseded.png") })]
+        : []),
+    ]);
+    expect(problems("L004")).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("画像: one.png") }),
+      expect.objectContaining({ message: expect.stringContaining("画像: two.png") }),
+    ]);
   });
 
   it.each([

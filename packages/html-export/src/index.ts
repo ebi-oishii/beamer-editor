@@ -21,6 +21,19 @@ import { renderDeck } from "@beamer-editor/renderer";
 import { isVisibleAtStep, PREVIEW_CSS } from "@beamer-editor/ui";
 import { nodePreviewBaseStyle } from "./template-style.js";
 
+export {
+  baseStyleOf,
+  editingPreviewOptions,
+  imageExists,
+  nodeTemplateFileSystem,
+  type ResolvedTemplate,
+  resolveImagePath,
+  resolveTemplate,
+  resolveTemplates,
+  type TemplateFileSystem,
+  templateStatuses,
+} from "./preview-inputs.js";
+
 export type HtmlExportErrorCode =
   | "E_INPUT"
   | "E_OUTPUT_EXISTS"
