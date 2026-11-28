@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { compileFragment, PdfReviewContent } from "@beamer-editor/compiler";
+import { managedPreambleBlock } from "@beamer-editor/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as vscode from "vscode";
 import type { ExportDocument, ExportHost } from "../src/export-controller";
@@ -397,7 +398,36 @@ describe("extension の Tectonic 接続", () => {
     expect(imageProblems()).toHaveLength(2);
   });
 
-  it("Problems keeps opaque template L023 but suppresses a superseded simple decoration", () => {
+  it.each([
+    { name: "declarative theme", themeCode: "", afterLoad: "", beforeManaged: "", keep: false },
+    {
+      name: "theme saves its background in a box",
+      themeCode: String.raw`\newsavebox{\ThemeBackgroundBox}
+\sbox{\ThemeBackgroundBox}{\usebeamertemplate{background}}`,
+      afterLoad: "",
+      beforeManaged: "",
+      keep: true,
+    },
+    {
+      name: "preamble uses the background before overriding it",
+      themeCode: "",
+      afterLoad: String.raw`\usebeamertemplate{background}`,
+      beforeManaged: "",
+      keep: true,
+    },
+    {
+      name: "preamble installs a package hook before loading the theme",
+      themeCode: "",
+      afterLoad: "",
+      beforeManaged: String.raw`\AddToHook{package/templates/theme/after}{\usebeamertemplate{background}}`,
+      keep: true,
+    },
+  ])("Problems preserves the appropriate template L023 for $name", ({
+    themeCode,
+    afterLoad,
+    beforeManaged,
+    keep,
+  }) => {
     openPdfTestDocument();
     state.getConfiguration.mockImplementation(() => ({
       get: (name: string, fallback: unknown) =>
@@ -409,15 +439,20 @@ describe("extension の Tectonic 接続", () => {
     writeFileSync(join(directory, "available.png"), "exists");
     writeFileSync(
       join(directory, "templates", "theme.sty"),
-      String.raw`\setbeamertemplate{background}{\includegraphics{missing-superseded.png}}
-\setbeamertemplate{background}{\includegraphics{missing-shared.png}}
+      String.raw`\setbeamertemplate{background}{\includegraphics{missing-shared.png}}
 \setbeamertemplate{title page}{\includegraphics{missing-shared.png}}
 \setbeamertemplate{background canvas}{\includegraphics{missing-canvas.png}}
-\AtBeginDocument{\setbeamertemplate{background}{\includegraphics{missing-hook.png}}}`,
+\AtBeginDocument{\setbeamertemplate{background}{\includegraphics{missing-hook.png}}}
+\setbeamertemplate{background}{\includegraphics{missing-superseded.png}}
+${themeCode}`,
     );
     const file = join(directory, "deck.slide.tex");
-    const source = String.raw`%% preamble-extra:begin
+    const source = String.raw`\documentclass[aspectratio=169]{beamer}
+${beforeManaged}
+${managedPreambleBlock()}
+%% preamble-extra:begin
 \usepackage{templates/theme}
+${afterLoad}
 %% preamble-extra:end
 %% style:begin
 \deckbackground{available.png}
@@ -450,6 +485,9 @@ describe("extension の Tectonic 接続", () => {
       expect.objectContaining({ message: expect.stringContaining("missing-shared.png") }),
       expect.objectContaining({ message: expect.stringContaining("missing-canvas.png") }),
       expect.objectContaining({ message: expect.stringContaining("missing-hook.png") }),
+      ...(keep
+        ? [expect.objectContaining({ message: expect.stringContaining("missing-superseded.png") })]
+        : []),
     ]);
     expect(problems("L004")).toEqual([
       expect.objectContaining({ message: expect.stringContaining("画像: one.png") }),

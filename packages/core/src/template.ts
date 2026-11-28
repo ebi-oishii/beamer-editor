@@ -21,7 +21,6 @@ import type {
   StyleColorRole,
   StyleLogoNode,
 } from "./ast.js";
-import { texTokens } from "./tex-scan.js";
 
 // ---------------------------------------------------------------------------
 // 参照の抽出
@@ -615,45 +614,24 @@ export function templateImagePaths(source: string): string[] {
   return [...paths];
 }
 
-/** Paths used exclusively by a simple, top-level Beamer background declaration. */
+/** Paths used exclusively by direct background declarations in a declarative theme. */
 export function templateBackgroundImagePaths(source: string): string[] {
+  if (source.includes("^^")) return [];
   const text = blankComments(source);
-  const live = new Set(
-    [...texTokens(text)].flatMap((token) =>
-      token.kind === "command" && token.name === "setbeamertemplate" ? [token.start] : [],
-    ),
-  );
-  // Arguments to commands such as \AtBeginDocument are not immediate declarations.
-  const topLevel = new Set<number>();
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "\\") {
-      if (live.has(i)) topLevel.add(i);
-      i++;
-    } else if (text[i] === "{") {
-      const group = balancedGroup(text, i);
-      if (!group) break;
-      i = group.next - 1;
-    }
-  }
-  const ranges: { start: number; end: number }[] = [];
-  for (const entry of commandGroups(text, "setbeamertemplate", 2)) {
-    const name = (entry.groups[0] as string).trim();
-    const simpleImage = /^\s*\\includegraphics\*?\s*(?:\[[^\]]*\])?\s*\{[^{}]+\}\s*$/.test(
-      entry.groups[1] as string,
-    );
-    // \deckbackground only replaces background, leaving background canvas and native logos intact.
-    if (topLevel.has(entry.index) && name === "background" && simpleImage)
-      ranges.push({ start: entry.index, end: entry.end });
-  }
+  const declarations =
+    /(?:(\\AtBeginDocument)\s*\{\s*)?\\setbeamertemplate\s*\{(background(?: canvas)?|title page)\}\s*\{\s*\\includegraphics\*?\s*(?:\[[^\]{}]*\]\s*)?\{([^{}\\#]+)\}\s*\}(\s*\})?/g;
   const decoration = new Set<string>();
   const opaque = new Set<string>();
-  for (const image of includeGraphics(text)) {
-    const path = expandMacroPath(image.path, text);
-    if (ranges.some((range) => image.index >= range.start && image.index < range.end))
-      decoration.add(path);
-    else opaque.add(path);
+  // Only recognize commands that store a template. Any other command could use
+  // the background during package loading, including through another macro.
+  let end = 0;
+  for (const match of text.matchAll(declarations)) {
+    const [declaration, hook, slot, path, hookEnd] = match;
+    if (text.slice(end, match.index).trim() !== "" || Boolean(hook) !== Boolean(hookEnd)) return [];
+    end = match.index + declaration.length;
+    const target = slot === "background" && !hook ? decoration : opaque;
+    target.add((path ?? "").trim());
   }
-  for (const { groups } of commandGroups(text, "pgfdeclareimage", 2))
-    opaque.add(expandMacroPath((groups[1] as string).trim(), text));
+  if (text.slice(end).trim() !== "") return [];
   return [...decoration].filter((path) => !opaque.has(path));
 }

@@ -2,10 +2,13 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import {
+  blankComments,
   type DeckDocument,
   extractPreviewStyle,
   graphicsPathsOf,
+  isCurrentManagedPreamble,
   joinImageSearchPath,
+  locateManagedPreamble,
   mergePreviewStyles,
   missingTemplateImageMessage,
   type PreviewStyle,
@@ -101,6 +104,24 @@ export function templateStatuses(doc: DeckDocument, fs: TemplateFileSystem): Tem
   }));
 }
 
+/** Recognize a single template load immediately followed by the managed override. */
+function templateLoadBeforeOverride(
+  doc: DeckDocument,
+  overrideStart: number,
+): TemplateReference["span"] | undefined {
+  const preamble = doc.managedPreamble.tex.slice(0, overrideStart);
+  if (preamble.includes("^^")) return undefined;
+  const managed = locateManagedPreamble(preamble, preamble.length);
+  if (!("span" in managed) || !isCurrentManagedPreamble(preamble, managed.span)) return undefined;
+  const beforeManaged = blankComments(preamble.slice(0, managed.span.start)).trim();
+  if (!/^\\documentclass(?:\[aspectratio=\d+\])?\{beamer\}$/.test(beforeManaged)) return undefined;
+  const afterManaged = blankComments(preamble.slice(managed.span.end));
+  const load = afterManaged.trim();
+  if (!/^\\(?:usepackage|usetheme)\{[A-Za-z0-9_./-]+\}$/.test(load)) return undefined;
+  const start = managed.span.end + afterManaged.indexOf(load);
+  return { start, end: start + load.length };
+}
+
 function baseStyleAndAssetsOf(
   doc: DeckDocument,
   fs: TemplateFileSystem,
@@ -165,11 +186,12 @@ function baseStyleAndAssetsOf(
     ...(background ? { background } : {}),
   };
   const override = styleImageOverrides(doc).background;
-  // The managed \deckbackground replaces Beamer's background only after the
-  // template has been loaded. Other template references may still matter to TeX.
-  const replacedTemplateDiagnostics = override
+  const load = override && templateLoadBeforeOverride(doc, override.span.start);
+  const replacedTemplateDiagnostics = load
     ? layers.flatMap((layer) =>
-        layer.source === "template" && layer.span.end <= override.span.start
+        layer.source === "template" &&
+        layer.span.start === load.start &&
+        layer.span.end === load.end
           ? templateBackgroundImagePaths(layer.templateText).map((image) => ({
               code: "L023" as const,
               message: missingTemplateImageMessage(layer.templatePath, image),
